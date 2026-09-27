@@ -2589,11 +2589,8 @@ fn preview_result_system_id(result: &PreviewResult) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_runner::ui_platform::{MisterPlatform, MisterSoftwareWindow};
+    use crate::visual_platform::install_isolated_test_platform;
     use slint::ComponentHandle;
-    use slint::platform::software_renderer::RepaintBufferType;
-    use std::cell::Cell;
-    use std::rc::Rc;
 
     #[test]
     fn preview_size_enlarges_only_by_integer_scale() {
@@ -3009,7 +3006,7 @@ mod tests {
 
     #[test]
     fn selected_row_without_preview_fades_visible_raw_preview_to_empty() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let bridge = app.global::<slint_ui::launcher::ArcadeView>();
         let games = vec![
@@ -3059,7 +3056,7 @@ mod tests {
 
     #[test]
     fn empty_demand_is_idempotent_while_detached() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let bridge = app.global::<slint_ui::launcher::ArcadeView>();
         let mut preview = PreviewState::new();
@@ -3922,11 +3919,5 @@ mod tests {
             control: "".into(),
             is_new: false,
         }
-    }
-
-    fn init_test_slint_platform() {
-        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-        let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-        let _ = slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
     }
 }

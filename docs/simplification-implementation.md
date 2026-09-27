@@ -79,14 +79,16 @@ pre-commit fixtures, repository and launcher contracts, and focused tests listed
 above were also checked during implementation. Logs are local artifacts, not
 committed evidence.
 
-The final UI-feature suite completes with **1,352 passed, 10 failed, and one
-ignored**. The untouched base completes with **1,353 passed, the same 10 failed,
-and one ignored**. All ten failures report `The Slint platform was initialized
-in another thread`; they are confirmed pre-existing process-global test
-isolation failures; all ten pass individually on the final branch. The exclusive
-software-renderer raster test passes when
-run separately with `--ignored --exact`. The earlier storage blocker is resolved;
-no shared caches were deleted.
+At the time of this simplification, the final UI-feature suite completed with
+**1,352 passed, 10 failed, and one ignored**. The untouched base completed with
+**1,353 passed, the same 10 failed, and one ignored**. All ten failures reported
+`The Slint platform was initialized in another thread` and passed individually.
+That historical test-isolation defect was subsequently fixed by keeping
+component-only test platforms from claiming Slint's process-global event-loop
+proxy. These failures are no longer an accepted validation exception. The
+exclusive software-renderer raster test passes when run separately with
+`--ignored --exact`. The earlier storage blocker is resolved; no shared caches
+were deleted.
 
 Broad ARM, full CI, visual inspection, and physical device qualification have
 not been run. No push, deployment, or Desktop modification was performed. The

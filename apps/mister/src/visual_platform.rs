@@ -406,6 +406,35 @@ impl Platform for MisterPlatform {
 }
 
 #[cfg(test)]
+// Slint contexts are thread-local, but event-loop proxies are process-global.
+// Component-only libtests must not claim the proxy from one test thread.
+struct IsolatedTestPlatform(MisterPlatform);
+
+#[cfg(test)]
+impl Platform for IsolatedTestPlatform {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+        self.0.create_window_adapter()
+    }
+
+    fn duration_since_start(&self) -> core::time::Duration {
+        self.0.duration_since_start()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_isolated_test_platform() {
+    let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+    let result = slint::platform::set_platform(Box::new(IsolatedTestPlatform(
+        MisterPlatform::new(window, fixed_time),
+    )));
+    match result {
+        Ok(()) | Err(slint::platform::SetPlatformError::AlreadySet) => {}
+        Err(error) => panic!("failed to install isolated Slint test platform: {error}"),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use slint::ComponentHandle;
@@ -462,6 +491,18 @@ mod tests {
         assert!(!called.load(Ordering::Acquire));
         window.draw_if_needed(|_| {});
         assert!(called.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn isolated_test_platform_supports_distinct_test_threads() {
+        for _ in 0..2 {
+            std::thread::spawn(|| {
+                install_isolated_test_platform();
+                ReusedRasterProbe::new().expect("test component");
+            })
+            .join()
+            .expect("test platform thread");
+        }
     }
 
     #[test]

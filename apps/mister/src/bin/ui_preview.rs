@@ -4688,11 +4688,34 @@ mod macos {
             }
         }
 
+        // Slint contexts are thread-local, but event-loop proxies are process-global.
+        // Component-only libtests must not claim the proxy from one test thread.
+        struct IsolatedTestPlatform(MisterPlatform);
+
+        impl slint::platform::Platform for IsolatedTestPlatform {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                slint::platform::Platform::create_window_adapter(&self.0)
+            }
+
+            fn duration_since_start(&self) -> core::time::Duration {
+                slint::platform::Platform::duration_since_start(&self.0)
+            }
+        }
+
         fn init_test_slint_platform() {
             let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
             let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-            let _ =
-                slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
+            let result = slint::platform::set_platform(Box::new(IsolatedTestPlatform(
+                MisterPlatform::new(window, fixed_time),
+            )));
+            match result {
+                Ok(()) | Err(slint::platform::SetPlatformError::AlreadySet) => {}
+                Err(error) => {
+                    panic!("failed to install isolated Slint preview-test platform: {error}")
+                }
+            }
         }
 
         #[test]
