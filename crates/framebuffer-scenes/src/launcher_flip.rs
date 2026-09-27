@@ -44,6 +44,11 @@ impl Scratch {
             reflection_pixels: vec![0; width * 64],
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn has_prepared_reflection(&self) -> bool {
+        self.reflection_key.is_some()
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -253,15 +258,6 @@ pub(super) fn draw_target<F: Fn(u16, usize, usize) -> u16>(
     );
 }
 
-pub(super) fn prepare_reflectionless_target(
-    face: &Face,
-    pose: Pose,
-    scratch: &mut Scratch,
-    blend: Option<(&Face, u32)>,
-) {
-    render(None, face, pose, scratch, RenderPass::Prepare, blend);
-}
-
 #[cfg(test)]
 pub(super) fn draw_occluded(
     destination: &mut [Rgb565Pixel],
@@ -323,7 +319,6 @@ impl RenderTarget<'_> {
 
 #[derive(Clone, Copy)]
 enum RenderPass<'a> {
-    Prepare,
     Reflection(&'a dyn Fn(u16, usize, usize) -> u16),
     Body(Option<&'a BodyOcclusion>),
 }
@@ -339,7 +334,7 @@ fn render(
     let reflections_only = !matches!(pass, RenderPass::Body(_));
     let occlusion = match pass {
         RenderPass::Body(occlusion) => occlusion,
-        RenderPass::Prepare | RenderPass::Reflection(_) => None,
+        RenderPass::Reflection(_) => None,
     };
     let (clip_top, body_bottom, reflection_bottom) = pose.vertical_clip;
     let left =
