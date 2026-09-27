@@ -1,87 +1,79 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
-import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
+import { Nocive15 } from "../../components/nocive_15.slint";
+import { Xerxes10 } from "../../components/xerxes_10.slint";
+import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome, SettingsFocusHighlight } from "../../components/page_chrome.slint";
 import { FeedbackView, SettingsView } from "../../api.slint";
+import { MisterUi } from "../../mister_window.slint";
 
 component LicenseRow inherits Rectangle {
     in property <string> label;
+    in property <string> kind;
     in property <bool> focused;
     in property <bool> acknowledged;
+    height: 36px;
     accessible-role: list-item;
     accessible-label: root.label;
+    accessible-description: root.kind;
     accessible-item-selected: root.focused;
     accessible-enabled: true;
-    height: 64px;
-    background: focused ? #2a2236 : #1e1828;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
-    HorizontalLayout {
-        padding: 12px;
-        Nocive15 { text: label; color: focused ? #06d6a0 : #e8e0f0; size: Nocive15Size.px15; vertical-alignment: center; }
-        Rectangle { horizontal-stretch: 1; background: transparent; }
-        Nocive15 { text: ">"; color: focused ? #06d6a0 : #9080a8; size: Nocive15Size.px15; vertical-alignment: center; }
+
+    if root.focused : SettingsFocusHighlight {
+        source: MisterUi.portrait-layout
+            ? SettingsView.focus-highlight-portrait
+            : SettingsView.focus-highlight-wide;
     }
+    Nocive15 { x: 12px; y: 7px; text: root.label.to-uppercase(); color: root.focused ? PageTheme.settings-accent : PageTheme.cream; }
+    Xerxes10 {
+        x: root.width - 14px - self.preferred-width;
+        y: 11px;
+        text: root.kind + "  >";
+        color: root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+    if !root.focused : PageRule { x: 12px; y: root.height - 1px; width: root.width - 12px; }
 }
 
 export component LicensesScreen inherits Rectangle {
     accessible-role: main;
-    accessible-label: "Licenses screen";
+    accessible-label: "Licenses";
     accessible-enabled: true;
-    if !SettingsView.license-expanded : VerticalLayout {
-        padding: 24px;
-        spacing: 12px;
-        HorizontalLayout {
-            height: license-title.preferred-height;
-            padding-left: 12px;
-            license-title := Spleen6x12 { text: "Licenses"; color: #e8e0f0; size: Spleen6x12Size.px24; horizontal-alignment: left; }
+    background: PageTheme.background;
+
+    if !MisterUi.portrait-layout : Rectangle {
+        LandscapePageChrome {
+            hint-a: "A  READ";
+            hint-b: "B  BACK";
+            hint-right: "UP  DOWN   MOVE";
         }
+        Xerxes10 { x: 29px; y: 101px; text: "ABOUT / LICENSES"; color: PageTheme.muted; }
+        Xerxes10 { x: 29px; y: 205px; text: "OPEN SOURCE LICENSES"; color: PageTheme.muted; }
+        PageRule { x: 28px; y: 239px; width: 213px; }
+        PageRule { x: 265px; y: 95px; width: 1px; height: 384px; }
+
         for title[index] in SettingsView.license-titles : LicenseRow {
+            x: 296px;
+            y: 101px + index * 36px;
+            width: 638px;
             label: title;
+            kind: SettingsView.license-kinds[index];
             focused: SettingsView.selected-license-index == index;
-            acknowledged: FeedbackView.acknowledged("licenses", index == 0 ? "mister-magik" : index == 1 ? "ffmpeg" : index == 2 ? "press-start-2p" : index == 3 ? "commercial-fonts" : index == 4 ? "jersey-25" : index == 5 ? "jersey-15" : index == 6 ? "terminus-font" : index == 7 ? "spleen" : index == 8 ? "arcade-cabinet" : "slint", FeedbackView.revision);
+            acknowledged: FeedbackView.acknowledged("licenses", "license:" + index, FeedbackView.revision);
         }
-        Rectangle { vertical-stretch: 1; background: transparent; }
-        Spleen6x12 { text: "A: open    B: back"; color: #6f8198; size: Spleen6x12Size.px8; horizontal-alignment: center; }
     }
 
-    if SettingsView.license-expanded : VerticalLayout {
-        padding: 24px;
-        spacing: 12px;
-        Nocive15 {
-            text: SettingsView.license-titles[SettingsView.selected-license-index] + "  v";
-            color: #06d6a0;
-            size: Nocive15Size.px15;
-            horizontal-alignment: center;
-        }
+    if MisterUi.portrait-layout : Rectangle {
+        PortraitPageChrome { section: "ABOUT / LICENSES"; hint-a: "A READ"; hint-b: "B BACK"; }
         Rectangle {
-            vertical-stretch: 1;
-            background: #12101a;
-            border-width: 1px;
-            border-color: #5c4a72;
-            accessible-role: region;
-            accessible-label: "License text";
-            accessible-description: SettingsView.license-titles[SettingsView.selected-license-index];
-            accessible-enabled: true;
-            Flickable {
-                x: 12px;
-                y: 12px;
-                width: parent.width - 24px;
-                height: parent.height - 24px;
-                content-y: -SettingsView.license-scroll-y * 1px;
-                VerticalLayout {
-                    for line in SettingsView.license-lines : Spleen6x12 {
-                        text: line;
-                        color: #d8d0e0;
-                        size: Spleen6x12Size.px8;
-                        height: 22px;
-                        overflow: clip;
-                        vertical-alignment: top;
-                    }
-                }
+            x: 32px; y: 130px; width: root.width - 64px; height: root.height - 240px;
+            for title[index] in SettingsView.license-titles : LicenseRow {
+                y: index * 42px;
+                width: parent.width;
+                label: title;
+                kind: SettingsView.license-kinds[index];
+                focused: SettingsView.selected-license-index == index;
+                acknowledged: FeedbackView.acknowledged("licenses", "license:" + index, FeedbackView.revision);
             }
         }
-        Spleen6x12 { text: "Up/Down: scroll    A/B: close"; color: #6f8198; size: Spleen6x12Size.px8; horizontal-alignment: center; }
     }
 }

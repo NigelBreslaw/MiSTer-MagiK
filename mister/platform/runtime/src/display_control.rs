@@ -10,7 +10,7 @@ use mister_magik_core::launcher_effects::{
     LauncherEffectFailureKind,
 };
 
-const DISPLAY_CONFIRM_SECONDS: u8 = 20;
+const DISPLAY_CONFIRM_SECONDS: u8 = 15;
 
 pub struct MainDisplayControl;
 
@@ -129,11 +129,11 @@ mod tests {
     #[test]
     fn display_state_parser_preserves_deadline_and_transaction_fields() {
         let state = parse_state_response(
-            "ok DisplayV1 schema=1 active=custom pending=custom remaining=99 phase=provisional error=none return=settings",
+            "ok DisplayV1 schema=1 active=hdmi-1920x1080p60 pending=hdmi-1920x1080p60 remaining=99 phase=provisional error=none return=settings",
         )
         .unwrap();
-        assert_eq!(state.active_mode, "custom");
-        assert_eq!(state.pending_mode.as_deref(), Some("custom"));
+        assert_eq!(state.active_mode, "hdmi-1920x1080p60");
+        assert_eq!(state.pending_mode.as_deref(), Some("hdmi-1920x1080p60"));
         assert_eq!(state.remaining_secs, DISPLAY_CONFIRM_SECONDS);
         assert_eq!(state.phase, DisplayTransactionPhase::Provisional);
         assert!(state.error.is_none());

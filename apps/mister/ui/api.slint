@@ -8,17 +8,15 @@ import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 // Shared semantic vocabulary. Finite launcher state crosses the Rust/Slint
 // boundary as enums; integers remain reserved for counts, geometry, timing,
 // percentages, and indices into dynamic models.
-export enum LauncherScreen { home, system-hub, controller, arcade, settings, screensaver-settings, about, licenses, info }
+export enum LauncherScreen { home, system-hub, controller, arcade, settings, about, licenses, license-text }
 export enum MenuHierarchy { root, nested }
 export enum SystemHubSection { games, recent, favourites, information }
 export enum HomeScrollPhase { idle, held, repeating }
 export enum NavigationTransitionState { idle, active }
-export enum SettingsSection { display, orientation, screensaver, reduce-motion, exit, refresh, about }
+export enum SettingsSection { display, orientation, reduce-motion, screensaver-delay, screensaver-preview, exit, refresh, about }
 export enum SettingsPopup { none, display-resolution, screen-orientation }
 export enum DisplayTransactionState { idle, provisional, persisting, failed }
 export enum ScreenOrientation { normal, monitor-clockwise, monitor-counterclockwise }
-export enum ScreensaverSetting { enabled, delay, preview }
-export enum AboutSection { information, licenses }
 export enum InputAvailability { available, unavailable }
 export enum SetupPhase { none, detected, new-or-existing, pick-existing, configure, name-kind }
 export enum ArcadeListMode { games, recent, favourites }
@@ -110,20 +108,24 @@ export global SettingsView {
     in property <int> orientation-confirm-remaining;
     in property <bool> simple-joystick-handling;
     in property <bool> reduce-motion;
-    in property <ScreensaverSetting> screensaver-setting;
     in property <bool> screensaver-enabled;
     in property <int> screensaver-delay-minutes;
-    in property <AboutSection> about-section;
     in property <int> selected-license-index;
     in property <[string]> license-titles;
-    in property <bool> license-expanded;
+    in property <[string]> license-kinds;
     in property <int> license-scroll-y;
     in property <[string]> license-lines;
     // Settings backdrop cog, installed once by Rust and always drawn 1:1.
     in property <image> cog-backdrop;
+    // Exact-size RGB565 focus fills. They are dithered once by Rust and must
+    // remain 1:1 so the ordered threshold pattern is never resampled.
+    in property <image> focus-highlight-settings;
+    in property <image> focus-highlight-wide;
+    in property <image> focus-highlight-portrait;
 }
 
 export global InformationView {
+    in property <string> version-label;
     in property <string> build-label;
     in property <string> present-mode-label;
     in property <string> kernel-version;
@@ -262,12 +264,10 @@ export global LauncherActions {
     callback select-settings-section(SettingsSection);
     callback select-display-option(string);
     callback select-orientation(ScreenOrientation);
-    callback select-screensaver-setting(ScreensaverSetting);
     callback set-screensaver-enabled(bool);
     callback set-screensaver-delay(int);
     callback set-reduce-motion(bool);
     callback set-simple-joystick-handling(bool);
-    callback select-about-section(AboutSection);
     callback select-license(int);
     callback select-arcade-game(string);
     callback select-arcade-search-pane(ArcadeSearchPane);

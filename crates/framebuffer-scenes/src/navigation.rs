@@ -87,6 +87,13 @@ pub enum SettingsPageTransitionAxis {
     VerticalReversed,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsPageTransitionStyle {
+    #[default]
+    WholePage,
+    Segmented,
+}
+
 impl NavigationTransitionDirection {
     pub const fn label(self) -> &'static str {
         match self {
@@ -554,6 +561,8 @@ pub struct NavigationTransitionRequest {
     pub preparation_timeout_us: u64,
     renderer: NavigationTransitionRenderer,
     settings_axis: SettingsPageTransitionAxis,
+    settings_style: SettingsPageTransitionStyle,
+    settings_destination_content_x: u16,
 }
 
 impl NavigationTransitionRequest {
@@ -570,6 +579,8 @@ impl NavigationTransitionRequest {
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
             renderer: NavigationTransitionRenderer::SuperScaler,
             settings_axis: SettingsPageTransitionAxis::Horizontal,
+            settings_style: SettingsPageTransitionStyle::WholePage,
+            settings_destination_content_x: 0,
         }
     }
 
@@ -582,7 +593,48 @@ impl NavigationTransitionRequest {
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
             renderer: NavigationTransitionRenderer::SettingsPage,
             settings_axis: SettingsPageTransitionAxis::Horizontal,
+            settings_style: SettingsPageTransitionStyle::WholePage,
+            settings_destination_content_x: 0,
         }
+    }
+
+    pub fn settings_page_segmented(direction: NavigationTransitionDirection) -> Self {
+        Self::settings_page_segmented_with_content_x(direction, 266)
+    }
+
+    pub fn settings_page_segmented_with_content_x(
+        direction: NavigationTransitionDirection,
+        destination_content_x: u16,
+    ) -> Self {
+        Self {
+            duration_us: 720_000,
+            settings_style: SettingsPageTransitionStyle::Segmented,
+            settings_destination_content_x: destination_content_x,
+            ..Self::settings_page(direction)
+        }
+    }
+
+    pub fn settings_page_segmented_on_axis(
+        direction: NavigationTransitionDirection,
+        axis: SettingsPageTransitionAxis,
+    ) -> Self {
+        Self::settings_page_segmented_on_axis_with_content_x(direction, axis, 266)
+    }
+
+    pub fn settings_page_segmented_on_axis_with_content_x(
+        direction: NavigationTransitionDirection,
+        axis: SettingsPageTransitionAxis,
+        destination_content_x: u16,
+    ) -> Self {
+        Self {
+            settings_axis: axis,
+            ..Self::settings_page_segmented_with_content_x(direction, destination_content_x)
+        }
+    }
+
+    #[must_use]
+    pub const fn settings_destination_content_x(self) -> u16 {
+        self.settings_destination_content_x
     }
 
     pub fn settings_page_on_axis(
@@ -1339,6 +1391,14 @@ pub fn render_settings_page_transition_into(
         return Ok(stats);
     }
 
+    if request.settings_style == SettingsPageTransitionStyle::Segmented
+        && request.settings_axis == SettingsPageTransitionAxis::Horizontal
+        && buffers.width == 960
+        && buffers.height == 540
+    {
+        return render_segmented_settings_page(source, destination, request, frame, output);
+    }
+
     let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
     let extent = match request.settings_axis {
         SettingsPageTransitionAxis::Horizontal => buffers.width,
@@ -1371,6 +1431,140 @@ pub fn render_settings_page_transition_into(
         request.settings_axis,
     );
     stats.settings_blit_us = elapsed_us(blit_started);
+    Ok(stats)
+}
+
+fn render_segmented_settings_page(
+    source: &[Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    const WIDTH: usize = 960;
+    const HEIGHT: usize = 540;
+    const BODY_TOP: u16 = 95;
+    const BODY_BOTTOM: u16 = 479;
+    const BAND_HEIGHT: u16 = 36;
+    if source.len() != WIDTH * HEIGHT
+        || destination.len() != source.len()
+        || output.len() != source.len()
+    {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+
+    let started = Instant::now();
+    let mut stats = NavigationTransitionRenderStats::default();
+    let destination_content_x = request.settings_destination_content_x.min(WIDTH as u16);
+    output.fill(Rgb565Pixel(0));
+    stats.filled_pixels = output.len() as u64;
+
+    // The header stays spatially fixed. The footer changes with the page, so it
+    // crossfades while the page content changes beneath it.
+    copy_rect_565(
+        output,
+        destination,
+        WIDTH,
+        HEIGHT,
+        NavigationTransitionRect {
+            x: 0,
+            y: 0,
+            width: WIDTH as u16,
+            height: BODY_TOP,
+        },
+        &mut stats,
+    );
+    let footer_progress = spring_ease_q16(window_q16(frame.progress_q16, 12_743, 29_127));
+    copy_crossfaded_rect(
+        output,
+        source,
+        destination,
+        WIDTH,
+        HEIGHT,
+        NavigationTransitionRect {
+            x: 0,
+            y: BODY_BOTTOM,
+            width: WIDTH as u16,
+            height: (HEIGHT as u16).saturating_sub(BODY_BOTTOM),
+        },
+        footer_progress,
+        &mut stats,
+    );
+
+    let source_progress = spring_ease_q16(window_q16(frame.progress_q16, 0, 18_204));
+    let source_opacity = PROGRESS_MAX.saturating_sub(source_progress);
+    let source_sign = match request.direction {
+        NavigationTransitionDirection::Forward => -1,
+        NavigationTransitionDirection::Reverse => 1,
+    };
+    let source_offset = source_sign * (48 * source_progress as isize / PROGRESS_MAX as isize);
+    let body_height = BODY_BOTTOM - BODY_TOP;
+    copy_rect_at_offset_with_opacity(
+        output,
+        source,
+        WIDTH,
+        HEIGHT,
+        NavigationTransitionRect {
+            x: 0,
+            y: BODY_TOP,
+            width: WIDTH as u16,
+            height: body_height,
+        },
+        source_offset,
+        0,
+        source_opacity,
+        &mut stats,
+    );
+
+    let panel_progress = spring_ease_q16(window_q16(frame.progress_q16, 12_743, 41_870));
+    copy_rect_at_offset_with_opacity(
+        output,
+        destination,
+        WIDTH,
+        HEIGHT,
+        NavigationTransitionRect {
+            x: 0,
+            y: BODY_TOP,
+            width: destination_content_x,
+            height: body_height,
+        },
+        0,
+        8 * (PROGRESS_MAX - panel_progress) as isize / PROGRESS_MAX as isize,
+        panel_progress,
+        &mut stats,
+    );
+    let destination_sign = match request.direction {
+        NavigationTransitionDirection::Forward => 1,
+        NavigationTransitionDirection::Reverse => -1,
+    };
+    for band in 0..11u16 {
+        let y = BODY_TOP + band * BAND_HEIGHT;
+        if y >= BODY_BOTTOM {
+            break;
+        }
+        let start = 12_743u16.saturating_add(band.saturating_mul(2_549));
+        let end = start.saturating_add(29_127);
+        let progress = spring_ease_q16(window_q16(frame.progress_q16, start, end));
+        let offset =
+            destination_sign * (40 * (PROGRESS_MAX - progress) as isize / PROGRESS_MAX as isize);
+        copy_rect_at_offset_with_opacity(
+            output,
+            destination,
+            WIDTH,
+            HEIGHT,
+            NavigationTransitionRect {
+                x: destination_content_x,
+                y,
+                width: WIDTH as u16 - destination_content_x,
+                height: BAND_HEIGHT.min(BODY_BOTTOM - y),
+            },
+            offset,
+            0,
+            progress,
+            &mut stats,
+        );
+    }
+    stats.settings_blit_us = elapsed_us(started);
     Ok(stats)
 }
 
@@ -2637,6 +2831,102 @@ fn copy_rect_at_offset(
             .copy_from_slice(&source[source_start..source_start + copy_width]);
         stats.copied_pixels = stats.copied_pixels.saturating_add(copy_width as u64);
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_rect_at_offset_with_opacity(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    offset_x: isize,
+    offset_y: isize,
+    opacity_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if opacity_q16 == 0
+        || working.len() != source.len()
+        || working.len() != width.saturating_mul(height)
+    {
+        return;
+    }
+    let destination_x = rect.x as isize + offset_x;
+    let destination_y = rect.y as isize + offset_y;
+    for source_y in rect.y as usize..rect.bottom() as usize {
+        let target_y = source_y as isize + destination_y - rect.y as isize;
+        if !(0..height as isize).contains(&target_y) {
+            continue;
+        }
+        for source_x in rect.x as usize..rect.right() as usize {
+            let target_x = source_x as isize + destination_x - rect.x as isize;
+            if !(0..width as isize).contains(&target_x) {
+                continue;
+            }
+            let source_pixel = source[source_y * width + source_x];
+            working[target_y as usize * width + target_x as usize] =
+                rgb565_scale(source_pixel, opacity_q16);
+            stats.copied_pixels = stats.copied_pixels.saturating_add(1);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_crossfaded_rect(
+    working: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    destination_opacity_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if working.len() != source.len()
+        || source.len() != destination.len()
+        || working.len() != width.saturating_mul(height)
+    {
+        return;
+    }
+    for y in rect.y as usize..rect.bottom() as usize {
+        for x in rect.x as usize..rect.right() as usize {
+            let index = y * width + x;
+            working[index] = rgb565_mix(source[index], destination[index], destination_opacity_q16);
+            stats.copied_pixels = stats.copied_pixels.saturating_add(1);
+        }
+    }
+}
+
+fn rgb565_scale(pixel: Rgb565Pixel, opacity_q16: u16) -> Rgb565Pixel {
+    let value = pixel.0;
+    let opacity = opacity_q16 as u32;
+    let red = ((value >> 11) & 0x1f) as u32 * opacity / PROGRESS_MAX as u32;
+    let green = ((value >> 5) & 0x3f) as u32 * opacity / PROGRESS_MAX as u32;
+    let blue = (value & 0x1f) as u32 * opacity / PROGRESS_MAX as u32;
+    Rgb565Pixel(((red << 11) | (green << 5) | blue) as u16)
+}
+
+fn rgb565_mix(source: Rgb565Pixel, destination: Rgb565Pixel, destination_q16: u16) -> Rgb565Pixel {
+    let source_q16 = PROGRESS_MAX.saturating_sub(destination_q16) as u32;
+    let destination_q16 = destination_q16 as u32;
+    let source_value = source.0;
+    let destination_value = destination.0;
+    let red = (((source_value >> 11) & 0x1f) as u32 * source_q16
+        + ((destination_value >> 11) & 0x1f) as u32 * destination_q16)
+        / PROGRESS_MAX as u32;
+    let green = (((source_value >> 5) & 0x3f) as u32 * source_q16
+        + ((destination_value >> 5) & 0x3f) as u32 * destination_q16)
+        / PROGRESS_MAX as u32;
+    let blue = ((source_value & 0x1f) as u32 * source_q16
+        + (destination_value & 0x1f) as u32 * destination_q16)
+        / PROGRESS_MAX as u32;
+    Rgb565Pixel(((red << 11) | (green << 5) | blue) as u16)
 }
 
 #[allow(clippy::too_many_arguments)]

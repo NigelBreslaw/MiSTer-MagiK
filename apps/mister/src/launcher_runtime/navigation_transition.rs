@@ -3,6 +3,7 @@
 
 //! Host-neutral navigation-transition state and RGB565 frame ownership.
 
+use crate::launcher::Screen;
 use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedRgb565Pixel;
 pub use mister_magik_framebuffer_scenes::navigation::{
     CrtNavigationLayout, NavigationTransitionBuffers, NavigationTransitionCompletion,
@@ -34,14 +35,23 @@ pub enum NavigationTransitionRoute {
     HomeToArcade,
     ConsolesToSystem,
     HomeToSettings,
-    SettingsToScreensaver,
     SettingsToAbout,
-    AboutToInfo,
     AboutToLicenses,
+    LicensesToLicenseText,
     NestedToHome,
 }
 
+const HDMI_ABOUT_CONTENT_X: u16 = 266;
+const HDMI_SETTINGS_CONTENT_X: u16 = 400;
+
 impl NavigationTransitionRoute {
+    pub const fn uses_segmented_settings_motion(self) -> bool {
+        matches!(
+            self,
+            Self::SettingsToAbout | Self::AboutToLicenses | Self::LicensesToLicenseText
+        )
+    }
+
     pub const fn from_super_scaler_edge(edge: NavigationTransitionEdge) -> Self {
         match edge {
             NavigationTransitionEdge::HomeToConsoles => Self::HomeToConsoles,
@@ -56,10 +66,9 @@ impl NavigationTransitionRoute {
             Self::HomeToArcade => "home-arcade",
             Self::ConsolesToSystem => "consoles-system",
             Self::HomeToSettings => "home-settings",
-            Self::SettingsToScreensaver => "settings-screensaver",
             Self::SettingsToAbout => "settings-about",
-            Self::AboutToInfo => "about-info",
             Self::AboutToLicenses => "about-licenses",
+            Self::LicensesToLicenseText => "licenses-license-text",
             Self::NestedToHome => "nested-home",
         }
     }
@@ -68,12 +77,66 @@ impl NavigationTransitionRoute {
         matches!(
             self,
             Self::HomeToSettings
-                | Self::SettingsToScreensaver
                 | Self::SettingsToAbout
-                | Self::AboutToInfo
                 | Self::AboutToLicenses
+                | Self::LicensesToLicenseText
                 | Self::NestedToHome
         )
+    }
+}
+
+pub fn settings_page_transition(
+    source: Screen,
+    destination: Screen,
+) -> Option<(NavigationTransitionRoute, NavigationTransitionDirection)> {
+    let source_depth = settings_page_depth(source)?;
+    let destination_depth = settings_page_depth(destination)?;
+    let route = match (source, destination) {
+        (Screen::Home, Screen::Settings) | (Screen::Settings, Screen::Home) => {
+            NavigationTransitionRoute::HomeToSettings
+        }
+        (Screen::Settings, Screen::About) | (Screen::About, Screen::Settings) => {
+            NavigationTransitionRoute::SettingsToAbout
+        }
+        (Screen::About, Screen::Licenses) | (Screen::Licenses, Screen::About) => {
+            NavigationTransitionRoute::AboutToLicenses
+        }
+        (Screen::Licenses, Screen::LicenseText) | (Screen::LicenseText, Screen::Licenses) => {
+            NavigationTransitionRoute::LicensesToLicenseText
+        }
+        (source, Screen::Home) if source != Screen::Home => NavigationTransitionRoute::NestedToHome,
+        _ => return None,
+    };
+    Some((
+        route,
+        if destination_depth > source_depth {
+            NavigationTransitionDirection::Forward
+        } else {
+            NavigationTransitionDirection::Reverse
+        },
+    ))
+}
+
+const fn segmented_destination_content_x(
+    route: NavigationTransitionRoute,
+    direction: NavigationTransitionDirection,
+) -> u16 {
+    match (route, direction) {
+        (NavigationTransitionRoute::SettingsToAbout, NavigationTransitionDirection::Reverse) => {
+            HDMI_SETTINGS_CONTENT_X
+        }
+        _ => HDMI_ABOUT_CONTENT_X,
+    }
+}
+
+const fn settings_page_depth(screen: Screen) -> Option<u8> {
+    match screen {
+        Screen::Home => Some(0),
+        Screen::Settings => Some(1),
+        Screen::About => Some(2),
+        Screen::Licenses => Some(3),
+        Screen::LicenseText => Some(4),
+        Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
     }
 }
 
@@ -550,11 +613,15 @@ impl NavigationTransitionRuntime {
         if !route.is_settings_page() {
             return Ok(false);
         }
-        let started = self.begin_settings_page_request(
-            NavigationTransitionRequest::settings_page(direction),
-            source,
-            now_us,
-        )?;
+        let request = if route.uses_segmented_settings_motion() {
+            NavigationTransitionRequest::settings_page_segmented_with_content_x(
+                direction,
+                segmented_destination_content_x(route, direction),
+            )
+        } else {
+            NavigationTransitionRequest::settings_page(direction)
+        };
+        let started = self.begin_settings_page_request(request, source, now_us)?;
         if started {
             self.route = Some(route);
         }
@@ -575,7 +642,15 @@ impl NavigationTransitionRuntime {
         if !route.is_settings_page() {
             return Ok(false);
         }
-        let request = NavigationTransitionRequest::settings_page_on_axis(direction, axis);
+        let request = if route.uses_segmented_settings_motion() {
+            NavigationTransitionRequest::settings_page_segmented_on_axis_with_content_x(
+                direction,
+                axis,
+                segmented_destination_content_x(route, direction),
+            )
+        } else {
+            NavigationTransitionRequest::settings_page_on_axis(direction, axis)
+        };
         self.begin_settings_physical(route, request, width, height, source, now_us)
     }
 
@@ -1181,6 +1256,31 @@ mod tests {
             NavigationTransitionRequest::settings_page(NavigationTransitionDirection::Forward)
                 .duration_us,
             300_000
+        );
+    }
+
+    #[test]
+    fn reverse_about_to_settings_marks_only_the_settings_list_as_moving_content() {
+        assert_eq!(
+            segmented_destination_content_x(
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionDirection::Reverse,
+            ),
+            HDMI_SETTINGS_CONTENT_X
+        );
+        assert_eq!(
+            segmented_destination_content_x(
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionDirection::Forward,
+            ),
+            HDMI_ABOUT_CONTENT_X
+        );
+        assert_eq!(
+            segmented_destination_content_x(
+                NavigationTransitionRoute::AboutToLicenses,
+                NavigationTransitionDirection::Reverse,
+            ),
+            HDMI_ABOUT_CONTENT_X
         );
     }
 

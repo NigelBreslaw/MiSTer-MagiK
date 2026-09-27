@@ -1,85 +1,107 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
-import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
+import { Jersey25, Jersey25Size } from "../../components/jersey_25.slint";
+import { Nocive15 } from "../../components/nocive_15.slint";
+import { Xerxes10 } from "../../components/xerxes_10.slint";
+import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome, SettingsFocusHighlight } from "../../components/page_chrome.slint";
+import { FeedbackView, InformationView, SettingsView } from "../../api.slint";
+import { MisterUi } from "../../mister_window.slint";
 
-import { AboutSection, FeedbackView, SettingsView } from "../../api.slint";
-
-component AboutRow inherits Rectangle {
+component InformationRow inherits Rectangle {
     in property <string> label;
-    in property <string> detail;
-    in property <bool> focused;
+    in property <string> value;
+    in property <bool> separator: true;
+    height: 36px;
+
+    Nocive15 { x: 12px; y: 7px; text: root.label; color: #c9c3b3; }
+    Xerxes10 {
+        x: root.width - 14px - self.preferred-width;
+        y: 11px;
+        text: root.value.to-uppercase();
+        color: PageTheme.muted;
+    }
+    if root.separator : PageRule { x: 12px; y: root.height - 1px; width: root.width - 12px; }
+}
+
+component LicensesRow inherits Rectangle {
     in property <bool> acknowledged;
+    height: 36px;
     accessible-role: list-item;
-    accessible-label: root.label;
-    accessible-description: root.detail;
-    accessible-item-selected: root.focused;
+    accessible-label: "Licenses";
+    accessible-description: "Open source licenses";
+    accessible-item-selected: true;
     accessible-enabled: true;
-
-    height: 52px;
-    background: focused ? #2a2236 : #1e1828;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
-
-    VerticalLayout {
-        padding: 10px;
-        spacing: 4px;
-        Nocive15 { text: label; color: focused ? #06d6a0 : #e8e0f0; size: Nocive15Size.px15; }
-        Spleen6x12 { text: detail; color: #9080a8; size: Spleen6x12Size.px8; }
+    SettingsFocusHighlight {
+        source: MisterUi.portrait-layout
+            ? SettingsView.focus-highlight-portrait
+            : SettingsView.focus-highlight-wide;
+    }
+    Nocive15 { x: 12px; y: 7px; text: "LICENSES"; color: PageTheme.settings-accent; }
+    Xerxes10 {
+        x: root.width - 14px - self.preferred-width;
+        y: 11px;
+        text: ">";
+        color: PageTheme.cream;
     }
 }
 
 export component AboutScreen inherits Rectangle {
     accessible-role: main;
-    accessible-label: "About screen";
+    accessible-label: "About";
     accessible-enabled: true;
-    VerticalLayout {
-        padding: 48px;
-        spacing: 24px;
-        Spleen6x12 {
-            text: "About";
-            color: #06d6a0;
-            size: Spleen6x12Size.px24;
-            horizontal-alignment: center;
-        }
-        Nocive15 {
-            text: "MiSTer MagiK is an Unintuitive.com software production. Crafted with love in Finland by Nigel Breslaw.";
-            color: #e8e0f0;
-            size: Nocive15Size.px15;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-        Nocive15 {
-            text: "Thanks to the MiSTer project for making all of this possible";
-            color: #b8acc8;
-            size: Nocive15Size.px15;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-        Nocive15 {
-            text: "Made with Slint. Delivering beautiful UI's on the most challenging of hardware www.slint.dev";
-            color: #70e1f5;
-            size: Nocive15Size.px15;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-        Rectangle { vertical-stretch: 1; background: transparent; }
+    background: PageTheme.background;
 
-        AboutRow {
-            label: "Info";
-            detail: "Build, display, database, and kernel details";
-            focused: SettingsView.about-section == AboutSection.information;
-            acknowledged: FeedbackView.acknowledged("about", "info", FeedbackView.revision);
+    if !MisterUi.portrait-layout : Rectangle {
+        LandscapePageChrome { hint-a: "A  OPEN"; hint-b: "B  BACK"; hint-right: ""; }
+
+        Xerxes10 { x: 29px; y: 101px; text: "SETTINGS / ABOUT"; color: PageTheme.muted; }
+        Jersey25 {
+            x: 27px;
+            y: 121px;
+            text: InformationView.version-label;
+            size: Jersey25Size.px56;
+            color: PageTheme.cream;
         }
-        AboutRow {
-            label: "Licenses";
-            detail: "Open source licenses and acknowledgements";
-            focused: SettingsView.about-section == AboutSection.licenses;
+        Xerxes10 { x: 29px; y: 205px; text: "MISTER MAGIK VERSION"; color: PageTheme.muted; }
+        PageRule { x: 28px; y: 239px; width: 213px; }
+        Xerxes10 {
+            x: 29px; y: 258px; width: 220px;
+            text: "AN UNINTUITIVE.COM\nPRODUCTION, CRAFTED\nIN FINLAND BY\nNIGEL BRESLAW";
+            color: #c9c3b3;
+            wrap: word-wrap;
+        }
+        PageRule { x: 28px; y: 352px; width: 213px; }
+        Xerxes10 {
+            x: 29px; y: 370px; width: 220px;
+            text: "THANKS TO THE MISTER\nPROJECT. MADE WITH\nSLINT: SLINT.DEV";
+            color: PageTheme.muted;
+            wrap: word-wrap;
+        }
+        PageRule { x: 265px; y: 95px; width: 1px; height: 384px; }
+
+        Xerxes10 { x: 308px; y: 101px; text: "SYSTEM"; color: PageTheme.muted; }
+        InformationRow { x: 296px; y: 121px; width: 638px; label: "BUILD"; value: InformationView.build-label; }
+        InformationRow { x: 296px; y: 157px; width: 638px; label: "GAME DATABASE"; value: InformationView.database-build; }
+        InformationRow { x: 296px; y: 193px; width: 638px; label: "KERNEL"; value: InformationView.kernel-version; separator: false; }
+        Xerxes10 { x: 308px; y: 247px; text: "LEGAL"; color: PageTheme.muted; }
+        LicensesRow {
+            x: 296px; y: 267px; width: 638px;
             acknowledged: FeedbackView.acknowledged("about", "licenses", FeedbackView.revision);
         }
-
-        Spleen6x12 { text: "B: back"; color: #6f8198; size: Spleen6x12Size.px8; horizontal-alignment: center; }
     }
 
+    if MisterUi.portrait-layout : Rectangle {
+        PortraitPageChrome { section: "SETTINGS / ABOUT"; hint-a: "A OPEN"; hint-b: "B BACK"; }
+        VerticalLayout {
+            x: 32px; y: 120px; width: root.width - 64px; height: root.height - 220px;
+            spacing: 12px;
+            Jersey25 { text: InformationView.version-label; size: Jersey25Size.px56; color: PageTheme.cream; }
+            Xerxes10 { text: "MISTER MAGIK VERSION"; color: PageTheme.muted; }
+            InformationRow { label: "BUILD"; value: InformationView.build-label; }
+            InformationRow { label: "GAME DATABASE"; value: InformationView.database-build; }
+            InformationRow { label: "KERNEL"; value: InformationView.kernel-version; }
+            LicensesRow { acknowledged: FeedbackView.acknowledged("about", "licenses", FeedbackView.revision); }
+        }
+    }
 }

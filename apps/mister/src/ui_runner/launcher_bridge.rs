@@ -80,6 +80,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let build_label = SharedString::from(build_label());
     navigation.set_build_label(build_label.clone());
     information.set_build_label(build_label);
+    information.set_version_label(env!("MISTER_MAGIK_VERSION").into());
     navigation.set_present_mode_label("Mode=/dev/fb0".into());
     information.set_present_mode_label("Mode=/dev/fb0".into());
     let kernel_version = SharedString::from(kernel_version());
@@ -161,18 +162,11 @@ pub(super) fn sync_settings_bridge(
     settings.set_orientation_confirm_remaining(nav.orientation_confirm_remaining as i32);
     settings.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
     settings.set_reduce_motion(nav.settings.reduce_motion);
-    settings.set_screensaver_setting(crate::launcher_view_types::screensaver_setting(
-        nav.screensaver_selected,
-    ));
     settings.set_screensaver_enabled(nav.settings.screensaver_enabled);
     settings.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
-    settings.set_about_section(crate::launcher_view_types::about_section(
-        nav.about_selected,
-    ));
     settings.set_selected_license_index(nav.licenses_selected as i32);
-    settings.set_license_expanded(nav.licenses_expanded);
     settings.set_license_scroll_y(nav.licenses_scroll_y());
-    if matches!(nav.screen, Screen::Settings | Screen::Screensaver)
+    if nav.screen == Screen::Settings
         || matches!(
             nav.confirm_action,
             Some(
@@ -595,7 +589,7 @@ fn sync_launcher_confirm_bridge(
     });
     sync_confirm_bridge(bridge, nav.confirm_action);
     if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolution) {
-        let label = format!("Cancel ({})", nav.display_confirm_remaining);
+        let label = format!("Revert {}", nav.display_confirm_remaining);
         set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, &label);
         if nav.display_confirm_busy {
             set_bridge_string_if_changed!(
@@ -623,9 +617,9 @@ fn sync_launcher_confirm_bridge(
         }
     } else if nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation) {
         let label = if nav.orientation_error.is_some() {
-            "Cancel".to_string()
+            "Revert".to_string()
         } else {
-            format!("Cancel ({})", nav.orientation_confirm_remaining)
+            format!("Revert {}", nav.orientation_confirm_remaining)
         };
         set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, &label);
         if nav.orientation_confirm_busy {
@@ -712,10 +706,10 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             right_label: "",
         },
         Some(launcher::ConfirmAction::DisplayResolution) => ConfirmBridgeText {
-            title: "Confirm new resolution works",
+            title: "Keep this display mode?",
             message: "Keep this display resolution? It will be restored automatically if you cannot see this dialog.",
-            left_label: "Cancel (10)",
-            right_label: "Confirm",
+            left_label: "Revert 15",
+            right_label: "Keep",
         },
         Some(launcher::ConfirmAction::DisplayResolutionError) => ConfirmBridgeText {
             title: "Resolution change failed",
@@ -724,10 +718,10 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             right_label: "",
         },
         Some(launcher::ConfirmAction::ScreenOrientation) => ConfirmBridgeText {
-            title: "Confirm screen orientation",
+            title: "Keep this orientation?",
             message: "Is the launcher upright on the rotated monitor?",
-            left_label: "Cancel (20)",
-            right_label: "Confirm",
+            left_label: "Revert 15",
+            right_label: "Keep",
         },
         Some(launcher::ConfirmAction::AddFavourite) => ConfirmBridgeText {
             title: "Game Options",
@@ -1006,7 +1000,6 @@ pub(super) struct LauncherProjectionKey {
     home_scroll_repeat_active: bool,
     home_scroll_held: bool,
     licenses_selected: usize,
-    licenses_expanded: bool,
     licenses_scroll_y: i32,
     confirm_action: Option<launcher::ConfirmAction>,
     confirm_selected: usize,
@@ -1035,7 +1028,6 @@ impl LauncherProjectionKey {
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
             home_scroll_held: nav.home_horizontal_held(),
             licenses_selected: nav.licenses_selected,
-            licenses_expanded: nav.licenses_expanded,
             licenses_scroll_y: nav.licenses_scroll_y(),
             confirm_action: nav.confirm_action,
             confirm_selected: nav.confirm_selected,
@@ -1595,14 +1587,13 @@ mod tests {
         init_test_slint_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::Screensaver;
+        nav.screen = Screen::Settings;
         let before = LauncherProjectionKey::from_nav(&nav);
 
-        nav.settings_selected = 3;
+        nav.settings_selected = 2;
         nav.display_combo_open = true;
         nav.display_selected = 1;
         nav.display_highlighted = 2;
-        nav.screensaver_selected = 1;
         nav.settings.screensaver_enabled = !nav.settings.screensaver_enabled;
         nav.settings.screensaver_delay_minutes += 1;
         nav.settings.simple_joystick_handling = true;
@@ -1623,7 +1614,7 @@ mod tests {
         assert_eq!(
             app.global::<slint_ui::launcher::NavigationView>()
                 .get_screen(),
-            slint_ui::launcher::LauncherScreen::ScreensaverSettings
+            slint_ui::launcher::LauncherScreen::Settings
         );
         assert_eq!(
             settings.get_section(),
@@ -1644,10 +1635,6 @@ mod tests {
             launcher::settings_display_resolution(2)
                 .expect("highlighted display")
                 .id
-        );
-        assert_eq!(
-            settings.get_screensaver_setting(),
-            slint_ui::launcher::ScreensaverSetting::Delay
         );
         assert_eq!(
             settings.get_screensaver_enabled(),
@@ -2089,10 +2076,9 @@ mod tests {
             Screen::Home,
             Screen::Controller,
             Screen::Settings,
-            Screen::Screensaver,
             Screen::About,
             Screen::Licenses,
-            Screen::Info,
+            Screen::LicenseText,
         ]
         .into_iter()
         .enumerate()

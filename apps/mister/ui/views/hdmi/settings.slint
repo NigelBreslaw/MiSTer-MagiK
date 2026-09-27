@@ -3,12 +3,12 @@
 
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
-import { LandscapePageChrome, PageTheme, PortraitPageChrome, PageRule } from "../../components/page_chrome.slint";
+import { LandscapePageChrome, PageTheme, PortraitPageChrome, PageRule, SettingsFocusHighlight } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
 
-import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
+import { ConfirmationKind, FeedbackView, NavigationTransitionState, NavigationView, OverlayView, ScreenOrientation, SettingsPopup, SettingsSection, SettingsView } from "../../api.slint";
 
-enum SettingsRowTrailing { value, link, toggle }
+enum SettingsRowTrailing { value, link, toggle, stepper }
 
 // One list row. The label is presentation-only upper case; accessibility keeps
 // the established mixed-case label and description used by device scenarios.
@@ -22,6 +22,9 @@ component SettingsRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
     in property <bool> separator: true;
+    in property <bool> step-at-start;
+    in property <bool> step-at-end;
+    in property <bool> dimmed;
 
     accessible-role: list-item;
     accessible-label: root.accessible-name;
@@ -30,10 +33,12 @@ component SettingsRow inherits Rectangle {
     accessible-enabled: true;
 
     height: 36px;
+    opacity: root.dimmed ? 0.35 : 1;
 
-    if root.focused : Rectangle {
-        background: @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 60%, PageTheme.background 100%);
-        Rectangle { x: 0px; width: 4px; background: PageTheme.settings-accent; }
+    if root.focused : SettingsFocusHighlight {
+        source: MisterUi.portrait-layout
+            ? SettingsView.focus-highlight-portrait
+            : SettingsView.focus-highlight-settings;
     }
 
     // Nocive caps start 4px below the text origin and Xerxes caps 5px below:
@@ -55,12 +60,39 @@ component SettingsRow inherits Rectangle {
         color: root.focused ? PageTheme.settings-accent : PageTheme.muted;
     }
 
-    if root.trailing != SettingsRowTrailing.toggle : Xerxes10 {
+    if root.trailing == SettingsRowTrailing.value || root.trailing == SettingsRowTrailing.link : Xerxes10 {
         x: root.width - 14px - self.preferred-width
             - (root.trailing == SettingsRowTrailing.link ? chevron.preferred-width + 8px : 0px);
         y: 11px;
         text: root.value;
         color: root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+
+    if root.trailing == SettingsRowTrailing.stepper : Rectangle {
+        x: root.width - 14px - self.width;
+        y: 11px;
+        width: 116px;
+        height: 18px;
+
+        Xerxes10 {
+            x: 0px;
+            text: "<";
+            color: !root.focused ? transparent
+                : root.step-at-start ? PageTheme.rule : PageTheme.settings-accent;
+        }
+        Xerxes10 {
+            x: 24px;
+            width: 68px;
+            text: root.value;
+            horizontal-alignment: center;
+            color: root.focused ? PageTheme.cream : PageTheme.muted;
+        }
+        Xerxes10 {
+            x: 108px;
+            text: ">";
+            color: !root.focused ? transparent
+                : root.step-at-end ? PageTheme.rule : PageTheme.settings-accent;
+        }
     }
 
     if root.trailing == SettingsRowTrailing.toggle : Rectangle {
@@ -95,16 +127,24 @@ component SettingsGroupLabel inherits Xerxes10 {
 
 // Rows are always listed in navigation order; groups only add headings.
 component SettingsList inherits Rectangle {
+    property <bool> display-anchor: SettingsView.popup == SettingsPopup.display-resolution
+        || OverlayView.confirmation-kind == ConfirmationKind.display-resolution;
+    property <bool> orientation-anchor: SettingsView.popup == SettingsPopup.screen-orientation
+        || OverlayView.confirmation-kind == ConfirmationKind.screen-orientation;
+    property <bool> overlay-active: root.display-anchor || root.orientation-anchor;
     property <string> orientation-value: SettingsView.active-orientation == ScreenOrientation.normal ? "NORMAL"
         : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise ? "MONITOR RIGHT" : "MONITOR LEFT";
     property <string> orientation-detail: SettingsView.active-orientation == ScreenOrientation.normal ? "Normal"
         : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise
         ? "Monitor right (clockwise)" : "Monitor left (counterclockwise)";
+    property <string> screensaver-delay-value: !SettingsView.screensaver-enabled ? "OFF"
+        : SettingsView.screensaver-delay-minutes == 1 ? "1 MIN"
+        : SettingsView.screensaver-delay-minutes + " MIN";
 
     accessible-role: list;
     accessible-label: "Settings";
 
-    SettingsGroupLabel { x: 12px; y: 0px; text: "DISPLAY"; }
+    SettingsGroupLabel { x: 12px; y: 0px; text: "DISPLAY"; opacity: root.overlay-active ? 0.35 : 1; }
     SettingsRow {
         y: 20px; width: root.width;
         label: "DISPLAY RESOLUTION";
@@ -113,6 +153,7 @@ component SettingsList inherits Rectangle {
         value: SettingsView.active-display.label.to-uppercase();
         focused: SettingsView.section == SettingsSection.display;
         acknowledged: FeedbackView.acknowledged("settings", "display", FeedbackView.revision);
+        dimmed: root.overlay-active && !root.display-anchor;
     }
     SettingsRow {
         y: 56px; width: root.width;
@@ -122,19 +163,10 @@ component SettingsList inherits Rectangle {
         value: root.orientation-value;
         focused: SettingsView.section == SettingsSection.orientation;
         acknowledged: FeedbackView.acknowledged("settings", "orientation", FeedbackView.revision);
+        dimmed: root.overlay-active && !root.orientation-anchor;
     }
     SettingsRow {
         y: 92px; width: root.width;
-        label: "SCREENSAVER";
-        accessible-name: "Screensaver";
-        detail: "Configure the idle display";
-        value: "CONFIGURE";
-        trailing: SettingsRowTrailing.link;
-        focused: SettingsView.section == SettingsSection.screensaver;
-        acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision);
-    }
-    SettingsRow {
-        y: 128px; width: root.width;
         label: "REDUCE MOTION";
         accessible-name: "Reduce motion";
         detail: SettingsView.reduce-motion ? "On" : "Off";
@@ -143,29 +175,59 @@ component SettingsList inherits Rectangle {
         separator: false;
         focused: SettingsView.section == SettingsSection.reduce-motion;
         acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision);
+        dimmed: root.overlay-active;
     }
 
-    SettingsGroupLabel { x: 12px; y: 182px; text: "SYSTEM"; }
+    SettingsGroupLabel { x: 12px; y: 146px; text: "SCREENSAVER"; opacity: root.overlay-active ? 0.35 : 1; }
+    SettingsRow {
+        y: 166px; width: root.width;
+        label: "START AFTER";
+        accessible-name: "Start after";
+        detail: root.screensaver-delay-value;
+        value: root.screensaver-delay-value;
+        trailing: SettingsRowTrailing.stepper;
+        step-at-start: !SettingsView.screensaver-enabled;
+        step-at-end: SettingsView.screensaver-enabled && SettingsView.screensaver-delay-minutes >= 10;
+        focused: SettingsView.section == SettingsSection.screensaver-delay;
+        acknowledged: FeedbackView.acknowledged("settings", "screensaver-delay", FeedbackView.revision);
+        dimmed: root.overlay-active;
+    }
     SettingsRow {
         y: 202px; width: root.width;
+        label: "PREVIEW SCREENSAVER";
+        accessible-name: "Preview screensaver";
+        detail: "Show now";
+        value: "SHOW NOW";
+        trailing: SettingsRowTrailing.link;
+        separator: false;
+        focused: SettingsView.section == SettingsSection.screensaver-preview;
+        acknowledged: FeedbackView.acknowledged("settings", "screensaver-preview", FeedbackView.revision);
+        dimmed: root.overlay-active;
+    }
+
+    SettingsGroupLabel { x: 12px; y: 256px; text: "SYSTEM"; opacity: root.overlay-active ? 0.35 : 1; }
+    SettingsRow {
+        y: 276px; width: root.width;
         label: "EXIT TO MISTER";
         accessible-name: "Exit to MiSTer";
         detail: "Use the stock MiSTer menu until reboot";
         value: "UNTIL REBOOT";
         focused: SettingsView.section == SettingsSection.exit;
         acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision);
+        dimmed: root.overlay-active;
     }
     SettingsRow {
-        y: 238px; width: root.width;
+        y: 312px; width: root.width;
         label: "REFRESH DATABASE";
         accessible-name: "Refresh Database";
         detail: "Refresh changed library systems";
         value: "CHANGED SYSTEMS";
         focused: SettingsView.section == SettingsSection.refresh;
         acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
+        dimmed: root.overlay-active;
     }
     SettingsRow {
-        y: 274px; width: root.width;
+        y: 348px; width: root.width;
         label: "ABOUT";
         accessible-name: "About";
         detail: "MiSTer MagiK and Slint";
@@ -174,6 +236,7 @@ component SettingsList inherits Rectangle {
         separator: false;
         focused: SettingsView.section == SettingsSection.about;
         acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision);
+        dimmed: root.overlay-active;
     }
 }
 
@@ -187,27 +250,31 @@ component CogBackdrop inherits Image {
 }
 
 export component SettingsScreen inherits Rectangle {
+    property <bool> overlay-active: SettingsView.popup != SettingsPopup.none
+        || OverlayView.confirmation-kind == ConfirmationKind.display-resolution
+        || OverlayView.confirmation-kind == ConfirmationKind.screen-orientation;
     accessible-role: main;
     accessible-label: "Settings";
+    accessible-description: NavigationView.transition-state == NavigationTransitionState.idle ? "Ready" : "Transitioning";
     background: PageTheme.background;
 
     if !MisterUi.portrait-layout : Rectangle {
-        CogBackdrop { x: -18px; y: 97px; }
+        CogBackdrop { x: -18px; y: 97px; opacity: root.overlay-active ? 0.55 : 1; }
         LandscapePageChrome {
-            hint-a: "A  CHANGE";
-            hint-b: "B  BACK";
-            hint-right: "UP  DOWN   MOVE";
+            hint-a: root.overlay-active ? "A  SELECT" : "A  CHANGE";
+            hint-b: root.overlay-active ? "B  CANCEL" : "B  BACK";
+            hint-right: root.overlay-active ? "UP  DOWN   CHOOSE" : "UP  DOWN   MOVE";
         }
-        SettingsList { x: 400px; y: 104px; width: 534px; height: 310px; }
+        SettingsList { x: 400px; y: 104px; width: 534px; height: 384px; }
     }
 
     if MisterUi.portrait-layout : Rectangle {
-        CogBackdrop { x: (root.width - 412px) / 2; y: 120px; }
+        CogBackdrop { x: (root.width - 412px) / 2; y: 120px; opacity: root.overlay-active ? 0.55 : 1; }
         PortraitPageChrome {
             section: "SETTINGS";
-            hint-a: "A CHANGE";
-            hint-b: "B BACK";
+            hint-a: root.overlay-active ? "A SELECT" : "A CHANGE";
+            hint-b: root.overlay-active ? "B CANCEL" : "B BACK";
         }
-        SettingsList { x: 32px; y: 506px; width: root.width - 64px; height: 310px; }
+        SettingsList { x: 32px; y: 506px; width: root.width - 64px; height: 384px; }
     }
 }

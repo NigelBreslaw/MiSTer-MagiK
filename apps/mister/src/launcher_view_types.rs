@@ -58,10 +58,9 @@ pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
         Screen::Controller => view::LauncherScreen::Controller,
         Screen::Arcade => view::LauncherScreen::Arcade,
         Screen::Settings => view::LauncherScreen::Settings,
-        Screen::Screensaver => view::LauncherScreen::ScreensaverSettings,
         Screen::About => view::LauncherScreen::About,
         Screen::Licenses => view::LauncherScreen::Licenses,
-        Screen::Info => view::LauncherScreen::Info,
+        Screen::LicenseText => view::LauncherScreen::LicenseText,
     }
 }
 
@@ -105,11 +104,12 @@ pub const fn settings_section(index: usize) -> view::SettingsSection {
     match index {
         0 => view::SettingsSection::Display,
         1 => view::SettingsSection::Orientation,
-        2 => view::SettingsSection::Screensaver,
-        3 => view::SettingsSection::ReduceMotion,
-        4 => view::SettingsSection::Exit,
-        5 => view::SettingsSection::Refresh,
-        6 => view::SettingsSection::About,
+        2 => view::SettingsSection::ReduceMotion,
+        3 => view::SettingsSection::ScreensaverDelay,
+        4 => view::SettingsSection::ScreensaverPreview,
+        5 => view::SettingsSection::Exit,
+        6 => view::SettingsSection::Refresh,
+        7 => view::SettingsSection::About,
         _ => panic!("settings selection is outside its finite domain"),
     }
 }
@@ -120,23 +120,6 @@ pub const fn settings_popup(display_open: bool, orientation_open: bool) -> view:
         (true, false) => view::SettingsPopup::DisplayResolution,
         (false, true) => view::SettingsPopup::ScreenOrientation,
         (true, true) => panic!("settings popups are mutually exclusive"),
-    }
-}
-
-pub const fn screensaver_setting(index: usize) -> view::ScreensaverSetting {
-    match index {
-        0 => view::ScreensaverSetting::Enabled,
-        1 => view::ScreensaverSetting::Delay,
-        2 => view::ScreensaverSetting::Preview,
-        _ => panic!("screensaver selection is outside its finite domain"),
-    }
-}
-
-pub const fn about_section(index: usize) -> view::AboutSection {
-    match index {
-        0 => view::AboutSection::Information,
-        1 => view::AboutSection::Licenses,
-        _ => panic!("about selection is outside its finite domain"),
     }
 }
 
@@ -265,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn active_display_identity_is_not_confused_with_the_filtered_settings_index() {
+    fn active_and_selected_display_choices_share_the_full_catalog_identity() {
         let runtime_index = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
             .iter()
             .position(|mode| mode.id == "crt-480p60")
@@ -277,9 +260,17 @@ mod tests {
                 .as_str(),
             "crt-480p60"
         );
-        assert!(selected_display_choice(runtime_index).id.is_empty());
-        assert_ne!(
-            settings_display_choice(runtime_index).id.as_str(),
+        assert_eq!(
+            selected_display_choice(runtime_index).id.as_str(),
+            "crt-480p60"
+        );
+        assert_eq!(
+            settings_display_choice(
+                crate::launcher::settings_display_selection_index(runtime_index)
+                    .expect("CRT 480p settings mode"),
+            )
+            .id
+            .as_str(),
             "crt-480p60"
         );
     }

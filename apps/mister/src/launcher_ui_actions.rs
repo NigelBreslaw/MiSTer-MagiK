@@ -25,12 +25,10 @@ pub enum LauncherUiAction {
     SelectSettingsSection(slint_ui::launcher::SettingsSection),
     SelectDisplayOption(String),
     SelectOrientation(slint_ui::launcher::ScreenOrientation),
-    SelectScreensaverSetting(slint_ui::launcher::ScreensaverSetting),
     SetScreensaverEnabled(bool),
     SetScreensaverDelay(i32),
     SetReduceMotion(bool),
     SetSimpleJoystickHandling(bool),
-    SelectAboutSection(slint_ui::launcher::AboutSection),
     SelectLicense(usize),
     SelectArcadeGame(String),
     SelectArcadeSearchPane(slint_ui::launcher::ArcadeSearchPane),
@@ -173,11 +171,12 @@ pub fn apply_navigation_action(
             nav.settings_selected = match section {
                 slint_ui::launcher::SettingsSection::Display => 0,
                 slint_ui::launcher::SettingsSection::Orientation => 1,
-                slint_ui::launcher::SettingsSection::Screensaver => 2,
-                slint_ui::launcher::SettingsSection::ReduceMotion => 3,
-                slint_ui::launcher::SettingsSection::Exit => 4,
-                slint_ui::launcher::SettingsSection::Refresh => 5,
-                slint_ui::launcher::SettingsSection::About => 6,
+                slint_ui::launcher::SettingsSection::ReduceMotion => 2,
+                slint_ui::launcher::SettingsSection::ScreensaverDelay => 3,
+                slint_ui::launcher::SettingsSection::ScreensaverPreview => 4,
+                slint_ui::launcher::SettingsSection::Exit => 5,
+                slint_ui::launcher::SettingsSection::Refresh => 6,
+                slint_ui::launcher::SettingsSection::About => 7,
             };
             None
         }
@@ -215,14 +214,6 @@ pub fn apply_navigation_action(
                 settings: None,
             })
         }
-        LauncherUiAction::SelectScreensaverSetting(setting) => {
-            nav.screensaver_selected = match setting {
-                slint_ui::launcher::ScreensaverSetting::Enabled => 0,
-                slint_ui::launcher::ScreensaverSetting::Delay => 1,
-                slint_ui::launcher::ScreensaverSetting::Preview => 2,
-            };
-            None
-        }
         LauncherUiAction::SetScreensaverEnabled(enabled) => {
             persist_settings(nav, |settings| settings.screensaver_enabled = enabled)
         }
@@ -235,13 +226,6 @@ pub fn apply_navigation_action(
         LauncherUiAction::SetSimpleJoystickHandling(enabled) => persist_settings(nav, |settings| {
             settings.simple_joystick_handling = enabled;
         }),
-        LauncherUiAction::SelectAboutSection(section) => {
-            nav.about_selected = match section {
-                slint_ui::launcher::AboutSection::Information => 0,
-                slint_ui::launcher::AboutSection::Licenses => 1,
-            };
-            None
-        }
         LauncherUiAction::SelectLicense(index) => {
             nav.licenses_selected = index;
             None
@@ -362,10 +346,6 @@ fn bind_simple_action(
         enqueue(&queue, LauncherUiAction::SelectOrientation(orientation));
     });
     let queue = state.clone();
-    actions.on_select_screensaver_setting(move |setting| {
-        enqueue(&queue, LauncherUiAction::SelectScreensaverSetting(setting));
-    });
-    let queue = state.clone();
     actions.on_set_screensaver_enabled(move |enabled| {
         enqueue(&queue, LauncherUiAction::SetScreensaverEnabled(enabled));
     });
@@ -376,10 +356,6 @@ fn bind_simple_action(
     let queue = state.clone();
     actions.on_set_simple_joystick_handling(move |enabled| {
         enqueue(&queue, LauncherUiAction::SetSimpleJoystickHandling(enabled));
-    });
-    let queue = state.clone();
-    actions.on_select_about_section(move |section| {
-        enqueue(&queue, LauncherUiAction::SelectAboutSection(section));
     });
     let queue = state.clone();
     actions.on_select_arcade_search_pane(move |pane| {
@@ -605,6 +581,8 @@ mod tests {
             ])));
         app.global::<slint_ui::launcher::SettingsView>()
             .set_license_titles(ModelRc::new(VecModel::from(vec!["GPL-3.0".into()])));
+        app.global::<slint_ui::launcher::SettingsView>()
+            .set_license_kinds(ModelRc::new(VecModel::from(vec!["GPL-3.0".into()])));
 
         let adapter = LauncherUiActionsAdapter::install(&app);
         let actions = app.global::<slint_ui::launcher::LauncherActions>();

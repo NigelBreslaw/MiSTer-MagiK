@@ -20,7 +20,6 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "licenses.ppm".into());
     let state = std::env::args().nth(2).unwrap_or_else(|| "list".into());
-    let expanded = state == "expanded";
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     slint::platform::set_platform(Box::new(SnapshotPlatform(window.clone())))
         .expect("set snapshot platform");
@@ -35,7 +34,6 @@ fn main() {
         "catalog-tiles" => LauncherScreen::Home,
         "settings" => LauncherScreen::Settings,
         "about" => LauncherScreen::About,
-        "info" => LauncherScreen::Info,
         _ => LauncherScreen::Licenses,
     });
     navigation.set_build_label("Build 42 | 2026-07-12 12:00 UTC".into());
@@ -47,7 +45,6 @@ fn main() {
     information.set_kernel_version("Kernel version detected at launcher startup".into());
     let settings = app.global::<SettingsView>();
     settings.set_selected_license_index(1);
-    settings.set_license_expanded(expanded);
     if state == "catalog-tiles" {
         use mister_magik_ui::launcher::{
             MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,

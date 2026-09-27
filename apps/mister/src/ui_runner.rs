@@ -236,8 +236,7 @@ fn screen_label(screen: Screen) -> &'static str {
         Screen::Settings => "settings",
         Screen::About => "about",
         Screen::Licenses => "licenses",
-        Screen::Info => "info",
-        Screen::Screensaver => "screensaver-settings",
+        Screen::LicenseText => "license-text",
     }
 }
 

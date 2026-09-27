@@ -169,14 +169,30 @@ def _press_key(application, text):
     window.dispatch_event(KeyReleasedEvent(text))
 
 
-def _settings_open(application):
-    return any(
-        element.accessible_label == "Settings"
-        and element.accessible_role.name == "Main"
-        for element in application.first_window.root_element.query_descendants()
-        .match_inherits("Rectangle")
-        .find_all()
+def _settings_element(application):
+    window = application.first_window
+    if window is None:
+        return None
+    return next(
+        (
+            element
+            for element in window.root_element.query_descendants()
+            .match_inherits("Rectangle")
+            .find_all()
+            if element.accessible_label == "Settings"
+            and element.accessible_role.name == "Main"
+        ),
+        None,
     )
+
+
+def _settings_open(application):
+    return _settings_element(application) is not None
+
+
+def _settings_ready(application):
+    element = _settings_element(application)
+    return element is not None and element.accessible_description == "Ready"
 
 
 def _open_settings_card(application):
@@ -199,7 +215,9 @@ def launcher_navigation(application, screenshot_path):
     started = time.monotonic()
     _open_settings_card(application)
     try:
-        _wait(lambda: _settings_open(application), "Settings did not open")
+        _wait(
+            lambda: _settings_ready(application), "Settings transition did not settle"
+        )
         opened_ms = round((time.monotonic() - started) * 1000, 2)
         screenshot(application, screenshot_path)
     finally:

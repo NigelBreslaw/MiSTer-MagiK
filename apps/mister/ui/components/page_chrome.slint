@@ -18,12 +18,35 @@ export global PageTheme {
     out property <color> settings-accent: #9c86e7;
     out property <color> settings-accent-deep: #735dbd;
     out property <color> settings-focus-start: #221843;
+    // Retained for the separate low-resolution CRT settings variant.
     out property <color> settings-focus-end: #120d24;
 }
 
 export component PageRule inherits Rectangle {
     height: 1px;
     background: PageTheme.rule;
+}
+
+// Shared focus fill for Settings and every About sub-view. `source` must have
+// the same dimensions as this component so RGB565 dithering remains 1:1.
+export component SettingsFocusHighlight inherits Rectangle {
+    in property <image> source;
+
+    Image {
+        source: root.source;
+        width: root.width;
+        height: root.height;
+        image-fit: fill;
+        image-rendering: pixelated;
+        accessible-role: none;
+    }
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 4px;
+        height: root.height;
+        background: PageTheme.settings-accent;
+    }
 }
 
 // 960x540 landscape chrome.

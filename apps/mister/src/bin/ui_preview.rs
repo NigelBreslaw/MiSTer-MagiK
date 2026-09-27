@@ -46,8 +46,8 @@ mod macos {
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
         CrtNavigationLayout, NavigationTransitionDirection, NavigationTransitionEdge,
-        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionRoute,
-        NavigationTransitionRuntime, crt_navigation_geometry, hdmi_navigation_geometry,
+        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionRuntime,
+        crt_navigation_geometry, hdmi_navigation_geometry, settings_page_transition,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_runtime::startup_intro::StartupIntroPlayback;
@@ -77,15 +77,15 @@ mod macos {
     #[cfg(test)]
     use mister_magik_ui::launcher::FeedbackView;
     use mister_magik_ui::launcher::{
-        AboutSection, ArcadeGame, ArcadeLoadState, ArcadeSearchMode,
-        ArcadeSearchPane as ViewArcadeSearchPane, ArcadeSearchStatus as ViewArcadeSearchStatus,
-        ArcadeView, CatalogActivity, CatalogView, ChoiceOption, ConfirmationKind, DialogChoice,
-        HomeScrollPhase, InformationView, InputAvailability, InputView, Launcher, LauncherLayout,
-        LauncherScreen, LayoutRect, LoadingState, MediaPackRow, MediaPackState, MediaView,
-        MenuHierarchy, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi,
+        ArcadeGame, ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane as ViewArcadeSearchPane,
+        ArcadeSearchStatus as ViewArcadeSearchStatus, ArcadeView, CatalogActivity, CatalogView,
+        ChoiceOption, ConfirmationKind, DialogChoice, HomeScrollPhase, InformationView,
+        InputAvailability, InputView, Launcher, LauncherLayout, LauncherScreen, LayoutRect,
+        LoadingState, MediaPackRow, MediaPackState, MediaView, MenuHierarchy, MenuItem,
+        MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi,
         NavigationTransitionState as ViewNavigationTransitionState, NavigationView, OverlayView,
         PreviewState as ViewPreviewState, ProgressMode, ScreenOrientation as ViewScreenOrientation,
-        ScreensaverSetting, SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
+        SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
         SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
     };
     use sha2::{Digest, Sha256};
@@ -517,10 +517,9 @@ mod macos {
             Screen::Arcade if nav.arcade_uses_menu_repeat() => (4, DirectionalPolicy::MenuRepeat),
             Screen::Arcade => (4, DirectionalPolicy::ArcadeContinuous),
             Screen::Settings => (5, DirectionalPolicy::MenuRepeat),
-            Screen::Screensaver => (6, DirectionalPolicy::EdgeOnly),
             Screen::About => (7, DirectionalPolicy::MenuRepeat),
             Screen::Licenses => (8, DirectionalPolicy::MenuRepeat),
-            Screen::Info => (9, DirectionalPolicy::MenuRepeat),
+            Screen::LicenseText => (10, DirectionalPolicy::MenuRepeat),
         };
         FocusRequest {
             target: FocusTarget {
@@ -648,6 +647,9 @@ mod macos {
             launcher
                 .global::<InformationView>()
                 .set_build_label(build_label);
+            launcher
+                .global::<InformationView>()
+                .set_version_label(env!("MISTER_MAGIK_VERSION").into());
             let navigation_motion_enabled =
                 force_navigation_motion || !launcher_nav.settings.reduce_motion;
             let launcher_ui_actions = LauncherUiActionsAdapter::install(&launcher);
@@ -815,6 +817,9 @@ mod macos {
             if scenario != Scenario::OrientationChoice {
                 self.launcher_nav.orientation_combo_open = false;
             }
+            if scenario != Scenario::DisplayChoice {
+                self.launcher_nav.display_combo_open = false;
+            }
             if scenario == Scenario::ArcadeCrossfade {
                 self.preview_previous_index = None;
                 self.preview_current_index = Some(0);
@@ -929,10 +934,9 @@ mod macos {
             let count = match self.scenario {
                 Scenario::Home | Scenario::BackgroundScan | Scenario::Confirm => 6,
                 Scenario::SystemHub => 4,
-                Scenario::Settings => 6,
-                Scenario::About => 2,
-                Scenario::Licenses => 2,
-                Scenario::ScreensaverSettings => 3,
+                Scenario::Settings => 8,
+                Scenario::About => 1,
+                Scenario::Licenses => 12,
                 Scenario::Arcade => self.catalog.system_game_count(MENU_ARCADE_SYSTEM_ID),
                 _ => 1,
             };
@@ -958,32 +962,20 @@ mod macos {
             }
             let settings = self.launcher.global::<SettingsView>();
             match self.scenario {
-                Scenario::Settings | Scenario::OrientationChoice => {
+                Scenario::Settings | Scenario::DisplayChoice | Scenario::OrientationChoice => {
                     settings.set_section(match self.selection {
                         0 => SettingsSection::Display,
                         1 => SettingsSection::Orientation,
-                        2 => SettingsSection::Screensaver,
-                        3 => SettingsSection::ReduceMotion,
-                        4 => SettingsSection::Exit,
-                        5 => SettingsSection::Refresh,
-                        6 => SettingsSection::About,
+                        2 => SettingsSection::ReduceMotion,
+                        3 => SettingsSection::ScreensaverDelay,
+                        4 => SettingsSection::ScreensaverPreview,
+                        5 => SettingsSection::Exit,
+                        6 => SettingsSection::Refresh,
+                        7 => SettingsSection::About,
                         _ => unreachable!("settings selection is bounded"),
                     });
                 }
-                Scenario::About => settings.set_about_section(match self.selection {
-                    0 => AboutSection::Information,
-                    1 => AboutSection::Licenses,
-                    _ => unreachable!("about selection is bounded"),
-                }),
                 Scenario::Licenses => settings.set_selected_license_index(self.selection as i32),
-                Scenario::ScreensaverSettings => {
-                    settings.set_screensaver_setting(match self.selection {
-                        0 => ScreensaverSetting::Enabled,
-                        1 => ScreensaverSetting::Delay,
-                        2 => ScreensaverSetting::Preview,
-                        _ => unreachable!("screensaver selection is bounded"),
-                    });
-                }
                 _ => {}
             }
             overlay.set_selected_choice(if self.selection == 0 {
@@ -1116,6 +1108,12 @@ mod macos {
                     }
                 }
                 Scenario::Settings => self.launcher_nav.screen = Screen::Settings,
+                Scenario::DisplayChoice => {
+                    self.launcher_nav.screen = Screen::Settings;
+                    self.launcher_nav.settings_selected = 0;
+                    self.launcher_nav.display_combo_open = true;
+                    self.launcher_nav.display_highlighted = self.launcher_nav.display_selected;
+                }
                 Scenario::OrientationChoice => {
                     self.launcher_nav.screen = Screen::Settings;
                     self.launcher_nav.settings_selected = 1;
@@ -1126,8 +1124,7 @@ mod macos {
                 Scenario::Controller => self.launcher_nav.screen = Screen::Controller,
                 Scenario::About => self.launcher_nav.screen = Screen::About,
                 Scenario::Licenses => self.launcher_nav.screen = Screen::Licenses,
-                Scenario::Info => self.launcher_nav.screen = Screen::Info,
-                Scenario::ScreensaverSettings => self.launcher_nav.screen = Screen::Screensaver,
+                Scenario::LicenseText => self.launcher_nav.screen = Screen::LicenseText,
                 _ => {}
             }
             self.launcher_pad = PadState::default();
@@ -1314,10 +1311,9 @@ mod macos {
                                 self.launcher_nav.screen,
                                 Screen::Home
                                     | Screen::Settings
-                                    | Screen::Screensaver
                                     | Screen::About
-                                    | Screen::Info
                                     | Screen::Licenses
+                                    | Screen::LicenseText
                             )
                     }))
                 .then(|| {
@@ -1513,6 +1509,7 @@ mod macos {
                 }
                 (Scenario::ArcadeCrossfade, Screen::Arcade) => Scenario::ArcadeCrossfade,
                 (Scenario::OrientationChoice, Screen::Settings) => Scenario::OrientationChoice,
+                (Scenario::DisplayChoice, Screen::Settings) => Scenario::DisplayChoice,
                 (Scenario::ControllerSetup, Screen::Controller) => Scenario::ControllerSetup,
                 _ => Scenario::from_screen(self.launcher_nav.screen),
             };
@@ -1590,10 +1587,7 @@ mod macos {
         }
 
         fn exit_screenshot_tiles(&mut self) {
-            let scenario = self
-                .screensaver_return
-                .take()
-                .unwrap_or(Scenario::ScreensaverSettings);
+            let scenario = self.screensaver_return.take().unwrap_or(Scenario::Settings);
             self.select_scenario(scenario);
         }
 
@@ -2680,13 +2674,13 @@ mod macos {
         ArcadeSearch,
         ArcadeCrossfade,
         Settings,
+        DisplayChoice,
         OrientationChoice,
         Controller,
         ControllerSetup,
         About,
         Licenses,
-        Info,
-        ScreensaverSettings,
+        LicenseText,
         Confirm,
         CatalogScan,
         BackgroundScan,
@@ -2706,12 +2700,12 @@ mod macos {
                     | Self::ArcadeSearch
                     | Self::ArcadeCrossfade
                     | Self::Settings
+                    | Self::DisplayChoice
                     | Self::OrientationChoice
                     | Self::Controller
                     | Self::About
                     | Self::Licenses
-                    | Self::Info
-                    | Self::ScreensaverSettings
+                    | Self::LicenseText
             )
         }
 
@@ -2724,8 +2718,7 @@ mod macos {
                 Screen::Settings => Self::Settings,
                 Screen::About => Self::About,
                 Screen::Licenses => Self::Licenses,
-                Screen::Info => Self::Info,
-                Screen::Screensaver => Self::ScreensaverSettings,
+                Screen::LicenseText => Self::LicenseText,
             }
         }
 
@@ -2737,13 +2730,13 @@ mod macos {
                 "arcade-search" | "search" => Some(Self::ArcadeSearch),
                 "arcade-crossfade" | "crossfade" => Some(Self::ArcadeCrossfade),
                 "settings" => Some(Self::Settings),
+                "display-choice" | "display-chooser" => Some(Self::DisplayChoice),
                 "orientation-choice" | "orientation-chooser" => Some(Self::OrientationChoice),
                 "controller" => Some(Self::Controller),
                 "controller-setup" | "setup" => Some(Self::ControllerSetup),
                 "about" => Some(Self::About),
                 "licenses" => Some(Self::Licenses),
-                "info" => Some(Self::Info),
-                "screensaver-settings" => Some(Self::ScreensaverSettings),
+                "license-text" | "license" => Some(Self::LicenseText),
                 "confirm" => Some(Self::Confirm),
                 "catalog-scan" => Some(Self::CatalogScan),
                 "background-scan" => Some(Self::BackgroundScan),
@@ -2765,13 +2758,13 @@ mod macos {
                 Self::ArcadeSearch => "Arcade Search",
                 Self::ArcadeCrossfade => "Arcade Crossfade",
                 Self::Settings => "Settings",
+                Self::DisplayChoice => "Display Choice",
                 Self::OrientationChoice => "Orientation Choice",
                 Self::Controller => "Controller",
                 Self::ControllerSetup => "Controller Setup",
                 Self::About => "About",
                 Self::Licenses => "Licenses",
-                Self::Info => "Info",
-                Self::ScreensaverSettings => "Screensaver Settings",
+                Self::LicenseText => "License Text",
                 Self::Confirm => "Confirmation",
                 Self::CatalogScan => "Catalog Scan",
                 Self::BackgroundScan => "Background Scan",
@@ -2790,13 +2783,13 @@ mod macos {
                 Self::ArcadeSearch => "arcade-search",
                 Self::ArcadeCrossfade => "arcade-crossfade",
                 Self::Settings => "settings",
+                Self::DisplayChoice => "display-choice",
                 Self::OrientationChoice => "orientation-choice",
                 Self::Controller => "controller",
                 Self::ControllerSetup => "controller-setup",
                 Self::About => "about",
                 Self::Licenses => "licenses",
-                Self::Info => "info",
-                Self::ScreensaverSettings => "screensaver-settings",
+                Self::LicenseText => "license-text",
                 Self::Confirm => "confirm",
                 Self::CatalogScan => "catalog-scan",
                 Self::BackgroundScan => "background-scan",
@@ -2820,12 +2813,12 @@ mod macos {
                 Self::Home => "1",
                 Self::SystemHub => "headless",
                 Self::Settings => "2",
+                Self::DisplayChoice => "headless",
                 Self::OrientationChoice => "headless",
                 Self::Controller => "3",
                 Self::About => "4",
                 Self::Licenses => "5",
-                Self::Info => "6",
-                Self::ScreensaverSettings => "7",
+                Self::LicenseText => "L",
                 Self::Confirm => "9",
                 Self::CatalogScan => "0",
                 Self::Arcade => "A",
@@ -2848,8 +2841,6 @@ mod macos {
             KeyCode::Digit3 | KeyCode::Numpad3 => Some(Scenario::Controller),
             KeyCode::Digit4 | KeyCode::Numpad4 => Some(Scenario::About),
             KeyCode::Digit5 | KeyCode::Numpad5 => Some(Scenario::Licenses),
-            KeyCode::Digit6 | KeyCode::Numpad6 => Some(Scenario::Info),
-            KeyCode::Digit7 | KeyCode::Numpad7 => Some(Scenario::ScreensaverSettings),
             KeyCode::Digit9 | KeyCode::Numpad9 => Some(Scenario::Confirm),
             KeyCode::Digit0 | KeyCode::Numpad0 => Some(Scenario::CatalogScan),
             KeyCode::KeyA => Some(Scenario::Arcade),
@@ -2867,10 +2858,9 @@ mod macos {
         match (scenario, selection) {
             (Scenario::Home, 0) => Some(Scenario::Arcade),
             (Scenario::Home, 5) => Some(Scenario::Settings),
-            (Scenario::Settings, 1) => Some(Scenario::ScreensaverSettings),
-            (Scenario::Settings, 5) => Some(Scenario::About),
-            (Scenario::About, 0) => Some(Scenario::Info),
-            (Scenario::About, 1) => Some(Scenario::Licenses),
+            (Scenario::Settings, 7) => Some(Scenario::About),
+            (Scenario::About, 0) => Some(Scenario::Licenses),
+            (Scenario::Licenses, _) => Some(Scenario::LicenseText),
             _ => None,
         }
     }
@@ -2878,8 +2868,9 @@ mod macos {
     fn back_scenario(scenario: Scenario) -> Option<Scenario> {
         match scenario {
             Scenario::Home => None,
-            Scenario::ScreensaverSettings | Scenario::About => Some(Scenario::Settings),
-            Scenario::Info | Scenario::Licenses => Some(Scenario::About),
+            Scenario::About => Some(Scenario::Settings),
+            Scenario::Licenses => Some(Scenario::About),
+            Scenario::LicenseText => Some(Scenario::Licenses),
             _ => Some(Scenario::Home),
         }
     }
@@ -2934,63 +2925,6 @@ mod macos {
                 NavigationTransitionDirection::Reverse,
             )),
             _ => None,
-        }
-    }
-
-    fn settings_page_transition(
-        source: Screen,
-        destination: Screen,
-    ) -> Option<(NavigationTransitionRoute, NavigationTransitionDirection)> {
-        let source_depth = settings_page_depth(source)?;
-        let destination_depth = settings_page_depth(destination)?;
-        let route = match (source, destination) {
-            (Screen::Home, Screen::Settings) | (Screen::Settings, Screen::Home) => {
-                Some(NavigationTransitionRoute::HomeToSettings)
-            }
-            (Screen::Settings, Screen::Screensaver) | (Screen::Screensaver, Screen::Settings) => {
-                Some(NavigationTransitionRoute::SettingsToScreensaver)
-            }
-            (Screen::Settings, Screen::About) | (Screen::About, Screen::Settings) => {
-                Some(NavigationTransitionRoute::SettingsToAbout)
-            }
-            (Screen::About, Screen::Info) | (Screen::Info, Screen::About) => {
-                Some(NavigationTransitionRoute::AboutToInfo)
-            }
-            (Screen::About, Screen::Licenses) | (Screen::Licenses, Screen::About) => {
-                Some(NavigationTransitionRoute::AboutToLicenses)
-            }
-            (source, Screen::Home) if source != Screen::Home => {
-                Some(NavigationTransitionRoute::NestedToHome)
-            }
-            _ => None,
-        }?;
-        let adjacent = matches!(
-            (source, destination),
-            (Screen::Home, Screen::Settings)
-                | (Screen::Settings, Screen::Home)
-                | (Screen::Settings, Screen::Screensaver | Screen::About)
-                | (Screen::Screensaver | Screen::About, Screen::Settings)
-                | (Screen::About, Screen::Info | Screen::Licenses)
-                | (Screen::Info | Screen::Licenses, Screen::About)
-        );
-        let direct_home = source != Screen::Home && destination == Screen::Home;
-        (adjacent || direct_home).then_some((
-            route,
-            if destination_depth > source_depth {
-                NavigationTransitionDirection::Forward
-            } else {
-                NavigationTransitionDirection::Reverse
-            },
-        ))
-    }
-
-    const fn settings_page_depth(screen: Screen) -> Option<u8> {
-        match screen {
-            Screen::Home => Some(0),
-            Screen::Settings => Some(1),
-            Screen::Screensaver | Screen::About => Some(2),
-            Screen::Info | Screen::Licenses => Some(3),
-            Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
         }
     }
 
@@ -4030,6 +3964,7 @@ mod macos {
     fn initialize_bridge(launcher: &Launcher, display_profile: DisplayProfile) {
         let navigation = launcher.global::<NavigationView>();
         let settings = launcher.global::<SettingsView>();
+        mister_magik_fb::launcher_presentation::install_settings_visual_assets(&settings);
         let information = launcher.global::<InformationView>();
         let input = launcher.global::<InputView>();
         let arcade = launcher.global::<ArcadeView>();
@@ -4037,6 +3972,7 @@ mod macos {
         navigation.set_build_label("Mac visual preview".into());
         navigation.set_present_mode_label("RGB565 host composition".into());
         information.set_build_label("Mac visual preview".into());
+        information.set_version_label(env!("MISTER_MAGIK_VERSION").into());
         information.set_present_mode_label("RGB565 host composition".into());
         input.set_capture_availability(InputAvailability::Available);
         input.set_input_availability(InputAvailability::Available);
@@ -4093,6 +4029,7 @@ mod macos {
         ]);
         settings.set_license_lines(license_lines);
         settings.set_license_titles(strings(&mister_magik_fb::licenses::LICENSE_TITLES));
+        settings.set_license_kinds(strings(&mister_magik_fb::licenses::LICENSE_KINDS));
         arcade.set_preview_run_label("Press A to launch".into());
         let catalog = launcher.global::<CatalogView>();
         catalog.set_activity(CatalogActivity::Idle);
@@ -4122,11 +4059,12 @@ mod macos {
             Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => {
                 LauncherScreen::Arcade
             }
-            Scenario::Settings | Scenario::OrientationChoice => LauncherScreen::Settings,
+            Scenario::Settings | Scenario::DisplayChoice | Scenario::OrientationChoice => {
+                LauncherScreen::Settings
+            }
             Scenario::About => LauncherScreen::About,
             Scenario::Licenses => LauncherScreen::Licenses,
-            Scenario::Info => LauncherScreen::Info,
-            Scenario::ScreensaverSettings => LauncherScreen::ScreensaverSettings,
+            Scenario::LicenseText => LauncherScreen::LicenseText,
             _ => LauncherScreen::Home,
         });
         navigation.set_menu_title("MiSTer MagiK".into());
@@ -4148,12 +4086,9 @@ mod macos {
         settings.set_popup(SettingsPopup::None);
         settings.set_simple_joystick_handling(true);
         settings.set_reduce_motion(false);
-        settings.set_screensaver_setting(ScreensaverSetting::Enabled);
         settings.set_screensaver_enabled(true);
         settings.set_screensaver_delay_minutes(5);
-        settings.set_about_section(AboutSection::Information);
         settings.set_selected_license_index(0);
-        settings.set_license_expanded(false);
         settings.set_license_scroll_y(0);
         let information = launcher.global::<InformationView>();
         information.set_kernel_version("Linux 6.6.68-MiSTer".into());
@@ -5104,9 +5039,7 @@ mod macos {
                 "controller",
                 "controller-setup",
                 "about",
-                "info",
                 "licenses",
-                "screensaver-settings",
                 "startup",
                 "confirm",
                 "catalog-scan",
@@ -5315,30 +5248,26 @@ mod macos {
         #[test]
         fn home_settings_focus_activates_settings() {
             assert_eq!(
-                activated_scenario(Scenario::Home, 0, true),
-                Some(Scenario::Settings)
-            );
-            assert_eq!(
-                activated_scenario(Scenario::Home, 0, false),
+                activated_scenario(Scenario::Home, 0),
                 Some(Scenario::Arcade)
             );
         }
 
         #[test]
         fn settings_subpages_and_back_routes_match_launcher_hierarchy() {
+            assert_eq!(activated_scenario(Scenario::Settings, 1), None);
             assert_eq!(
-                activated_scenario(Scenario::Settings, 1, false),
-                Some(Scenario::ScreensaverSettings)
-            );
-            assert_eq!(
-                activated_scenario(Scenario::Settings, 5, false),
+                activated_scenario(Scenario::Settings, 7),
                 Some(Scenario::About)
             );
             assert_eq!(
-                back_scenario(Scenario::ScreensaverSettings),
-                Some(Scenario::Settings)
+                activated_scenario(Scenario::About, 0),
+                Some(Scenario::Licenses)
             );
-            assert_eq!(back_scenario(Scenario::Info), Some(Scenario::About));
+            assert_eq!(
+                back_scenario(Scenario::LicenseText),
+                Some(Scenario::Licenses)
+            );
         }
 
         #[test]
@@ -5347,10 +5276,7 @@ mod macos {
                 shortcut_scenario(KeyCode::Numpad2),
                 Some(Scenario::Settings)
             );
-            assert_eq!(
-                shortcut_scenario(KeyCode::Numpad7),
-                Some(Scenario::ScreensaverSettings)
-            );
+            assert_eq!(shortcut_scenario(KeyCode::Numpad7), None);
             assert_eq!(shortcut_scenario(KeyCode::Numpad8), None);
         }
 

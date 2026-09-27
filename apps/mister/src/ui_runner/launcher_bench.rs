@@ -277,8 +277,7 @@ fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
         "settings" => Some(Screen::Settings),
         "about" => Some(Screen::About),
         "licenses" => Some(Screen::Licenses),
-        "info" => Some(Screen::Info),
-        "screensaver" | "screensaver-settings" => Some(Screen::Screensaver),
+        "license-text" => Some(Screen::LicenseText),
         _ => None,
     }
 }

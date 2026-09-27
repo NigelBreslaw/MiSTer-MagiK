@@ -160,6 +160,7 @@ mod tests {
                 "hdmi-1920x1080p60",
                 "hdmi-1920x1200p60",
                 "hdmi-2048x1536p60",
+                "hdmi-2560x1440p60",
                 "crt-240p60",
                 "crt-480p60",
                 "crt-288p50",
@@ -167,7 +168,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            DISPLAY_RESOLUTIONS[5..]
+            DISPLAY_RESOLUTIONS[6..]
                 .iter()
                 .map(|mode| (mode.id, mode.label))
                 .collect::<Vec<_>>(),

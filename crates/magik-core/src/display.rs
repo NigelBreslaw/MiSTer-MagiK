@@ -435,6 +435,16 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
         forced_scandoubler: 0,
     },
     DisplayResolution {
+        id: "hdmi-2560x1440p60",
+        label: "2560x1440 (16:9)",
+        output_w: 2560,
+        output_h: 1440,
+        video_mode: Some("2560,1440,60"),
+        direct_video: 0,
+        menu_pal: 0,
+        forced_scandoubler: 0,
+    },
+    DisplayResolution {
         id: "crt-240p60",
         label: "CRT 240p 60hz NTSC",
         output_w: 640,
@@ -704,12 +714,12 @@ mod tests {
 
     #[test]
     fn selectable_catalog_stays_stable() {
-        assert_eq!(DISPLAY_RESOLUTIONS.len(), 9);
+        assert_eq!(DISPLAY_RESOLUTIONS.len(), 10);
         assert!(DISPLAY_RESOLUTIONS.iter().all(|mode| mode.id != "auto"));
         assert!(
             DISPLAY_RESOLUTIONS
                 .iter()
-                .all(|mode| mode.id != "hdmi-2560x1440p60")
+                .any(|mode| mode.id == "hdmi-2560x1440p60")
         );
         assert_eq!(
             find_display_resolution("auto"),

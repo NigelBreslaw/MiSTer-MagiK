@@ -57,7 +57,7 @@ CONTRACTS = (
         UI_ROOT / "components/jersey_25.slint",
         "Jersey25",
         "Jersey25Size",
-        ("px25",),
+        ("px25", "px56"),
         "Jersey 25",
         "41px",
     ),
