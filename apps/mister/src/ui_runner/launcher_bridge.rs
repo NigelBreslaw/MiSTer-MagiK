@@ -80,6 +80,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let build_label = SharedString::from(build_label());
     navigation.set_build_label(build_label.clone());
     information.set_build_label(build_label);
+    information.set_version_label(env!("MISTER_MAGIK_VERSION").into());
     navigation.set_present_mode_label("Mode=/dev/fb0".into());
     information.set_present_mode_label("Mode=/dev/fb0".into());
     let kernel_version = SharedString::from(kernel_version());
@@ -595,7 +596,7 @@ fn sync_launcher_confirm_bridge(
     });
     sync_confirm_bridge(bridge, nav.confirm_action);
     if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolution) {
-        let label = format!("Cancel ({})", nav.display_confirm_remaining);
+        let label = format!("Revert {}", nav.display_confirm_remaining);
         set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, &label);
         if nav.display_confirm_busy {
             set_bridge_string_if_changed!(
@@ -623,9 +624,9 @@ fn sync_launcher_confirm_bridge(
         }
     } else if nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation) {
         let label = if nav.orientation_error.is_some() {
-            "Cancel".to_string()
+            "Revert".to_string()
         } else {
-            format!("Cancel ({})", nav.orientation_confirm_remaining)
+            format!("Revert {}", nav.orientation_confirm_remaining)
         };
         set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, &label);
         if nav.orientation_confirm_busy {
@@ -712,10 +713,10 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             right_label: "",
         },
         Some(launcher::ConfirmAction::DisplayResolution) => ConfirmBridgeText {
-            title: "Confirm new resolution works",
+            title: "Keep this display mode?",
             message: "Keep this display resolution? It will be restored automatically if you cannot see this dialog.",
-            left_label: "Cancel (10)",
-            right_label: "Confirm",
+            left_label: "Revert 15",
+            right_label: "Keep",
         },
         Some(launcher::ConfirmAction::DisplayResolutionError) => ConfirmBridgeText {
             title: "Resolution change failed",
@@ -724,10 +725,10 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             right_label: "",
         },
         Some(launcher::ConfirmAction::ScreenOrientation) => ConfirmBridgeText {
-            title: "Confirm screen orientation",
+            title: "Keep this orientation?",
             message: "Is the launcher upright on the rotated monitor?",
-            left_label: "Cancel (20)",
-            right_label: "Confirm",
+            left_label: "Revert 15",
+            right_label: "Keep",
         },
         Some(launcher::ConfirmAction::AddFavourite) => ConfirmBridgeText {
             title: "Game Options",
@@ -1598,7 +1599,7 @@ mod tests {
         nav.screen = Screen::Screensaver;
         let before = LauncherProjectionKey::from_nav(&nav);
 
-        nav.settings_selected = 3;
+        nav.settings_selected = 2;
         nav.display_combo_open = true;
         nav.display_selected = 1;
         nav.display_highlighted = 2;

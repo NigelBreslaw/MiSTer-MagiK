@@ -89,28 +89,27 @@ const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
 const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAIN_START_TIMEOUT: Duration = Duration::from_secs(15);
-pub const DISPLAY_CONFIRM_SECONDS: u8 = 20;
+pub const DISPLAY_CONFIRM_SECONDS: u8 = 15;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
 const SETTINGS_DISPLAY_SELECTED: usize = 0;
 const SETTINGS_ORIENTATION_SELECTED: usize = 1;
-const SETTINGS_SCREENSAVER_SELECTED: usize = 2;
-const SETTINGS_REDUCE_MOTION_SELECTED: usize = 3;
-const SETTINGS_EXIT_SELECTED: usize = 4;
-const SETTINGS_REFRESH_SELECTED: usize = 5;
-const SETTINGS_ABOUT_SELECTED: usize = 6;
+const SETTINGS_REDUCE_MOTION_SELECTED: usize = 2;
+const SETTINGS_SCREENSAVER_DELAY_SELECTED: usize = 3;
+const SETTINGS_SCREENSAVER_PREVIEW_SELECTED: usize = 4;
+const SETTINGS_EXIT_SELECTED: usize = 5;
+const SETTINGS_REFRESH_SELECTED: usize = 6;
+const SETTINGS_ABOUT_SELECTED: usize = 7;
 const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
-const ABOUT_MAX_SELECTED: usize = 1;
 const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
-const LICENSE_SCROLL_LINE_PX: f64 = 22.0;
+const LICENSE_SCROLL_LINE_PX: f64 = 18.0;
+const SETTINGS_DISPLAY_ORDER: [usize; 10] = [0, 1, 2, 3, 4, 5, 6, 8, 7, 9];
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
-const SETTINGS_HIDDEN_DISPLAY_RESOLUTION_IDS: [&str; 2] = ["crt-480p60", "crt-576p50"];
-
 pub fn settings_display_resolutions() -> impl Iterator<Item = &'static DisplayResolution> {
-    DISPLAY_RESOLUTIONS
-        .iter()
-        .filter(|mode| !SETTINGS_HIDDEN_DISPLAY_RESOLUTION_IDS.contains(&mode.id))
+    SETTINGS_DISPLAY_ORDER
+        .into_iter()
+        .filter_map(|index| DISPLAY_RESOLUTIONS.get(index))
 }
 
 pub fn settings_display_resolution(index: usize) -> Option<&'static DisplayResolution> {
@@ -314,6 +313,7 @@ pub enum Screen {
     Screensaver,
     About,
     Licenses,
+    LicenseText,
     Info,
 }
 
@@ -2629,6 +2629,9 @@ impl LauncherNav {
                     None
                 }
                 Screen::Licenses => self.handle_licenses(pressed, held, tick_continuous, frame_now),
+                Screen::LicenseText => {
+                    self.handle_license_text(pressed, held, tick_continuous, frame_now)
+                }
             }
         }
     }
@@ -3350,11 +3353,6 @@ impl LauncherNav {
                 self.orientation_highlighted = self.orientation_selected;
                 return None;
             }
-            if self.settings_selected == SETTINGS_SCREENSAVER_SELECTED {
-                self.screensaver_selected = 0;
-                self.screen = Screen::Screensaver;
-                return None;
-            }
             if self.settings_selected == SETTINGS_REDUCE_MOTION_SELECTED {
                 let mut next = self.settings.clone();
                 next.reduce_motion = !next.reduce_motion;
@@ -3363,6 +3361,16 @@ impl LauncherNav {
                     action: LauncherAction::PersistSettings,
                     path: None,
                     settings: Some(next),
+                });
+            }
+            if self.settings_selected == SETTINGS_SCREENSAVER_DELAY_SELECTED {
+                return self.step_screensaver_delay(1, true);
+            }
+            if self.settings_selected == SETTINGS_SCREENSAVER_PREVIEW_SELECTED {
+                return Some(LauncherEvent {
+                    action: LauncherAction::PreviewScreensaver,
+                    path: None,
+                    settings: None,
                 });
             }
             if self.settings_selected == SETTINGS_ABOUT_SELECTED {
@@ -3377,7 +3385,42 @@ impl LauncherNav {
                 _ => return None,
             });
         }
+        if self.settings_selected == SETTINGS_SCREENSAVER_DELAY_SELECTED {
+            if pressed.dpad_left {
+                return self.step_screensaver_delay(-1, false);
+            }
+            if pressed.dpad_right {
+                return self.step_screensaver_delay(1, false);
+            }
+        }
         None
+    }
+
+    fn step_screensaver_delay(&mut self, direction: i8, wrap: bool) -> Option<LauncherEvent> {
+        let current = if self.settings.screensaver_enabled {
+            self.settings.screensaver_delay_minutes.clamp(1, 10)
+        } else {
+            0
+        };
+        let next = if wrap {
+            (current + 1) % 11
+        } else {
+            (i16::from(current) + i16::from(direction)).clamp(0, 10) as u8
+        };
+        if next == current {
+            return None;
+        }
+        let mut settings = self.settings.clone();
+        settings.screensaver_enabled = next != 0;
+        if next != 0 {
+            settings.screensaver_delay_minutes = next;
+        }
+        self.settings = settings.clone();
+        Some(LauncherEvent {
+            action: LauncherAction::PersistSettings,
+            path: None,
+            settings: Some(settings),
+        })
     }
 
     fn handle_about(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
@@ -3389,21 +3432,11 @@ impl LauncherNav {
             self.screen = Screen::Settings;
             return None;
         }
-        if pressed.dpad_down && self.about_selected < ABOUT_MAX_SELECTED {
-            self.about_selected += 1;
-        }
-        if pressed.dpad_up && self.about_selected > 0 {
-            self.about_selected -= 1;
-        }
         if pressed.btn_a {
-            if self.about_selected == 0 {
-                self.screen = Screen::Info;
-            } else {
-                self.licenses_selected = 0;
-                self.licenses_expanded = false;
-                self.licenses_scroll.reset();
-                self.screen = Screen::Licenses;
-            }
+            self.licenses_selected = 0;
+            self.licenses_expanded = false;
+            self.licenses_scroll.reset();
+            self.screen = Screen::Licenses;
         }
         None
     }
@@ -3452,9 +3485,9 @@ impl LauncherNav {
     fn handle_licenses(
         &mut self,
         pressed: &PadState,
-        held: &PadState,
-        tick_continuous: bool,
-        frame_now: Instant,
+        _held: &PadState,
+        _tick_continuous: bool,
+        _frame_now: Instant,
     ) -> Option<LauncherEvent> {
         if pressed.btn_home {
             self.licenses_expanded = false;
@@ -3462,29 +3495,16 @@ impl LauncherNav {
             self.go_root();
             return None;
         }
-        if self.licenses_expanded {
-            if pressed.btn_a || pressed.btn_b {
-                self.licenses_expanded = false;
-                self.licenses_scroll.reset();
-            } else {
-                let count = crate::licenses::max_scroll_line(self.licenses_selected) + 1;
-                if tick_continuous {
-                    let previous_dir = self.licenses_scroll.scroll.held_dir;
-                    self.licenses_scroll.handle_direction_input(
-                        arcade_dpad_dir(held),
-                        previous_dir,
-                        frame_now,
-                        count,
-                    );
-                    self.licenses_scroll.tick(count, frame_now);
-                }
-            }
-            return None;
-        }
         if pressed.btn_b {
             self.screen = Screen::About;
             self.licenses_scroll.reset();
             return None;
+        }
+        if pressed.dpad_left {
+            self.licenses_selected = self.licenses_selected.saturating_sub(10);
+        }
+        if pressed.dpad_right {
+            self.licenses_selected = (self.licenses_selected + 10).min(LICENSES_MAX_SELECTED);
         }
         if pressed.dpad_down && self.licenses_selected < LICENSES_MAX_SELECTED {
             self.licenses_selected += 1;
@@ -3493,8 +3513,39 @@ impl LauncherNav {
             self.licenses_selected -= 1;
         }
         if pressed.btn_a {
-            self.licenses_expanded = true;
             self.licenses_scroll.reset();
+            self.screen = Screen::LicenseText;
+        }
+        None
+    }
+
+    fn handle_license_text(
+        &mut self,
+        pressed: &PadState,
+        held: &PadState,
+        tick_continuous: bool,
+        frame_now: Instant,
+    ) -> Option<LauncherEvent> {
+        if pressed.btn_home {
+            self.licenses_scroll.reset();
+            self.go_root();
+            return None;
+        }
+        if pressed.btn_a || pressed.btn_b {
+            self.licenses_scroll.reset();
+            self.screen = Screen::Licenses;
+            return None;
+        }
+        let count = crate::licenses::max_scroll_line(self.licenses_selected) + 1;
+        if tick_continuous {
+            let previous_dir = self.licenses_scroll.scroll.held_dir;
+            self.licenses_scroll.handle_direction_input(
+                arcade_dpad_dir(held),
+                previous_dir,
+                frame_now,
+                count,
+            );
+            self.licenses_scroll.tick(count, frame_now);
         }
         None
     }
@@ -3512,9 +3563,7 @@ impl LauncherNav {
     }
 
     pub fn licenses_scroll_active(&self) -> bool {
-        self.screen == Screen::Licenses
-            && self.licenses_expanded
-            && self.licenses_scroll.is_scroll_active()
+        self.screen == Screen::LicenseText && self.licenses_scroll.is_scroll_active()
     }
 
     fn handle_confirm(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
@@ -8812,7 +8861,7 @@ mod tests {
             nav.handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
                 .is_none()
         );
-        assert!(nav.licenses_expanded);
+        assert_eq!(nav.screen, Screen::LicenseText);
         release(&mut nav, &catalog, t0, 80);
         assert!(
             nav.handle_input(&down, t0 + Duration::from_millis(96), &catalog)
@@ -8831,7 +8880,7 @@ mod tests {
             nav.handle_input(&back, t0 + Duration::from_millis(128), &catalog)
                 .is_none()
         );
-        assert!(!nav.licenses_expanded);
+        assert_eq!(nav.screen, Screen::Licenses);
         assert_eq!(nav.licenses_scroll.selected, 0);
         release(&mut nav, &catalog, t0, 144);
         assert!(
@@ -8862,7 +8911,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_settings_opens_about_then_info_and_b_returns_through_hierarchy() {
+    fn launcher_settings_opens_about_then_licenses_and_b_returns_through_hierarchy() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
@@ -8892,7 +8941,7 @@ mod tests {
             nav.handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
                 .is_none()
         );
-        assert_eq!(nav.screen, Screen::Info);
+        assert_eq!(nav.screen, Screen::Licenses);
         release(&mut nav, &catalog, t0, 112);
         assert!(
             nav.handle_input(&press_b, t0 + Duration::from_millis(128), &catalog)
@@ -8902,11 +8951,11 @@ mod tests {
     }
 
     #[test]
-    fn screensaver_settings_preview_emits_immediate_action() {
+    fn inline_screensaver_preview_emits_immediate_action() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::Screensaver;
-        nav.screensaver_selected = 2;
+        nav.screen = Screen::Settings;
+        nav.settings_selected = SETTINGS_SCREENSAVER_PREVIEW_SELECTED;
 
         let event = nav
             .handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog)
@@ -8918,19 +8967,20 @@ mod tests {
     }
 
     #[test]
-    fn screensaver_setting_change_emits_persistence_effect() {
+    fn inline_screensaver_delay_change_emits_persistence_effect() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::Screensaver;
-        nav.screensaver_selected = 0;
-        let previous = nav.settings.screensaver_enabled;
+        nav.screen = Screen::Settings;
+        nav.settings_selected = SETTINGS_SCREENSAVER_DELAY_SELECTED;
+        nav.settings.screensaver_enabled = false;
 
         let event = nav
             .handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog)
             .expect("settings persistence effect");
 
         assert_eq!(event.action, LauncherAction::PersistSettings);
-        assert_eq!(nav.settings.screensaver_enabled, !previous);
+        assert!(nav.settings.screensaver_enabled);
+        assert_eq!(nav.settings.screensaver_delay_minutes, 1);
         assert_eq!(event.settings, Some(nav.settings.clone()));
     }
 
@@ -8939,8 +8989,7 @@ mod tests {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
-        nav.screen = Screen::Licenses;
-        nav.licenses_expanded = true;
+        nav.screen = Screen::LicenseText;
 
         let down = pad_with(|pad| pad.dpad_down = true);
         assert!(nav.handle_input(&down, t0, &catalog).is_none());
@@ -8979,8 +9028,7 @@ mod tests {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
-        nav.screen = Screen::Licenses;
-        nav.licenses_expanded = true;
+        nav.screen = Screen::LicenseText;
         let down = pad_with(|pad| pad.dpad_down = true);
         let up = pad_with(|pad| pad.dpad_up = true);
 
@@ -9417,7 +9465,7 @@ mod tests {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let count = settings_display_resolution_count();
-        assert_eq!(count, 7);
+        assert_eq!(count, 10);
         nav.screen = Screen::Settings;
         nav.display_combo_open = true;
         nav.display_selected = 0;
@@ -9440,26 +9488,33 @@ mod tests {
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .expect("last display mode");
         assert_eq!(event.action, LauncherAction::ApplyDisplayResolution);
-        assert_eq!(event.path.as_deref(), Some("crt-288p50"));
+        assert_eq!(event.path.as_deref(), Some("crt-576p50"));
     }
 
     #[test]
-    fn display_settings_hide_scandoubled_crt_modes_without_removing_runtime_support() {
+    fn display_settings_offer_every_supported_mode() {
         let ids = settings_display_resolutions()
             .map(|mode| mode.id)
             .collect::<Vec<_>>();
 
-        assert_eq!(settings_display_resolution_index("crt-240p60"), Some(5));
-        assert_eq!(settings_display_resolution_index("crt-288p50"), Some(6));
-        for id in SETTINGS_HIDDEN_DISPLAY_RESOLUTION_IDS {
-            let runtime_index = DISPLAY_RESOLUTIONS
-                .iter()
-                .position(|mode| mode.id == id)
-                .expect("hidden display mode remains in the runtime catalog");
-            assert!(!ids.contains(&id));
-            assert_eq!(settings_display_selection_index(runtime_index), None);
-            assert!(mister_magik_mister_runtime::display_resolution::find(id).is_some());
-        }
+        assert_eq!(settings_display_resolution_index("crt-240p60"), Some(6));
+        assert_eq!(settings_display_resolution_index("crt-288p50"), Some(7));
+        assert_eq!(ids.len(), DISPLAY_RESOLUTIONS.len());
+        assert_eq!(
+            ids,
+            vec![
+                "hdmi-1280x720p60",
+                "hdmi-1366x768p60",
+                "hdmi-1920x1080p60",
+                "hdmi-1920x1200p60",
+                "hdmi-2048x1536p60",
+                "hdmi-2560x1440p60",
+                "crt-240p60",
+                "crt-288p50",
+                "crt-480p60",
+                "crt-576p50",
+            ]
+        );
     }
 
     #[test]

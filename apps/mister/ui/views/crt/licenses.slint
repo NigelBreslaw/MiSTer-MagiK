@@ -1,8 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12 } from "../../components/spleen_6x12.slint";
-import { Jersey25 } from "../../components/jersey_25.slint";
 import { FeedbackView, SettingsView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
@@ -13,7 +11,7 @@ export component LicensesScreen inherits Rectangle {
     accessible-enabled: true;
     background: CrtTheme.background;
 
-    if !SettingsView.license-expanded : VerticalLayout {
+    VerticalLayout {
         padding-left: MisterUi.grid-x * 2;
         padding-right: MisterUi.grid-x * 2;
         padding-top: MisterUi.grid-y * 2;
@@ -22,51 +20,10 @@ export component LicensesScreen inherits Rectangle {
         CrtHeader { title: "Licenses"; subtitle: "Open source software"; status: ""; }
         for title[index] in SettingsView.license-titles : CrtMenuRow {
             label: title;
-            detail: ">";
+            detail: SettingsView.license-kinds[index] + "  >";
             focused: SettingsView.selected-license-index == index;
             acknowledged: FeedbackView.acknowledged("licenses", index == 0 ? "mister-magik" : index == 1 ? "ffmpeg" : index == 2 ? "press-start-2p" : index == 3 ? "commercial-fonts" : index == 4 ? "jersey-25" : index == 5 ? "jersey-15" : index == 6 ? "terminus-font" : index == 7 ? "spleen" : index == 8 ? "arcade-cabinet" : "slint", FeedbackView.revision);
         }
-        CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
-    }
-
-    if SettingsView.license-expanded : VerticalLayout {
-        padding-left: MisterUi.grid-x * 2;
-        padding-right: MisterUi.grid-x * 2;
-        padding-top: MisterUi.grid-y * 2;
-        padding-bottom: MisterUi.grid-y * 2;
-        spacing: MisterUi.grid-y;
-        Jersey25 {
-            text: SettingsView.license-titles[SettingsView.selected-license-index] + "  v";
-            color: CrtTheme.accent;
-            horizontal-alignment: center;
-        }
-        Rectangle {
-            vertical-stretch: 1;
-            background: CrtTheme.panel;
-            border-width: MisterUi.border;
-            border-color: CrtTheme.border;
-            accessible-role: region;
-            accessible-label: "License text";
-            accessible-description: SettingsView.license-titles[SettingsView.selected-license-index];
-            accessible-enabled: true;
-            Flickable {
-                x: 12px;
-                y: 12px;
-                width: parent.width - 24px;
-                height: parent.height - 24px;
-                content-y: -SettingsView.license-scroll-y * 1px;
-                VerticalLayout {
-                    for line in SettingsView.license-lines : Spleen6x12 {
-                        text: line;
-                        color: CrtTheme.text;
-                        size: MisterUi.crt-body-font;
-                        height: MisterUi.body-font;
-                        overflow: clip;
-                        vertical-alignment: top;
-                    }
-                }
-            }
-        }
-        CrtFooter { left-hint: "UP/DOWN Scroll"; right-hint: "A/B Close"; }
+        CrtFooter { left-hint: "A Read   B Back"; right-hint: "HOME Launcher"; }
     }
 }

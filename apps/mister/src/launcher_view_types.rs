@@ -61,6 +61,7 @@ pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
         Screen::Screensaver => view::LauncherScreen::ScreensaverSettings,
         Screen::About => view::LauncherScreen::About,
         Screen::Licenses => view::LauncherScreen::Licenses,
+        Screen::LicenseText => view::LauncherScreen::LicenseText,
         Screen::Info => view::LauncherScreen::Info,
     }
 }
@@ -105,11 +106,12 @@ pub const fn settings_section(index: usize) -> view::SettingsSection {
     match index {
         0 => view::SettingsSection::Display,
         1 => view::SettingsSection::Orientation,
-        2 => view::SettingsSection::Screensaver,
-        3 => view::SettingsSection::ReduceMotion,
-        4 => view::SettingsSection::Exit,
-        5 => view::SettingsSection::Refresh,
-        6 => view::SettingsSection::About,
+        2 => view::SettingsSection::ReduceMotion,
+        3 => view::SettingsSection::ScreensaverDelay,
+        4 => view::SettingsSection::ScreensaverPreview,
+        5 => view::SettingsSection::Exit,
+        6 => view::SettingsSection::Refresh,
+        7 => view::SettingsSection::About,
         _ => panic!("settings selection is outside its finite domain"),
     }
 }
@@ -265,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn active_display_identity_is_not_confused_with_the_filtered_settings_index() {
+    fn active_and_selected_display_choices_share_the_full_catalog_identity() {
         let runtime_index = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
             .iter()
             .position(|mode| mode.id == "crt-480p60")
@@ -277,9 +279,17 @@ mod tests {
                 .as_str(),
             "crt-480p60"
         );
-        assert!(selected_display_choice(runtime_index).id.is_empty());
-        assert_ne!(
-            settings_display_choice(runtime_index).id.as_str(),
+        assert_eq!(
+            selected_display_choice(runtime_index).id.as_str(),
+            "crt-480p60"
+        );
+        assert_eq!(
+            settings_display_choice(
+                crate::launcher::settings_display_selection_index(runtime_index)
+                    .expect("CRT 480p settings mode"),
+            )
+            .id
+            .as_str(),
             "crt-480p60"
         );
     }

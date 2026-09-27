@@ -1,0 +1,94 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { Jersey25, Jersey25Size } from "../../components/jersey_25.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
+import { Xerxes10 } from "../../components/xerxes_10.slint";
+import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome } from "../../components/page_chrome.slint";
+import { SettingsView } from "../../api.slint";
+import { MisterUi } from "../../mister_window.slint";
+
+component LicenseTextBody inherits Rectangle {
+    in property <length> line-height: 18px;
+    property <length> content-height: SettingsView.license-lines.length * root.line-height;
+    clip: true;
+    accessible-role: region;
+    accessible-label: "License text";
+    accessible-description: SettingsView.license-titles[SettingsView.selected-license-index];
+    accessible-enabled: true;
+
+    Rectangle {
+        y: -SettingsView.license-scroll-y * 1px;
+        width: parent.width;
+        height: root.content-height;
+        for line[index] in SettingsView.license-lines : Spleen6x12 {
+            y: index * root.line-height;
+            width: parent.width;
+            height: root.line-height;
+            text: line;
+            color: #d8d2c2;
+            size: Spleen6x12Size.px8;
+            overflow: clip;
+            vertical-alignment: top;
+        }
+    }
+    Rectangle {
+        x: 0px;
+        y: parent.height - 36px;
+        width: parent.width;
+        height: 36px;
+        background: @linear-gradient(180deg, transparent 0%, PageTheme.background 100%);
+    }
+}
+
+export component LicenseTextScreen inherits Rectangle {
+    property <int> visible-lines: 21;
+    property <int> max-scroll-lines: Math.max(1, SettingsView.license-lines.length - root.visible-lines);
+    property <length> thumb-height: Math.max(12px, 390px * root.visible-lines / Math.max(root.visible-lines, SettingsView.license-lines.length));
+    accessible-role: main;
+    accessible-label: "License text";
+    accessible-enabled: true;
+    background: PageTheme.background;
+
+    if !MisterUi.portrait-layout : Rectangle {
+        LandscapePageChrome { hint-a: "B  BACK"; hint-b: ""; hint-right: "UP  DOWN   SCROLL     LEFT  RIGHT   PAGE"; }
+        Xerxes10 {
+            x: 29px; y: 101px; width: 220px;
+            text: "LICENSES / " + SettingsView.license-titles[SettingsView.selected-license-index].to-uppercase();
+            color: PageTheme.muted;
+            overflow: elide;
+        }
+        Jersey25 {
+            x: 27px; y: 121px;
+            text: SettingsView.license-kinds[SettingsView.selected-license-index];
+            size: Jersey25Size.px56;
+            color: PageTheme.cream;
+        }
+        Xerxes10 { x: 29px; y: 205px; text: "LICENSE TEXT"; color: PageTheme.muted; }
+        PageRule { x: 265px; y: 95px; width: 1px; height: 384px; }
+        LicenseTextBody { x: 296px; y: 98px; width: 612px; height: 390px; }
+        Rectangle { x: 922px; y: 98px; width: 2px; height: 390px; background: #1c1826; }
+        Rectangle {
+            x: 921px;
+            y: 98px + (390px - root.thumb-height) * SettingsView.license-scroll-y / Math.max(1, root.max-scroll-lines * 18);
+            width: 4px;
+            height: root.thumb-height;
+            background: PageTheme.settings-accent;
+        }
+    }
+
+    if MisterUi.portrait-layout : Rectangle {
+        PortraitPageChrome {
+            section: "LICENSES / " + SettingsView.license-titles[SettingsView.selected-license-index].to-uppercase();
+            hint-a: "B BACK";
+            hint-b: "UP DOWN SCROLL";
+        }
+        Jersey25 {
+            x: 32px; y: 120px;
+            text: SettingsView.license-kinds[SettingsView.selected-license-index];
+            size: Jersey25Size.px56;
+            color: PageTheme.cream;
+        }
+        LicenseTextBody { x: 32px; y: 220px; width: root.width - 64px; height: root.height - 330px; }
+    }
+}

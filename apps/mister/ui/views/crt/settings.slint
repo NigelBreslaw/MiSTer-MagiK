@@ -114,28 +114,37 @@ export component SettingsScreen inherits Rectangle {
         }
         CrtSettingsRow {
             y: (root.heading-h + 2 * root.row-h) * 1px; width: parent.width;
-            label: "SCREENSAVER";
-            accessible-name: "Screensaver";
-            detail: "Configure the idle display";
-            value: "CONFIGURE >";
-            focused: SettingsView.section == SettingsSection.screensaver;
-            acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision);
-        }
-        CrtSettingsRow {
-            y: (root.heading-h + 3 * root.row-h) * 1px; width: parent.width;
             label: "REDUCE MOTION";
             accessible-name: "Reduce motion";
             detail: SettingsView.reduce-motion ? "On" : "Off";
             value: SettingsView.reduce-motion ? "ON" : "OFF";
             value-accent: SettingsView.reduce-motion;
-            separator: false;
             focused: SettingsView.section == SettingsSection.reduce-motion;
             acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision);
+        }
+        CrtSettingsRow {
+            y: (root.heading-h + 3 * root.row-h) * 1px; width: parent.width;
+            label: "START AFTER";
+            accessible-name: "Screensaver start delay";
+            detail: "Screensaver idle delay";
+            value: SettingsView.screensaver-delay-minutes == 0 ? "OFF" : SettingsView.screensaver-delay-minutes + " MIN";
+            separator: false;
+            focused: SettingsView.section == SettingsSection.screensaver-delay;
+            acknowledged: FeedbackView.acknowledged("settings", "screensaver-delay", FeedbackView.revision);
         }
 
         CrtGroupLabel { y: (root.second-group - root.top) * 1px; text: "SYSTEM"; }
         CrtSettingsRow {
             y: (root.second-group - root.top + root.heading-h) * 1px; width: parent.width;
+            label: "PREVIEW SCREENSAVER";
+            accessible-name: "Preview screensaver";
+            detail: "Start the screensaver now";
+            value: "PREVIEW >";
+            focused: SettingsView.section == SettingsSection.screensaver-preview;
+            acknowledged: FeedbackView.acknowledged("settings", "screensaver-preview", FeedbackView.revision);
+        }
+        CrtSettingsRow {
+            y: (root.second-group - root.top + root.heading-h + root.row-h) * 1px; width: parent.width;
             label: "EXIT TO MISTER";
             accessible-name: "Exit to MiSTer";
             detail: "Use the stock MiSTer menu until reboot";
@@ -144,7 +153,7 @@ export component SettingsScreen inherits Rectangle {
             acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision);
         }
         CrtSettingsRow {
-            y: (root.second-group - root.top + root.heading-h + root.row-h) * 1px; width: parent.width;
+            y: (root.second-group - root.top + root.heading-h + 2 * root.row-h) * 1px; width: parent.width;
             label: "REFRESH DATABASE";
             accessible-name: "Refresh Database";
             detail: "Refresh changed library systems";
@@ -153,7 +162,7 @@ export component SettingsScreen inherits Rectangle {
             acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
         }
         CrtSettingsRow {
-            y: (root.second-group - root.top + root.heading-h + 2 * root.row-h) * 1px; width: parent.width;
+            y: (root.second-group - root.top + root.heading-h + 3 * root.row-h) * 1px; width: parent.width;
             label: "ABOUT";
             accessible-name: "About";
             detail: "MiSTer MagiK and Slint";

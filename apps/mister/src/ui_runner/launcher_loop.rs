@@ -337,8 +337,9 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
             [
                 "display",
                 "orientation",
-                "screensaver",
                 "reduce-motion",
+                "screensaver-delay",
+                "screensaver-preview",
                 "exit",
                 "rebuild",
                 "about",
@@ -361,19 +362,21 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
                 .copied()
                 .unwrap_or("unknown"),
         )),
-        Screen::Licenses if !nav.licenses_expanded => Some(SelectionFeedbackTarget::new(
+        Screen::Licenses => Some(SelectionFeedbackTarget::new(
             "licenses",
             [
                 "mister-magik",
                 "ffmpeg",
+                "slint",
                 "press-start-2p",
                 "commercial-fonts",
                 "jersey-25",
                 "jersey-15",
-                "terminus-font",
                 "spleen",
-                "arcade-cabinet",
-                "slint",
+                "terminus-font",
+                "rust-standard-library",
+                "zlib",
+                "libpng",
             ]
             .get(nav.licenses_selected)
             .copied()
@@ -394,7 +397,7 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
         // The game list and search results are fixed-selector velocity surfaces.
         // Their press-to-first-motion response remains latency-critical, but
         // continuous crossings do not create discrete acknowledgement pulses.
-        Screen::Arcade | Screen::Controller | Screen::Info | Screen::Licenses => None,
+        Screen::Arcade | Screen::Controller | Screen::Info | Screen::LicenseText => None,
     }
 }
 const ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV: &str =
@@ -413,6 +416,7 @@ fn launcher_screen_input_focus(nav: &LauncherNav) -> FocusRequest {
         Screen::About => (7, DirectionalPolicy::MenuRepeat),
         Screen::Licenses => (8, DirectionalPolicy::MenuRepeat),
         Screen::Info => (9, DirectionalPolicy::MenuRepeat),
+        Screen::LicenseText => (10, DirectionalPolicy::MenuRepeat),
     };
     FocusRequest {
         target: FocusTarget {
@@ -1092,6 +1096,9 @@ fn settings_page_transition(
         (Screen::About, Screen::Licenses) | (Screen::Licenses, Screen::About) => {
             Some(NavigationTransitionRoute::AboutToLicenses)
         }
+        (Screen::Licenses, Screen::LicenseText) | (Screen::LicenseText, Screen::Licenses) => {
+            Some(NavigationTransitionRoute::LicensesToLicenseText)
+        }
         (source, Screen::Home) if source != Screen::Home => {
             Some(NavigationTransitionRoute::NestedToHome)
         }
@@ -1105,6 +1112,8 @@ fn settings_page_transition(
             | (Screen::Screensaver | Screen::About, Screen::Settings)
             | (Screen::About, Screen::Info | Screen::Licenses)
             | (Screen::Info | Screen::Licenses, Screen::About)
+            | (Screen::Licenses, Screen::LicenseText)
+            | (Screen::LicenseText, Screen::Licenses)
     );
     let direct_home = source != Screen::Home && destination == Screen::Home;
     (adjacent || direct_home).then_some((
@@ -1152,6 +1161,7 @@ const fn settings_page_depth(screen: Screen) -> Option<u8> {
         Screen::Settings => Some(1),
         Screen::Screensaver | Screen::About => Some(2),
         Screen::Info | Screen::Licenses => Some(3),
+        Screen::LicenseText => Some(4),
         Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
     }
 }
@@ -1173,7 +1183,8 @@ fn settings_navigation_input_candidate(
         | Screen::Screensaver
         | Screen::About
         | Screen::Info
-        | Screen::Licenses => activated || backed || went_home,
+        | Screen::Licenses
+        | Screen::LicenseText => activated || backed || went_home,
         Screen::Controller | Screen::Arcade | Screen::SystemHub => false,
     }
 }
@@ -15129,7 +15140,7 @@ mod tests {
         );
 
         nav.screen = Screen::Settings;
-        nav.settings_selected = 3;
+        nav.settings_selected = 2;
         assert_eq!(
             nav_selection_feedback_target(&nav),
             Some(SelectionFeedbackTarget::new("settings", "reduce-motion"))
@@ -15160,13 +15171,16 @@ mod tests {
         );
 
         nav.screen = Screen::Licenses;
-        nav.licenses_selected = 9;
+        nav.licenses_selected = 2;
         assert_eq!(
             nav_selection_feedback_target(&nav),
             Some(SelectionFeedbackTarget::new("licenses", "slint"))
         );
         nav.licenses_expanded = true;
-        assert_eq!(nav_selection_feedback_target(&nav), None);
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("licenses", "slint"))
+        );
 
         nav.screen = Screen::Arcade;
         nav.licenses_expanded = false;
@@ -16063,6 +16077,20 @@ mod tests {
             ))
         );
         assert_eq!(
+            settings_page_transition(Screen::Licenses, Screen::LicenseText),
+            Some((
+                NavigationTransitionRoute::LicensesToLicenseText,
+                NavigationTransitionDirection::Forward
+            ))
+        );
+        assert_eq!(
+            settings_page_transition(Screen::LicenseText, Screen::Licenses),
+            Some((
+                NavigationTransitionRoute::LicensesToLicenseText,
+                NavigationTransitionDirection::Reverse
+            ))
+        );
+        assert_eq!(
             settings_page_transition(Screen::Screensaver, Screen::Home),
             Some((
                 NavigationTransitionRoute::NestedToHome,
@@ -16166,7 +16194,7 @@ mod tests {
         let catalog = empty_arcade_catalog("/tmp");
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 4;
+        nav.settings_selected = 5;
         let initial_focus = launcher_input_focus(true, false, false, false, false, false, &nav);
         let mut router = InputRouter::new(initial_focus);
         let now = Instant::now();
@@ -18190,7 +18218,7 @@ mod tests {
         let catalog = empty_arcade_catalog("/tmp");
         let mut nav = LauncherNav::new();
         nav.selected = 5;
-        let mut driver = LauncherInputScriptDriver::from_script("a,down,down,a,down,down,a", start);
+        let mut driver = LauncherInputScriptDriver::from_script("a,down,down,down,down,a", start);
         driver.wait_frames = 0;
         let mut action = None;
         let mut frame = 0_u64;
@@ -18206,8 +18234,8 @@ mod tests {
             frame += 1;
         }
 
-        assert_eq!(nav.screen, Screen::Screensaver);
-        assert_eq!(nav.screensaver_selected, 2);
+        assert_eq!(nav.screen, Screen::Settings);
+        assert_eq!(nav.settings_selected, 4);
         assert_eq!(action, Some(LauncherAction::PreviewScreensaver));
     }
 
@@ -18416,6 +18444,7 @@ mod tests {
             Screen::Screensaver,
             Screen::About,
             Screen::Licenses,
+            Screen::LicenseText,
             Screen::Info,
         ] {
             let mut preview = PreviewState::new();

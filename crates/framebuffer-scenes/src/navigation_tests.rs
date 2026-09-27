@@ -138,6 +138,56 @@ fn settings_page_push_settles_to_exact_snapshots_in_both_directions() {
 }
 
 #[test]
+fn segmented_settings_motion_keeps_chrome_fixed_and_exact_endpoints() {
+    let width = 960;
+    let height = 540;
+    let source = (0..width * height)
+        .map(|index| Rgb565Pixel(0x1000_u16.wrapping_add(index as u16)))
+        .collect::<Vec<_>>();
+    let destination = (0..width * height)
+        .map(|index| Rgb565Pixel(0x8000_u16.wrapping_add(index as u16)))
+        .collect::<Vec<_>>();
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+
+    for direction in [
+        NavigationTransitionDirection::Forward,
+        NavigationTransitionDirection::Reverse,
+    ] {
+        let request = NavigationTransitionRequest::settings_page_segmented(direction);
+        assert_eq!(request.duration_us, 720_000);
+
+        for (progress_q16, expected) in [(0, &source), (PROGRESS_MAX, &destination)] {
+            render_settings_page_push(
+                &mut buffers,
+                request,
+                NavigationTransitionFrame {
+                    progress_q16,
+                    ..NavigationTransitionFrame::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(buffers.working(), expected);
+        }
+
+        render_settings_page_push(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                progress_q16: 20_000,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(&buffers.working()[..width * 95], &destination[..width * 95]);
+        let body = 110 * width + 400;
+        assert_ne!(buffers.working()[body], source[body]);
+        assert_ne!(buffers.working()[body], destination[body]);
+    }
+}
+
+#[test]
 fn portrait_settings_page_push_stays_horizontal_in_both_directions() {
     let width = 8;
     let height = 16;

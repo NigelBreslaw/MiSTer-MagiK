@@ -412,6 +412,7 @@ struct SettingsViewPresenter {
     display_options: Option<Rc<VecModel<ChoiceOption>>>,
     orientation_options: Option<Rc<VecModel<ChoiceOption>>>,
     license_titles: Option<Rc<VecModel<SharedString>>>,
+    license_kinds: Option<Rc<VecModel<SharedString>>>,
     cog_backdrop_installed: bool,
 }
 
@@ -588,6 +589,21 @@ impl LauncherViewPresenters {
                     .license_titles
                     .as_ref()
                     .expect("license titles initialized")
+                    .clone(),
+            ));
+        }
+        if self.settings.license_kinds.is_none() {
+            self.settings.license_kinds = Some(Rc::new(VecModel::from(
+                crate::licenses::LICENSE_KINDS
+                    .iter()
+                    .map(|kind| SharedString::from(*kind))
+                    .collect::<Vec<_>>(),
+            )));
+            settings.set_license_kinds(ModelRc::from(
+                self.settings
+                    .license_kinds
+                    .as_ref()
+                    .expect("license kinds initialized")
                     .clone(),
             ));
         }

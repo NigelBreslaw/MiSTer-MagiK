@@ -38,10 +38,18 @@ pub enum NavigationTransitionRoute {
     SettingsToAbout,
     AboutToInfo,
     AboutToLicenses,
+    LicensesToLicenseText,
     NestedToHome,
 }
 
 impl NavigationTransitionRoute {
+    pub const fn uses_segmented_settings_motion(self) -> bool {
+        matches!(
+            self,
+            Self::SettingsToAbout | Self::AboutToLicenses | Self::LicensesToLicenseText
+        )
+    }
+
     pub const fn from_super_scaler_edge(edge: NavigationTransitionEdge) -> Self {
         match edge {
             NavigationTransitionEdge::HomeToConsoles => Self::HomeToConsoles,
@@ -60,6 +68,7 @@ impl NavigationTransitionRoute {
             Self::SettingsToAbout => "settings-about",
             Self::AboutToInfo => "about-info",
             Self::AboutToLicenses => "about-licenses",
+            Self::LicensesToLicenseText => "licenses-license-text",
             Self::NestedToHome => "nested-home",
         }
     }
@@ -72,6 +81,7 @@ impl NavigationTransitionRoute {
                 | Self::SettingsToAbout
                 | Self::AboutToInfo
                 | Self::AboutToLicenses
+                | Self::LicensesToLicenseText
                 | Self::NestedToHome
         )
     }
@@ -550,11 +560,12 @@ impl NavigationTransitionRuntime {
         if !route.is_settings_page() {
             return Ok(false);
         }
-        let started = self.begin_settings_page_request(
-            NavigationTransitionRequest::settings_page(direction),
-            source,
-            now_us,
-        )?;
+        let request = if route.uses_segmented_settings_motion() {
+            NavigationTransitionRequest::settings_page_segmented(direction)
+        } else {
+            NavigationTransitionRequest::settings_page(direction)
+        };
+        let started = self.begin_settings_page_request(request, source, now_us)?;
         if started {
             self.route = Some(route);
         }
@@ -575,7 +586,11 @@ impl NavigationTransitionRuntime {
         if !route.is_settings_page() {
             return Ok(false);
         }
-        let request = NavigationTransitionRequest::settings_page_on_axis(direction, axis);
+        let request = if route.uses_segmented_settings_motion() {
+            NavigationTransitionRequest::settings_page_segmented_on_axis(direction, axis)
+        } else {
+            NavigationTransitionRequest::settings_page_on_axis(direction, axis)
+        };
         self.begin_settings_physical(route, request, width, height, source, now_us)
     }
 

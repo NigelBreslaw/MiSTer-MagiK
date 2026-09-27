@@ -173,11 +173,12 @@ pub fn apply_navigation_action(
             nav.settings_selected = match section {
                 slint_ui::launcher::SettingsSection::Display => 0,
                 slint_ui::launcher::SettingsSection::Orientation => 1,
-                slint_ui::launcher::SettingsSection::Screensaver => 2,
-                slint_ui::launcher::SettingsSection::ReduceMotion => 3,
-                slint_ui::launcher::SettingsSection::Exit => 4,
-                slint_ui::launcher::SettingsSection::Refresh => 5,
-                slint_ui::launcher::SettingsSection::About => 6,
+                slint_ui::launcher::SettingsSection::ReduceMotion => 2,
+                slint_ui::launcher::SettingsSection::ScreensaverDelay => 3,
+                slint_ui::launcher::SettingsSection::ScreensaverPreview => 4,
+                slint_ui::launcher::SettingsSection::Exit => 5,
+                slint_ui::launcher::SettingsSection::Refresh => 6,
+                slint_ui::launcher::SettingsSection::About => 7,
             };
             None
         }
@@ -605,6 +606,8 @@ mod tests {
             ])));
         app.global::<slint_ui::launcher::SettingsView>()
             .set_license_titles(ModelRc::new(VecModel::from(vec!["GPL-3.0".into()])));
+        app.global::<slint_ui::launcher::SettingsView>()
+            .set_license_kinds(ModelRc::new(VecModel::from(vec!["GPL-3.0".into()])));
 
         let adapter = LauncherUiActionsAdapter::install(&app);
         let actions = app.global::<slint_ui::launcher::LauncherActions>();

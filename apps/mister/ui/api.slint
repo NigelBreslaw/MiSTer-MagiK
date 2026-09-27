@@ -8,12 +8,12 @@ import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 // Shared semantic vocabulary. Finite launcher state crosses the Rust/Slint
 // boundary as enums; integers remain reserved for counts, geometry, timing,
 // percentages, and indices into dynamic models.
-export enum LauncherScreen { home, system-hub, controller, arcade, settings, screensaver-settings, about, licenses, info }
+export enum LauncherScreen { home, system-hub, controller, arcade, settings, screensaver-settings, about, licenses, license-text, info }
 export enum MenuHierarchy { root, nested }
 export enum SystemHubSection { games, recent, favourites, information }
 export enum HomeScrollPhase { idle, held, repeating }
 export enum NavigationTransitionState { idle, active }
-export enum SettingsSection { display, orientation, screensaver, reduce-motion, exit, refresh, about }
+export enum SettingsSection { display, orientation, reduce-motion, screensaver-delay, screensaver-preview, exit, refresh, about }
 export enum SettingsPopup { none, display-resolution, screen-orientation }
 export enum DisplayTransactionState { idle, provisional, persisting, failed }
 export enum ScreenOrientation { normal, monitor-clockwise, monitor-counterclockwise }
@@ -116,6 +116,7 @@ export global SettingsView {
     in property <AboutSection> about-section;
     in property <int> selected-license-index;
     in property <[string]> license-titles;
+    in property <[string]> license-kinds;
     in property <bool> license-expanded;
     in property <int> license-scroll-y;
     in property <[string]> license-lines;
@@ -124,6 +125,7 @@ export global SettingsView {
 }
 
 export global InformationView {
+    in property <string> version-label;
     in property <string> build-label;
     in property <string> present-mode-label;
     in property <string> kernel-version;

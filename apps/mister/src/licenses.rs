@@ -4,17 +4,24 @@
 use std::sync::OnceLock;
 
 // Directly shipped third-party assets remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 10] = [
+pub const LICENSE_TITLES: [&str; 12] = [
     "MiSTer MagiK",
     "FFmpeg",
+    "Slint",
     "Press Start 2P",
     "Commercial Fonts",
     "Jersey 25",
     "Jersey 15",
-    "Terminus Font",
     "Spleen",
-    "Arcade Cabinet",
-    "Slint",
+    "Terminus",
+    "Rust standard library",
+    "zlib",
+    "libpng",
+];
+
+pub const LICENSE_KINDS: [&str; 12] = [
+    "GPL-3.0", "LGPL-2.1", "GPL-3.0", "OFL-1.1", "LICENSED", "OFL-1.1", "OFL-1.1", "BSD-2",
+    "OFL-1.1", "MIT", "ZLIB", "LIBPNG",
 ];
 
 const GPL3: &str = include_str!("../../../LICENSE");
@@ -25,28 +32,27 @@ const JERSEY_25: &str = include_str!("../licenses/JERSEY-25.txt");
 const JERSEY_15: &str = include_str!("../licenses/JERSEY-15.txt");
 const TERMINUS_FONT: &str = include_str!("../licenses/TERMINUS-FONT.txt");
 const SPLEEN: &str = include_str!("../licenses/SPLEEN.txt");
-const ARCADE_CABINET: &str =
-    include_str!("../../../crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt");
+const RUST_LIBRARIES: &str = include_str!("../licenses/RUST-LIBRARIES.txt");
 const LICENSE_LINE_COLUMNS: usize = 105;
-const LICENSE_VISIBLE_ROWS: usize = 40;
+const LICENSE_VISIBLE_ROWS: usize = 21;
 
 pub fn text(index: usize) -> &'static str {
     match index {
-        0 | 9 => GPL3,
+        0 | 2 => GPL3,
         1 => FFMPEG,
-        2 => PRESS_START_2P,
-        3 => COMMERCIAL_FONTS,
-        4 => JERSEY_25,
-        5 => JERSEY_15,
-        6 => TERMINUS_FONT,
+        3 => PRESS_START_2P,
+        4 => COMMERCIAL_FONTS,
+        5 => JERSEY_25,
+        6 => JERSEY_15,
         7 => SPLEEN,
-        8 => ARCADE_CABINET,
+        8 => TERMINUS_FONT,
+        9..=11 => RUST_LIBRARIES,
         _ => GPL3,
     }
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 10] = [const { OnceLock::new() }; 10];
+    static LINES: [OnceLock<Vec<String>>; 12] = [const { OnceLock::new() }; 12];
     let index = index.min(LICENSE_TITLES.len() - 1);
     LINES[index].get_or_init(|| wrap_text(index))
 }
@@ -98,7 +104,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in [0, 1, 2, 4, 5, 6, 9] {
+        for index in [0, 1, 2, 3, 5, 6, 8, 9, 10, 11] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -124,17 +130,19 @@ mod tests {
             [
                 "MiSTer MagiK",
                 "FFmpeg",
+                "Slint",
                 "Press Start 2P",
                 "Commercial Fonts",
                 "Jersey 25",
                 "Jersey 15",
-                "Terminus Font",
                 "Spleen",
-                "Arcade Cabinet",
-                "Slint"
+                "Terminus",
+                "Rust standard library",
+                "zlib",
+                "libpng"
             ]
         );
-        assert_eq!(text(9), GPL3);
+        assert_eq!(text(2), GPL3);
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
         assert!(COMMERCIAL_FONTS.contains("commercial licences"));
@@ -142,7 +150,6 @@ mod tests {
         assert!(JERSEY_15.contains("SIL Open Font License"));
         assert!(TERMINUS_FONT.contains("Reserved Font Name \"Terminus Font\""));
         assert!(SPLEEN.contains("Redistribution and use in source and binary forms"));
-        assert!(ARCADE_CABINET.contains("Lluc Guardiolaa"));
-        assert!(ARCADE_CABINET.contains("CC-BY-NC-4.0"));
+        assert!(RUST_LIBRARIES.contains("zlib License"));
     }
 }

@@ -24,7 +24,7 @@ pub struct SettingsNavigationLeg {
     pub destination: Screen,
 }
 
-pub const SETTINGS_NAVIGATION_ROUTE: [SettingsNavigationLeg; 6] = [
+pub const SETTINGS_NAVIGATION_ROUTE: [SettingsNavigationLeg; 8] = [
     SettingsNavigationLeg {
         route: NavigationTransitionRoute::HomeToSettings,
         direction: NavigationTransitionDirection::Forward,
@@ -38,15 +38,27 @@ pub const SETTINGS_NAVIGATION_ROUTE: [SettingsNavigationLeg; 6] = [
         destination: Screen::About,
     },
     SettingsNavigationLeg {
-        route: NavigationTransitionRoute::AboutToInfo,
+        route: NavigationTransitionRoute::AboutToLicenses,
         direction: NavigationTransitionDirection::Forward,
         source: Screen::About,
-        destination: Screen::Info,
+        destination: Screen::Licenses,
     },
     SettingsNavigationLeg {
-        route: NavigationTransitionRoute::AboutToInfo,
+        route: NavigationTransitionRoute::LicensesToLicenseText,
+        direction: NavigationTransitionDirection::Forward,
+        source: Screen::Licenses,
+        destination: Screen::LicenseText,
+    },
+    SettingsNavigationLeg {
+        route: NavigationTransitionRoute::LicensesToLicenseText,
         direction: NavigationTransitionDirection::Reverse,
-        source: Screen::Info,
+        source: Screen::LicenseText,
+        destination: Screen::Licenses,
+    },
+    SettingsNavigationLeg {
+        route: NavigationTransitionRoute::AboutToLicenses,
+        direction: NavigationTransitionDirection::Reverse,
+        source: Screen::Licenses,
         destination: Screen::About,
     },
     SettingsNavigationLeg {
@@ -214,14 +226,17 @@ impl SettingsNavigationBenchmark {
                 }
             }
             (1, Screen::Settings) => {
-                if settings_selected < 6 {
+                if settings_selected < 7 {
                     BenchmarkButton::Down
                 } else {
                     BenchmarkButton::A
                 }
             }
-            (2, Screen::About) => BenchmarkButton::A,
-            (3, Screen::Info) | (4, Screen::About) | (5, Screen::Settings) => BenchmarkButton::B,
+            (2, Screen::About) | (3, Screen::Licenses) => BenchmarkButton::A,
+            (4, Screen::LicenseText)
+            | (5, Screen::Licenses)
+            | (6, Screen::About)
+            | (7, Screen::Settings) => BenchmarkButton::B,
             _ => return None,
         };
         self.release_pending = true;
@@ -633,6 +648,6 @@ mod tests {
             );
         }
         assert!(benchmark.complete());
-        assert_eq!(benchmark.records().len(), 12);
+        assert_eq!(benchmark.records().len(), 16);
     }
 }

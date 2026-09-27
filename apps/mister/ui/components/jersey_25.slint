@@ -3,12 +3,13 @@
 
 export enum Jersey25Size {
     px25,
+    px56,
 }
 
 export global Jersey25Metrics {
     // The 41px Slint resource size produces exact 25px physical capitals.
     pure public function resolve(size: Jersey25Size) -> length {
-        return 41px;
+        return size == Jersey25Size.px56 ? 92px : 41px;
     }
 }
 

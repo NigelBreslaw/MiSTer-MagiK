@@ -4,7 +4,7 @@
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { AboutSection, FeedbackView, SettingsView } from "../../api.slint";
+import { FeedbackView, InformationView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component AboutScreen inherits Rectangle {
@@ -20,7 +20,7 @@ export component AboutScreen inherits Rectangle {
         padding-bottom: MisterUi.grid-y * 2;
         spacing: MisterUi.grid-y;
 
-        CrtHeader { title: "About"; subtitle: "MiSTer MagiK"; status: ""; }
+        CrtHeader { title: "About"; subtitle: InformationView.version-label; status: ""; }
 
         Spleen6x12 {
             text: "An Unintuitive.com production, crafted in Finland by Nigel Breslaw.";
@@ -37,18 +37,14 @@ export component AboutScreen inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        CrtMenuRow {
-            vertical-stretch: 1;
-            label: "Info";
-            detail: "Build and display";
-            focused: SettingsView.about-section == AboutSection.information;
-            acknowledged: FeedbackView.acknowledged("about", "info", FeedbackView.revision);
-        }
+        Spleen6x12 { text: "Build: " + InformationView.build-label; color: CrtTheme.muted; size: MisterUi.crt-body-font; }
+        Spleen6x12 { text: "Database: " + InformationView.database-build; color: CrtTheme.muted; size: MisterUi.crt-body-font; }
+        Spleen6x12 { text: "Kernel: " + InformationView.kernel-version; color: CrtTheme.muted; size: MisterUi.crt-body-font; }
         CrtMenuRow {
             vertical-stretch: 1;
             label: "Licenses";
-            detail: "Open source";
-            focused: SettingsView.about-section == AboutSection.licenses;
+            detail: "12 open source licenses  >";
+            focused: true;
             acknowledged: FeedbackView.acknowledged("about", "licenses", FeedbackView.revision);
         }
         CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
