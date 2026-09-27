@@ -116,6 +116,10 @@ fn card_cached_frame_view(
     height: usize,
 ) -> CachedFrameView<'_> {
     assert_eq!(pixels.len(), width.saturating_mul(height));
+    CachedFrameView::new(card_pixels_as_slint(pixels), width, height)
+}
+
+fn card_pixels_as_slint(pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel]) -> &[Rgb565Pixel] {
     const {
         assert!(
             std::mem::size_of::<mister_magik_framebuffer_scenes::Rgb565Pixel>()
@@ -128,9 +132,7 @@ fn card_cached_frame_view(
     }
     // SAFETY: both RGB565 pixel types are transparent `u16` wrappers, have
     // compile-time-checked layout, and accept every `u16` bit pattern.
-    let pixels =
-        unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565Pixel>(), pixels.len()) };
-    CachedFrameView::new(pixels, width, height)
+    unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565Pixel>(), pixels.len()) }
 }
 
 fn custom_damage_invalidation_comparison(
@@ -8032,7 +8034,6 @@ pub(super) fn run_launcher_loop(
                                     .as_micros()
                                     .min(u64::MAX as u128)
                                     as u64;
-                                let source = target.cached_565();
                                 let axis = match nav.settings.screen_orientation {
                                     ScreenOrientation::Normal => {
                                         SettingsPageTransitionAxis::Horizontal
@@ -8060,6 +8061,16 @@ pub(super) fn run_launcher_loop(
                                 );
                                 let started = if card_zoom {
                                     let cog = settings_cog_backdrop_rgb565();
+                                    // Card motion presents directly into scanout slots, so
+                                    // the generic cached target may still contain the
+                                    // neighbouring card. Render the settled card session
+                                    // itself as the cog transition's exact source frame.
+                                    let source = card_pixels_as_slint(
+                                        launcher_card_home
+                                            .as_mut()
+                                            .expect("card zoom eligibility requires a card session")
+                                            .render(),
+                                    );
                                     navigation_transition.begin_settings_cog_physical(
                                         direction,
                                         ui.render_w(),
@@ -8075,7 +8086,7 @@ pub(super) fn run_launcher_loop(
                                         axis,
                                         ui.render_w(),
                                         ui.render_h(),
-                                        source,
+                                        target.cached_565(),
                                         now_us,
                                     )
                                 };
