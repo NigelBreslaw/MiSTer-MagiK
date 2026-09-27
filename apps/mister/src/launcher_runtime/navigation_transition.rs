@@ -144,6 +144,14 @@ impl NavigationTransitionController {
         true
     }
 
+    pub fn delay_unstarted_animation(&mut self, delay_us: u64) -> bool {
+        if self.phase != NavigationTransitionPhase::Expand || self.progress_q16 != 0 {
+            return false;
+        }
+        self.phase_started_us = self.phase_started_us.saturating_add(delay_us);
+        true
+    }
+
     pub fn note_destination_prepared(&mut self, prepare_us: u64) {
         self.telemetry.destination_prepare_us = prepare_us;
     }
@@ -926,6 +934,10 @@ impl NavigationTransitionRuntime {
         self.last_frame_work_us = frame_work_us;
     }
 
+    pub fn delay_unstarted_animation(&mut self, delay_us: u64) -> bool {
+        self.controller.delay_unstarted_animation(delay_us)
+    }
+
     pub fn note_pending_status_quiesce(&mut self, wait_us: u64, timed_out: bool) {
         self.pending_status_quiesce_us = wait_us;
         self.pending_status_quiesce_timeout = timed_out;
@@ -1202,6 +1214,22 @@ mod tests {
             settled.endpoint,
             Some(NavigationTransitionEndpoint::Destination)
         );
+    }
+
+    #[test]
+    fn one_time_setup_does_not_consume_animation_time() {
+        let mut controller = NavigationTransitionController::default();
+        let request = request();
+        assert!(controller.begin(request, 10_000));
+        assert!(controller.captured(10_000, 0));
+        assert!(controller.delay_unstarted_animation(40_000));
+
+        let still_at_source = controller.tick(50_000, true);
+        assert_eq!(still_at_source.progress_q16, 0);
+
+        let moving = controller.tick(60_000, true);
+        assert!(moving.progress_q16 > 0);
+        assert!(!controller.delay_unstarted_animation(1));
     }
 
     #[test]
