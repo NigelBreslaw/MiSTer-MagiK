@@ -260,8 +260,8 @@ pub fn render_settings_cog_transition_into(
     let mut cog_source_x = [0_i16; W];
     if !cog_at_rest {
         let mut u = (((((cog_x0 as i64) << 16) + (1 << 15) - cog_x) * inv_s) >> 16) - (1 << 15);
-        for x in cog_x0..cog_x1 {
-            cog_source_x[x] = ((u + (1 << 15)) >> 16) as i16;
+        for source_x in cog_source_x.iter_mut().take(cog_x1).skip(cog_x0) {
+            *source_x = ((u + (1 << 15)) >> 16) as i16;
             u += inv_s;
         }
     }

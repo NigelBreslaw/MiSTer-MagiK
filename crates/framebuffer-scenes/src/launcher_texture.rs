@@ -101,6 +101,7 @@ pub(super) fn reflect_column(
     }
 }
 
+#[cfg(test)]
 pub(super) fn project_column(
     source: &[u32],
     destination: &mut [u32],
@@ -110,52 +111,18 @@ pub(super) fn project_column(
     sample: (i32, i32),
 ) {
     assert!(x < pitch && rows.start <= rows.end && rows.end <= destination.len() / pitch);
-    #[cfg(target_arch = "arm")]
-    {
-        unsafe extern "C" {
-            fn magik_launcher_project_column(
-                out: *mut u32,
-                pitch: usize,
-                x: usize,
-                top: usize,
-                bottom: usize,
-                src: *const u32,
-                height: usize,
-                q: i32,
-                step: i32,
-            );
-        }
-        // SAFETY: destination geometry is bounded above, source is live and
-        // the kernel checks every source index, including transparent edges.
-        unsafe {
-            magik_launcher_project_column(
-                destination.as_mut_ptr(),
-                pitch,
-                x,
-                rows.start,
-                rows.end,
-                source.as_ptr(),
-                source.len(),
-                sample.0,
-                sample.1,
-            );
-        }
-    }
-    #[cfg(not(target_arch = "arm"))]
-    {
-        let mut q = sample.0;
-        for y in rows {
-            let row = q >> 16;
-            let get = |i: i32| {
-                if i < 0 {
-                    0
-                } else {
-                    source.get(i as usize).copied().unwrap_or(0)
-                }
-            };
-            destination[y * pitch + x] = mix(get(row), get(row + 1), ((q & 65535) >> 8) as u32);
-            q += sample.1;
-        }
+    let mut q = sample.0;
+    for y in rows {
+        let row = q >> 16;
+        let get = |i: i32| {
+            if i < 0 {
+                0
+            } else {
+                source.get(i as usize).copied().unwrap_or(0)
+            }
+        };
+        destination[y * pitch + x] = mix(get(row), get(row + 1), ((q & 65535) >> 8) as u32);
+        q += sample.1;
     }
 }
 
@@ -261,23 +228,9 @@ fn project_over_column_with_opaque(
     }
 }
 
+#[cfg(test)]
 pub(super) fn over_row(destination: &mut [Rgb565Pixel], source: &[u32]) {
     assert_eq!(destination.len(), source.len());
-    #[cfg(target_arch = "arm")]
-    {
-        unsafe extern "C" {
-            fn magik_launcher_over_row(out: *mut u16, src: *const u32, n: usize);
-        }
-        // SAFETY: matching live slices; transparent u16 destination wrapper.
-        unsafe {
-            magik_launcher_over_row(
-                destination.as_mut_ptr().cast(),
-                source.as_ptr(),
-                source.len(),
-            );
-        }
-    }
-    #[cfg(not(target_arch = "arm"))]
     for (d, &s) in destination.iter_mut().zip(source) {
         *d = over(s, *d);
     }
@@ -322,63 +275,6 @@ pub(super) fn mix_rgba(a: &mut [u32], b: &[u32], weight: u32) {
     #[cfg(not(target_arch = "arm"))]
     for (a, &b) in a.iter_mut().zip(b) {
         *a = mix(*a, b, weight);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn project_flat_rgba(
-    destination: &mut [u32],
-    pitch: usize,
-    source: &[u32],
-    stride: usize,
-    height: usize,
-    width: usize,
-    rows: usize,
-    sample: (i32, i32),
-) {
-    assert!(width <= pitch && rows * pitch <= destination.len());
-    assert!(height <= stride && width * stride <= source.len());
-    #[cfg(target_arch = "arm")]
-    {
-        unsafe extern "C" {
-            fn magik_launcher_flat_rgba(
-                out: *mut u32,
-                pitch: usize,
-                src: *const u32,
-                stride: usize,
-                height: usize,
-                width: usize,
-                rows: usize,
-                q: i32,
-                step: i32,
-            );
-        }
-        // SAFETY: complete destination and source spans checked above; C
-        // checks transparent rows and processes incomplete SIMD tails safely.
-        unsafe {
-            magik_launcher_flat_rgba(
-                destination.as_mut_ptr(),
-                pitch,
-                source.as_ptr(),
-                stride,
-                height,
-                width,
-                rows,
-                sample.0,
-                sample.1,
-            );
-        }
-    }
-    #[cfg(not(target_arch = "arm"))]
-    for x in 0..width {
-        project_column(
-            &source[x * stride..x * stride + height],
-            destination,
-            pitch,
-            x,
-            0..rows,
-            sample,
-        );
     }
 }
 

@@ -598,7 +598,6 @@ impl PreparedLauncher {
                             crate::launcher_flip::STRIP_WIDTH,
                             scene.width,
                             layout.card_h,
-                            scene.height,
                         )
                     } else {
                         crate::launcher_flip::Scratch::new()
@@ -1062,9 +1061,6 @@ fn draw_carousel_plan(
             );
         } else {
             crate::launcher_flip::prepare_reflectionless_target(
-                pixels,
-                pitch,
-                origin,
                 item.face,
                 pose,
                 &mut scratch[slot],
@@ -1096,7 +1092,6 @@ fn draw_carousel_plan(
             item.face,
             pose,
             &mut scratch[slot],
-            artwork::reflection_colour,
             item.blend,
             &occlusion[slot],
         );

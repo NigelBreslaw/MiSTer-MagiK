@@ -12,7 +12,6 @@ pub(super) struct Scratch {
     column_height: usize,
     columns: Vec<Column>,
     texels: Vec<u32>,
-    projected: Vec<u32>,
     key: Option<(usize, usize, u32, Pose)>,
     reflection_key: Option<(usize, usize, u32, Pose)>,
     blend: Vec<u32>,
@@ -22,7 +21,6 @@ impl Scratch {
     pub fn storage_bytes(&self) -> usize {
         self.texels.capacity() * 4
             + self.columns.capacity() * std::mem::size_of::<Column>()
-            + self.projected.capacity() * 4
             + self.blend.capacity() * 4
             + self.reflection_pixels.capacity() * 2
     }
@@ -33,19 +31,13 @@ impl Scratch {
         Self::with_width(STRIP_WIDTH)
     }
     fn with_width(width: usize) -> Self {
-        Self::sized(width, 960, COLUMN_HEIGHT, 320)
+        Self::sized(width, 960, COLUMN_HEIGHT)
     }
-    pub fn sized(
-        width: usize,
-        screen_width: usize,
-        column_height: usize,
-        screen_height: usize,
-    ) -> Self {
+    pub fn sized(width: usize, screen_width: usize, column_height: usize) -> Self {
         Self {
             column_height,
             columns: vec![Column::default(); screen_width],
             texels: vec![0; width * column_height],
-            projected: vec![0; ((width.min(638).div_ceil(8) | 1) * 8) * screen_height],
             key: None,
             reflection_key: None,
             blend: vec![0; column_height],
@@ -242,56 +234,40 @@ pub(super) fn draw_target<F: Fn(u16, usize, usize) -> u16>(
     reflections_only: bool,
     blend: Option<(&Face, u32)>,
 ) {
+    let reflection = &reflection as &dyn Fn(u16, usize, usize) -> u16;
     render(
-        destination,
-        destination_pitch,
-        destination_origin,
+        Some(RenderTarget {
+            pixels: destination,
+            pitch: destination_pitch,
+            origin: destination_origin,
+        }),
         face,
         pose,
         scratch,
-        reflection,
-        reflections_only,
-        true,
+        if reflections_only {
+            RenderPass::Reflection(reflection)
+        } else {
+            RenderPass::Body(None)
+        },
         blend,
-        false,
-        None,
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_reflectionless_target(
-    destination: &mut [Rgb565Pixel],
-    destination_pitch: usize,
-    destination_origin: (usize, usize),
     face: &Face,
     pose: Pose,
     scratch: &mut Scratch,
     blend: Option<(&Face, u32)>,
 ) {
-    render(
-        destination,
-        destination_pitch,
-        destination_origin,
-        face,
-        pose,
-        scratch,
-        |pixel, _, _| pixel,
-        true,
-        false,
-        blend,
-        false,
-        None,
-    );
+    render(None, face, pose, scratch, RenderPass::Prepare, blend);
 }
 
-#[allow(clippy::too_many_arguments)]
 #[cfg(test)]
-pub(super) fn draw_occluded<F: Fn(u16, usize, usize) -> u16>(
+pub(super) fn draw_occluded(
     destination: &mut [Rgb565Pixel],
     face: &Face,
     pose: Pose,
     scratch: &mut Scratch,
-    reflection: F,
     blend: Option<(&Face, u32)>,
     occlusion: &BodyOcclusion,
 ) {
@@ -302,60 +278,70 @@ pub(super) fn draw_occluded<F: Fn(u16, usize, usize) -> u16>(
         face,
         pose,
         scratch,
-        reflection,
         blend,
         occlusion,
     );
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_occluded_target<F: Fn(u16, usize, usize) -> u16>(
+pub(super) fn draw_occluded_target(
     destination: &mut [Rgb565Pixel],
     destination_pitch: usize,
     destination_origin: (usize, usize),
     face: &Face,
     pose: Pose,
     scratch: &mut Scratch,
-    reflection: F,
     blend: Option<(&Face, u32)>,
     occlusion: &BodyOcclusion,
 ) {
     render(
-        destination,
-        destination_pitch,
-        destination_origin,
+        Some(RenderTarget {
+            pixels: destination,
+            pitch: destination_pitch,
+            origin: destination_origin,
+        }),
         face,
         pose,
         scratch,
-        reflection,
-        false,
-        true,
+        RenderPass::Body(Some(occlusion)),
         blend,
-        false,
-        Some(occlusion),
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render<F: Fn(u16, usize, usize) -> u16>(
-    destination: &mut [Rgb565Pixel],
-    destination_pitch: usize,
-    destination_origin: (usize, usize),
+struct RenderTarget<'a> {
+    pixels: &'a mut [Rgb565Pixel],
+    pitch: usize,
+    origin: (usize, usize),
+}
+
+impl RenderTarget<'_> {
+    fn index(&self, x: usize, y: usize) -> usize {
+        debug_assert!(x >= self.origin.0 && y >= self.origin.1);
+        (y - self.origin.1) * self.pitch + x - self.origin.0
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RenderPass<'a> {
+    Prepare,
+    Reflection(&'a dyn Fn(u16, usize, usize) -> u16),
+    Body(Option<&'a BodyOcclusion>),
+}
+
+fn render(
+    mut target: Option<RenderTarget<'_>>,
     face: &Face,
     pose: Pose,
     scratch: &mut Scratch,
-    _reflection: F,
-    reflections_only: bool,
-    render_reflection: bool,
+    pass: RenderPass<'_>,
     blend: Option<(&Face, u32)>,
-    prepare_only: bool,
-    occlusion: Option<&BodyOcclusion>,
 ) {
-    let (clip_top, body_bottom, reflection_bottom) = pose.vertical_clip;
-    let destination_index = |x: usize, y: usize| {
-        debug_assert!(x >= destination_origin.0 && y >= destination_origin.1);
-        (y - destination_origin.1) * destination_pitch + x - destination_origin.0
+    let reflections_only = !matches!(pass, RenderPass::Body(_));
+    let occlusion = match pass {
+        RenderPass::Body(occlusion) => occlusion,
+        RenderPass::Prepare | RenderPass::Reflection(_) => None,
     };
+    let (clip_top, body_bottom, reflection_bottom) = pose.vertical_clip;
     let left =
         ((pose.x - pose.width / 2) / ONE).clamp(pose.clip.0 as i64, pose.clip.1 as i64) as usize;
     let right = ((pose.x + pose.width * 3 / 2 + ONE - 1) / ONE)
@@ -506,7 +492,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                         .clamp(clip_top as i64 * ONE, reflection_bottom as i64 * ONE)
                 },
             };
-            let start = if !prepare_only && (x < pose.body_clip.0 || x >= pose.body_clip.1) {
+            let start = if x < pose.body_clip.0 || x >= pose.body_clip.1 {
                 face.height - face.height / 4
             } else {
                 0
@@ -552,7 +538,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             );
         }
     }
-    if rebuild || !reflections_only {
+    if !reflections_only {
         let active_left = (left..right).find(|&x| columns[x].valid).unwrap_or(right);
         let active_right = (left..right)
             .rev()
@@ -570,125 +556,69 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             .map(|c| c.bottom + 1)
             .max()
             .unwrap_or(active_top);
-        // A compact odd number of 32-byte cache lines per row avoids the
-        // full-screen stride's repeated cache-set collisions during column
-        // writes. Geometry and filtering remain exactly the same.
         let active_width = active_right - active_left;
-        let pitch = (active_width.div_ceil(8) | 1) * 8;
-        assert!(pitch * (active_bottom - active_top) <= scratch.projected.len());
-        if rebuild {
-            #[cfg(feature = "launcher-profile")]
-            let _profile = crate::launcher_profile::span("flip.project");
-            if flat && prepare_only {
-                crate::launcher_texture::project_flat_rgba(
-                    &mut scratch.projected,
-                    pitch,
-                    &texels[(active_left - left) * scratch.column_height
-                        ..(active_right - left) * scratch.column_height],
-                    scratch.column_height,
-                    face.height,
-                    active_width,
-                    active_bottom - active_top,
-                    (
-                        (flat_zero + active_top as i64 * flat_step) as i32,
-                        flat_step as i32,
-                    ),
-                );
-            } else if !flat && prepare_only {
-                for y in active_top..active_bottom {
-                    let row = (y - active_top) * pitch;
-                    scratch.projected[row..row + active_width].fill(0);
+        let target = target.as_mut().expect("body render requires a target");
+        #[cfg(feature = "launcher-profile")]
+        let _profile = crate::launcher_profile::span("flip.compose");
+        if flat {
+            let index = target.index(active_left, active_top);
+            crate::launcher_texture::project_flat(
+                &mut target.pixels[index..],
+                target.pitch,
+                &texels[(active_left - left) * scratch.column_height
+                    ..(active_right - left) * scratch.column_height],
+                scratch.column_height,
+                face.height,
+                active_width,
+                active_bottom - active_top,
+                (
+                    (flat_zero + active_top as i64 * flat_step) as i32,
+                    flat_step as i32,
+                ),
+            );
+        } else {
+            for (x, c) in columns
+                .iter()
+                .enumerate()
+                .take(active_right)
+                .skip(active_left)
+            {
+                if !c.valid || x < pose.body_clip.0 || x >= pose.body_clip.1 {
+                    continue;
                 }
-                for x in active_left..active_right {
-                    let c = &columns[x];
-                    if !c.valid {
-                        continue;
+                let source = &texels[(x - left) * scratch.column_height
+                    ..(x - left) * scratch.column_height + face.height];
+                let mut project = |top: usize, bottom: usize| {
+                    if top < bottom {
+                        let index = target.index(x, top);
+                        crate::launcher_texture::project_card_over_column(
+                            source,
+                            &mut target.pixels[index..],
+                            target.pitch,
+                            bottom - top,
+                            (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
+                        );
                     }
-                    crate::launcher_texture::project_column(
-                        &texels[(x - left) * scratch.column_height
-                            ..(x - left) * scratch.column_height + face.height],
-                        &mut scratch.projected,
-                        pitch,
-                        x - active_left,
-                        c.top - active_top..c.bottom + 1 - active_top,
-                        (
-                            c.source_y + (c.top as i32 - clip_top as i32) * c.step,
-                            c.step,
-                        ),
-                    );
-                }
-            }
-        }
-        if !reflections_only {
-            #[cfg(feature = "launcher-profile")]
-            let _profile = crate::launcher_profile::span("flip.compose");
-            if flat {
-                crate::launcher_texture::project_flat(
-                    &mut destination[destination_index(active_left, active_top)..],
-                    destination_pitch,
-                    &texels[(active_left - left) * scratch.column_height
-                        ..(active_right - left) * scratch.column_height],
-                    scratch.column_height,
-                    face.height,
-                    active_width,
-                    active_bottom - active_top,
-                    (
-                        (flat_zero + active_top as i64 * flat_step) as i32,
-                        flat_step as i32,
-                    ),
-                );
-            } else if !prepare_only {
-                for (x, c) in columns
-                    .iter()
-                    .enumerate()
-                    .take(active_right)
-                    .skip(active_left)
+                };
+                if let Some((covered_top, covered_bottom)) = occlusion.and_then(|mask| mask.span(x))
                 {
-                    if !c.valid || x < pose.body_clip.0 || x >= pose.body_clip.1 {
-                        continue;
-                    }
-                    let source = &texels[(x - left) * scratch.column_height
-                        ..(x - left) * scratch.column_height + face.height];
-                    let mut project = |top: usize, bottom: usize| {
-                        if top < bottom {
-                            crate::launcher_texture::project_card_over_column(
-                                source,
-                                &mut destination[destination_index(x, top)..],
-                                destination_pitch,
-                                bottom - top,
-                                (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
-                            );
-                        }
-                    };
-                    if let Some((covered_top, covered_bottom)) =
-                        occlusion.and_then(|mask| mask.span(x))
-                    {
-                        let covered_top = covered_top.clamp(c.top, c.bottom + 1);
-                        let covered_bottom = covered_bottom.clamp(c.top, c.bottom + 1);
-                        if covered_top < covered_bottom {
-                            project(c.top, covered_top);
-                            project(covered_bottom, c.bottom + 1);
-                        } else {
-                            project(c.top, c.bottom + 1);
-                        }
+                    let covered_top = covered_top.clamp(c.top, c.bottom + 1);
+                    let covered_bottom = covered_bottom.clamp(c.top, c.bottom + 1);
+                    if covered_top < covered_bottom {
+                        project(c.top, covered_top);
+                        project(covered_bottom, c.bottom + 1);
                     } else {
                         project(c.top, c.bottom + 1);
                     }
-                }
-            } else {
-                for y in active_top..active_bottom {
-                    let row_start = destination_index(active_left, y);
-                    let range = row_start..row_start + active_width;
-                    let row = (y - active_top) * pitch;
-                    crate::launcher_texture::over_row(
-                        &mut destination[range],
-                        &scratch.projected[row..row + active_width],
-                    );
+                } else {
+                    project(c.top, c.bottom + 1);
                 }
             }
         }
     }
-    if reflections_only && render_reflection && scratch.reflection_key != Some(key) {
+    if let RenderPass::Reflection(reflection) = pass
+        && scratch.reflection_key != Some(key)
+    {
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("reflection.prepare");
         for (x, c) in columns.iter().enumerate().take(right).skip(left) {
@@ -722,7 +652,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 }
                 #[cfg(any(not(target_arch = "arm"), test))]
                 for row in 0..64 {
-                    scratch.reflection_pixels[(x - left) * 64 + row] = _reflection(
+                    scratch.reflection_pixels[(x - left) * 64 + row] = reflection(
                         crate::launcher_texture::over(
                             reflected_texel(
                                 &texels[(x - left) * scratch.column_height
@@ -740,11 +670,13 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
         }
         scratch.reflection_key = Some(key);
     }
-    if reflections_only && render_reflection && !prepare_only {
+    if matches!(pass, RenderPass::Reflection(_)) {
+        let target = target
+            .as_mut()
+            .expect("reflection render requires a target");
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("flip.reflection");
-        for x in left..right {
-            let c = columns[x];
+        for (x, c) in columns.iter().copied().enumerate().take(right).skip(left) {
             if !c.valid {
                 continue;
             }
@@ -760,9 +692,9 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                     _ => 0,
                 };
                 let alpha = (opacity(row) * (256 - weight) + opacity(row + 1) * weight) / 256;
-                let index = destination_index(x, y as usize);
-                destination[index] = Rgb565Pixel(crate::launcher::mix_colour(
-                    destination[index].0,
+                let index = target.index(x, y as usize);
+                target.pixels[index] = Rgb565Pixel(crate::launcher::mix_colour(
+                    target.pixels[index].0,
                     0,
                     alpha as usize,
                 ));
@@ -780,9 +712,10 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 / ONE;
             // Fade remains baked before interpolation. The vector kernel
             // only replaces the exact RGB565 lerp, not sampling or the fade.
+            let index = target.index(x, first_y as usize);
             crate::launcher_texture::reflect_column(
-                &mut destination[destination_index(x, first_y as usize)..],
-                destination_pitch,
+                &mut target.pixels[index..],
+                target.pitch,
                 &scratch.reflection_pixels[(x - left) * 64..(x - left + 1) * 64],
                 (end.min(reflection_bottom as i64) - first_y).max(0) as usize,
                 (i32::try_from(q).expect("bounded reflection origin"), c.step),
@@ -972,7 +905,7 @@ mod tests {
                 160,
                 height,
             );
-            let mut scratch = Scratch::sized(960, 960, height, 540);
+            let mut scratch = Scratch::sized(960, 960, height);
             let mut frame = vec![Rgb565Pixel(0); 960 * 540];
             let rows = std::cell::RefCell::new(Vec::new());
             draw(
@@ -1257,7 +1190,6 @@ mod tests {
                     &face,
                     background,
                     &mut background_scratch,
-                    |p, _, _| p,
                     None,
                     &covered,
                 );
