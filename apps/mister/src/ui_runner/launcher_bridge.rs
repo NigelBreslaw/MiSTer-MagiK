@@ -1408,10 +1408,9 @@ mod tests {
     use crate::input_state::PadState;
     use crate::launcher_presentation::SelectionFeedbackTarget;
     use crate::test_support::arcade_game;
-    use std::cell::Cell;
+    use crate::visual_platform::install_isolated_test_platform;
     use std::path::PathBuf;
-    use std::rc::Rc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     fn assert_layout_rect(
         actual: slint_ui::launcher::LayoutRect,
@@ -1492,7 +1491,7 @@ mod tests {
 
     #[test]
     fn launcher_layout_matches_route_geometry_for_all_display_families() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         for (pal, label) in [(0, "CRT 240p"), (1, "CRT 288p")] {
             let plan = crate::ui_display::UiDisplayPlan::from_mister_ini_text(&format!(
                 "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler=0\n"
@@ -1584,7 +1583,7 @@ mod tests {
 
     #[test]
     fn settings_sync_does_not_depend_on_launcher_bridge_key() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Settings;
@@ -1650,7 +1649,7 @@ mod tests {
 
     #[test]
     fn settings_sync_uses_output_geometry_when_the_active_mode_is_unknown() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let nav = LauncherNav::new();
         let lifecycle = LauncherLifecycle::new(
@@ -1767,15 +1766,9 @@ mod tests {
         assert_eq!(text.right_label, "Exit to MiSTer");
     }
 
-    fn init_test_slint_platform() {
-        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-        let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-        let _ = slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
-    }
-
     #[test]
     fn menu_item_state_mutates_only_the_previous_and_next_rows() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
@@ -1965,7 +1958,7 @@ mod tests {
 
     #[test]
     fn light_bridge_sync_refreshes_active_system_header() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let arcade = app.global::<slint_ui::launcher::ArcadeView>();
         arcade.set_active_title("AcornAtom".into());
@@ -2058,7 +2051,7 @@ mod tests {
 
     #[test]
     fn full_and_light_bridge_sync_leave_every_static_view_detached() {
-        init_test_slint_platform();
+        install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let catalog =
             ArcadeCatalog::new(PathBuf::from(DEFAULT_ARCADE_ROOT), Vec::new(), Vec::new());

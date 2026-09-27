@@ -541,16 +541,11 @@ fn projected_arcade_id_exists(app: &slint_ui::launcher::Launcher, id: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::visual_platform::{MisterPlatform, MisterSoftwareWindow};
-    use slint::platform::software_renderer::RepaintBufferType;
+    use crate::visual_platform::install_isolated_test_platform;
     use slint::{ModelRc, VecModel};
-    use std::cell::Cell;
-    use std::time::Duration;
 
     fn launcher() -> slint_ui::launcher::Launcher {
-        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-        let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-        let _ = slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
+        install_isolated_test_platform();
         slint_ui::launcher::Launcher::new().expect("launcher component")
     }
 
