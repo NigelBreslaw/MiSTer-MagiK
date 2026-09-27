@@ -109,6 +109,7 @@ def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_pa
 
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(actions, "_settings_ready", lambda _: state["open"])
     monkeypatch.setattr(actions, "_open_settings_card", lambda app: press(app, "\n"))
     monkeypatch.setattr(actions, "screenshot", capture)
     with pytest.raises(RuntimeError, match="capture failed"):

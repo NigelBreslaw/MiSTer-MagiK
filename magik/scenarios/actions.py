@@ -169,11 +169,14 @@ def _press_key(application, text):
     window.dispatch_event(KeyReleasedEvent(text))
 
 
-def _settings_state(application):
+def _settings_element(application):
+    window = application.first_window
+    if window is None:
+        return None
     return next(
         (
-            element.accessible_description
-            for element in application.first_window.root_element.query_descendants()
+            element
+            for element in window.root_element.query_descendants()
             .match_inherits("Rectangle")
             .find_all()
             if element.accessible_label == "Settings"
@@ -184,11 +187,12 @@ def _settings_state(application):
 
 
 def _settings_open(application):
-    return _settings_state(application) is not None
+    return _settings_element(application) is not None
 
 
 def _settings_ready(application):
-    return _settings_state(application) == "Ready"
+    element = _settings_element(application)
+    return element is not None and element.accessible_description == "Ready"
 
 
 def _open_settings_card(application):

@@ -236,8 +236,8 @@ mod tests {
             ],
         )
         .unwrap();
-        for row in pixels.chunks_exact(2) {
-            assert_eq!(row, [Rgb565Pixel(0xf800), Rgb565Pixel(0x001f)]);
+        for row in pixels.as_chunks::<2>().0 {
+            assert_eq!(*row, [Rgb565Pixel(0xf800), Rgb565Pixel(0x001f)]);
         }
     }
 
