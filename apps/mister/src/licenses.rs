@@ -217,14 +217,14 @@ mod tests {
             (576, 640),
         ] {
             let viewport = LicenseViewport::for_crt(width, height, 0, 0).unwrap();
-            for index in 0..LICENSE_TITLES.len() {
+            for (index, title) in LICENSE_TITLES.iter().enumerate() {
                 let lines = wrapped_lines(index, viewport);
                 assert!(
                     lines
                         .iter()
                         .all(|line| line.chars().count() <= viewport.columns()),
                     "{} at {width}x{height}",
-                    LICENSE_TITLES[index]
+                    title
                 );
                 assert_eq!(
                     max_scroll_line(index, viewport),
