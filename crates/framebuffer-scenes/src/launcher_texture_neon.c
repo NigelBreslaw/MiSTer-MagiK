@@ -69,6 +69,21 @@ static inline uint16x4_t reflect_channel(uint16x4_t a, uint16x4_t b,
 static const uint8_t reflection_bayer[4][4] = {
     {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
 
+static const uint16_t reflection_alpha_64[64] = {
+    150, 145, 140, 136, 131, 127, 122, 118, 114, 110, 106, 102, 98,
+    94,  90,  87,  83,  79,  76,  73,  69,  66,  63,  60,  57, 54,
+    51,  48,  46,  43,  41,  38,  36,  34,  31,  29,  27,  25, 23,
+    21,  19,  18,  16,  15,  13,  12,  10,  9,   8,   7,   6,  5,
+    4,   3,   3,   2,   1,   1,   0,   0,   0,   0,   0,   0};
+
+// Vector rows always begin at a multiple of eight, so one pattern per x
+// phase covers all eight lanes.
+static const uint16_t reflection_threshold_8[4][8] = {
+    {8, 200, 56, 248, 8, 200, 56, 248},
+    {136, 72, 184, 120, 136, 72, 184, 120},
+    {40, 232, 24, 216, 40, 232, 24, 216},
+    {168, 104, 152, 88, 168, 104, 152, 88}};
+
 static inline uint32x4_t reverse4_u32(uint32x4_t value) {
   value = vrev64q_u32(value);
   return vcombine_u32(vget_high_u32(value), vget_low_u32(value));
@@ -100,8 +115,11 @@ static inline size_t reflection_fade_row(size_t row, size_t fade_rows) {
 void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
                                        size_t height, size_t x, size_t fade_rows) {
   const size_t visible = height / 4 < 64 ? height / 4 : 64;
+  const int standard_fade =
+      height >= 64 && (fade_rows == 63 || fade_rows == 64);
+  const size_t vector_rows = standard_fade ? 64 : visible;
   size_t row = 0;
-  for (; row + 8 <= visible; row += 8) {
+  for (; row + 8 <= vector_rows; row += 8) {
     const uint32x4_t first =
         reverse4_u32(vld1q_u32(body + height - row - 4));
     const uint32x4_t second =
@@ -120,17 +138,23 @@ void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
             vmovn_u32(vandq_u32(vshrq_n_u32(first, 16), vdupq_n_u32(255))),
             vmovn_u32(vandq_u32(vshrq_n_u32(second, 16), vdupq_n_u32(255)))),
         3);
-    uint16_t alpha_values[8], threshold_values[8];
-    for (size_t lane = 0; lane < 8; ++lane) {
-      const size_t reflected_row =
-          reflection_fade_row(row + lane, fade_rows);
-      const uint32_t left = 63 - reflected_row;
-      alpha_values[lane] = (uint16_t)(150 * left * left / (63 * 63));
-      threshold_values[lane] =
-          (uint16_t)(reflection_bayer[reflected_row & 3][x & 3] * 16 + 8);
+    uint16x8_t alpha, threshold;
+    if (standard_fade) {
+      alpha = vld1q_u16(reflection_alpha_64 + row);
+      threshold = vld1q_u16(reflection_threshold_8[x & 3]);
+    } else {
+      uint16_t alpha_values[8], threshold_values[8];
+      for (size_t lane = 0; lane < 8; ++lane) {
+        const size_t reflected_row =
+            reflection_fade_row(row + lane, fade_rows);
+        const uint32_t left = 63 - reflected_row;
+        alpha_values[lane] = (uint16_t)(150 * left * left / (63 * 63));
+        threshold_values[lane] =
+            (uint16_t)(reflection_bayer[reflected_row & 3][x & 3] * 16 + 8);
+      }
+      alpha = vld1q_u16(alpha_values);
+      threshold = vld1q_u16(threshold_values);
     }
-    const uint16x8_t alpha = vld1q_u16(alpha_values);
-    const uint16x8_t threshold = vld1q_u16(threshold_values);
     const uint16x8_t faded_red = reflection_fade(red, alpha, threshold);
     const uint16x8_t faded_green = reflection_fade(green, alpha, threshold);
     const uint16x8_t faded_blue = reflection_fade(blue, alpha, threshold);
