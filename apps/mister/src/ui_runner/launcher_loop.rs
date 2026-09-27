@@ -5351,7 +5351,6 @@ pub(super) fn run_launcher_loop(
         navigation_motion_enabled,
     );
     let mut settings_cog_render_ahead: Option<SettingsCogRenderAhead> = None;
-    let mut settings_cog_render_sequence = 0_u64;
     let mut full_screen_transition = FullScreenTransitionStateChart::default();
     let mut navigation_transition_generation = None;
     nav.screen = start_screen;
@@ -10924,8 +10923,6 @@ pub(super) fn run_launcher_loop(
                         settings_cog_render_ahead.as_mut(),
                         navigation_transition.settings_cog_render_input(),
                     ) {
-                        settings_cog_render_sequence =
-                            settings_cog_render_sequence.wrapping_add(1).max(1);
                         const SETTINGS_RENDER_LEAD_VBLANKS: u64 = 2;
                         let lead_ms = pacer
                             .period_us()
@@ -10943,7 +10940,6 @@ pub(super) fn run_launcher_loop(
                             }
                         };
                         pipeline.submit(SettingsFrameRequest {
-                            sequence: settings_cog_render_sequence,
                             target_vblank: pacer
                                 .hits()
                                 .saturating_add(SETTINGS_RENDER_LEAD_VBLANKS),
@@ -10981,7 +10977,7 @@ pub(super) fn run_launcher_loop(
                                 direct_render_timing.expect("successful direct render was timed");
                             if let Some(frame) = prepared.as_ref() {
                                 frame_production_trace.class = FrameProductionClass::Prepared;
-                                frame_production_trace.sequence = frame.request().sequence;
+                                frame_production_trace.sequence = frame.request().target_vblank;
                                 frame_production_trace.render_wall_us = frame.render_us();
                                 frame_production_completed_at = Some(frame.completed_at());
                             } else {
