@@ -425,10 +425,13 @@ impl Platform for IsolatedTestPlatform {
 pub(crate) fn install_isolated_test_platform() {
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-    slint::platform::set_platform(Box::new(IsolatedTestPlatform(MisterPlatform::new(
-        window, fixed_time,
-    ))))
-    .expect("isolated Slint test platform should be unset on this thread");
+    let result = slint::platform::set_platform(Box::new(IsolatedTestPlatform(
+        MisterPlatform::new(window, fixed_time),
+    )));
+    match result {
+        Ok(()) | Err(slint::platform::SetPlatformError::AlreadySet) => {}
+        Err(error) => panic!("failed to install isolated Slint test platform: {error}"),
+    }
 }
 
 #[cfg(test)]

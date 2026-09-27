@@ -4707,10 +4707,15 @@ mod macos {
         fn init_test_slint_platform() {
             let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
             let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-            slint::platform::set_platform(Box::new(IsolatedTestPlatform(MisterPlatform::new(
-                window, fixed_time,
-            ))))
-            .expect("isolated Slint preview-test platform should be unset on this thread");
+            let result = slint::platform::set_platform(Box::new(IsolatedTestPlatform(
+                MisterPlatform::new(window, fixed_time),
+            )));
+            match result {
+                Ok(()) | Err(slint::platform::SetPlatformError::AlreadySet) => {}
+                Err(error) => {
+                    panic!("failed to install isolated Slint preview-test platform: {error}")
+                }
+            }
         }
 
         #[test]
