@@ -176,14 +176,17 @@ fn rounded_span(y: i32, x: i64, top: i64, w: i64, h: i64, radius: i64) -> Option
     (x0 < x1).then_some((x0, x1))
 }
 
-/// Bilinear RGB565 sample of the cog asset at (u, v) in Q16 asset pixels.
+/// Bilinear RGB565 sample from precomputed source coordinates.
 #[inline]
-fn sample_cog(cog: &[Rgb565Pixel], u: i64, v: i64) -> u16 {
-    let (x, y) = ((u >> 16) as i32, (v >> 16) as i32);
-    let (fx, fy) = (
-        (((u >> 8) & 0xff) as u32 + 4) >> 3,
-        (((v >> 8) & 0xff) as u32 + 4) >> 3,
-    );
+fn sample_cog(cog: &[Rgb565Pixel], x: i32, y: i32, fx: u32, fy: u32) -> u16 {
+    if x >= 0 && y >= 0 && x + 1 < COG_ASSET_WIDTH as i32 && y + 1 < COG_ASSET_HEIGHT as i32 {
+        let at = y as usize * COG_ASSET_WIDTH + x as usize;
+        let a = cog[at].0;
+        let b = cog[at + 1].0;
+        let c = cog[at + COG_ASSET_WIDTH].0;
+        let d = cog[at + COG_ASSET_WIDTH + 1].0;
+        return lerp_rgb565(lerp_rgb565(a, b, fx), lerp_rgb565(c, d, fx), fy);
+    }
     let at = |x: i32, y: i32| -> u16 {
         if x < 0 || y < 0 || x >= COG_ASSET_WIDTH as i32 || y >= COG_ASSET_HEIGHT as i32 {
             0
@@ -265,6 +268,16 @@ pub fn render_settings_cog_transition_into(
     let cog_x1 = (((cog_x + COG_ASSET_WIDTH as i64 * cog_s) >> 16) + 1).clamp(0, W as i64) as usize;
     let cog_y0 = (cog_y >> 16).max(0) as usize;
     let cog_y1 = (((cog_y + COG_ASSET_HEIGHT as i64 * cog_s) >> 16) + 1).max(0) as usize;
+    let mut cog_source_x = [0_i16; W];
+    let mut cog_fraction_x = [0_u8; W];
+    if !cog_at_rest {
+        let mut u = (((((cog_x0 as i64) << 16) + (1 << 15) - cog_x) * inv_s) >> 16) - (1 << 15);
+        for x in cog_x0..cog_x1 {
+            cog_source_x[x] = (u >> 16) as i16;
+            cog_fraction_x[x] = ((((u >> 8) & 0xff) + 4) >> 3) as u8;
+            u += inv_s;
+        }
+    }
 
     // Begin with the still launcher. Header and rule pixels come from the
     // destination because they are identical in production; keeping this
@@ -294,19 +307,24 @@ pub fn render_settings_cog_transition_into(
                 if (0..COG_ASSET_HEIGHT as i32).contains(&v) {
                     let cog_row =
                         &cog[v as usize * COG_ASSET_WIDTH..(v as usize + 1) * COG_ASSET_WIDTH];
-                    for (x, pixel) in out.iter_mut().enumerate().take(x1).skip(x0) {
-                        let u = x as i32 - COG_REST_X;
-                        if (0..COG_ASSET_WIDTH as i32).contains(&u) {
-                            *pixel = cog_row[u as usize];
-                        }
+                    let source_x = (x0 as i32 - COG_REST_X).max(0) as usize;
+                    let len = (x1 - x0).min(COG_ASSET_WIDTH.saturating_sub(source_x));
+                    if len > 0 {
+                        out[x0..x0 + len].copy_from_slice(&cog_row[source_x..source_x + len]);
                     }
                 }
             } else {
                 let v = (((((y as i64) << 16) + (1 << 15) - cog_y) * inv_s) >> 16) - (1 << 15);
-                let mut u = (((((x0 as i64) << 16) + (1 << 15) - cog_x) * inv_s) >> 16) - (1 << 15);
-                for pixel in out.iter_mut().take(x1).skip(x0) {
-                    *pixel = Rgb565Pixel(sample_cog(cog, u, v));
-                    u += inv_s;
+                let source_y = (v >> 16) as i32;
+                let fraction_y = ((((v >> 8) & 0xff) + 4) >> 3) as u32;
+                for x in x0..x1 {
+                    out[x] = Rgb565Pixel(sample_cog(
+                        cog,
+                        i32::from(cog_source_x[x]),
+                        source_y,
+                        u32::from(cog_fraction_x[x]),
+                        fraction_y,
+                    ));
                 }
             }
         }
