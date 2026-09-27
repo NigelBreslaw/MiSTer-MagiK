@@ -4,14 +4,13 @@
 use std::sync::OnceLock;
 
 // Directly shipped third-party assets remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 12] = [
+pub const LICENSE_TITLES: [&str; 11] = [
     "MiSTer MagiK",
     "FFmpeg",
     "Slint",
     "Press Start 2P",
     "Commercial Fonts",
-    "Jersey 25",
-    "Jersey 15",
+    "Jersey",
     "Spleen",
     "Terminus",
     "Rust standard library",
@@ -19,17 +18,16 @@ pub const LICENSE_TITLES: [&str; 12] = [
     "libpng",
 ];
 
-pub const LICENSE_KINDS: [&str; 12] = [
-    "GPL-3.0", "LGPL-2.1", "GPL-3.0", "OFL-1.1", "LICENSED", "OFL-1.1", "OFL-1.1", "BSD-2",
-    "OFL-1.1", "MIT", "ZLIB", "LIBPNG",
+pub const LICENSE_KINDS: [&str; 11] = [
+    "GPL-3.0", "LGPL-2.1", "GPL-3.0", "OFL-1.1", "LICENSED", "OFL-1.1", "BSD-2", "OFL-1.1", "MIT",
+    "ZLIB", "LIBPNG",
 ];
 
 const GPL3: &str = include_str!("../../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
 const COMMERCIAL_FONTS: &str = include_str!("../licenses/COMMERCIAL-FONTS.txt");
-const JERSEY_25: &str = include_str!("../licenses/JERSEY-25.txt");
-const JERSEY_15: &str = include_str!("../licenses/JERSEY-15.txt");
+const JERSEY: &str = include_str!("../licenses/JERSEY.txt");
 const TERMINUS_FONT: &str = include_str!("../licenses/TERMINUS-FONT.txt");
 const SPLEEN: &str = include_str!("../licenses/SPLEEN.txt");
 const RUST_LIBRARIES: &str = include_str!("../licenses/RUST-LIBRARIES.txt");
@@ -42,17 +40,16 @@ pub fn text(index: usize) -> &'static str {
         1 => FFMPEG,
         3 => PRESS_START_2P,
         4 => COMMERCIAL_FONTS,
-        5 => JERSEY_25,
-        6 => JERSEY_15,
-        7 => SPLEEN,
-        8 => TERMINUS_FONT,
-        9..=11 => RUST_LIBRARIES,
+        5 => JERSEY,
+        6 => SPLEEN,
+        7 => TERMINUS_FONT,
+        8..=10 => RUST_LIBRARIES,
         _ => GPL3,
     }
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 12] = [const { OnceLock::new() }; 12];
+    static LINES: [OnceLock<Vec<String>>; 11] = [const { OnceLock::new() }; 11];
     let index = index.min(LICENSE_TITLES.len() - 1);
     LINES[index].get_or_init(|| wrap_text(index))
 }
@@ -104,7 +101,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in [0, 1, 2, 3, 5, 6, 8, 9, 10, 11] {
+        for index in [0, 1, 2, 3, 5, 7, 8, 9, 10] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -133,8 +130,7 @@ mod tests {
                 "Slint",
                 "Press Start 2P",
                 "Commercial Fonts",
-                "Jersey 25",
-                "Jersey 15",
+                "Jersey",
                 "Spleen",
                 "Terminus",
                 "Rust standard library",
@@ -146,8 +142,7 @@ mod tests {
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
         assert!(COMMERCIAL_FONTS.contains("commercial licences"));
-        assert!(JERSEY_25.contains("SIL OPEN FONT LICENSE"));
-        assert!(JERSEY_15.contains("SIL Open Font License"));
+        assert!(JERSEY.contains("SIL OPEN FONT LICENSE"));
         assert!(TERMINUS_FONT.contains("Reserved Font Name \"Terminus Font\""));
         assert!(SPLEEN.contains("Redistribution and use in source and binary forms"));
         assert!(RUST_LIBRARIES.contains("zlib License"));

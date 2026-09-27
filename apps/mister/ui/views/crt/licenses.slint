@@ -22,7 +22,7 @@ export component LicensesScreen inherits Rectangle {
             label: title;
             detail: SettingsView.license-kinds[index] + "  >";
             focused: SettingsView.selected-license-index == index;
-            acknowledged: FeedbackView.acknowledged("licenses", index == 0 ? "mister-magik" : index == 1 ? "ffmpeg" : index == 2 ? "press-start-2p" : index == 3 ? "commercial-fonts" : index == 4 ? "jersey-25" : index == 5 ? "jersey-15" : index == 6 ? "terminus-font" : index == 7 ? "spleen" : index == 8 ? "arcade-cabinet" : "slint", FeedbackView.revision);
+            acknowledged: FeedbackView.acknowledged("licenses", "license:" + index, FeedbackView.revision);
         }
         CrtFooter { left-hint: "A Read   B Back"; right-hint: "HOME Launcher"; }
     }

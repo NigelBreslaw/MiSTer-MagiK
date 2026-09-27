@@ -117,6 +117,11 @@ export global SettingsView {
     in property <[string]> license-lines;
     // Settings backdrop cog, installed once by Rust and always drawn 1:1.
     in property <image> cog-backdrop;
+    // Exact-size RGB565 focus fills. They are dithered once by Rust and must
+    // remain 1:1 so the ordered threshold pattern is never resampled.
+    in property <image> focus-highlight-settings;
+    in property <image> focus-highlight-wide;
+    in property <image> focus-highlight-portrait;
 }
 
 export global InformationView {

@@ -4,8 +4,8 @@
 import { Jersey25, Jersey25Size } from "../../components/jersey_25.slint";
 import { Nocive15 } from "../../components/nocive_15.slint";
 import { Xerxes10 } from "../../components/xerxes_10.slint";
-import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome } from "../../components/page_chrome.slint";
-import { FeedbackView, InformationView } from "../../api.slint";
+import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome, SettingsFocusHighlight } from "../../components/page_chrome.slint";
+import { FeedbackView, InformationView, SettingsView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 
 component InformationRow inherits Rectangle {
@@ -29,16 +29,19 @@ component LicensesRow inherits Rectangle {
     height: 36px;
     accessible-role: list-item;
     accessible-label: "Licenses";
-    accessible-description: "12 open source licenses";
+    accessible-description: "Open source licenses";
     accessible-item-selected: true;
     accessible-enabled: true;
-    background: @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 60%, PageTheme.background 100%);
-    Rectangle { width: 4px; background: PageTheme.settings-accent; }
+    SettingsFocusHighlight {
+        source: MisterUi.portrait-layout
+            ? SettingsView.focus-highlight-portrait
+            : SettingsView.focus-highlight-wide;
+    }
     Nocive15 { x: 12px; y: 7px; text: "LICENSES"; color: PageTheme.settings-accent; }
     Xerxes10 {
         x: root.width - 14px - self.preferred-width;
         y: 11px;
-        text: "12  >";
+        text: ">";
         color: PageTheme.cream;
     }
 }

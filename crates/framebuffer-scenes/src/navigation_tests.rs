@@ -188,6 +188,44 @@ fn segmented_settings_motion_keeps_chrome_fixed_and_exact_endpoints() {
 }
 
 #[test]
+fn segmented_settings_motion_does_not_mark_pixels_left_of_destination_content() {
+    let width = 960;
+    let height = 540;
+    let source = vec![Rgb565Pixel(0); width * height];
+    let mut destination = vec![Rgb565Pixel(0); width * height];
+    for y in 95..479 {
+        destination[y * width + 300] = Rgb565Pixel(0xffff);
+    }
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+    let request = NavigationTransitionRequest::settings_page_segmented_with_content_x(
+        NavigationTransitionDirection::Reverse,
+        400,
+    );
+
+    render_settings_page_push(
+        &mut buffers,
+        request,
+        NavigationTransitionFrame {
+            progress_q16: 20_000,
+            ..NavigationTransitionFrame::default()
+        },
+    )
+    .unwrap();
+
+    let non_black = buffers
+        .working()
+        .iter()
+        .enumerate()
+        .filter(|(_, pixel)| pixel.0 != 0)
+        .map(|(index, _)| index % width)
+        .collect::<Vec<_>>();
+    assert!(!non_black.is_empty());
+    assert!(non_black.iter().all(|x| *x == 300));
+}
+
+#[test]
 fn portrait_settings_page_push_stays_horizontal_in_both_directions() {
     let width = 8;
     let height = 16;

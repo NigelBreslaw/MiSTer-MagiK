@@ -3964,6 +3964,7 @@ mod macos {
     fn initialize_bridge(launcher: &Launcher, display_profile: DisplayProfile) {
         let navigation = launcher.global::<NavigationView>();
         let settings = launcher.global::<SettingsView>();
+        mister_magik_fb::launcher_presentation::install_settings_visual_assets(&settings);
         let information = launcher.global::<InformationView>();
         let input = launcher.global::<InputView>();
         let arcade = launcher.global::<ArcadeView>();

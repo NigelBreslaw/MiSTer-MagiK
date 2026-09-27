@@ -1,10 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Jersey25, Jersey25Size } from "../../components/jersey_25.slint";
 import { Nocive15 } from "../../components/nocive_15.slint";
 import { Xerxes10 } from "../../components/xerxes_10.slint";
-import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome } from "../../components/page_chrome.slint";
+import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome, SettingsFocusHighlight } from "../../components/page_chrome.slint";
 import { FeedbackView, SettingsView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 
@@ -20,9 +19,10 @@ component LicenseRow inherits Rectangle {
     accessible-item-selected: root.focused;
     accessible-enabled: true;
 
-    if root.focused : Rectangle {
-        background: @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 60%, PageTheme.background 100%);
-        Rectangle { width: 4px; background: PageTheme.settings-accent; }
+    if root.focused : SettingsFocusHighlight {
+        source: MisterUi.portrait-layout
+            ? SettingsView.focus-highlight-portrait
+            : SettingsView.focus-highlight-wide;
     }
     Nocive15 { x: 12px; y: 7px; text: root.label.to-uppercase(); color: root.focused ? PageTheme.settings-accent : PageTheme.cream; }
     Xerxes10 {
@@ -35,8 +35,6 @@ component LicenseRow inherits Rectangle {
 }
 
 export component LicensesScreen inherits Rectangle {
-    property <int> page-start: (SettingsView.selected-license-index / 10) * 10;
-    property <int> page-end: Math.min(root.page-start + 10, SettingsView.license-titles.length);
     accessible-role: main;
     accessible-label: "Licenses";
     accessible-enabled: true;
@@ -46,25 +44,17 @@ export component LicensesScreen inherits Rectangle {
         LandscapePageChrome {
             hint-a: "A  READ";
             hint-b: "B  BACK";
-            hint-right: "UP  DOWN   MOVE       " + (root.page-start + 1) + " - " + root.page-end + " OF " + SettingsView.license-titles.length;
+            hint-right: "UP  DOWN   MOVE";
         }
         Xerxes10 { x: 29px; y: 101px; text: "ABOUT / LICENSES"; color: PageTheme.muted; }
-        Jersey25 { x: 27px; y: 121px; text: SettingsView.license-titles.length; size: Jersey25Size.px56; color: PageTheme.cream; }
         Xerxes10 { x: 29px; y: 205px; text: "OPEN SOURCE LICENSES"; color: PageTheme.muted; }
         PageRule { x: 28px; y: 239px; width: 213px; }
-        Xerxes10 {
-            x: 29px; y: 258px; width: 220px;
-            text: "SOFTWARE, FONTS AND\nARTWORK THAT MISTER\nMAGIK IS BUILT ON";
-            color: #c9c3b3;
-            wrap: word-wrap;
-        }
         PageRule { x: 265px; y: 95px; width: 1px; height: 384px; }
 
         for title[index] in SettingsView.license-titles : LicenseRow {
             x: 296px;
-            y: 101px + (index - root.page-start) * 36px;
+            y: 101px + index * 36px;
             width: 638px;
-            visible: index >= root.page-start && index < root.page-end;
             label: title;
             kind: SettingsView.license-kinds[index];
             focused: SettingsView.selected-license-index == index;
@@ -77,9 +67,8 @@ export component LicensesScreen inherits Rectangle {
         Rectangle {
             x: 32px; y: 130px; width: root.width - 64px; height: root.height - 240px;
             for title[index] in SettingsView.license-titles : LicenseRow {
-                y: (index - root.page-start) * 42px;
+                y: index * 42px;
                 width: parent.width;
-                visible: index >= root.page-start && index < root.page-end;
                 label: title;
                 kind: SettingsView.license-kinds[index];
                 focused: SettingsView.selected-license-index == index;

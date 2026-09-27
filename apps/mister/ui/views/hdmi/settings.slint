@@ -3,7 +3,7 @@
 
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
-import { LandscapePageChrome, PageTheme, PortraitPageChrome, PageRule } from "../../components/page_chrome.slint";
+import { LandscapePageChrome, PageTheme, PortraitPageChrome, PageRule, SettingsFocusHighlight } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
 
 import { ConfirmationKind, FeedbackView, NavigationTransitionState, NavigationView, OverlayView, ScreenOrientation, SettingsPopup, SettingsSection, SettingsView } from "../../api.slint";
@@ -35,9 +35,10 @@ component SettingsRow inherits Rectangle {
     height: 36px;
     opacity: root.dimmed ? 0.35 : 1;
 
-    if root.focused : Rectangle {
-        background: @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 60%, PageTheme.background 100%);
-        Rectangle { x: 0px; width: 4px; background: PageTheme.settings-accent; }
+    if root.focused : SettingsFocusHighlight {
+        source: MisterUi.portrait-layout
+            ? SettingsView.focus-highlight-portrait
+            : SettingsView.focus-highlight-settings;
     }
 
     // Nocive caps start 4px below the text origin and Xerxes caps 5px below:

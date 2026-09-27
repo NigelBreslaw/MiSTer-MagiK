@@ -16,6 +16,9 @@ use crate::launcher_view_types::{
     settings_section, system_hub_section,
 };
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
+use mister_magik_framebuffer_scenes::dithered_gradient::{
+    HorizontalGradientStop, Rgb8Color, horizontal_rgb565,
+};
 use mister_magik_framebuffer_scenes::settings_cog::{COG_ASSET_HEIGHT, COG_ASSET_WIDTH};
 use mister_magik_ui::launcher::{
     ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
@@ -412,8 +415,18 @@ struct SettingsViewPresenter {
     orientation_options: Option<Rc<VecModel<ChoiceOption>>>,
     license_titles: Option<Rc<VecModel<SharedString>>>,
     license_kinds: Option<Rc<VecModel<SharedString>>>,
-    cog_backdrop_installed: bool,
+    visual_assets_installed: bool,
 }
+
+const SETTINGS_FOCUS_HEIGHT: usize = 36;
+const SETTINGS_FOCUS_SETTINGS_WIDTH: usize = 534;
+const SETTINGS_FOCUS_WIDE_WIDTH: usize = 638;
+const SETTINGS_FOCUS_PORTRAIT_WIDTH: usize = 476;
+const SETTINGS_FOCUS_STOPS: [HorizontalGradientStop; 3] = [
+    HorizontalGradientStop::percent(0, Rgb8Color::new(0x22, 0x18, 0x43)),
+    HorizontalGradientStop::percent(60, Rgb8Color::new(0x12, 0x0d, 0x24)),
+    HorizontalGradientStop::percent(100, Rgb8Color::new(0, 0, 0)),
+];
 
 /// Settings backdrop: 412x374 little-endian RGB565, dithered once at its
 /// displayed size and always presented 1:1. See `assets/ui/settings/README.md`.
@@ -432,16 +445,14 @@ pub fn settings_cog_backdrop_rgb565() -> &'static [Rgb565Pixel] {
 
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565
 /// software renderer's truncation return exactly the stored pixels.
-fn settings_cog_backdrop_image() -> slint::Image {
-    let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(
-        COG_ASSET_WIDTH as u32,
-        COG_ASSET_HEIGHT as u32,
+fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::Image {
+    assert_eq!(
+        pixels.len(),
+        width * height,
+        "RGB565 image geometry must match its pixels"
     );
-    for (pixel, packed) in buffer
-        .make_mut_slice()
-        .iter_mut()
-        .zip(settings_cog_backdrop_rgb565())
-    {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(width as u32, height as u32);
+    for (pixel, packed) in buffer.make_mut_slice().iter_mut().zip(pixels) {
         let (r, g, b) = (packed.0 >> 11, (packed.0 >> 5) & 0x3f, packed.0 & 0x1f);
         *pixel = slint::Rgb8Pixel {
             r: ((r << 3) | (r >> 2)) as u8,
@@ -450,6 +461,31 @@ fn settings_cog_backdrop_image() -> slint::Image {
         };
     }
     slint::Image::from_rgb8(buffer)
+}
+
+fn settings_cog_backdrop_image() -> slint::Image {
+    rgb565_image(
+        COG_ASSET_WIDTH,
+        COG_ASSET_HEIGHT,
+        settings_cog_backdrop_rgb565(),
+    )
+}
+
+fn settings_focus_highlight_image(width: usize) -> slint::Image {
+    let pixels = horizontal_rgb565(width, SETTINGS_FOCUS_HEIGHT, &SETTINGS_FOCUS_STOPS)
+        .expect("fixed Settings focus gradient is valid");
+    rgb565_image(width, SETTINGS_FOCUS_HEIGHT, &pixels)
+}
+
+pub fn install_settings_visual_assets(settings: &SettingsView) {
+    settings.set_cog_backdrop(settings_cog_backdrop_image());
+    settings.set_focus_highlight_settings(settings_focus_highlight_image(
+        SETTINGS_FOCUS_SETTINGS_WIDTH,
+    ));
+    settings.set_focus_highlight_wide(settings_focus_highlight_image(SETTINGS_FOCUS_WIDE_WIDTH));
+    settings.set_focus_highlight_portrait(settings_focus_highlight_image(
+        SETTINGS_FOCUS_PORTRAIT_WIDTH,
+    ));
 }
 
 #[derive(Default)]
@@ -539,9 +575,9 @@ impl LauncherViewPresenters {
             nav.favourite_count() as i32
         );
         let settings = app.global::<SettingsView>();
-        if !self.settings.cog_backdrop_installed {
-            settings.set_cog_backdrop(settings_cog_backdrop_image());
-            self.settings.cog_backdrop_installed = true;
+        if !self.settings.visual_assets_installed {
+            install_settings_visual_assets(&settings);
+            self.settings.visual_assets_installed = true;
         }
         if self.settings.display_options.is_none() {
             let choices = crate::launcher::settings_display_resolutions()

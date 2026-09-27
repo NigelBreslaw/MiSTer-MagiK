@@ -562,6 +562,7 @@ pub struct NavigationTransitionRequest {
     renderer: NavigationTransitionRenderer,
     settings_axis: SettingsPageTransitionAxis,
     settings_style: SettingsPageTransitionStyle,
+    settings_destination_content_x: u16,
 }
 
 impl NavigationTransitionRequest {
@@ -579,6 +580,7 @@ impl NavigationTransitionRequest {
             renderer: NavigationTransitionRenderer::SuperScaler,
             settings_axis: SettingsPageTransitionAxis::Horizontal,
             settings_style: SettingsPageTransitionStyle::WholePage,
+            settings_destination_content_x: 0,
         }
     }
 
@@ -592,13 +594,22 @@ impl NavigationTransitionRequest {
             renderer: NavigationTransitionRenderer::SettingsPage,
             settings_axis: SettingsPageTransitionAxis::Horizontal,
             settings_style: SettingsPageTransitionStyle::WholePage,
+            settings_destination_content_x: 0,
         }
     }
 
     pub fn settings_page_segmented(direction: NavigationTransitionDirection) -> Self {
+        Self::settings_page_segmented_with_content_x(direction, 266)
+    }
+
+    pub fn settings_page_segmented_with_content_x(
+        direction: NavigationTransitionDirection,
+        destination_content_x: u16,
+    ) -> Self {
         Self {
             duration_us: 720_000,
             settings_style: SettingsPageTransitionStyle::Segmented,
+            settings_destination_content_x: destination_content_x,
             ..Self::settings_page(direction)
         }
     }
@@ -607,10 +618,23 @@ impl NavigationTransitionRequest {
         direction: NavigationTransitionDirection,
         axis: SettingsPageTransitionAxis,
     ) -> Self {
+        Self::settings_page_segmented_on_axis_with_content_x(direction, axis, 266)
+    }
+
+    pub fn settings_page_segmented_on_axis_with_content_x(
+        direction: NavigationTransitionDirection,
+        axis: SettingsPageTransitionAxis,
+        destination_content_x: u16,
+    ) -> Self {
         Self {
             settings_axis: axis,
-            ..Self::settings_page_segmented(direction)
+            ..Self::settings_page_segmented_with_content_x(direction, destination_content_x)
         }
+    }
+
+    #[must_use]
+    pub const fn settings_destination_content_x(self) -> u16 {
+        self.settings_destination_content_x
     }
 
     pub fn settings_page_on_axis(
@@ -1421,7 +1445,6 @@ fn render_segmented_settings_page(
     const HEIGHT: usize = 540;
     const BODY_TOP: u16 = 95;
     const BODY_BOTTOM: u16 = 479;
-    const PANEL_WIDTH: u16 = 266;
     const BAND_HEIGHT: u16 = 36;
     if source.len() != WIDTH * HEIGHT
         || destination.len() != source.len()
@@ -1432,6 +1455,7 @@ fn render_segmented_settings_page(
 
     let started = Instant::now();
     let mut stats = NavigationTransitionRenderStats::default();
+    let destination_content_x = request.settings_destination_content_x.min(WIDTH as u16);
     output.fill(Rgb565Pixel(0));
     stats.filled_pixels = output.len() as u64;
 
@@ -1501,7 +1525,7 @@ fn render_segmented_settings_page(
         NavigationTransitionRect {
             x: 0,
             y: BODY_TOP,
-            width: PANEL_WIDTH,
+            width: destination_content_x,
             height: body_height,
         },
         0,
@@ -1529,9 +1553,9 @@ fn render_segmented_settings_page(
             WIDTH,
             HEIGHT,
             NavigationTransitionRect {
-                x: PANEL_WIDTH,
+                x: destination_content_x,
                 y,
-                width: WIDTH as u16 - PANEL_WIDTH,
+                width: WIDTH as u16 - destination_content_x,
                 height: BAND_HEIGHT.min(BODY_BOTTOM - y),
             },
             offset,

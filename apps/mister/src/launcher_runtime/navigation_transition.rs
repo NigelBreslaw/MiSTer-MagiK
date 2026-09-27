@@ -41,6 +41,9 @@ pub enum NavigationTransitionRoute {
     NestedToHome,
 }
 
+const HDMI_ABOUT_CONTENT_X: u16 = 266;
+const HDMI_SETTINGS_CONTENT_X: u16 = 400;
+
 impl NavigationTransitionRoute {
     pub const fn uses_segmented_settings_motion(self) -> bool {
         matches!(
@@ -112,6 +115,18 @@ pub fn settings_page_transition(
             NavigationTransitionDirection::Reverse
         },
     ))
+}
+
+const fn segmented_destination_content_x(
+    route: NavigationTransitionRoute,
+    direction: NavigationTransitionDirection,
+) -> u16 {
+    match (route, direction) {
+        (NavigationTransitionRoute::SettingsToAbout, NavigationTransitionDirection::Reverse) => {
+            HDMI_SETTINGS_CONTENT_X
+        }
+        _ => HDMI_ABOUT_CONTENT_X,
+    }
 }
 
 const fn settings_page_depth(screen: Screen) -> Option<u8> {
@@ -599,7 +614,10 @@ impl NavigationTransitionRuntime {
             return Ok(false);
         }
         let request = if route.uses_segmented_settings_motion() {
-            NavigationTransitionRequest::settings_page_segmented(direction)
+            NavigationTransitionRequest::settings_page_segmented_with_content_x(
+                direction,
+                segmented_destination_content_x(route, direction),
+            )
         } else {
             NavigationTransitionRequest::settings_page(direction)
         };
@@ -625,7 +643,11 @@ impl NavigationTransitionRuntime {
             return Ok(false);
         }
         let request = if route.uses_segmented_settings_motion() {
-            NavigationTransitionRequest::settings_page_segmented_on_axis(direction, axis)
+            NavigationTransitionRequest::settings_page_segmented_on_axis_with_content_x(
+                direction,
+                axis,
+                segmented_destination_content_x(route, direction),
+            )
         } else {
             NavigationTransitionRequest::settings_page_on_axis(direction, axis)
         };
@@ -1234,6 +1256,31 @@ mod tests {
             NavigationTransitionRequest::settings_page(NavigationTransitionDirection::Forward)
                 .duration_us,
             300_000
+        );
+    }
+
+    #[test]
+    fn reverse_about_to_settings_marks_only_the_settings_list_as_moving_content() {
+        assert_eq!(
+            segmented_destination_content_x(
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionDirection::Reverse,
+            ),
+            HDMI_SETTINGS_CONTENT_X
+        );
+        assert_eq!(
+            segmented_destination_content_x(
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionDirection::Forward,
+            ),
+            HDMI_ABOUT_CONTENT_X
+        );
+        assert_eq!(
+            segmented_destination_content_x(
+                NavigationTransitionRoute::AboutToLicenses,
+                NavigationTransitionDirection::Reverse,
+            ),
+            HDMI_ABOUT_CONTENT_X
         );
     }
 
