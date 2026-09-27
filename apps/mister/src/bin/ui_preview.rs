@@ -577,6 +577,21 @@ mod macos {
             launcher_nav.settings = settings_store.load();
             launcher_nav.settings.screen_orientation = orientation;
             launcher_nav.set_portrait_layout(layout.is_portrait());
+            let layout_content = layout.content_rect();
+            launcher_nav.set_license_viewport_geometry(
+                layout.logical_w(),
+                layout.logical_h(),
+                layout_content.x.max(
+                    layout
+                        .logical_w()
+                        .saturating_sub(layout_content.x + layout_content.width),
+                ),
+                layout_content.y.max(
+                    layout
+                        .logical_h()
+                        .saturating_sub(layout_content.y + layout_content.height),
+                ),
+            );
             launcher_nav.sync_orientation_selection();
             launcher_nav.display_selected = display_profile.display_resolution_index();
             launcher_nav.display_highlighted = display_profile

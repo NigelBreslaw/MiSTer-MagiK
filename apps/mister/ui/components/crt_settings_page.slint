@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { FeedbackView, SettingsView } from "../api.slint";
+import { SettingsView } from "../api.slint";
 import { MisterUi } from "../mister_window.slint";
 import { CrtLauncherText, CrtPageMetrics } from "crt_page_chrome.slint";
 import { PageTheme, SettingsFocusHighlight } from "page_chrome.slint";
@@ -44,11 +44,6 @@ export component CrtSettingsRow inherits Rectangle {
         source: SettingsView.focus-highlight-crt-row;
         width: root.width;
         height: root.height;
-        Rectangle {
-            x: 0px;
-            width: CrtPageMetrics.len-x(2);
-            background: PageTheme.settings-accent;
-        }
     }
 
     label-text := CrtLauncherText {

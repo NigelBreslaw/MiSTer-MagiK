@@ -74,6 +74,105 @@ const BAND_STAGGER_MS: u32 = 30;
 const BAND_DURATION_MS: u32 = 200;
 const BAND_TRAVEL: i32 = 40;
 
+/// Shared CRT Settings-family geometry in logical framebuffer pixels.
+///
+/// The card zoom, segmented page transition and host-side viewport assets use
+/// this one calculation. `safe_x`/`safe_y` preserve the text overscan inset;
+/// callers rendering the full physical raster pass zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CrtSettingsGeometry {
+    width: usize,
+    height: usize,
+    sx: usize,
+    sy: usize,
+    margin_x: usize,
+    margin_y: usize,
+    header_bottom: usize,
+    footer_rule: usize,
+}
+
+impl CrtSettingsGeometry {
+    #[must_use]
+    pub fn for_dimensions(width: usize, height: usize) -> Option<Self> {
+        Self::for_viewport(width, height, 0, 0)
+    }
+
+    #[must_use]
+    pub fn for_viewport(width: usize, height: usize, safe_x: usize, safe_y: usize) -> Option<Self> {
+        if width.max(height) != 640 || !matches!(width.min(height), 240 | 288 | 480 | 512 | 576) {
+            return None;
+        }
+        let narrow = width.min(height);
+        let (sx, sy) = if narrow <= 288 {
+            if width > height { (2, 1) } else { (1, 2) }
+        } else {
+            (2, 2)
+        };
+        let margin_x = (width * 6 / 100).max(8 * sx).max(safe_x);
+        let margin_y = (height * 5 / 100).max(6 * sy).max(safe_y);
+        let header_bottom = margin_y + 18 * sy;
+        let footer_rule = height.saturating_sub(margin_y + 20 * sy);
+        Some(Self {
+            width,
+            height,
+            sx,
+            sy,
+            margin_x,
+            margin_y,
+            header_bottom,
+            footer_rule,
+        })
+    }
+
+    pub const fn width(self) -> usize {
+        self.width
+    }
+
+    pub const fn height(self) -> usize {
+        self.height
+    }
+
+    pub const fn scale_x(self) -> usize {
+        self.sx
+    }
+
+    pub const fn scale_y(self) -> usize {
+        self.sy
+    }
+
+    pub const fn margin_x(self) -> usize {
+        self.margin_x
+    }
+
+    pub const fn margin_y(self) -> usize {
+        self.margin_y
+    }
+
+    pub const fn header_bottom(self) -> usize {
+        self.header_bottom
+    }
+
+    pub const fn footer_rule(self) -> usize {
+        self.footer_rule
+    }
+
+    pub const fn list_top(self) -> usize {
+        self.header_bottom + 26 * self.sy
+    }
+
+    pub const fn row_height(self) -> usize {
+        16 * self.sy
+    }
+
+    pub const fn group_gap(self) -> usize {
+        6 * self.sy
+    }
+
+    pub const fn axis_scale(self, horizontal: bool) -> usize {
+        if horizontal { self.sx } else { self.sy }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SettingsCogLayout {
     width: usize,
@@ -130,22 +229,16 @@ impl SettingsCogLayout {
         if (width, height) == (SETTINGS_COG_WIDTH, SETTINGS_COG_HEIGHT) {
             return Some(Self::hdmi());
         }
-        if width.max(height) != 640 || !matches!(width.min(height), 240 | 288 | 480 | 512 | 576) {
-            return None;
-        }
-        let narrow = width.min(height);
-        let (sx, sy) = if narrow <= 288 {
-            if width > height { (2, 1) } else { (1, 2) }
-        } else {
-            (2, 2)
-        };
+        let geometry = CrtSettingsGeometry::for_dimensions(width, height)?;
+        let sx = geometry.scale_x();
+        let sy = geometry.scale_y();
         let (aspect_y, aspect_x) = match (width, height) {
             (640, 288) => (3, 5),
             (288, 640) => (5, 3),
             _ => (sy, sx),
         };
-        let margin_x = (width * 6 / 100).max(8 * sx);
-        let margin_y = (height * 5 / 100).max(6 * sy);
+        let margin_x = geometry.margin_x();
+        let margin_y = geometry.margin_y();
         let top = margin_y + 36 * sy;
         let bottom = height.saturating_sub(margin_y + 34 * sy);
         let available_h = bottom.saturating_sub(top);
@@ -157,11 +250,11 @@ impl SettingsCogLayout {
         let centre_y = top + available_h.saturating_sub(card_h + card_h / 5) / 2 + card_h / 2;
         let card_x = width.saturating_sub(card_w) / 2;
         let card_y = centre_y.saturating_sub(card_h / 2);
-        let header_bottom = margin_y + 18 * sy;
-        let footer_rule = height.saturating_sub(margin_y + 20 * sy);
-        let list_top = header_bottom + 26 * sy;
-        let row_h = 16 * sy;
-        let gap = 6 * sy;
+        let header_bottom = geometry.header_bottom();
+        let footer_rule = geometry.footer_rule();
+        let list_top = geometry.list_top();
+        let row_h = geometry.row_height();
+        let gap = geometry.group_gap();
         let starts = [
             list_top,
             list_top + row_h,

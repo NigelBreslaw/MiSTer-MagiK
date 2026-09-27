@@ -4,6 +4,7 @@
 //! Portable RGB565 navigation-transition geometry, buffers, and rasterization.
 
 use crate::Rgb565Pixel;
+use crate::settings_cog::CrtSettingsGeometry;
 use crate::spring_animation::smooth_spring_q16;
 use std::time::Instant;
 
@@ -28,6 +29,10 @@ const SUPER_SCALER_TEXTURE_FADE_END_Q16: u16 = 16_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const NAVIGATION_TRANSITION_DURATION_US: u64 = 300_000;
 const SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR: isize = 4;
+const SETTINGS_SEGMENT_HEADER_START_Q16: u16 = 12_743;
+const SETTINGS_SEGMENT_HEADER_DURATION_Q16: u16 = 29_127;
+const SETTINGS_SEGMENT_SOURCE_DURATION_Q16: u16 = 18_204;
+const SETTINGS_SEGMENT_BAND_STAGGER_Q16: u16 = 2_549;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavigationTransitionEdge {
@@ -1391,29 +1396,29 @@ pub fn render_settings_page_transition_into(
         return Ok(stats);
     }
 
-    if request.settings_style == SettingsPageTransitionStyle::Segmented
-        && request.settings_axis == SettingsPageTransitionAxis::Horizontal
-        && buffers.width == 960
-        && buffers.height == 540
-    {
-        return render_segmented_settings_page(source, destination, request, frame, output);
-    }
-    if request.settings_style == SettingsPageTransitionStyle::Segmented
-        && buffers.width.max(buffers.height) == 640
-        && matches!(
-            buffers.width.min(buffers.height),
-            240 | 288 | 480 | 512 | 576
-        )
-    {
-        return render_crt_segmented_settings_page(
-            source,
-            destination,
-            buffers.width,
-            buffers.height,
-            request,
-            frame,
-            output,
-        );
+    if request.settings_style == SettingsPageTransitionStyle::Segmented {
+        if request.settings_axis == SettingsPageTransitionAxis::Horizontal
+            && buffers.width == 960
+            && buffers.height == 540
+        {
+            return render_hdmi_segmented_settings_page(
+                source,
+                destination,
+                request,
+                frame,
+                output,
+            );
+        }
+        if let Some(geometry) = CrtSettingsGeometry::for_dimensions(buffers.width, buffers.height) {
+            return render_crt_segmented_settings_page(
+                source,
+                destination,
+                geometry,
+                request,
+                frame,
+                output,
+            );
+        }
     }
 
     let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
@@ -1451,16 +1456,16 @@ pub fn render_settings_page_transition_into(
     Ok(stats)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn render_crt_segmented_settings_page(
     source: &[Rgb565Pixel],
     destination: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
+    geometry: CrtSettingsGeometry,
     request: NavigationTransitionRequest,
     frame: NavigationTransitionFrame,
     output: &mut [Rgb565Pixel],
 ) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    let width = geometry.width();
+    let height = geometry.height();
     if source.len() != width.saturating_mul(height)
         || destination.len() != source.len()
         || output.len() != source.len()
@@ -1470,15 +1475,9 @@ fn render_crt_segmented_settings_page(
 
     let started = Instant::now();
     let mut stats = NavigationTransitionRenderStats::default();
-    let narrow = width.min(height);
-    let sy = if narrow <= 288 && height > width || narrow >= 400 {
-        2
-    } else {
-        1
-    };
-    let margin_y = (height * 5 / 100).max(6 * sy);
-    let body_top = (margin_y + 18 * sy + 1).min(height);
-    let body_bottom = height.saturating_sub(margin_y + 20 * sy).max(body_top);
+    let body_top = (geometry.header_bottom() + 1).min(height);
+    let body_bottom = geometry.footer_rule().max(body_top);
+    let timeline = segmented_settings_timeline(request, frame);
 
     // Build the unmoving layer from pixels shared by both pages. The cog,
     // rules and black field are identical and therefore stay pinned; changed
@@ -1488,7 +1487,6 @@ fn render_crt_segmented_settings_page(
     }
     stats.copied_pixels = output.len() as u64;
 
-    let header_progress = spring_ease_q16(window_q16(frame.progress_q16, 12_743, 29_127));
     copy_crossfaded_rect(
         output,
         source,
@@ -1501,7 +1499,7 @@ fn render_crt_segmented_settings_page(
             width: width as u16,
             height: body_top as u16,
         },
-        header_progress,
+        timeline.header_progress,
         &mut stats,
     );
     copy_crossfaded_rect(
@@ -1516,28 +1514,15 @@ fn render_crt_segmented_settings_page(
             width: width as u16,
             height: height.saturating_sub(body_bottom) as u16,
         },
-        header_progress,
+        timeline.header_progress,
         &mut stats,
     );
 
-    let source_progress = spring_ease_q16(window_q16(frame.progress_q16, 0, 18_204));
-    let source_opacity = PROGRESS_MAX.saturating_sub(source_progress);
-    let destination_sign = match request.direction {
-        NavigationTransitionDirection::Forward => 1,
-        NavigationTransitionDirection::Reverse => -1,
-    };
-    let source_sign = -destination_sign;
     let travel = 12isize
-        * if request.settings_axis == SettingsPageTransitionAxis::Horizontal {
-            if narrow <= 288 && width > height || narrow >= 400 {
-                2
-            } else {
-                1
-            }
-        } else {
-            sy
-        } as isize;
-    let source_offset = source_sign * travel * source_progress as isize / PROGRESS_MAX as isize;
+        * geometry.axis_scale(request.settings_axis == SettingsPageTransitionAxis::Horizontal)
+            as isize;
+    let source_offset =
+        timeline.source_sign * travel * timeline.source_progress as isize / PROGRESS_MAX as isize;
     copy_changed_pixels_at_offset(
         output,
         source,
@@ -1548,35 +1533,33 @@ fn render_crt_segmented_settings_page(
         body_bottom,
         source_offset,
         request.settings_axis,
-        source_opacity,
+        timeline.source_opacity,
         &mut stats,
     );
 
-    let band_height = (16 * sy).max(1);
-    for (band, top) in (body_top..body_bottom).step_by(band_height).enumerate() {
-        let bottom = (top + band_height).min(body_bottom);
-        let start = 12_743u16.saturating_add((band as u16).saturating_mul(2_549));
-        let progress = spring_ease_q16(window_q16(
-            frame.progress_q16,
-            start,
-            start.saturating_add(29_127),
-        ));
-        let offset =
-            destination_sign * travel * (PROGRESS_MAX - progress) as isize / PROGRESS_MAX as isize;
-        copy_changed_pixels_at_offset(
-            output,
-            destination,
-            source,
-            width,
-            height,
-            top,
-            bottom,
-            offset,
-            request.settings_axis,
-            progress,
-            &mut stats,
-        );
-    }
+    for_each_segmented_settings_band(
+        frame,
+        body_top,
+        body_bottom,
+        geometry.row_height(),
+        timeline.destination_sign,
+        travel,
+        |top, bottom, offset, progress| {
+            copy_changed_pixels_at_offset(
+                output,
+                destination,
+                source,
+                width,
+                height,
+                top,
+                bottom,
+                offset,
+                request.settings_axis,
+                progress,
+                &mut stats,
+            );
+        },
+    );
     stats.settings_blit_us = elapsed_us(started);
     Ok(stats)
 }
@@ -1623,7 +1606,70 @@ fn copy_changed_pixels_at_offset(
     }
 }
 
-fn render_segmented_settings_page(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SegmentedSettingsTimeline {
+    header_progress: u16,
+    source_progress: u16,
+    source_opacity: u16,
+    source_sign: isize,
+    destination_sign: isize,
+}
+
+fn segmented_settings_timeline(
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+) -> SegmentedSettingsTimeline {
+    let header_progress = spring_ease_q16(window_q16(
+        frame.progress_q16,
+        SETTINGS_SEGMENT_HEADER_START_Q16,
+        SETTINGS_SEGMENT_HEADER_DURATION_Q16,
+    ));
+    let source_progress = spring_ease_q16(window_q16(
+        frame.progress_q16,
+        0,
+        SETTINGS_SEGMENT_SOURCE_DURATION_Q16,
+    ));
+    let destination_sign = match request.direction {
+        NavigationTransitionDirection::Forward => 1,
+        NavigationTransitionDirection::Reverse => -1,
+    };
+    SegmentedSettingsTimeline {
+        header_progress,
+        source_progress,
+        source_opacity: PROGRESS_MAX.saturating_sub(source_progress),
+        source_sign: -destination_sign,
+        destination_sign,
+    }
+}
+
+fn for_each_segmented_settings_band(
+    frame: NavigationTransitionFrame,
+    body_top: usize,
+    body_bottom: usize,
+    band_height: usize,
+    destination_sign: isize,
+    travel: isize,
+    mut render: impl FnMut(usize, usize, isize, u16),
+) {
+    for (band, top) in (body_top..body_bottom)
+        .step_by(band_height.max(1))
+        .enumerate()
+    {
+        let bottom = (top + band_height).min(body_bottom);
+        let start = SETTINGS_SEGMENT_HEADER_START_Q16
+            .saturating_add((band as u16).saturating_mul(SETTINGS_SEGMENT_BAND_STAGGER_Q16));
+        let progress = spring_ease_q16(window_q16(
+            frame.progress_q16,
+            start,
+            start.saturating_add(SETTINGS_SEGMENT_HEADER_DURATION_Q16),
+        ));
+        let offset =
+            destination_sign * travel * (PROGRESS_MAX - progress) as isize / PROGRESS_MAX as isize;
+        render(top, bottom, offset, progress);
+    }
+}
+
+fn render_hdmi_segmented_settings_page(
     source: &[Rgb565Pixel],
     destination: &[Rgb565Pixel],
     request: NavigationTransitionRequest,
@@ -1644,6 +1690,7 @@ fn render_segmented_settings_page(
 
     let started = Instant::now();
     let mut stats = NavigationTransitionRenderStats::default();
+    let timeline = segmented_settings_timeline(request, frame);
     let destination_content_x = request.settings_destination_content_x.min(WIDTH as u16);
     output.fill(Rgb565Pixel(0));
     stats.filled_pixels = output.len() as u64;
@@ -1663,7 +1710,6 @@ fn render_segmented_settings_page(
         },
         &mut stats,
     );
-    let footer_progress = spring_ease_q16(window_q16(frame.progress_q16, 12_743, 29_127));
     copy_crossfaded_rect(
         output,
         source,
@@ -1676,17 +1722,12 @@ fn render_segmented_settings_page(
             width: WIDTH as u16,
             height: (HEIGHT as u16).saturating_sub(BODY_BOTTOM),
         },
-        footer_progress,
+        timeline.header_progress,
         &mut stats,
     );
 
-    let source_progress = spring_ease_q16(window_q16(frame.progress_q16, 0, 18_204));
-    let source_opacity = PROGRESS_MAX.saturating_sub(source_progress);
-    let source_sign = match request.direction {
-        NavigationTransitionDirection::Forward => -1,
-        NavigationTransitionDirection::Reverse => 1,
-    };
-    let source_offset = source_sign * (48 * source_progress as isize / PROGRESS_MAX as isize);
+    let source_offset =
+        timeline.source_sign * (48 * timeline.source_progress as isize / PROGRESS_MAX as isize);
     let body_height = BODY_BOTTOM - BODY_TOP;
     copy_rect_at_offset_with_opacity(
         output,
@@ -1701,7 +1742,7 @@ fn render_segmented_settings_page(
         },
         source_offset,
         0,
-        source_opacity,
+        timeline.source_opacity,
         &mut stats,
     );
 
@@ -1722,37 +1763,32 @@ fn render_segmented_settings_page(
         panel_progress,
         &mut stats,
     );
-    let destination_sign = match request.direction {
-        NavigationTransitionDirection::Forward => 1,
-        NavigationTransitionDirection::Reverse => -1,
-    };
-    for band in 0..11u16 {
-        let y = BODY_TOP + band * BAND_HEIGHT;
-        if y >= BODY_BOTTOM {
-            break;
-        }
-        let start = 12_743u16.saturating_add(band.saturating_mul(2_549));
-        let end = start.saturating_add(29_127);
-        let progress = spring_ease_q16(window_q16(frame.progress_q16, start, end));
-        let offset =
-            destination_sign * (40 * (PROGRESS_MAX - progress) as isize / PROGRESS_MAX as isize);
-        copy_rect_at_offset_with_opacity(
-            output,
-            destination,
-            WIDTH,
-            HEIGHT,
-            NavigationTransitionRect {
-                x: destination_content_x,
-                y,
-                width: WIDTH as u16 - destination_content_x,
-                height: BAND_HEIGHT.min(BODY_BOTTOM - y),
-            },
-            offset,
-            0,
-            progress,
-            &mut stats,
-        );
-    }
+    for_each_segmented_settings_band(
+        frame,
+        BODY_TOP as usize,
+        BODY_BOTTOM as usize,
+        BAND_HEIGHT as usize,
+        timeline.destination_sign,
+        40,
+        |top, bottom, offset, progress| {
+            copy_rect_at_offset_with_opacity(
+                output,
+                destination,
+                WIDTH,
+                HEIGHT,
+                NavigationTransitionRect {
+                    x: destination_content_x,
+                    y: top as u16,
+                    width: WIDTH as u16 - destination_content_x,
+                    height: (bottom - top) as u16,
+                },
+                offset,
+                0,
+                progress,
+                &mut stats,
+            );
+        },
+    );
     stats.settings_blit_us = elapsed_us(started);
     Ok(stats)
 }

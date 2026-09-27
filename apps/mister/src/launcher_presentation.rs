@@ -19,7 +19,9 @@ use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::dithered_gradient::{
     HorizontalGradientStop, Rgb8Color, horizontal_rgb565,
 };
-use mister_magik_framebuffer_scenes::settings_cog::{COG_ASSET_HEIGHT, COG_ASSET_WIDTH};
+use mister_magik_framebuffer_scenes::settings_cog::{
+    COG_ASSET_HEIGHT, COG_ASSET_WIDTH, CrtSettingsGeometry,
+};
 use mister_magik_ui::launcher::{
     ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
     MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi, NavigationView, SettingsView,
@@ -409,13 +411,14 @@ struct NavigationViewPresenter {
 
 #[derive(Default)]
 struct SettingsViewPresenter {
-    license_lines_key: Option<(usize, bool)>,
+    license_lines_key: Option<(usize, crate::licenses::LicenseViewport)>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
     display_options: Option<Rc<VecModel<ChoiceOption>>>,
     orientation_options: Option<Rc<VecModel<ChoiceOption>>>,
     license_titles: Option<Rc<VecModel<SharedString>>>,
     license_kinds: Option<Rc<VecModel<SharedString>>>,
-    visual_assets_geometry: Option<SettingsVisualAssetGeometry>,
+    fixed_visual_assets_installed: bool,
+    crt_visual_assets_geometry: Option<SettingsVisualAssetGeometry>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -424,7 +427,6 @@ struct SettingsVisualAssetGeometry {
     height: i32,
     content_x: i32,
     content_width: i32,
-    crt: bool,
 }
 
 const SETTINGS_FOCUS_HEIGHT: usize = 36;
@@ -492,7 +494,6 @@ fn settings_visual_asset_geometry(ui: &MisterUi) -> SettingsVisualAssetGeometry 
         height: ui.get_window_height(),
         content_x: ui.get_crt_content_x(),
         content_width: ui.get_crt_content_width(),
-        crt: ui.get_crt_layout(),
     }
 }
 
@@ -501,26 +502,20 @@ fn crt_focus_highlight_geometry(
 ) -> ((usize, usize), (usize, usize)) {
     let width = geometry.width.max(1) as usize;
     let height = geometry.height.max(1) as usize;
-    let narrow = width.min(height);
-    let (sx, sy) = if narrow <= 288 && width.max(height) >= 640 {
-        if width > height { (2, 1) } else { (1, 2) }
-    } else if narrow >= 400 {
-        (2, 2)
-    } else {
-        (1, 1)
-    };
     let content_x = geometry.content_x.max(0) as usize;
     let content_width = geometry.content_width.max(0) as usize;
     let safe_x = content_x.max(width.saturating_sub(content_x.saturating_add(content_width)));
-    let margin_x = (width * 6 / 100).max(8 * sx).max(safe_x);
-    let row_width = width.saturating_sub(2 * margin_x).max(1);
-    let menu_width = (240 * sx).min(row_width).max(1);
-    ((row_width, 16 * sy), (menu_width, 12 * sy))
+    let layout = CrtSettingsGeometry::for_viewport(width, height, safe_x, 0)
+        .expect("CRT focus assets use a supported viewport");
+    let row_width = width.saturating_sub(2 * layout.margin_x()).max(1);
+    let menu_width = (240 * layout.scale_x()).min(row_width).max(1);
+    (
+        (row_width, layout.row_height()),
+        (menu_width, 12 * layout.scale_y()),
+    )
 }
 
-pub fn install_settings_visual_assets(app: &Launcher) {
-    let settings = app.global::<SettingsView>();
-    let geometry = settings_visual_asset_geometry(&app.global::<MisterUi>());
+fn install_fixed_settings_visual_assets(settings: &SettingsView) {
     settings.set_cog_backdrop(settings_cog_backdrop_image());
     settings.set_focus_highlight_settings(settings_focus_highlight_image(
         SETTINGS_FOCUS_SETTINGS_WIDTH,
@@ -534,9 +529,24 @@ pub fn install_settings_visual_assets(app: &Launcher) {
         SETTINGS_FOCUS_PORTRAIT_WIDTH,
         SETTINGS_FOCUS_HEIGHT,
     ));
+}
+
+fn install_crt_settings_visual_assets(
+    settings: &SettingsView,
+    geometry: SettingsVisualAssetGeometry,
+) {
     let (row, menu) = crt_focus_highlight_geometry(geometry);
     settings.set_focus_highlight_crt_row(settings_focus_highlight_image(row.0, row.1));
     settings.set_focus_highlight_crt_menu(settings_focus_highlight_image(menu.0, menu.1));
+}
+
+pub fn install_settings_visual_assets(app: &Launcher) {
+    let settings = app.global::<SettingsView>();
+    install_fixed_settings_visual_assets(&settings);
+    let ui = app.global::<MisterUi>();
+    if ui.get_crt_layout() {
+        install_crt_settings_visual_assets(&settings, settings_visual_asset_geometry(&ui));
+    }
 }
 
 #[derive(Default)]
@@ -626,10 +636,17 @@ impl LauncherViewPresenters {
             nav.favourite_count() as i32
         );
         let settings = app.global::<SettingsView>();
-        let visual_assets_geometry = settings_visual_asset_geometry(&app.global::<MisterUi>());
-        if self.settings.visual_assets_geometry != Some(visual_assets_geometry) {
-            install_settings_visual_assets(app);
-            self.settings.visual_assets_geometry = Some(visual_assets_geometry);
+        if !self.settings.fixed_visual_assets_installed {
+            install_fixed_settings_visual_assets(&settings);
+            self.settings.fixed_visual_assets_installed = true;
+        }
+        let ui = app.global::<MisterUi>();
+        if ui.get_crt_layout() {
+            let geometry = settings_visual_asset_geometry(&ui);
+            if self.settings.crt_visual_assets_geometry != Some(geometry) {
+                install_crt_settings_visual_assets(&settings, geometry);
+                self.settings.crt_visual_assets_geometry = Some(geometry);
+            }
         }
         if self.settings.display_options.is_none() {
             let choices = crate::launcher::settings_display_resolutions()
@@ -811,9 +828,9 @@ impl LauncherViewPresenters {
             set_license_scroll_y,
             nav.licenses_scroll_y()
         );
-        let license_lines_key = (nav.licenses_selected, nav.uses_crt_layout());
+        let license_lines_key = (nav.licenses_selected, nav.license_viewport());
         if self.settings.license_lines_key != Some(license_lines_key) {
-            let lines = self.license_lines(nav.licenses_selected, nav.uses_crt_layout());
+            let lines = self.license_lines(nav.licenses_selected, nav.license_viewport());
             settings.set_license_lines(lines);
         }
 
@@ -939,10 +956,14 @@ impl LauncherViewPresenters {
         navigation.set_menu_item_presentation(ModelRc::from(presentation.clone()));
     }
 
-    pub fn license_lines(&mut self, index: usize, crt: bool) -> ModelRc<SharedString> {
-        let key = (index, crt);
+    pub fn license_lines(
+        &mut self,
+        index: usize,
+        viewport: crate::licenses::LicenseViewport,
+    ) -> ModelRc<SharedString> {
+        let key = (index, viewport);
         if self.settings.license_lines_key != Some(key) {
-            let lines = crate::licenses::wrapped_lines_for(index, crt)
+            let lines = crate::licenses::wrapped_lines(index, viewport)
                 .iter()
                 .map(|line| SharedString::from(line.as_str()))
                 .collect::<Vec<_>>();

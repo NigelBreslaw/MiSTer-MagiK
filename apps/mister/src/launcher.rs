@@ -981,6 +981,7 @@ pub struct LauncherTaxonomySyncTiming {
 pub struct LauncherNav {
     crt_layout: bool,
     portrait_layout: bool,
+    license_viewport: crate::licenses::LicenseViewport,
     pub screen: Screen,
     pub selected: usize,
     pub system_hub_selected: usize,
@@ -1340,6 +1341,8 @@ impl LauncherNav {
         let mut nav = Self::new();
         nav.crt_layout = crt_layout;
         if crt_layout {
+            nav.license_viewport = crate::licenses::LicenseViewport::for_crt(640, 240, 0, 0)
+                .expect("default CRT license viewport is supported");
             nav.arcade = ArcadeNav::with_row_height(row_height);
             nav.arcade_filter.scroll = ArcadeNav::with_row_height(row_height);
         }
@@ -1366,6 +1369,25 @@ impl LauncherNav {
             self.selected as i32 * ARCADE_ROW_HEIGHT,
             ROOT_HOME_CARDS.len(),
         );
+    }
+
+    pub fn set_license_viewport_geometry(
+        &mut self,
+        width: usize,
+        height: usize,
+        safe_x: usize,
+        safe_y: usize,
+    ) {
+        self.license_viewport = if self.crt_layout {
+            crate::licenses::LicenseViewport::for_crt(width, height, safe_x, safe_y)
+                .expect("CRT launcher uses a supported license viewport")
+        } else {
+            crate::licenses::LicenseViewport::HDMI
+        };
+    }
+
+    pub const fn license_viewport(&self) -> crate::licenses::LicenseViewport {
+        self.license_viewport
     }
 
     pub fn uses_portrait_layout(&self) -> bool {
@@ -1439,6 +1461,7 @@ impl LauncherNav {
         Self {
             crt_layout: false,
             portrait_layout: false,
+            license_viewport: crate::licenses::LicenseViewport::HDMI,
             screen: Screen::Home,
             selected: 0,
             system_hub_selected: 0,
@@ -3470,8 +3493,7 @@ impl LauncherNav {
             return None;
         }
         let count =
-            crate::licenses::max_scroll_line_for(self.licenses_selected, self.uses_crt_layout())
-                + 1;
+            crate::licenses::max_scroll_line(self.licenses_selected, self.license_viewport) + 1;
         if tick_continuous {
             let previous_dir = self.licenses_scroll.scroll.held_dir;
             self.licenses_scroll.handle_direction_input(
@@ -8944,7 +8966,10 @@ mod tests {
                 .is_none()
         );
         assert!(!nav.licenses_scroll.scroll.continuous_active);
-        let count = crate::licenses::max_scroll_line(nav.licenses_selected) + 1;
+        let count = crate::licenses::max_scroll_line(
+            nav.licenses_selected,
+            crate::licenses::LicenseViewport::HDMI,
+        ) + 1;
         settle(&mut nav.licenses_scroll, count, release_at);
         assert!(nav.licenses_scroll.is_settled());
     }
@@ -8973,7 +8998,10 @@ mod tests {
         );
         assert_eq!(nav.licenses_scroll.selected, 0);
 
-        let count = crate::licenses::max_scroll_line(nav.licenses_selected) + 1;
+        let count = crate::licenses::max_scroll_line(
+            nav.licenses_selected,
+            crate::licenses::LicenseViewport::HDMI,
+        ) + 1;
         nav.licenses_scroll.selected = count - 1;
         nav.licenses_scroll.snap_to_selected();
         release(&mut nav, &catalog, t0, 80);
