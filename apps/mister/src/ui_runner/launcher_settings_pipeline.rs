@@ -6,12 +6,14 @@
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::settings_cog::render_settings_cog_transition_into;
+use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
 const FRAME_PIXELS: usize = 960 * 540;
-const BUFFER_COUNT: usize = 3;
+const WORKER_COUNT: usize = 2;
+const BUFFER_COUNT: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct SettingsFrameRequest {
@@ -46,12 +48,14 @@ impl PreparedSettingsFrame {
 }
 
 pub(super) struct SettingsCogRenderAhead {
-    request_tx: Option<SyncSender<(SettingsFrameRequest, Vec<Rgb565Pixel>)>>,
+    request_txs: Vec<SyncSender<(SettingsFrameRequest, Vec<Rgb565Pixel>)>>,
     completed_rx: Receiver<PreparedSettingsFrame>,
     free_tx: SyncSender<Vec<Rgb565Pixel>>,
     free_rx: Receiver<Vec<Rgb565Pixel>>,
-    worker: Option<JoinHandle<()>>,
-    ready: Option<PreparedSettingsFrame>,
+    workers: Vec<JoinHandle<()>>,
+    ready: Vec<PreparedSettingsFrame>,
+    pending_targets: BTreeSet<u64>,
+    next_worker: usize,
 }
 
 impl SettingsCogRenderAhead {
@@ -68,74 +72,114 @@ impl SettingsCogRenderAhead {
         {
             return None;
         }
-        let (request_tx, request_rx) = sync_channel(1);
         let (completed_tx, completed_rx) = channel();
         let (free_tx, free_rx) = sync_channel(BUFFER_COUNT);
         for _ in 0..BUFFER_COUNT {
             free_tx.send(vec![Rgb565Pixel(0); FRAME_PIXELS]).ok()?;
         }
-        let worker = std::thread::Builder::new()
-            .name("settings-cog-ahead".into())
-            .spawn(move || run_worker(request_rx, completed_tx, launcher, settings, cog))
-            .ok()?;
+        let mut request_txs = Vec::with_capacity(WORKER_COUNT);
+        let mut workers = Vec::with_capacity(WORKER_COUNT);
+        for worker_index in 0..WORKER_COUNT {
+            let (request_tx, request_rx) = sync_channel(1);
+            let worker_launcher = launcher.clone();
+            let worker_settings = settings.clone();
+            let worker_completed = completed_tx.clone();
+            let role = if worker_index == 0 {
+                RuntimeThreadRole::LauncherCardRenderer
+            } else {
+                RuntimeThreadRole::LauncherCardRendererSecondary
+            };
+            let worker = std::thread::Builder::new()
+                .name(format!("settings-cog-ahead-{worker_index}"))
+                .spawn(move || {
+                    run_worker(
+                        request_rx,
+                        worker_completed,
+                        worker_launcher,
+                        worker_settings,
+                        cog,
+                        role,
+                    )
+                })
+                .ok()?;
+            request_txs.push(request_tx);
+            workers.push(worker);
+        }
         Some(Self {
-            request_tx: Some(request_tx),
+            request_txs,
             completed_rx,
             free_tx,
             free_rx,
-            worker: Some(worker),
-            ready: None,
+            workers,
+            ready: Vec::with_capacity(BUFFER_COUNT),
+            pending_targets: BTreeSet::new(),
+            next_worker: 0,
         })
     }
 
     pub(super) fn submit(&mut self, request: SettingsFrameRequest) {
-        while let Ok(completed) = self.completed_rx.try_recv() {
-            self.replace_ready(completed);
+        self.drain_completed();
+        if self.pending_targets.contains(&request.target_vblank) {
+            return;
         }
         let Ok(buffer) = self.free_rx.try_recv() else {
             return;
         };
-        let Some(request_tx) = self.request_tx.as_ref() else {
-            let _ = self.free_tx.try_send(buffer);
-            return;
-        };
-        match request_tx.try_send((request, buffer)) {
-            Ok(()) => {}
-            Err(std::sync::mpsc::TrySendError::Full((_, buffer)))
-            | Err(std::sync::mpsc::TrySendError::Disconnected((_, buffer))) => {
-                let _ = self.free_tx.try_send(buffer);
+        let mut work = Some((request, buffer));
+        for offset in 0..self.request_txs.len() {
+            let worker_index = (self.next_worker + offset) % self.request_txs.len();
+            match self.request_txs[worker_index].try_send(work.take().unwrap()) {
+                Ok(()) => {
+                    self.pending_targets.insert(request.target_vblank);
+                    self.next_worker = (worker_index + 1) % self.request_txs.len();
+                    return;
+                }
+                Err(std::sync::mpsc::TrySendError::Full(returned))
+                | Err(std::sync::mpsc::TrySendError::Disconnected(returned)) => {
+                    work = Some(returned);
+                }
             }
         }
+        let (_, buffer) = work.unwrap();
+        let _ = self.free_tx.try_send(buffer);
     }
 
     pub(super) fn take_for_vblank(&mut self, target_vblank: u64) -> Option<PreparedSettingsFrame> {
-        while let Ok(completed) = self.completed_rx.try_recv() {
-            self.replace_ready(completed);
+        self.drain_completed();
+        let mut index = 0;
+        while index < self.ready.len() {
+            if self.ready[index].request.target_vblank < target_vblank {
+                let stale = self.ready.swap_remove(index);
+                self.pending_targets.remove(&stale.request.target_vblank);
+                self.recycle(stale);
+            } else {
+                index += 1;
+            }
         }
-        let ready = self.ready.take()?;
-        if ready.request.target_vblank == target_vblank {
-            Some(ready)
-        } else {
-            self.recycle(ready);
-            None
-        }
+        let index = self
+            .ready
+            .iter()
+            .position(|frame| frame.request.target_vblank == target_vblank)?;
+        let ready = self.ready.swap_remove(index);
+        self.pending_targets.remove(&target_vblank);
+        Some(ready)
     }
 
     pub(super) fn recycle(&mut self, frame: PreparedSettingsFrame) {
         let _ = self.free_tx.try_send(frame.pixels);
     }
 
-    fn replace_ready(&mut self, completed: PreparedSettingsFrame) {
-        if let Some(previous) = self.ready.replace(completed) {
-            let _ = self.free_tx.try_send(previous.pixels);
+    fn drain_completed(&mut self) {
+        while let Ok(completed) = self.completed_rx.try_recv() {
+            self.ready.push(completed);
         }
     }
 }
 
 impl Drop for SettingsCogRenderAhead {
     fn drop(&mut self) {
-        self.request_tx.take();
-        if let Some(worker) = self.worker.take() {
+        self.request_txs.clear();
+        for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
     }
@@ -147,8 +191,9 @@ fn run_worker(
     launcher: Vec<Rgb565Pixel>,
     settings: Vec<Rgb565Pixel>,
     cog: &'static [Rgb565Pixel],
+    role: RuntimeThreadRole,
 ) {
-    apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+    apply_runtime_thread_policy(role);
     while let Ok((request, mut pixels)) = requests.recv() {
         let started = Instant::now();
         if !render_settings_cog_transition_into(
@@ -223,5 +268,36 @@ mod tests {
         });
         let last = take(&mut pipeline, 13);
         assert!(last.pixels().iter().all(|pixel| pixel.0 == 0x4321));
+    }
+
+    #[test]
+    fn workers_preserve_consecutive_target_frames() {
+        let launcher = vec![Rgb565Pixel(0x1234); FRAME_PIXELS];
+        let settings = vec![Rgb565Pixel(0x4321); FRAME_PIXELS];
+        let cog = Box::leak(
+            vec![
+                Rgb565Pixel(0);
+                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+            ]
+            .into_boxed_slice(),
+        );
+        let mut pipeline =
+            SettingsCogRenderAhead::start(launcher, settings, cog).expect("valid pipeline");
+
+        pipeline.submit(SettingsFrameRequest {
+            sequence: 1,
+            target_vblank: 21,
+            t_ms: 400,
+        });
+        pipeline.submit(SettingsFrameRequest {
+            sequence: 2,
+            target_vblank: 22,
+            t_ms: 417,
+        });
+        let first = take(&mut pipeline, 21);
+        let second = take(&mut pipeline, 22);
+        assert_eq!(first.request().sequence, 1);
+        assert_eq!(second.request().sequence, 2);
     }
 }
