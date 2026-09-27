@@ -152,6 +152,7 @@ mod launcher_scheduler;
 mod launcher_screensaver;
 #[allow(dead_code)]
 mod launcher_screensaver_pipeline;
+mod launcher_settings_pipeline;
 mod launcher_startup_intro;
 #[allow(dead_code)]
 mod launcher_worker_intents;

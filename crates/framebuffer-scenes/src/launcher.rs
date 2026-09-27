@@ -598,7 +598,6 @@ impl PreparedLauncher {
                             crate::launcher_flip::STRIP_WIDTH,
                             scene.width,
                             layout.card_h,
-                            scene.height,
                         )
                     } else {
                         crate::launcher_flip::Scratch::new()
@@ -1035,24 +1034,7 @@ fn draw_carousel_plan(
     scratch: &mut [crate::launcher_flip::Scratch],
     clip: (usize, usize),
 ) {
-    for (slot, item) in plan.items.iter().enumerate() {
-        let Some(item) = item else { continue };
-        let mut pose = item.pose;
-        pose.clip = clip;
-        pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
-        pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
-        crate::launcher_flip::draw_target(
-            pixels,
-            pitch,
-            origin,
-            item.face,
-            pose,
-            &mut scratch[slot],
-            artwork::reflection_colour,
-            true,
-            item.blend,
-        );
-    }
+    draw_carousel_reflections(pixels, pitch, origin, plan, scratch, clip);
     let mut covered = crate::launcher_flip::BodyOcclusion::new(clip);
     let mut occlusion = [covered; 6];
     for (slot, item) in plan.items.iter().enumerate().rev() {
@@ -1077,9 +1059,36 @@ fn draw_carousel_plan(
             item.face,
             pose,
             &mut scratch[slot],
-            artwork::reflection_colour,
             item.blend,
             &occlusion[slot],
+        );
+    }
+}
+
+fn draw_carousel_reflections(
+    pixels: &mut [Rgb565Pixel],
+    pitch: usize,
+    origin: (usize, usize),
+    plan: &CarouselPlan<'_>,
+    scratch: &mut [crate::launcher_flip::Scratch],
+    clip: (usize, usize),
+) {
+    for (slot, item) in plan.items.iter().enumerate() {
+        let Some(item) = item else { continue };
+        let mut pose = item.pose;
+        pose.clip = clip;
+        pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
+        pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
+        crate::launcher_flip::draw_target(
+            pixels,
+            pitch,
+            origin,
+            item.face,
+            pose,
+            &mut scratch[slot],
+            artwork::reflection_colour,
+            true,
+            item.blend,
         );
     }
 }
@@ -1815,6 +1824,69 @@ mod tests {
                 },
             );
             assert_eq!(settled.items[4].expect("settled top card").pose.angle, 0);
+        }
+    }
+
+    #[test]
+    fn motion_renders_reflections_for_every_visible_card_at_both_edges() {
+        let prepared = LauncherScene::new(960, 540).prepare(data());
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        for (direction, target) in [(BrowseDirection::Right, 1), (BrowseDirection::Left, 4)] {
+            for progress in [1, units / 2, units - 1] {
+                let moving = build_carousel_plan(
+                    &prepared.faces,
+                    BrowseFrame {
+                        selected: 0,
+                        target,
+                        phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                        direction: Some(direction),
+                        progress_millis: progress,
+                        duration_millis: units,
+                    },
+                );
+                let mut reflections = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+                let mut reflection_scratch: Vec<_> = (0..6)
+                    .map(|_| crate::launcher_flip::Scratch::strip())
+                    .collect();
+                for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
+                    draw_carousel_reflections(
+                        &mut reflections,
+                        LOGICAL_WIDTH,
+                        (0, 0),
+                        &moving,
+                        &mut reflection_scratch,
+                        (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
+                    );
+                }
+
+                for (slot, item) in moving.items.iter().enumerate() {
+                    if item.is_none() {
+                        continue;
+                    }
+                    let mut without = CarouselPlan {
+                        items: moving.items,
+                    };
+                    without.items[slot] = None;
+                    let mut without_pixels = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+                    let mut without_scratch: Vec<_> = (0..6)
+                        .map(|_| crate::launcher_flip::Scratch::strip())
+                        .collect();
+                    for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
+                        draw_carousel_reflections(
+                            &mut without_pixels,
+                            LOGICAL_WIDTH,
+                            (0, 0),
+                            &without,
+                            &mut without_scratch,
+                            (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
+                        );
+                    }
+                    assert_ne!(
+                        reflections, without_pixels,
+                        "moving card in slot {slot} contributed no visible reflection at {progress} going {direction:?}"
+                    );
+                }
+            }
         }
     }
 

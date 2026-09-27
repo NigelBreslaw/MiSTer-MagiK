@@ -317,6 +317,15 @@ def launcher_motion(
             raise AssertionError(
                 "instrumented card motion recorded no hidden-slot copy work"
             )
+        for name in (
+            "card_target_vblank_misses",
+            "card_target_vblank_repeats",
+            "card_target_vblank_skips",
+            "last_card_target_vblank",
+            "last_card_actual_vblank",
+        ):
+            if type(window.get(name)) is not int or window[name] < 0:
+                raise AssertionError(f"instrumented card motion has no {name} evidence")
     if force_fallback and window.get("card_fallback_copies", 0) == 0:
         raise AssertionError("forced fallback did not execute")
     return {

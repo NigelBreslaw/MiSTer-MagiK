@@ -99,6 +99,7 @@ pub(super) struct LauncherCardHomeSession {
     presented_frame: Option<RenderedCardFrame>,
     navigation_generation: u64,
     request_sequence: u64,
+    target_vblank: u64,
     frame_timestamp_us: u64,
     last_visual_index: f32,
     frame: BrowseFrame,
@@ -137,6 +138,7 @@ impl LauncherCardHomeSession {
             presented_frame: None,
             navigation_generation: 1,
             request_sequence: 0,
+            target_vblank: 0,
             frame_timestamp_us: 0,
             last_visual_index: selected as f32,
             frame,
@@ -271,6 +273,10 @@ impl LauncherCardHomeSession {
         self.content_generation
     }
 
+    pub(super) fn set_target_vblank(&mut self, target_vblank: u64) {
+        self.target_vblank = target_vblank;
+    }
+
     pub(super) fn chrome_pixels(&self) -> &[Rgb565Pixel] {
         self.prepared.pixels()
     }
@@ -367,6 +373,7 @@ impl LauncherCardHomeSession {
             },
             content_generation: self.content_generation,
             navigation_generation: self.navigation_generation,
+            target_vblank: self.target_vblank,
         });
     }
 

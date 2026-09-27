@@ -69,6 +69,21 @@ static inline uint16x4_t reflect_channel(uint16x4_t a, uint16x4_t b,
 static const uint8_t reflection_bayer[4][4] = {
     {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
 
+static const uint16_t reflection_alpha_64[64] = {
+    150, 145, 140, 136, 131, 127, 122, 118, 114, 110, 106, 102, 98,
+    94,  90,  87,  83,  79,  76,  73,  69,  66,  63,  60,  57, 54,
+    51,  48,  46,  43,  41,  38,  36,  34,  31,  29,  27,  25, 23,
+    21,  19,  18,  16,  15,  13,  12,  10,  9,   8,   7,   6,  5,
+    4,   3,   3,   2,   1,   1,   0,   0,   0,   0,   0,   0};
+
+// Vector rows always begin at a multiple of eight, so one pattern per x
+// phase covers all eight lanes.
+static const uint16_t reflection_threshold_8[4][8] = {
+    {8, 200, 56, 248, 8, 200, 56, 248},
+    {136, 72, 184, 120, 136, 72, 184, 120},
+    {40, 232, 24, 216, 40, 232, 24, 216},
+    {168, 104, 152, 88, 168, 104, 152, 88}};
+
 static inline uint32x4_t reverse4_u32(uint32x4_t value) {
   value = vrev64q_u32(value);
   return vcombine_u32(vget_high_u32(value), vget_low_u32(value));
@@ -83,9 +98,25 @@ static inline uint16x8_t reflection_fade(uint16x8_t channel,
   return vaddq_u16(vshrq_n_u16(value, 8), rounded);
 }
 
+static inline size_t reflection_fade_row(size_t row, size_t fade_rows) {
+  size_t scaled;
+  // Production card faces use 63 rows and the full-height fallback uses 64.
+  // Keep both paths division-free on Cortex-A9; unusual test assets retain the
+  // general contract.
+  if (fade_rows == 64)
+    scaled = row;
+  else if (fade_rows == 63)
+    scaled = row * 63 / 62;
+  else
+    scaled = row * 63 / (fade_rows - 1);
+  return scaled < 63 ? scaled : 63;
+}
+
 void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
                                        size_t height, size_t x, size_t fade_rows) {
   const size_t visible = height / 4 < 64 ? height / 4 : 64;
+  const int standard_fade =
+      height >= 64 && (fade_rows == 63 || fade_rows == 64);
   size_t row = 0;
   for (; row + 8 <= visible; row += 8) {
     const uint32x4_t first =
@@ -106,16 +137,23 @@ void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
             vmovn_u32(vandq_u32(vshrq_n_u32(first, 16), vdupq_n_u32(255))),
             vmovn_u32(vandq_u32(vshrq_n_u32(second, 16), vdupq_n_u32(255)))),
         3);
-    uint16_t alpha_values[8], threshold_values[8];
-    for (size_t lane = 0; lane < 8; ++lane) {
-      const size_t reflected_row = (row + lane) * 63 / (fade_rows - 1);
-      const uint32_t left = 63 - reflected_row;
-      alpha_values[lane] = (uint16_t)(150 * left * left / (63 * 63));
-      threshold_values[lane] =
-          (uint16_t)(reflection_bayer[reflected_row & 3][x & 3] * 16 + 8);
+    uint16x8_t alpha, threshold;
+    if (standard_fade) {
+      alpha = vld1q_u16(reflection_alpha_64 + row);
+      threshold = vld1q_u16(reflection_threshold_8[x & 3]);
+    } else {
+      uint16_t alpha_values[8], threshold_values[8];
+      for (size_t lane = 0; lane < 8; ++lane) {
+        const size_t reflected_row =
+            reflection_fade_row(row + lane, fade_rows);
+        const uint32_t left = 63 - reflected_row;
+        alpha_values[lane] = (uint16_t)(150 * left * left / (63 * 63));
+        threshold_values[lane] =
+            (uint16_t)(reflection_bayer[reflected_row & 3][x & 3] * 16 + 8);
+      }
+      alpha = vld1q_u16(alpha_values);
+      threshold = vld1q_u16(threshold_values);
     }
-    const uint16x8_t alpha = vld1q_u16(alpha_values);
-    const uint16x8_t threshold = vld1q_u16(threshold_values);
     const uint16x8_t faded_red = reflection_fade(red, alpha, threshold);
     const uint16x8_t faded_green = reflection_fade(green, alpha, threshold);
     const uint16x8_t faded_blue = reflection_fade(blue, alpha, threshold);
@@ -126,7 +164,7 @@ void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
   }
   for (; row < 64; ++row) {
     const uint32_t pixel = row < visible ? body[height - 1 - row] : 0;
-    const size_t fade_row = row * 63 / (fade_rows - 1);
+    const size_t fade_row = reflection_fade_row(row, fade_rows);
     const uint32_t left = fade_row < 63 ? 63 - fade_row : 0;
     const uint32_t alpha = 150 * left * left / (63 * 63);
     const uint32_t threshold = reflection_bayer[fade_row & 3][x & 3] * 16 + 8;
@@ -186,42 +224,6 @@ void magik_launcher_filter_column(uint32_t *out, const uint32_t *a0,
   for (; i < n; ++i) {
     uint32_t a = scalar(a0[i], a1[i], wx);
     out[i] = lod ? scalar(a, scalar(b0[i], b1[i], wx2), lod) : a;
-  }
-}
-
-void magik_launcher_project_column(uint32_t *out, size_t pitch, size_t x,
-                                   size_t top, size_t bottom,
-                                   const uint32_t *src, size_t height,
-                                   int32_t q, int32_t step) {
-  size_t y = top;
-  while (y < bottom) {
-    int32_t row = q >> 16;
-    int32_t next = q + step;
-    int32_t row2 = next >> 16;
-    if (y + 1 < bottom && row >= 0 && row2 >= 0 && (size_t)(row + 1) < height &&
-        (size_t)(row2 + 1) < height) {
-      // Gather two adjacent RGBA pairs, then interpolate all eight channels.
-      // 16-bit weights preserve the exact scalar floor even when weight is 0.
-      uint32x2x2_t samples =
-          vtrn_u32(vld1_u32(src + row), vld1_u32(src + row2));
-      uint16x8_t a = vmovl_u8(vreinterpret_u8_u32(samples.val[0]));
-      uint16x8_t b = vmovl_u8(vreinterpret_u8_u32(samples.val[1]));
-      uint16x8_t w = vcombine_u16(vdup_n_u16(((uint32_t)q & 65535) >> 8),
-                                  vdup_n_u16(((uint32_t)next & 65535) >> 8));
-      uint16x8_t value =
-          vmlaq_u16(vmulq_u16(a, vsubq_u16(vdupq_n_u16(256), w)), b, w);
-      uint32x2_t pixels = vreinterpret_u32_u8(vshrn_n_u16(value, 8));
-      vst1_lane_u32(out + y * pitch + x, pixels, 0);
-      vst1_lane_u32(out + (y + 1) * pitch + x, pixels, 1);
-      y += 2;
-      q = next + step;
-      continue;
-    }
-    uint32_t a = row >= 0 && (size_t)row < height ? src[row] : 0;
-    uint32_t b = row + 1 >= 0 && (size_t)(row + 1) < height ? src[row + 1] : 0;
-    out[y * pitch + x] = scalar(a, b, ((uint32_t)q & 65535) >> 8);
-    ++y;
-    q = next;
   }
 }
 
@@ -364,27 +366,6 @@ void magik_launcher_project_over_column(uint16_t *out, size_t pitch,
     }
   }
 }
-void magik_launcher_over_row(uint16_t *out, const uint32_t *src, size_t n) {
-  size_t i = 0;
-  for (; i + 4 <= n; i += 4) {
-    uint32x4_t p = vld1q_u32(src + i);
-    uint32x4_t alpha = vshrq_n_u32(p, 24);
-    uint32x2_t m = vmin_u32(vget_low_u32(alpha), vget_high_u32(alpha));
-    if (vget_lane_u32(m, 0) == 255 && vget_lane_u32(m, 1) == 255) {
-      uint32x4_t r = vshlq_n_u32(vandq_u32(p, vdupq_n_u32(248)), 8);
-      uint32x4_t g =
-          vshlq_n_u32(vandq_u32(vshrq_n_u32(p, 8), vdupq_n_u32(252)), 3);
-      uint32x4_t b = vandq_u32(vshrq_n_u32(p, 19), vdupq_n_u32(31));
-      vst1_u16(out + i, vmovn_u32(vorrq_u32(vorrq_u32(r, g), b)));
-    } else {
-      for (size_t j = 0; j < 4; ++j)
-        out[i + j] = over_pixel(src[i + j], out[i + j]);
-    }
-  }
-  for (; i < n; ++i)
-    out[i] = over_pixel(src[i], out[i]);
-}
-
 // Face-on cards share one vertical mapping. Gather four column pairs and
 // composite immediately, avoiding a strided intermediate image and reread.
 void magik_launcher_flat(uint16_t *out, size_t pitch, const uint32_t *src,
@@ -430,31 +411,6 @@ void magik_launcher_mix_rgba(uint32_t *a, const uint32_t *b, size_t n, uint32_t 
   for (; i + 4 <= n; i += 4)
     vst1q_u32(a + i, blend(vld1q_u32(a + i), vld1q_u32(b + i), w));
   for (; i < n; ++i) a[i] = scalar(a[i], b[i], w);
-}
-
-void magik_launcher_flat_rgba(uint32_t *out, size_t pitch, const uint32_t *src,
-                             size_t stride, size_t height, size_t width, size_t rows,
-                             int32_t q, int32_t step) {
-  for (size_t y = 0; y < rows; ++y, q += step) {
-    int32_t r = q >> 16;
-    uint32_t w = ((uint32_t)q & 65535) >> 8;
-    size_t x = 0;
-    if (r >= 0 && (size_t)(r + 1) < height) {
-      for (; x + 4 <= width; x += 4) {
-        uint32x2x2_t ab = vtrn_u32(vld1_u32(src + x * stride + r),
-                                   vld1_u32(src + (x + 1) * stride + r));
-        uint32x2x2_t cd = vtrn_u32(vld1_u32(src + (x + 2) * stride + r),
-                                   vld1_u32(src + (x + 3) * stride + r));
-        vst1q_u32(out + y * pitch + x, blend(vcombine_u32(ab.val[0], cd.val[0]),
-                                            vcombine_u32(ab.val[1], cd.val[1]), w));
-      }
-    }
-    for (; x < width; ++x) {
-      uint32_t a = r >= 0 && (size_t)r < height ? src[x * stride + r] : 0;
-      uint32_t b = r + 1 >= 0 && (size_t)(r + 1) < height ? src[x * stride + r + 1] : 0;
-      out[y * pitch + x] = scalar(a, b, w);
-    }
-  }
 }
 
 static uint16_t unpremultiply(uint32_t p) {

@@ -18,7 +18,7 @@ const WIDTH: usize = 960;
 #[cfg(test)]
 const HEIGHT: usize = 540;
 const CAROUSEL_LEFT: usize = 296;
-const CAROUSEL_SPLIT: usize = 615;
+pub(super) const CAROUSEL_SPLIT: usize = 629;
 const CAROUSEL_RIGHT: usize = 934;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +26,7 @@ pub(super) struct CardFrameRequest {
     pub(super) render: LauncherFrameRequest,
     pub(super) content_generation: u64,
     pub(super) navigation_generation: u64,
+    pub(super) target_vblank: u64,
 }
 
 pub(super) struct RenderedCardFrame {
@@ -495,6 +496,7 @@ mod tests {
             },
             content_generation: 4,
             navigation_generation: 7,
+            target_vblank: sequence,
         }
     }
 

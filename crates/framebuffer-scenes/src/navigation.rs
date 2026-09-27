@@ -846,6 +846,10 @@ impl NavigationTransitionBuffers {
         self.settings_cog_asset = Some(asset);
     }
 
+    pub fn settings_cog_asset(&self) -> Option<&'static [Rgb565Pixel]> {
+        self.settings_cog_asset
+    }
+
     pub fn copy_source_to_working(&mut self) -> Result<usize, NavigationTransitionFailure> {
         if !self.source_ready || self.working.len() != self.source.len() {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);

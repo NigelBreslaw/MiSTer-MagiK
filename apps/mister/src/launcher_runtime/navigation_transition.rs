@@ -20,6 +20,14 @@ use mister_magik_framebuffer_scenes::navigation::{
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
+pub struct SettingsCogRenderInput<'a> {
+    pub launcher: &'a [SharedRgb565Pixel],
+    pub settings: &'a [SharedRgb565Pixel],
+    pub cog: &'static [SharedRgb565Pixel],
+    pub t_ms: u32,
+    pub direction: NavigationTransitionDirection,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavigationTransitionRoute {
     HomeToConsoles,
@@ -880,6 +888,32 @@ impl NavigationTransitionRuntime {
         self.settings_physical_space
     }
 
+    pub fn settings_cog_render_input(&self) -> Option<SettingsCogRenderInput<'_>> {
+        let request = self.request()?;
+        if request.renderer_label() != "settings-cog" {
+            return None;
+        }
+        let source = self.buffers.source()?;
+        let destination = self.buffers.destination()?;
+        let cog = self.buffers.settings_cog_asset()?;
+        let duration = mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_DURATION_MS;
+        let elapsed = (u64::from(self.frame().progress_q16) * u64::from(duration)
+            / u64::from(PROGRESS_MAX)) as u32;
+        let (launcher, settings, t_ms) = match request.direction {
+            NavigationTransitionDirection::Forward => (source, destination, elapsed),
+            NavigationTransitionDirection::Reverse => {
+                (destination, source, duration.saturating_sub(elapsed))
+            }
+        };
+        Some(SettingsCogRenderInput {
+            launcher,
+            settings,
+            cog,
+            t_ms,
+            direction: request.direction,
+        })
+    }
+
     pub const fn last_render_stats(&self) -> NavigationTransitionRenderStats {
         self.last_render_stats
     }
@@ -936,7 +970,7 @@ fn slint_rgb565_as_shared(pixels: &[Rgb565Pixel]) -> &[SharedRgb565Pixel] {
     unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<SharedRgb565Pixel>(), pixels.len()) }
 }
 
-fn slint_rgb565_as_shared_mut(pixels: &mut [Rgb565Pixel]) -> &mut [SharedRgb565Pixel] {
+pub(crate) fn slint_rgb565_as_shared_mut(pixels: &mut [Rgb565Pixel]) -> &mut [SharedRgb565Pixel] {
     assert_eq!(
         std::mem::size_of::<Rgb565Pixel>(),
         std::mem::size_of::<SharedRgb565Pixel>()
@@ -1853,6 +1887,41 @@ mod tests {
 
         assert!(output.iter().all(|pixel| *pixel != Rgb565Pixel(0xffff)));
         assert!(runtime.buffers.working().iter().all(|pixel| pixel.0 == 0));
+    }
+
+    #[test]
+    fn reverse_settings_cog_uses_live_settings_as_its_settings_pixels() {
+        let mut runtime = NavigationTransitionRuntime::new(8, 6, true);
+        let live_settings = vec![Rgb565Pixel(0x2222); 8 * 6];
+        let launcher = vec![Rgb565Pixel(0x1111); 8 * 6];
+        let cog = Box::leak(
+            vec![
+                SharedRgb565Pixel(0);
+                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+            ]
+            .into_boxed_slice(),
+        );
+
+        assert!(
+            runtime
+                .begin_settings_cog_physical(
+                    NavigationTransitionDirection::Reverse,
+                    8,
+                    6,
+                    &live_settings,
+                    cog,
+                    0,
+                )
+                .unwrap()
+        );
+        runtime.capture_destination(&launcher, 1).unwrap();
+
+        let input = runtime
+            .settings_cog_render_input()
+            .expect("captured settings cog transition");
+        assert!(input.launcher.iter().all(|pixel| pixel.0 == 0x1111));
+        assert!(input.settings.iter().all(|pixel| pixel.0 == 0x2222));
     }
 
     #[test]
