@@ -19,10 +19,12 @@ use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::dithered_gradient::{
     HorizontalGradientStop, Rgb8Color, horizontal_rgb565,
 };
-use mister_magik_framebuffer_scenes::settings_cog::{COG_ASSET_HEIGHT, COG_ASSET_WIDTH};
+use mister_magik_framebuffer_scenes::settings_cog::{
+    COG_ASSET_HEIGHT, COG_ASSET_WIDTH, CrtSettingsGeometry,
+};
 use mister_magik_ui::launcher::{
     ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
-    MenuItemKind, MenuItemPresentation, MenuItemStatus, NavigationView, SettingsView,
+    MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi, NavigationView, SettingsView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -409,13 +411,22 @@ struct NavigationViewPresenter {
 
 #[derive(Default)]
 struct SettingsViewPresenter {
-    license_lines_index: Option<usize>,
+    license_lines_key: Option<(usize, crate::licenses::LicenseViewport)>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
     display_options: Option<Rc<VecModel<ChoiceOption>>>,
     orientation_options: Option<Rc<VecModel<ChoiceOption>>>,
     license_titles: Option<Rc<VecModel<SharedString>>>,
     license_kinds: Option<Rc<VecModel<SharedString>>>,
-    visual_assets_installed: bool,
+    fixed_visual_assets_installed: bool,
+    crt_visual_assets_geometry: Option<SettingsVisualAssetGeometry>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SettingsVisualAssetGeometry {
+    width: i32,
+    height: i32,
+    content_x: i32,
+    content_width: i32,
 }
 
 const SETTINGS_FOCUS_HEIGHT: usize = 36;
@@ -471,21 +482,71 @@ fn settings_cog_backdrop_image() -> slint::Image {
     )
 }
 
-fn settings_focus_highlight_image(width: usize) -> slint::Image {
-    let pixels = horizontal_rgb565(width, SETTINGS_FOCUS_HEIGHT, &SETTINGS_FOCUS_STOPS)
+fn settings_focus_highlight_image(width: usize, height: usize) -> slint::Image {
+    let pixels = horizontal_rgb565(width, height, &SETTINGS_FOCUS_STOPS)
         .expect("fixed Settings focus gradient is valid");
-    rgb565_image(width, SETTINGS_FOCUS_HEIGHT, &pixels)
+    rgb565_image(width, height, &pixels)
 }
 
-pub fn install_settings_visual_assets(settings: &SettingsView) {
+fn settings_visual_asset_geometry(ui: &MisterUi) -> SettingsVisualAssetGeometry {
+    SettingsVisualAssetGeometry {
+        width: ui.get_window_width(),
+        height: ui.get_window_height(),
+        content_x: ui.get_crt_content_x(),
+        content_width: ui.get_crt_content_width(),
+    }
+}
+
+fn crt_focus_highlight_geometry(
+    geometry: SettingsVisualAssetGeometry,
+) -> ((usize, usize), (usize, usize)) {
+    let width = geometry.width.max(1) as usize;
+    let height = geometry.height.max(1) as usize;
+    let content_x = geometry.content_x.max(0) as usize;
+    let content_width = geometry.content_width.max(0) as usize;
+    let safe_x = content_x.max(width.saturating_sub(content_x.saturating_add(content_width)));
+    let layout = CrtSettingsGeometry::for_viewport(width, height, safe_x, 0)
+        .expect("CRT focus assets use a supported viewport");
+    let row_width = width.saturating_sub(2 * layout.margin_x()).max(1);
+    let menu_width = (240 * layout.scale_x()).min(row_width).max(1);
+    (
+        (row_width, layout.row_height()),
+        (menu_width, 12 * layout.scale_y()),
+    )
+}
+
+fn install_fixed_settings_visual_assets(settings: &SettingsView) {
     settings.set_cog_backdrop(settings_cog_backdrop_image());
     settings.set_focus_highlight_settings(settings_focus_highlight_image(
         SETTINGS_FOCUS_SETTINGS_WIDTH,
+        SETTINGS_FOCUS_HEIGHT,
     ));
-    settings.set_focus_highlight_wide(settings_focus_highlight_image(SETTINGS_FOCUS_WIDE_WIDTH));
+    settings.set_focus_highlight_wide(settings_focus_highlight_image(
+        SETTINGS_FOCUS_WIDE_WIDTH,
+        SETTINGS_FOCUS_HEIGHT,
+    ));
     settings.set_focus_highlight_portrait(settings_focus_highlight_image(
         SETTINGS_FOCUS_PORTRAIT_WIDTH,
+        SETTINGS_FOCUS_HEIGHT,
     ));
+}
+
+fn install_crt_settings_visual_assets(
+    settings: &SettingsView,
+    geometry: SettingsVisualAssetGeometry,
+) {
+    let (row, menu) = crt_focus_highlight_geometry(geometry);
+    settings.set_focus_highlight_crt_row(settings_focus_highlight_image(row.0, row.1));
+    settings.set_focus_highlight_crt_menu(settings_focus_highlight_image(menu.0, menu.1));
+}
+
+pub fn install_settings_visual_assets(app: &Launcher) {
+    let settings = app.global::<SettingsView>();
+    install_fixed_settings_visual_assets(&settings);
+    let ui = app.global::<MisterUi>();
+    if ui.get_crt_layout() {
+        install_crt_settings_visual_assets(&settings, settings_visual_asset_geometry(&ui));
+    }
 }
 
 #[derive(Default)]
@@ -575,9 +636,17 @@ impl LauncherViewPresenters {
             nav.favourite_count() as i32
         );
         let settings = app.global::<SettingsView>();
-        if !self.settings.visual_assets_installed {
-            install_settings_visual_assets(&settings);
-            self.settings.visual_assets_installed = true;
+        if !self.settings.fixed_visual_assets_installed {
+            install_fixed_settings_visual_assets(&settings);
+            self.settings.fixed_visual_assets_installed = true;
+        }
+        let ui = app.global::<MisterUi>();
+        if ui.get_crt_layout() {
+            let geometry = settings_visual_asset_geometry(&ui);
+            if self.settings.crt_visual_assets_geometry != Some(geometry) {
+                install_crt_settings_visual_assets(&settings, geometry);
+                self.settings.crt_visual_assets_geometry = Some(geometry);
+            }
         }
         if self.settings.display_options.is_none() {
             let choices = crate::launcher::settings_display_resolutions()
@@ -759,8 +828,9 @@ impl LauncherViewPresenters {
             set_license_scroll_y,
             nav.licenses_scroll_y()
         );
-        if self.settings.license_lines_index != Some(nav.licenses_selected) {
-            let lines = self.license_lines(nav.licenses_selected);
+        let license_lines_key = (nav.licenses_selected, nav.license_viewport());
+        if self.settings.license_lines_key != Some(license_lines_key) {
+            let lines = self.license_lines(nav.licenses_selected, nav.license_viewport());
             settings.set_license_lines(lines);
         }
 
@@ -886,14 +956,19 @@ impl LauncherViewPresenters {
         navigation.set_menu_item_presentation(ModelRc::from(presentation.clone()));
     }
 
-    pub fn license_lines(&mut self, index: usize) -> ModelRc<SharedString> {
-        if self.settings.license_lines_index != Some(index) {
-            let lines = crate::licenses::wrapped_lines(index)
+    pub fn license_lines(
+        &mut self,
+        index: usize,
+        viewport: crate::licenses::LicenseViewport,
+    ) -> ModelRc<SharedString> {
+        let key = (index, viewport);
+        if self.settings.license_lines_key != Some(key) {
+            let lines = crate::licenses::wrapped_lines(index, viewport)
                 .iter()
                 .map(|line| SharedString::from(line.as_str()))
                 .collect::<Vec<_>>();
             self.settings.license_lines = Some(Rc::new(VecModel::from(lines)));
-            self.settings.license_lines_index = Some(index);
+            self.settings.license_lines_key = Some(key);
         }
         ModelRc::from(
             self.settings

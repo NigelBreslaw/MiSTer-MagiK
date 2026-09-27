@@ -1062,16 +1062,16 @@ fn navigation_transition_for_intent(
 fn settings_cog_transition_eligible(
     route: NavigationTransitionRoute,
     card_home_settled: bool,
-    portrait: bool,
     render_width: usize,
     render_height: usize,
     reduce_motion: bool,
 ) -> bool {
     route == NavigationTransitionRoute::HomeToSettings
         && card_home_settled
-        && !portrait
-        && render_width == 960
-        && render_height == 540
+        && mister_magik_framebuffer_scenes::settings_cog::supports_dimensions(
+            render_width,
+            render_height,
+        )
         && !reduce_motion
 }
 
@@ -4934,6 +4934,19 @@ fn replace_layout(
     true
 }
 
+fn sync_license_viewport(nav: &mut LauncherNav, layout: UiLayoutGeometry) {
+    let content = layout.content_rect();
+    let safe_x = content
+        .x
+        .max(layout.logical_w().saturating_sub(content.x + content.width));
+    let safe_y = content.y.max(
+        layout
+            .logical_h()
+            .saturating_sub(content.y + content.height),
+    );
+    nav.set_license_viewport_geometry(layout.logical_w(), layout.logical_h(), safe_x, safe_y);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_orientation_layout(
     app: &slint_ui::launcher::Launcher,
@@ -4950,6 +4963,7 @@ fn apply_orientation_layout(
     let next_layout = UiLayoutGeometry::for_display(ui, orientation);
     replace_layout(layout, layout_epoch, next_layout);
     nav.set_portrait_layout(layout.is_portrait());
+    sync_license_viewport(nav, *layout);
     if ui.output_route().is_crt() {
         let metrics = crate::ui_display::CrtUiMetrics::for_display(ui);
         nav.set_arcade_row_height(crt_arcade_row_height(
@@ -5324,6 +5338,7 @@ pub(super) fn run_launcher_loop(
     let mut preview_compositor = None;
     let mut preview_compositor_start_attempted = false;
     nav.set_portrait_layout(layout.is_portrait());
+    sync_license_viewport(&mut nav, layout);
     if crt_layout {
         nav.set_arcade_row_height(crt_arcade_row_height(
             crt_metrics.game_row_height,
@@ -7974,16 +7989,15 @@ pub(super) fn run_launcher_loop(
                                         SettingsPageTransitionAxis::VerticalReversed
                                     }
                                 };
-                                // The card zoom exists only for the native
-                                // 960x540 landscape card launcher; Reduce
-                                // motion and every other route keep the slide.
+                                // The card zoom runs in the physical raster for
+                                // HDMI landscape and native CRT modes in either
+                                // orientation. Reduce motion keeps the slide.
                                 let card_home_settled = launcher_card_home
                                     .as_ref()
                                     .is_some_and(|session| !session.is_animating());
                                 let card_zoom = settings_cog_transition_eligible(
                                     route,
                                     card_home_settled,
-                                    layout.is_portrait(),
                                     ui.render_w(),
                                     ui.render_h(),
                                     nav.settings.reduce_motion,
@@ -10932,7 +10946,12 @@ pub(super) fn run_launcher_loop(
                     gui_profiling.phase_span(gui_custom_selection.navigation_transition_raster);
                 let mut rendered_direct = false;
                 if navigation_transition.settings_physical_space() {
-                    if settings_cog_render_ahead.is_none()
+                    if (layout.logical_w(), layout.logical_h())
+                        == (
+                            mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_WIDTH,
+                            mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_HEIGHT,
+                        )
+                        && settings_cog_render_ahead.is_none()
                         && let Some(input) = navigation_transition.settings_cog_render_input()
                     {
                         settings_cog_render_ahead = SettingsCogRenderAhead::start(
@@ -14689,11 +14708,10 @@ mod tests {
     }
 
     #[test]
-    fn settings_cog_zoom_requires_a_settled_native_landscape_card() {
+    fn settings_cog_zoom_requires_a_settled_native_card() {
         assert!(settings_cog_transition_eligible(
             NavigationTransitionRoute::HomeToSettings,
             true,
-            false,
             960,
             540,
             false,
@@ -14701,9 +14719,22 @@ mod tests {
         assert!(!settings_cog_transition_eligible(
             NavigationTransitionRoute::HomeToSettings,
             false,
-            false,
             960,
             540,
+            false,
+        ));
+        assert!(settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            true,
+            240,
+            640,
+            false,
+        ));
+        assert!(!settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            true,
+            800,
+            600,
             false,
         ));
     }

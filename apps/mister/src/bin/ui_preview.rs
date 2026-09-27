@@ -30,8 +30,9 @@ mod macos {
     };
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{
-        ArcadeSearchPane, LauncherAction, LauncherEvent, LauncherNav, NavigationTransitionState,
-        Screen, settings_display_resolution_index, settings_display_resolutions,
+        ArcadeSearchPane, ConfirmAction, LauncherAction, LauncherEvent, LauncherNav,
+        NavigationTransitionState, Screen, settings_display_resolution_index,
+        settings_display_resolutions,
     };
     use mister_magik_fb::launcher_presentation::LauncherViewPresenters;
     use mister_magik_fb::launcher_runtime::catalog::{
@@ -576,6 +577,21 @@ mod macos {
             launcher_nav.settings = settings_store.load();
             launcher_nav.settings.screen_orientation = orientation;
             launcher_nav.set_portrait_layout(layout.is_portrait());
+            let layout_content = layout.content_rect();
+            launcher_nav.set_license_viewport_geometry(
+                layout.logical_w(),
+                layout.logical_h(),
+                layout_content.x.max(
+                    layout
+                        .logical_w()
+                        .saturating_sub(layout_content.x + layout_content.width),
+                ),
+                layout_content.y.max(
+                    layout
+                        .logical_h()
+                        .saturating_sub(layout_content.y + layout_content.height),
+                ),
+            );
             launcher_nav.sync_orientation_selection();
             launcher_nav.display_selected = display_profile.display_resolution_index();
             launcher_nav.display_highlighted = display_profile
@@ -962,7 +978,10 @@ mod macos {
             }
             let settings = self.launcher.global::<SettingsView>();
             match self.scenario {
-                Scenario::Settings | Scenario::DisplayChoice | Scenario::OrientationChoice => {
+                Scenario::Settings
+                | Scenario::DisplayChoice
+                | Scenario::OrientationChoice
+                | Scenario::DisplayConfirm => {
                     settings.set_section(match self.selection {
                         0 => SettingsSection::Display,
                         1 => SettingsSection::Orientation,
@@ -1120,6 +1139,13 @@ mod macos {
                     self.launcher_nav.orientation_combo_open = true;
                     self.launcher_nav.orientation_highlighted =
                         self.launcher_nav.orientation_selected;
+                }
+                Scenario::DisplayConfirm => {
+                    self.launcher_nav.screen = Screen::Settings;
+                    self.launcher_nav.settings_selected = 0;
+                    self.launcher_nav.confirm_action = Some(ConfirmAction::DisplayResolution);
+                    self.launcher_nav.confirm_selected = 0;
+                    self.launcher_nav.display_confirm_remaining = 15;
                 }
                 Scenario::Controller => self.launcher_nav.screen = Screen::Controller,
                 Scenario::About => self.launcher_nav.screen = Screen::About,
@@ -1510,6 +1536,7 @@ mod macos {
                 (Scenario::ArcadeCrossfade, Screen::Arcade) => Scenario::ArcadeCrossfade,
                 (Scenario::OrientationChoice, Screen::Settings) => Scenario::OrientationChoice,
                 (Scenario::DisplayChoice, Screen::Settings) => Scenario::DisplayChoice,
+                (Scenario::DisplayConfirm, Screen::Settings) => Scenario::DisplayConfirm,
                 (Scenario::ControllerSetup, Screen::Controller) => Scenario::ControllerSetup,
                 _ => Scenario::from_screen(self.launcher_nav.screen),
             };
@@ -2682,6 +2709,7 @@ mod macos {
         Licenses,
         LicenseText,
         Confirm,
+        DisplayConfirm,
         CatalogScan,
         BackgroundScan,
         Loading,
@@ -2706,6 +2734,7 @@ mod macos {
                     | Self::About
                     | Self::Licenses
                     | Self::LicenseText
+                    | Self::DisplayConfirm
             )
         }
 
@@ -2738,6 +2767,7 @@ mod macos {
                 "licenses" => Some(Self::Licenses),
                 "license-text" | "license" => Some(Self::LicenseText),
                 "confirm" => Some(Self::Confirm),
+                "display-confirm" | "resolution-confirm" => Some(Self::DisplayConfirm),
                 "catalog-scan" => Some(Self::CatalogScan),
                 "background-scan" => Some(Self::BackgroundScan),
                 "loading" => Some(Self::Loading),
@@ -2766,6 +2796,7 @@ mod macos {
                 Self::Licenses => "Licenses",
                 Self::LicenseText => "License Text",
                 Self::Confirm => "Confirmation",
+                Self::DisplayConfirm => "Display Confirmation",
                 Self::CatalogScan => "Catalog Scan",
                 Self::BackgroundScan => "Background Scan",
                 Self::Loading => "Loading",
@@ -2791,6 +2822,7 @@ mod macos {
                 Self::Licenses => "licenses",
                 Self::LicenseText => "license-text",
                 Self::Confirm => "confirm",
+                Self::DisplayConfirm => "display-confirm",
                 Self::CatalogScan => "catalog-scan",
                 Self::BackgroundScan => "background-scan",
                 Self::Loading => "loading",
@@ -2820,6 +2852,7 @@ mod macos {
                 Self::Licenses => "5",
                 Self::LicenseText => "L",
                 Self::Confirm => "9",
+                Self::DisplayConfirm => "headless",
                 Self::CatalogScan => "0",
                 Self::Arcade => "A",
                 Self::ArcadeSearch => "headless",
@@ -3964,7 +3997,7 @@ mod macos {
     fn initialize_bridge(launcher: &Launcher, display_profile: DisplayProfile) {
         let navigation = launcher.global::<NavigationView>();
         let settings = launcher.global::<SettingsView>();
-        mister_magik_fb::launcher_presentation::install_settings_visual_assets(&settings);
+        mister_magik_fb::launcher_presentation::install_settings_visual_assets(launcher);
         let information = launcher.global::<InformationView>();
         let input = launcher.global::<InputView>();
         let arcade = launcher.global::<ArcadeView>();
@@ -4059,9 +4092,10 @@ mod macos {
             Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => {
                 LauncherScreen::Arcade
             }
-            Scenario::Settings | Scenario::DisplayChoice | Scenario::OrientationChoice => {
-                LauncherScreen::Settings
-            }
+            Scenario::Settings
+            | Scenario::DisplayChoice
+            | Scenario::OrientationChoice
+            | Scenario::DisplayConfirm => LauncherScreen::Settings,
             Scenario::About => LauncherScreen::About,
             Scenario::Licenses => LauncherScreen::Licenses,
             Scenario::LicenseText => LauncherScreen::LicenseText,
@@ -4099,6 +4133,17 @@ mod macos {
         navigation.set_system_hub_favourites_count(28);
 
         match scenario {
+            Scenario::DisplayConfirm => {
+                overlay.set_confirmation_kind(ConfirmationKind::DisplayResolution);
+                overlay.set_selected_choice(DialogChoice::Cancel);
+                overlay.set_confirmation_title("Keep this display mode?".into());
+                overlay.set_confirmation_message(
+                    "Keep this display resolution? It will be restored automatically if you cannot see this dialog."
+                        .into(),
+                );
+                overlay.set_cancel_label("Revert 15".into());
+                overlay.set_confirm_label("Keep".into());
+            }
             Scenario::Confirm => {
                 overlay.set_confirmation_kind(ConfirmationKind::RefreshDatabase);
                 overlay.set_confirmation_title("Refresh Database?".into());

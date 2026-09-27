@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Home -> Settings card zoom for the 960x540 landscape card launcher.
+//! Home -> Settings card zoom for the HDMI and native CRT card launchers.
 //!
 //! The selected Settings card's outline zooms past the screen edges while the
 //! full Settings cog, rendered from the same Blender camera at twice the card
@@ -23,14 +23,14 @@ pub const SETTINGS_COG_DURATION_MS: u32 = 1_000;
 pub const COG_ASSET_WIDTH: usize = 412;
 pub const COG_ASSET_HEIGHT: usize = 374;
 
+const MAX_FRAME_WIDTH: usize = SETTINGS_COG_WIDTH;
+
 // Selected (centre) card of the landscape launcher: slot centre 610, half
 // width 90, vertical centre 284 (crates/framebuffer-scenes/src/launcher.rs).
 const CARD_X: i32 = 520;
 const CARD_Y: i32 = 158;
 const CARD_W: i32 = 180;
 const CARD_H: i32 = 252;
-const CARD_CX: i32 = CARD_X + CARD_W / 2;
-const CARD_CY: i32 = CARD_Y + CARD_H / 2;
 const CARD_RADIUS: i32 = 8;
 
 // The 816x1142 backdrop render frames the card's 408-pixel-wide view in its
@@ -73,6 +73,241 @@ const BAND_START_MS: u32 = 560;
 const BAND_STAGGER_MS: u32 = 30;
 const BAND_DURATION_MS: u32 = 200;
 const BAND_TRAVEL: i32 = 40;
+
+/// Shared CRT Settings-family geometry in logical framebuffer pixels.
+///
+/// The card zoom, segmented page transition and host-side viewport assets use
+/// this one calculation. `safe_x`/`safe_y` preserve the text overscan inset;
+/// callers rendering the full physical raster pass zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CrtSettingsGeometry {
+    width: usize,
+    height: usize,
+    sx: usize,
+    sy: usize,
+    margin_x: usize,
+    margin_y: usize,
+    header_bottom: usize,
+    footer_rule: usize,
+}
+
+impl CrtSettingsGeometry {
+    #[must_use]
+    pub fn for_dimensions(width: usize, height: usize) -> Option<Self> {
+        Self::for_viewport(width, height, 0, 0)
+    }
+
+    #[must_use]
+    pub fn for_viewport(width: usize, height: usize, safe_x: usize, safe_y: usize) -> Option<Self> {
+        if width.max(height) != 640 || !matches!(width.min(height), 240 | 288 | 480 | 512 | 576) {
+            return None;
+        }
+        let narrow = width.min(height);
+        let (sx, sy) = if narrow <= 288 {
+            if width > height { (2, 1) } else { (1, 2) }
+        } else {
+            (2, 2)
+        };
+        let margin_x = (width * 6 / 100).max(8 * sx).max(safe_x);
+        let margin_y = (height * 5 / 100).max(6 * sy).max(safe_y);
+        let header_bottom = margin_y + 18 * sy;
+        let footer_rule = height.saturating_sub(margin_y + 20 * sy);
+        Some(Self {
+            width,
+            height,
+            sx,
+            sy,
+            margin_x,
+            margin_y,
+            header_bottom,
+            footer_rule,
+        })
+    }
+
+    pub const fn width(self) -> usize {
+        self.width
+    }
+
+    pub const fn height(self) -> usize {
+        self.height
+    }
+
+    pub const fn scale_x(self) -> usize {
+        self.sx
+    }
+
+    pub const fn scale_y(self) -> usize {
+        self.sy
+    }
+
+    pub const fn margin_x(self) -> usize {
+        self.margin_x
+    }
+
+    pub const fn margin_y(self) -> usize {
+        self.margin_y
+    }
+
+    pub const fn header_bottom(self) -> usize {
+        self.header_bottom
+    }
+
+    pub const fn footer_rule(self) -> usize {
+        self.footer_rule
+    }
+
+    pub const fn list_top(self) -> usize {
+        self.header_bottom + 26 * self.sy
+    }
+
+    pub const fn row_height(self) -> usize {
+        16 * self.sy
+    }
+
+    pub const fn group_gap(self) -> usize {
+        6 * self.sy
+    }
+
+    pub const fn axis_scale(self, horizontal: bool) -> usize {
+        if horizontal { self.sx } else { self.sy }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SettingsCogLayout {
+    width: usize,
+    height: usize,
+    card_x: i32,
+    card_y: i32,
+    card_w: i32,
+    card_h: i32,
+    card_radius: i32,
+    cog_rest_x: i32,
+    cog_rest_y: i32,
+    cog_rest_w: i32,
+    cog_rest_h: i32,
+    cog_rest_alpha: u32,
+    content_top: usize,
+    content_bottom: usize,
+    footer_top: usize,
+    list_left: usize,
+    list_right: usize,
+    list_bands: [(usize, usize); 9],
+    list_band_count: usize,
+    band_travel: i32,
+    zoom_max_q16: i64,
+}
+
+impl SettingsCogLayout {
+    const fn hdmi() -> Self {
+        Self {
+            width: SETTINGS_COG_WIDTH,
+            height: SETTINGS_COG_HEIGHT,
+            card_x: CARD_X,
+            card_y: CARD_Y,
+            card_w: CARD_W,
+            card_h: CARD_H,
+            card_radius: CARD_RADIUS,
+            cog_rest_x: COG_REST_X,
+            cog_rest_y: COG_REST_Y,
+            cog_rest_w: COG_ASSET_WIDTH as i32,
+            cog_rest_h: COG_ASSET_HEIGHT as i32,
+            cog_rest_alpha: 256,
+            content_top: CONTENT_TOP,
+            content_bottom: CONTENT_BOTTOM,
+            footer_top: FOOTER_TOP,
+            list_left: LIST_LEFT,
+            list_right: LIST_RIGHT,
+            list_bands: LIST_BANDS,
+            list_band_count: LIST_BANDS.len(),
+            band_travel: BAND_TRAVEL,
+            zoom_max_q16: ZOOM_MAX_Q16,
+        }
+    }
+
+    fn for_dimensions(width: usize, height: usize) -> Option<Self> {
+        if (width, height) == (SETTINGS_COG_WIDTH, SETTINGS_COG_HEIGHT) {
+            return Some(Self::hdmi());
+        }
+        let geometry = CrtSettingsGeometry::for_dimensions(width, height)?;
+        let sx = geometry.scale_x();
+        let sy = geometry.scale_y();
+        let (aspect_y, aspect_x) = match (width, height) {
+            (640, 288) => (3, 5),
+            (288, 640) => (5, 3),
+            _ => (sy, sx),
+        };
+        let margin_x = geometry.margin_x();
+        let margin_y = geometry.margin_y();
+        let top = margin_y + 36 * sy;
+        let bottom = height.saturating_sub(margin_y + 34 * sy);
+        let available_h = bottom.saturating_sub(top);
+        let available_w = width.saturating_sub(2 * margin_x);
+        let card_w =
+            ((available_w * 34 / 100).min(available_h * 5 * aspect_x / (9 * aspect_y)) / 2 * 2)
+                .max(72 * sx);
+        let card_h = (card_w * 7 * aspect_y / (5 * aspect_x) / 2 * 2).max(2);
+        let centre_y = top + available_h.saturating_sub(card_h + card_h / 5) / 2 + card_h / 2;
+        let card_x = width.saturating_sub(card_w) / 2;
+        let card_y = centre_y.saturating_sub(card_h / 2);
+        let header_bottom = geometry.header_bottom();
+        let footer_rule = geometry.footer_rule();
+        let list_top = geometry.list_top();
+        let row_h = geometry.row_height();
+        let gap = geometry.group_gap();
+        let starts = [
+            list_top,
+            list_top + row_h,
+            list_top + 2 * row_h,
+            list_top + 3 * row_h + gap,
+            list_top + 4 * row_h + gap,
+            list_top + 5 * row_h + 2 * gap,
+            list_top + 6 * row_h + 2 * gap,
+            list_top + 7 * row_h + 2 * gap,
+        ];
+        let mut bands = [(0, 0); 9];
+        let mut index = 0;
+        while index < starts.len() {
+            let end = if index + 1 < starts.len() {
+                starts[index + 1]
+            } else {
+                starts[index] + row_h
+            };
+            bands[index] = (starts[index], end.min(footer_rule));
+            index += 1;
+        }
+        let cog_rest_w = 150 * sx;
+        let cog_rest_h = 150 * sy;
+        Some(Self {
+            width,
+            height,
+            card_x: card_x as i32,
+            card_y: card_y as i32,
+            card_w: card_w as i32,
+            card_h: card_h as i32,
+            card_radius: 2 * sx.min(sy) as i32,
+            cog_rest_x: (width - cog_rest_w + 6 * sx) as i32,
+            cog_rest_y: (header_bottom + 20 * sy) as i32,
+            cog_rest_w: cog_rest_w as i32,
+            cog_rest_h: cog_rest_h as i32,
+            cog_rest_alpha: 77,
+            content_top: header_bottom + 1,
+            content_bottom: footer_rule,
+            footer_top: footer_rule + 1,
+            list_left: margin_x,
+            list_right: width - margin_x,
+            list_bands: bands,
+            list_band_count: starts.len(),
+            band_travel: (12 * sx) as i32,
+            zoom_max_q16: 7 << 16,
+        })
+    }
+}
+
+#[must_use]
+pub fn supports_dimensions(width: usize, height: usize) -> bool {
+    SettingsCogLayout::for_dimensions(width, height).is_some()
+}
 
 const fn rgb565(r: u16, g: u16, b: u16) -> u16 {
     ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
@@ -118,6 +353,14 @@ fn zoom_q16(p: i64) -> i64 {
     (frac << whole).min(ZOOM_MAX_Q16)
 }
 
+fn zoom_q16_to(p: i64, maximum: i64) -> i64 {
+    if maximum == ZOOM_MAX_Q16 {
+        return zoom_q16(p);
+    }
+    let progress = p.clamp(0, 1 << 16) as f64 / 65536.0;
+    ((maximum as f64 / 65536.0).powf(progress) * 65536.0).round() as i64
+}
+
 /// Interpolate two RGB565 pixels with a five-bit fraction. The red/blue
 /// lanes have enough separation to share the same multiply without carrying
 /// into one another; green is handled independently.
@@ -150,7 +393,15 @@ fn alpha_of(q16: i64) -> u32 {
 
 /// Horizontal span of a rounded rectangle on row `y` (all Q16 except y).
 /// Returns the covered [x0, x1) in whole pixels, clipped to the frame.
-fn rounded_span(y: i32, x: i64, top: i64, w: i64, h: i64, radius: i64) -> Option<(usize, usize)> {
+fn rounded_span(
+    y: i32,
+    x: i64,
+    top: i64,
+    w: i64,
+    h: i64,
+    radius: i64,
+    frame_width: usize,
+) -> Option<(usize, usize)> {
     let yc = (i64::from(y) << 16) + (1 << 15);
     if yc < top || yc >= top + h {
         return None;
@@ -171,8 +422,8 @@ fn rounded_span(y: i32, x: i64, top: i64, w: i64, h: i64, radius: i64) -> Option
     } else {
         0
     };
-    let x0 = ((x + inset + (1 << 15)) >> 16).clamp(0, SETTINGS_COG_WIDTH as i64) as usize;
-    let x1 = ((x + w - inset + (1 << 15)) >> 16).clamp(0, SETTINGS_COG_WIDTH as i64) as usize;
+    let x0 = ((x + inset + (1 << 15)) >> 16).clamp(0, frame_width as i64) as usize;
+    let x1 = ((x + w - inset + (1 << 15)) >> 16).clamp(0, frame_width as i64) as usize;
     (x0 < x1).then_some((x0, x1))
 }
 
@@ -200,7 +451,36 @@ pub fn render_settings_cog_transition_into(
     t_ms: u32,
     output: &mut [Rgb565Pixel],
 ) -> bool {
-    let frame_len = SETTINGS_COG_WIDTH * SETTINGS_COG_HEIGHT;
+    render_settings_cog_transition_for_dimensions_into(
+        SETTINGS_COG_WIDTH,
+        SETTINGS_COG_HEIGHT,
+        launcher,
+        settings,
+        cog,
+        t_ms,
+        output,
+    )
+}
+
+/// Render the same card-to-Settings timeline for a supported physical raster.
+///
+/// CRT portrait modes are already rotated into physical scanout space here,
+/// so their responsive card and page geometry is derived directly from the
+/// buffer dimensions rather than rotating pixels in the hot path.
+#[must_use]
+pub fn render_settings_cog_transition_for_dimensions_into(
+    width: usize,
+    height: usize,
+    launcher: &[Rgb565Pixel],
+    settings: &[Rgb565Pixel],
+    cog: &[Rgb565Pixel],
+    t_ms: u32,
+    output: &mut [Rgb565Pixel],
+) -> bool {
+    let Some(layout) = SettingsCogLayout::for_dimensions(width, height) else {
+        return false;
+    };
+    let frame_len = width.saturating_mul(height);
     if launcher.len() != frame_len
         || settings.len() != frame_len
         || output.len() != frame_len
@@ -217,7 +497,7 @@ pub fn render_settings_cog_transition_into(
         output.copy_from_slice(settings);
         return true;
     }
-    const W: usize = SETTINGS_COG_WIDTH;
+    let w = layout.width;
 
     // Timeline (ms): the outline zooms 0-760, the cog travels 80-840, the
     // card face fades 60-260, and list bands slide in from 560 with a 30 ms
@@ -226,43 +506,58 @@ pub fn render_settings_cog_transition_into(
     // fade every frame.
     let zoom_p = ease_in_out(window_q16(t, 0, 760));
     let cog_p = ease_in_out(window_q16(t, 80, 760));
-    let z = zoom_q16(zoom_p);
+    let z = zoom_q16_to(zoom_p, layout.zoom_max_q16);
     let face_alpha = 256 - alpha_of(window_q16(t, 60, 200));
     // The outline fades as it leaves the screen: 1 - 1.25 p^2.
     let outline_p = window_q16(t, 0, 760);
     let outline_alpha = alpha_of((1 << 16) - ((outline_p * outline_p) >> 16) * 5 / 4);
 
     // Window (the zoomed card) in Q16 screen pixels.
-    let win_w = i64::from(CARD_W) * z;
-    let win_h = i64::from(CARD_H) * z;
-    let win_x = (i64::from(CARD_CX) << 16) - win_w / 2;
-    let win_y = (i64::from(CARD_CY) << 16) - win_h / 2;
-    let win_r = i64::from(CARD_RADIUS) * z;
+    let card_cx = layout.card_x + layout.card_w / 2;
+    let card_cy = layout.card_y + layout.card_h / 2;
+    let win_w = i64::from(layout.card_w) * z;
+    let win_h = i64::from(layout.card_h) * z;
+    let win_x = (i64::from(card_cx) << 16) - win_w / 2;
+    let win_y = (i64::from(card_cy) << 16) - win_h / 2;
+    let win_r = i64::from(layout.card_radius) * z;
     let stroke = ((3.0 * ((z as f64) / 65536.0).sqrt()) * 65536.0) as i64;
 
     // Cog: screen = origin + scale * asset, interpolated from the card crop.
-    let c0 = (i64::from(CARD_W) << 16) / i64::from(RENDER_CARD_W); // Q16
-    let start_x =
-        (i64::from(CARD_X) << 16) + (i64::from(ASSET_CROP_X * 2 - RENDER_CARD_X_Q1) * c0) / 2;
-    let start_y =
-        (i64::from(CARD_Y) << 16) + (i64::from(ASSET_CROP_Y * 2 - RENDER_CARD_Y_Q1) * c0) / 2;
+    let c0_x = (i64::from(layout.card_w) << 16) / i64::from(RENDER_CARD_W);
+    let c0_y = (i64::from(layout.card_h) << 16) / i64::from(RENDER_CARD_Y_Q1);
+    let start_x = (i64::from(layout.card_x) << 16)
+        + (i64::from(ASSET_CROP_X * 2 - RENDER_CARD_X_Q1) * c0_x) / 2;
+    let start_y = (i64::from(layout.card_y) << 16)
+        + (i64::from(ASSET_CROP_Y * 2 - RENDER_CARD_Y_Q1) * c0_y) / 2;
     let lerp = |a: i64, b: i64| a + (((b - a) * cog_p) >> 16);
-    let cog_x = lerp(start_x, i64::from(COG_REST_X) << 16);
-    let cog_y = lerp(start_y, i64::from(COG_REST_Y) << 16);
-    let cog_s = lerp(c0, 1 << 16);
-    let cog_at_rest = cog_p >= 1 << 16;
-    let inv_s = (1i64 << 32) / cog_s.max(1); // Q16 reciprocal
+    let cog_x = lerp(start_x, i64::from(layout.cog_rest_x) << 16);
+    let cog_y = lerp(start_y, i64::from(layout.cog_rest_y) << 16);
+    let cog_sx = lerp(
+        c0_x,
+        (i64::from(layout.cog_rest_w) << 16) / COG_ASSET_WIDTH as i64,
+    );
+    let cog_sy = lerp(
+        c0_y,
+        (i64::from(layout.cog_rest_h) << 16) / COG_ASSET_HEIGHT as i64,
+    );
+    let cog_alpha = lerp(256 << 16, i64::from(layout.cog_rest_alpha) << 16) >> 16;
+    let cog_at_native_rest =
+        cog_p >= 1 << 16 && cog_sx == 1 << 16 && cog_sy == 1 << 16 && cog_alpha >= 256;
+    let inv_sx = (1i64 << 32) / cog_sx.max(1);
+    let inv_sy = (1i64 << 32) / cog_sy.max(1);
     let inv_z = (1i64 << 32) / z.max(1); // Q16 reciprocal
     let cog_x0 = (cog_x >> 16).max(0) as usize;
-    let cog_x1 = (((cog_x + COG_ASSET_WIDTH as i64 * cog_s) >> 16) + 1).clamp(0, W as i64) as usize;
+    let cog_x1 =
+        (((cog_x + COG_ASSET_WIDTH as i64 * cog_sx) >> 16) + 1).clamp(0, w as i64) as usize;
     let cog_y0 = (cog_y >> 16).max(0) as usize;
-    let cog_y1 = (((cog_y + COG_ASSET_HEIGHT as i64 * cog_s) >> 16) + 1).max(0) as usize;
-    let mut cog_source_x = [0_i16; W];
-    if !cog_at_rest {
-        let mut u = (((((cog_x0 as i64) << 16) + (1 << 15) - cog_x) * inv_s) >> 16) - (1 << 15);
+    let cog_y1 = (((cog_y + COG_ASSET_HEIGHT as i64 * cog_sy) >> 16) + 1)
+        .clamp(0, layout.height as i64) as usize;
+    let mut cog_source_x = [0_i16; MAX_FRAME_WIDTH];
+    if !cog_at_native_rest {
+        let mut u = (((((cog_x0 as i64) << 16) + (1 << 15) - cog_x) * inv_sx) >> 16) - (1 << 15);
         for source_x in cog_source_x.iter_mut().take(cog_x1).skip(cog_x0) {
             *source_x = ((u + (1 << 15)) >> 16) as i16;
-            u += inv_s;
+            u += inv_sx;
         }
     }
 
@@ -270,18 +565,18 @@ pub fn render_settings_cog_transition_into(
     // destination because they are identical in production; keeping this
     // explicit also preserves the pure renderer's endpoint contract.
     output.copy_from_slice(launcher);
-    output[..CONTENT_TOP * W].copy_from_slice(&settings[..CONTENT_TOP * W]);
-    output[CONTENT_BOTTOM * W..FOOTER_TOP * W]
-        .copy_from_slice(&settings[CONTENT_BOTTOM * W..FOOTER_TOP * W]);
+    output[..layout.content_top * w].copy_from_slice(&settings[..layout.content_top * w]);
+    output[layout.content_bottom * w..layout.footer_top * w]
+        .copy_from_slice(&settings[layout.content_bottom * w..layout.footer_top * w]);
     if t >= 860 {
-        output[FOOTER_TOP * W..].copy_from_slice(&settings[FOOTER_TOP * W..]);
+        output[layout.footer_top * w..].copy_from_slice(&settings[layout.footer_top * w..]);
     }
 
-    for y in CONTENT_TOP..CONTENT_BOTTOM {
-        let row = y * W;
-        let out = &mut output[row..row + W];
-        let span = rounded_span(y as i32, win_x, win_y, win_w, win_h, win_r);
-        let (in0, in1) = span.unwrap_or((W, W));
+    for y in layout.content_top..layout.content_bottom {
+        let row = y * w;
+        let out = &mut output[row..row + w];
+        let span = rounded_span(y as i32, win_x, win_y, win_w, win_h, win_r, w);
+        let (in0, in1) = span.unwrap_or((w, w));
 
         // Inside the window: black, then the cog, then the fading card face.
         if span.is_some() {
@@ -289,37 +584,39 @@ pub fn render_settings_cog_transition_into(
         }
         if span.is_some() && y >= cog_y0 && y < cog_y1 {
             let (x0, x1) = (cog_x0.max(in0), cog_x1.min(in1));
-            if cog_at_rest {
-                let v = y as i32 - COG_REST_Y;
+            if cog_at_native_rest {
+                let v = y as i32 - layout.cog_rest_y;
                 if (0..COG_ASSET_HEIGHT as i32).contains(&v) {
                     let cog_row =
                         &cog[v as usize * COG_ASSET_WIDTH..(v as usize + 1) * COG_ASSET_WIDTH];
-                    let source_x = (x0 as i32 - COG_REST_X).max(0) as usize;
+                    let source_x = (x0 as i32 - layout.cog_rest_x).max(0) as usize;
                     let len = (x1 - x0).min(COG_ASSET_WIDTH.saturating_sub(source_x));
                     if len > 0 {
                         out[x0..x0 + len].copy_from_slice(&cog_row[source_x..source_x + len]);
                     }
                 }
             } else {
-                let v = (((((y as i64) << 16) + (1 << 15) - cog_y) * inv_s) >> 16) - (1 << 15);
+                let v = (((((y as i64) << 16) + (1 << 15) - cog_y) * inv_sy) >> 16) - (1 << 15);
                 let source_y = ((v + (1 << 15)) >> 16) as i32;
                 for x in x0..x1 {
-                    out[x] = Rgb565Pixel(sample_cog(cog, i32::from(cog_source_x[x]), source_y));
+                    let sampled = sample_cog(cog, i32::from(cog_source_x[x]), source_y);
+                    out[x] = Rgb565Pixel(blend(out[x].0, sampled, cog_alpha as u32));
                 }
             }
         }
         if span.is_some() && face_alpha > 0 {
             // The launcher's own card pixels, scaled with the window.
-            let sy = CARD_CY as i64
-                + ((((((y as i64) << 16) + (1 << 15)) - (i64::from(CARD_CY) << 16)) * inv_z) >> 32);
-            if (CARD_Y as i64..(CARD_Y + CARD_H) as i64).contains(&sy) {
-                let face_row = sy as usize * W;
-                let mut sx_q16 = (i64::from(CARD_CX) << 16)
-                    + (((((in0 as i64) << 16) + (1 << 15) - (i64::from(CARD_CX) << 16)) * inv_z)
+            let sy = card_cy as i64
+                + ((((((y as i64) << 16) + (1 << 15)) - (i64::from(card_cy) << 16)) * inv_z) >> 32);
+            if (layout.card_y as i64..(layout.card_y + layout.card_h) as i64).contains(&sy) {
+                let face_row = sy as usize * w;
+                let mut sx_q16 = (i64::from(card_cx) << 16)
+                    + (((((in0 as i64) << 16) + (1 << 15) - (i64::from(card_cx) << 16)) * inv_z)
                         >> 16);
                 for pixel in out.iter_mut().take(in1).skip(in0) {
                     let sx = sx_q16 >> 16;
-                    if (CARD_X as i64..(CARD_X + CARD_W) as i64).contains(&sx) {
+                    if (layout.card_x as i64..(layout.card_x + layout.card_w) as i64).contains(&sx)
+                    {
                         *pixel = Rgb565Pixel(blend(
                             pixel.0,
                             launcher[face_row + sx as usize].0,
@@ -340,6 +637,7 @@ pub fn render_settings_cog_transition_into(
                 win_w + 2 * stroke,
                 win_h + 2 * stroke,
                 win_r + stroke,
+                w,
             )
         {
             let (i0, i1) = span.map_or((o1, o1), |(i0, i1)| (i0.clamp(o0, o1), i1.clamp(o0, o1)));
@@ -350,27 +648,33 @@ pub fn render_settings_cog_transition_into(
     }
 
     // Settings list bands: Slint's pixels, whole-pixel slide, alpha fade.
-    for (index, &(top, bottom)) in LIST_BANDS.iter().enumerate() {
+    for (index, &(top, bottom)) in layout.list_bands[..layout.list_band_count]
+        .iter()
+        .enumerate()
+    {
         let at = BAND_START_MS + index as u32 * BAND_STAGGER_MS;
         let k = ease_out(window_q16(t, at, BAND_DURATION_MS));
         let alpha = alpha_of(k);
         if alpha == 0 {
             continue;
         }
-        let offset = ((i64::from(BAND_TRAVEL) * ((1 << 16) - k) + (1 << 15)) >> 16) as usize;
+        let offset = ((i64::from(layout.band_travel) * ((1 << 16) - k) + (1 << 15)) >> 16) as usize;
         for y in top..bottom {
-            let row = y * W;
+            let row = y * w;
             if alpha >= 256 {
-                let len = (LIST_RIGHT - LIST_LEFT).min(W.saturating_sub(LIST_LEFT + offset));
+                let len = (layout.list_right - layout.list_left)
+                    .min(w.saturating_sub(layout.list_left + offset));
                 if len > 0 {
-                    output[row + LIST_LEFT + offset..row + LIST_LEFT + offset + len]
-                        .copy_from_slice(&settings[row + LIST_LEFT..row + LIST_LEFT + len]);
+                    output[row + layout.list_left + offset..row + layout.list_left + offset + len]
+                        .copy_from_slice(
+                            &settings[row + layout.list_left..row + layout.list_left + len],
+                        );
                 }
                 continue;
             }
-            for x in LIST_LEFT..LIST_RIGHT {
+            for x in layout.list_left..layout.list_right {
                 let destination = x + offset;
-                if destination >= W {
+                if destination >= w {
                     break;
                 }
                 output[row + destination] = Rgb565Pixel(blend(
@@ -529,5 +833,73 @@ mod tests {
             &mut output,
         ));
         assert_eq!(output, settings);
+    }
+
+    #[test]
+    fn native_crt_rasters_are_supported_in_both_orientations() {
+        for (width, height) in [
+            (640, 240),
+            (240, 640),
+            (640, 288),
+            (288, 640),
+            (640, 480),
+            (480, 640),
+            (640, 576),
+            (576, 640),
+        ] {
+            assert!(supports_dimensions(width, height), "{width}x{height}");
+        }
+        assert!(!supports_dimensions(800, 600));
+    }
+
+    #[test]
+    fn crt_layout_uses_the_responsive_launcher_card_geometry() {
+        let layout = SettingsCogLayout::for_dimensions(640, 240).expect("native CRT layout");
+        assert_eq!(
+            (layout.card_x, layout.card_y, layout.card_w, layout.card_h),
+            (239, 54, 162, 112)
+        );
+        assert_eq!((layout.content_top, layout.content_bottom), (31, 208));
+    }
+
+    #[test]
+    fn crt_endpoints_are_exact_and_midpoint_is_rendered() {
+        for (width, height) in [(640, 240), (240, 640)] {
+            let launcher = vec![Rgb565Pixel(0x1234); width * height];
+            let settings = vec![Rgb565Pixel(0x4321); width * height];
+            let cog = patterned_cog();
+            let mut output = vec![Rgb565Pixel(0); width * height];
+            assert!(render_settings_cog_transition_for_dimensions_into(
+                width,
+                height,
+                &launcher,
+                &settings,
+                &cog,
+                0,
+                &mut output,
+            ));
+            assert_eq!(output, launcher);
+            assert!(render_settings_cog_transition_for_dimensions_into(
+                width,
+                height,
+                &launcher,
+                &settings,
+                &cog,
+                SETTINGS_COG_DURATION_MS / 2,
+                &mut output,
+            ));
+            assert_ne!(output, launcher);
+            assert_ne!(output, settings);
+            assert!(render_settings_cog_transition_for_dimensions_into(
+                width,
+                height,
+                &launcher,
+                &settings,
+                &cog,
+                SETTINGS_COG_DURATION_MS,
+                &mut output,
+            ));
+            assert_eq!(output, settings);
+        }
     }
 }

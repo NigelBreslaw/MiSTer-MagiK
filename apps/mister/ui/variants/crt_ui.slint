@@ -4,6 +4,7 @@
 import { MisterUi } from "../mister_window.slint";
 import { CatalogActivity, CatalogView, ConfirmationKind, LauncherScreen, LoadingState, MediaView, NavigationView, OverlayView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
+import { CrtSettingsBackdrop } from "../components/crt_settings_page.slint";
 import { CrtControllerPanel } from "../views/crt/controller_panel.slint";
 import { SetupOverlay } from "crt_setup.slint";
 import { ArcadeListScreen } from "../views/crt/arcade_list.slint";
@@ -23,7 +24,25 @@ import {
 } from "crt_overlays.slint";
 
 export component CrtLauncherUi inherits Rectangle {
-    background: MisterUi.custom-home-base ? transparent : CrtTheme.background;
+    property <bool> settings-family: NavigationView.screen == LauncherScreen.settings
+        || NavigationView.screen == LauncherScreen.about
+        || NavigationView.screen == LauncherScreen.licenses
+        || NavigationView.screen == LauncherScreen.license-text;
+    property <bool> settings-overlay-active: NavigationView.screen == LauncherScreen.settings
+        && (SettingsView.popup != SettingsPopup.none
+            || OverlayView.confirmation-kind == ConfirmationKind.display-resolution
+            || OverlayView.confirmation-kind == ConfirmationKind.screen-orientation);
+
+    // Launcher already paints black when there is no custom native home base.
+    // Paint it here only when that base makes the Launcher transparent, so the
+    // Settings family always has one edge-to-edge black scene background.
+    background: root.settings-family
+        ? (MisterUi.custom-home-base ? #000000 : transparent)
+        : MisterUi.custom-home-base ? transparent : CrtTheme.background;
+
+    if root.settings-family : CrtSettingsBackdrop {
+        opacity: root.settings-overlay-active ? 0.18 : 0.3;
+    }
 
     content := Rectangle {
         x: MisterUi.content-x;

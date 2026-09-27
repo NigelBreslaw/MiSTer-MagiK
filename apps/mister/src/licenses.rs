@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::sync::OnceLock;
+use mister_magik_framebuffer_scenes::settings_cog::CrtSettingsGeometry;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 // Directly shipped third-party assets remain visible in the in-app legal surface.
 pub const LICENSE_TITLES: [&str; 11] = [
@@ -31,8 +33,52 @@ const JERSEY: &str = include_str!("../licenses/JERSEY.txt");
 const TERMINUS_FONT: &str = include_str!("../licenses/TERMINUS-FONT.txt");
 const SPLEEN: &str = include_str!("../licenses/SPLEEN.txt");
 const RUST_LIBRARIES: &str = include_str!("../licenses/RUST-LIBRARIES.txt");
-const LICENSE_LINE_COLUMNS: usize = 105;
-const LICENSE_VISIBLE_ROWS: usize = 21;
+const HDMI_LINE_COLUMNS: usize = 105;
+const HDMI_VISIBLE_ROWS: usize = 21;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct LicenseViewport {
+    columns: usize,
+    visible_rows: usize,
+}
+
+impl LicenseViewport {
+    pub const HDMI: Self = Self {
+        columns: HDMI_LINE_COLUMNS,
+        visible_rows: HDMI_VISIBLE_ROWS,
+    };
+
+    pub fn for_crt(width: usize, height: usize, safe_x: usize, safe_y: usize) -> Option<Self> {
+        let geometry = CrtSettingsGeometry::for_viewport(width, height, safe_x, safe_y)?;
+        let text_width = width
+            .saturating_sub(2 * geometry.margin_x())
+            .saturating_sub(10 * geometry.scale_x());
+        let glyph_width = if geometry.scale_y() == 2 { 12 } else { 6 };
+        let content_top = geometry.header_bottom() + 26 * geometry.scale_y();
+        let viewport_height = geometry.footer_rule().saturating_sub(content_top);
+        Some(Self {
+            columns: (text_width / glyph_width).max(1),
+            visible_rows: (viewport_height / (12 * geometry.scale_y())).max(1),
+        })
+    }
+
+    pub const fn columns(self) -> usize {
+        self.columns
+    }
+
+    pub const fn visible_rows(self) -> usize {
+        self.visible_rows
+    }
+}
+
+impl Default for LicenseViewport {
+    fn default() -> Self {
+        Self::HDMI
+    }
+}
+
+type SharedLicenseLines = Arc<[String]>;
+type LicenseLineCache = Mutex<HashMap<(usize, usize), SharedLicenseLines>>;
 
 pub fn text(index: usize) -> &'static str {
     match index {
@@ -48,13 +94,21 @@ pub fn text(index: usize) -> &'static str {
     }
 }
 
-pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 11] = [const { OnceLock::new() }; 11];
+pub fn wrapped_lines(index: usize, viewport: LicenseViewport) -> SharedLicenseLines {
+    static LINES: OnceLock<LicenseLineCache> = OnceLock::new();
     let index = index.min(LICENSE_TITLES.len() - 1);
-    LINES[index].get_or_init(|| wrap_text(index))
+    let key = (index, viewport.columns());
+    let mut lines = LINES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("license line cache poisoned");
+    lines
+        .entry(key)
+        .or_insert_with(|| Arc::from(wrap_text(index, viewport.columns())))
+        .clone()
 }
 
-fn wrap_text(index: usize) -> Vec<String> {
+fn wrap_text(index: usize, columns: usize) -> Vec<String> {
     let mut result = Vec::new();
     for source_line in text(index).lines() {
         if source_line.trim().is_empty() {
@@ -64,15 +118,15 @@ fn wrap_text(index: usize) -> Vec<String> {
         let mut line = String::new();
         for word in source_line.split_whitespace() {
             let word_len = word.chars().count();
-            if !line.is_empty() && line.chars().count() + 1 + word_len > LICENSE_LINE_COLUMNS {
+            if !line.is_empty() && line.chars().count() + 1 + word_len > columns {
                 result.push(std::mem::take(&mut line));
             }
-            if word_len > LICENSE_LINE_COLUMNS {
+            if word_len > columns {
                 if !line.is_empty() {
                     result.push(std::mem::take(&mut line));
                 }
                 let chars = word.chars().collect::<Vec<_>>();
-                for chunk in chars.chunks(LICENSE_LINE_COLUMNS) {
+                for chunk in chars.chunks(columns) {
                     result.push(chunk.iter().collect());
                 }
             } else {
@@ -89,10 +143,10 @@ fn wrap_text(index: usize) -> Vec<String> {
     result
 }
 
-pub fn max_scroll_line(index: usize) -> usize {
-    wrapped_lines(index)
+pub fn max_scroll_line(index: usize, viewport: LicenseViewport) -> usize {
+    wrapped_lines(index, viewport)
         .len()
-        .saturating_sub(LICENSE_VISIBLE_ROWS)
+        .saturating_sub(viewport.visible_rows())
 }
 
 #[cfg(test)]
@@ -108,11 +162,11 @@ mod tests {
                 LICENSE_TITLES[index]
             );
             assert!(
-                max_scroll_line(index) > 0,
+                max_scroll_line(index, LicenseViewport::HDMI) > 0,
                 "{} text does not scroll",
                 LICENSE_TITLES[index]
             );
-            assert!(!wrapped_lines(index).is_empty());
+            assert!(!wrapped_lines(index, LicenseViewport::HDMI).is_empty());
         }
         assert!(COMMERCIAL_FONTS.contains("Yesterday 10"));
         assert!(COMMERCIAL_FONTS.contains("Xerxes 10"));
@@ -146,5 +200,39 @@ mod tests {
         assert!(TERMINUS_FONT.contains("Reserved Font Name \"Terminus Font\""));
         assert!(SPLEEN.contains("Redistribution and use in source and binary forms"));
         assert!(RUST_LIBRARIES.contains("zlib License"));
+    }
+
+    #[test]
+    fn crt_lines_fit_each_native_spleen_viewport_and_scroll_to_the_end() {
+        for (width, height) in [
+            (640, 240),
+            (640, 288),
+            (640, 480),
+            (640, 512),
+            (640, 576),
+            (240, 640),
+            (288, 640),
+            (480, 640),
+            (512, 640),
+            (576, 640),
+        ] {
+            let viewport = LicenseViewport::for_crt(width, height, 0, 0).unwrap();
+            for (index, title) in LICENSE_TITLES.iter().enumerate() {
+                let lines = wrapped_lines(index, viewport);
+                assert!(
+                    lines
+                        .iter()
+                        .all(|line| line.chars().count() <= viewport.columns()),
+                    "{} at {width}x{height}",
+                    title
+                );
+                assert_eq!(
+                    max_scroll_line(index, viewport),
+                    lines.len().saturating_sub(viewport.visible_rows())
+                );
+            }
+        }
+        let portrait = LicenseViewport::for_crt(240, 640, 0, 0).unwrap();
+        assert_eq!((portrait.columns(), portrait.visible_rows()), (16, 18));
     }
 }

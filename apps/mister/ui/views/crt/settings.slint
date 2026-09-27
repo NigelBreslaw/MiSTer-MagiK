@@ -1,99 +1,54 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { FeedbackView, NavigationTransitionState, NavigationView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
-import { PageTheme } from "../../components/page_chrome.slint";
-import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import {
+    ConfirmationKind,
+    FeedbackView,
+    NavigationTransitionState,
+    NavigationView,
+    OverlayView,
+    ScreenOrientation,
+    SettingsPopup,
+    SettingsSection,
+    SettingsView,
+} from "../../api.slint";
+import { CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import { CrtGroupRule, CrtSettingsRow } from "../../components/crt_settings_page.slint";
 import { MisterUi } from "../../mister_window.slint";
 
-// One CRT list row, laid out on the launcher's per-axis route scale.
-component CrtSettingsRow inherits Rectangle {
-    in property <string> label;
-    in property <string> accessible-name;
-    in property <string> detail;
-    in property <string> value;
-    in property <bool> value-accent;
-    in property <bool> focused;
-    in property <bool> acknowledged;
-    in property <bool> separator: true;
-
-    accessible-role: list-item;
-    accessible-label: root.accessible-name;
-    accessible-description: root.detail;
-    accessible-item-selected: root.focused;
-    accessible-enabled: true;
-
-    height: CrtPageMetrics.len-y(16);
-
-    if root.focused : Rectangle {
-        background: @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 60%, PageTheme.background 100%);
-        Rectangle { x: 0px; width: CrtPageMetrics.len-x(2); background: PageTheme.settings-accent; }
-    }
-
-    label-text := CrtLauncherText {
-        x: CrtPageMetrics.len-x(6);
-        y: CrtPageMetrics.len-y(2);
-        text: root.label;
-        text-color: root.focused ? PageTheme.settings-accent
-            : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.cream;
-    }
-
-    CrtLauncherText {
-        x: Math.max(root.width - CrtPageMetrics.len-x(6) - self.preferred-width,
-            label-text.x + label-text.preferred-width + CrtPageMetrics.len-x(12));
-        y: CrtPageMetrics.len-y(2);
-        width: root.width - CrtPageMetrics.len-x(6) - self.x;
-        text: root.value;
-        text-color: root.value-accent ? PageTheme.settings-accent
-            : root.focused ? PageTheme.cream : PageTheme.muted;
-    }
-
-    if root.separator && !root.focused : Rectangle {
-        x: CrtPageMetrics.len-x(6);
-        y: root.height - 1px;
-        width: root.width - self.x;
-        height: 1px;
-        background: PageTheme.rule;
-    }
-}
-
-component CrtGroupLabel inherits CrtLauncherText {
-    x: CrtPageMetrics.len-x(6);
-    text-color: PageTheme.muted;
-}
-
 export component SettingsScreen inherits Rectangle {
-    accessible-role: main;
-    accessible-label: "Settings";
-    accessible-description: NavigationView.transition-state == NavigationTransitionState.idle ? "Ready" : "Transitioning";
-    background: PageTheme.background;
-
-    // Rows follow navigation order; headings only group them.
+    property <bool> overlay-active: SettingsView.popup != SettingsPopup.none
+        || OverlayView.confirmation-kind == ConfirmationKind.display-resolution
+        || OverlayView.confirmation-kind == ConfirmationKind.screen-orientation;
     property <int> left: CrtPageMetrics.margin-x;
     property <int> top: CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy;
     property <int> row-h: 16 * CrtPageMetrics.sy;
-    property <int> heading-h: 14 * CrtPageMetrics.sy;
-    property <int> second-group: root.top + root.heading-h + 4 * root.row-h + 4 * CrtPageMetrics.sy;
+    property <int> gap: 6 * CrtPageMetrics.sy;
     property <length> list-x: CrtPageMetrics.px-x(root.left);
     property <length> list-width: (MisterUi.window-width - 2 * root.left) * 1px;
 
+    accessible-role: main;
+    accessible-label: "Settings";
+    accessible-description: NavigationView.transition-state == NavigationTransitionState.idle ? "Ready" : "Transitioning";
+    background: transparent;
+
     CrtPageChrome {
         section: "SETTINGS";
-        hint-a: "A CHANGE";
-        hint-b: "B BACK";
+        hint-a: root.overlay-active ? "A SELECT" : "A CHANGE";
+        hint-b: root.overlay-active ? "B CANCEL" : "B BACK";
     }
 
     Rectangle {
         x: root.list-x;
         y: CrtPageMetrics.px-y(root.top);
         width: root.list-width;
-        height: CrtPageMetrics.px-y(root.second-group + root.heading-h + 3 * root.row-h) - self.y;
+        height: CrtPageMetrics.px-y(CrtPageMetrics.footer-rule) - self.y;
         accessible-role: list;
         accessible-label: "Settings";
+        opacity: root.overlay-active ? 0.35 : 1;
 
-        CrtGroupLabel { y: 0px; text: "DISPLAY"; }
         CrtSettingsRow {
-            y: root.heading-h * 1px; width: parent.width;
+            y: 0px; width: parent.width;
             label: "DISPLAY RESOLUTION";
             accessible-name: "Display resolution";
             detail: SettingsView.active-display.label;
@@ -102,7 +57,7 @@ export component SettingsScreen inherits Rectangle {
             acknowledged: FeedbackView.acknowledged("settings", "display", FeedbackView.revision);
         }
         CrtSettingsRow {
-            y: (root.heading-h + root.row-h) * 1px; width: parent.width;
+            y: root.row-h * 1px; width: parent.width;
             label: "SCREEN ORIENTATION";
             accessible-name: "Screen orientation";
             detail: SettingsView.active-orientation == ScreenOrientation.normal ? "Normal"
@@ -114,7 +69,7 @@ export component SettingsScreen inherits Rectangle {
             acknowledged: FeedbackView.acknowledged("settings", "orientation", FeedbackView.revision);
         }
         CrtSettingsRow {
-            y: (root.heading-h + 2 * root.row-h) * 1px; width: parent.width;
+            y: 2 * root.row-h * 1px; width: parent.width;
             label: "REDUCE MOTION";
             accessible-name: "Reduce motion";
             detail: SettingsView.reduce-motion ? "On" : "Off";
@@ -123,29 +78,33 @@ export component SettingsScreen inherits Rectangle {
             focused: SettingsView.section == SettingsSection.reduce-motion;
             acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision);
         }
+
+        CrtGroupRule { y: (3 * root.row-h + root.gap / 2 - 1) * 1px; width: parent.width - self.x; }
         CrtSettingsRow {
-            y: (root.heading-h + 3 * root.row-h) * 1px; width: parent.width;
+            y: (3 * root.row-h + root.gap) * 1px; width: parent.width;
             label: "START AFTER";
             accessible-name: "Screensaver start delay";
             detail: "Screensaver idle delay";
-            value: SettingsView.screensaver-delay-minutes == 0 ? "OFF" : SettingsView.screensaver-delay-minutes + " MIN";
-            separator: false;
+            value: (SettingsView.section == SettingsSection.screensaver-delay ? "<  " : "")
+                + (SettingsView.screensaver-delay-minutes == 0 ? "OFF" : SettingsView.screensaver-delay-minutes + " MIN")
+                + (SettingsView.section == SettingsSection.screensaver-delay ? "  >" : "");
             focused: SettingsView.section == SettingsSection.screensaver-delay;
             acknowledged: FeedbackView.acknowledged("settings", "screensaver-delay", FeedbackView.revision);
         }
-
-        CrtGroupLabel { y: (root.second-group - root.top) * 1px; text: "SYSTEM"; }
         CrtSettingsRow {
-            y: (root.second-group - root.top + root.heading-h) * 1px; width: parent.width;
+            y: (4 * root.row-h + root.gap) * 1px; width: parent.width;
             label: "PREVIEW SCREENSAVER";
             accessible-name: "Preview screensaver";
             detail: "Start the screensaver now";
-            value: "PREVIEW >";
+            value: "SHOW NOW";
+            link: true;
             focused: SettingsView.section == SettingsSection.screensaver-preview;
             acknowledged: FeedbackView.acknowledged("settings", "screensaver-preview", FeedbackView.revision);
         }
+
+        CrtGroupRule { y: (5 * root.row-h + 3 * root.gap / 2 - 1) * 1px; width: parent.width - self.x; }
         CrtSettingsRow {
-            y: (root.second-group - root.top + root.heading-h + root.row-h) * 1px; width: parent.width;
+            y: (5 * root.row-h + 2 * root.gap) * 1px; width: parent.width;
             label: "EXIT TO MISTER";
             accessible-name: "Exit to MiSTer";
             detail: "Use the stock MiSTer menu until reboot";
@@ -154,21 +113,21 @@ export component SettingsScreen inherits Rectangle {
             acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision);
         }
         CrtSettingsRow {
-            y: (root.second-group - root.top + root.heading-h + 2 * root.row-h) * 1px; width: parent.width;
+            y: (6 * root.row-h + 2 * root.gap) * 1px; width: parent.width;
             label: "REFRESH DATABASE";
-            accessible-name: "Refresh Database";
+            accessible-name: "Refresh database";
             detail: "Refresh changed library systems";
             value: "CHANGED SYSTEMS";
             focused: SettingsView.section == SettingsSection.refresh;
             acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
         }
         CrtSettingsRow {
-            y: (root.second-group - root.top + root.heading-h + 3 * root.row-h) * 1px; width: parent.width;
+            y: (7 * root.row-h + 2 * root.gap) * 1px; width: parent.width;
             label: "ABOUT";
             accessible-name: "About";
             detail: "MiSTer MagiK and Slint";
-            value: "MAGIK >";
-            separator: false;
+            value: "MAGIK";
+            link: true;
             focused: SettingsView.section == SettingsSection.about;
             acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision);
         }

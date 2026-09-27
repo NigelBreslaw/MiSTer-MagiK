@@ -150,15 +150,15 @@ export component ComboBoxOverlay inherits Rectangle {
                 x: 12px;
                 y: 68px;
                 width: 143px;
-                label: OverlayView.confirm-label == "" ? "KEEP" : OverlayView.confirm-label;
-                focused: OverlayView.selected-choice == DialogChoice.confirm;
+                label: OverlayView.cancel-label;
+                focused: OverlayView.selected-choice == DialogChoice.cancel;
             }
             PickerButton {
                 x: 163px;
                 y: 68px;
                 width: 125px;
-                label: OverlayView.cancel-label;
-                focused: OverlayView.selected-choice == DialogChoice.cancel;
+                label: OverlayView.confirm-label == "" ? "KEEP" : OverlayView.confirm-label;
+                focused: OverlayView.selected-choice == DialogChoice.confirm;
             }
         }
     }
