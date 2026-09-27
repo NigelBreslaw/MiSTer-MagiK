@@ -923,6 +923,7 @@ struct CarouselItem<'a> {
     face: &'a crate::launcher_flip::Face,
     blend: Option<(&'a crate::launcher_flip::Face, u32)>,
     pose: crate::launcher_flip::Pose,
+    reflect: bool,
 }
 
 struct CarouselPlan<'a> {
@@ -1022,7 +1023,13 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
                     .then_some((&faces[index].detail, prominence as u32)),
             )
         };
-        items[slot] = Some(CarouselItem { face, blend, pose });
+        let reflect = settled || relative.abs() <= 1 || destination.abs() <= 1;
+        items[slot] = Some(CarouselItem {
+            face,
+            blend,
+            pose,
+            reflect,
+        });
     }
     CarouselPlan { items }
 }
@@ -1041,17 +1048,29 @@ fn draw_carousel_plan(
         pose.clip = clip;
         pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
         pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
-        crate::launcher_flip::draw_target(
-            pixels,
-            pitch,
-            origin,
-            item.face,
-            pose,
-            &mut scratch[slot],
-            artwork::reflection_colour,
-            true,
-            item.blend,
-        );
+        if item.reflect {
+            crate::launcher_flip::draw_target(
+                pixels,
+                pitch,
+                origin,
+                item.face,
+                pose,
+                &mut scratch[slot],
+                artwork::reflection_colour,
+                true,
+                item.blend,
+            );
+        } else {
+            crate::launcher_flip::prepare_reflectionless_target(
+                pixels,
+                pitch,
+                origin,
+                item.face,
+                pose,
+                &mut scratch[slot],
+                item.blend,
+            );
+        }
     }
     let mut covered = crate::launcher_flip::BodyOcclusion::new(clip);
     let mut occlusion = [covered; 6];
@@ -1816,6 +1835,34 @@ mod tests {
             );
             assert_eq!(settled.items[4].expect("settled top card").pose.angle, 0);
         }
+    }
+
+    #[test]
+    fn motion_keeps_near_reflections_and_settled_frames_keep_all_reflections() {
+        let prepared = LauncherScene::new(960, 540).prepare(data());
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        let moving = build_carousel_plan(
+            &prepared.faces,
+            BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                direction: Some(BrowseDirection::Right),
+                progress_millis: units / 2,
+                duration_millis: units,
+            },
+        );
+        assert_eq!(
+            moving
+                .items
+                .iter()
+                .flatten()
+                .filter(|item| item.reflect)
+                .count(),
+            4
+        );
+        let settled = build_carousel_plan(&prepared.faces, settled_frame(0));
+        assert!(settled.items.iter().flatten().all(|item| item.reflect));
     }
 
     #[test]

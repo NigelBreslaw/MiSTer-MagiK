@@ -14,6 +14,7 @@ pub(super) struct Scratch {
     texels: Vec<u32>,
     projected: Vec<u32>,
     key: Option<(usize, usize, u32, Pose)>,
+    reflection_key: Option<(usize, usize, u32, Pose)>,
     blend: Vec<u32>,
     reflection_pixels: Vec<u16>,
 }
@@ -46,6 +47,7 @@ impl Scratch {
             texels: vec![0; width * column_height],
             projected: vec![0; ((width.min(638).div_ceil(8) | 1) * 8) * screen_height],
             key: None,
+            reflection_key: None,
             blend: vec![0; column_height],
             reflection_pixels: vec![0; width * 64],
         }
@@ -249,6 +251,33 @@ pub(super) fn draw_target<F: Fn(u16, usize, usize) -> u16>(
         scratch,
         reflection,
         reflections_only,
+        true,
+        blend,
+        false,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_reflectionless_target(
+    destination: &mut [Rgb565Pixel],
+    destination_pitch: usize,
+    destination_origin: (usize, usize),
+    face: &Face,
+    pose: Pose,
+    scratch: &mut Scratch,
+    blend: Option<(&Face, u32)>,
+) {
+    render(
+        destination,
+        destination_pitch,
+        destination_origin,
+        face,
+        pose,
+        scratch,
+        |pixel, _, _| pixel,
+        true,
+        false,
         blend,
         false,
         None,
@@ -300,6 +329,7 @@ pub(super) fn draw_occluded_target<F: Fn(u16, usize, usize) -> u16>(
         scratch,
         reflection,
         false,
+        true,
         blend,
         false,
         Some(occlusion),
@@ -316,6 +346,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
     scratch: &mut Scratch,
     _reflection: F,
     reflections_only: bool,
+    render_reflection: bool,
     blend: Option<(&Face, u32)>,
     prepare_only: bool,
     occlusion: Option<&BodyOcclusion>,
@@ -657,7 +688,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             }
         }
     }
-    if rebuild {
+    if reflections_only && render_reflection && scratch.reflection_key != Some(key) {
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("reflection.prepare");
         for (x, c) in columns.iter().enumerate().take(right).skip(left) {
@@ -707,8 +738,9 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 }
             }
         }
+        scratch.reflection_key = Some(key);
     }
-    if reflections_only && !prepare_only {
+    if reflections_only && render_reflection && !prepare_only {
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("flip.reflection");
         for x in left..right {
