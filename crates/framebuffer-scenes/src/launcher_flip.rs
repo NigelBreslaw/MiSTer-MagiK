@@ -616,7 +616,7 @@ fn render(
             }
         }
     }
-    if let RenderPass::Reflection(reflection) = pass
+    if let RenderPass::Reflection(_reflection) = pass
         && scratch.reflection_key != Some(key)
     {
         #[cfg(feature = "launcher-profile")]
@@ -652,7 +652,7 @@ fn render(
                 }
                 #[cfg(any(not(target_arch = "arm"), test))]
                 for row in 0..64 {
-                    scratch.reflection_pixels[(x - left) * 64 + row] = reflection(
+                    scratch.reflection_pixels[(x - left) * 64 + row] = _reflection(
                         crate::launcher_texture::over(
                             reflected_texel(
                                 &texels[(x - left) * scratch.column_height
