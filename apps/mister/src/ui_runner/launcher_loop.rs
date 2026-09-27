@@ -25,7 +25,9 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
-use crate::launcher_presentation::{SelectionFeedbackTarget, settings_cog_backdrop_rgb565};
+use crate::launcher_presentation::{
+    SelectionFeedbackTarget, arcade_cabinet_rgb565, settings_cog_backdrop_rgb565,
+};
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
@@ -8211,7 +8213,23 @@ pub(super) fn run_launcher_loop(
                                                     }
                                                 };
                                                 geometry.is_some_and(|geometry| {
-                                                    let started = if layout.is_portrait() {
+                                                    let now_us = frame_now
+                                                        .saturating_duration_since(start)
+                                                        .as_micros()
+                                                        .min(u64::MAX as u128)
+                                                        as u64;
+                                                    let started = if edge
+                                                        == NavigationTransitionEdge::HomeToArcade
+                                                        && !layout.is_portrait()
+                                                    {
+                                                        navigation_transition.begin_arcade_card(
+                                                            direction,
+                                                            geometry,
+                                                            target.cached_565(),
+                                                            arcade_cabinet_rgb565(),
+                                                            now_us,
+                                                        )
+                                                    } else if layout.is_portrait() {
                                                         navigation_transition.begin_physical(
                                                             edge,
                                                             direction,
@@ -8222,11 +8240,7 @@ pub(super) fn run_launcher_loop(
                                                             layout.composition_w(),
                                                             layout.composition_h(),
                                                             target.cached_565(),
-                                                            frame_now
-                                                                .saturating_duration_since(start)
-                                                                .as_micros()
-                                                                .min(u64::MAX as u128)
-                                                                as u64,
+                                                            now_us,
                                                         )
                                                     } else {
                                                         navigation_transition.begin(
@@ -8234,11 +8248,7 @@ pub(super) fn run_launcher_loop(
                                                             direction,
                                                             geometry,
                                                             target.cached_565(),
-                                                            frame_now
-                                                                .saturating_duration_since(start)
-                                                                .as_micros()
-                                                                .min(u64::MAX as u128)
-                                                                as u64,
+                                                            now_us,
                                                         )
                                                     };
                                                     started.unwrap_or(false)

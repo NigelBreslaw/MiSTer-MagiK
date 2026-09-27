@@ -163,6 +163,15 @@ pub fn hdmi_preview_rect(frame_width: usize, frame_height: usize) -> DirtyRect {
         };
     }
 
+    if frame_width == 960 && frame_height == 540 {
+        return DirtyRect {
+            x0: 572,
+            y0: 96,
+            x1: 892,
+            y1: 416,
+        };
+    }
+
     let list = ArcadeListGeometry::NORMAL;
     // The list may extend into the nominal right pane. Center in the black
     // pixels that remain visible between the list, header, and footer.
@@ -592,11 +601,11 @@ mod tests {
     #[test]
     fn hdmi_preview_is_centered_in_visible_black_area() {
         for (frame_width, frame_height, x0, y0, x1, y1) in [
-            (683, 384, 518, 56, 683, 352),
-            (960, 540, 579, 122, 899, 442),
-            (960, 600, 579, 136, 899, 456),
-            (1024, 768, 611, 136, 931, 456),
-            (1280, 720, 800, 136, 1120, 456),
+            (683, 384, 488, 124, 683, 338),
+            (960, 540, 572, 96, 892, 416),
+            (960, 600, 564, 179, 884, 499),
+            (1024, 768, 608, 204, 928, 524),
+            (1280, 720, 800, 204, 1120, 524),
         ] {
             assert_eq!(
                 hdmi_preview_rect(frame_width, frame_height),

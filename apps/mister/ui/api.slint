@@ -213,6 +213,9 @@ export global ArcadeView {
     in property <[string]> drawer-items;
     in property <int> drawer-selected-index;
     in property <string> active-filter-label;
+    // Front-on HDMI cabinet, installed once by Rust and drawn 1:1. Native
+    // preview pixels are composed into its 320x320 screen opening afterwards.
+    in property <image> cabinet-backdrop;
 }
 
 export global CatalogView {

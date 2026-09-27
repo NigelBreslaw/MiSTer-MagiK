@@ -1511,15 +1511,27 @@ mod macos {
                     geometry
                 }
             };
-            self.navigation_transition
-                .begin(
-                    edge,
-                    direction,
-                    geometry,
-                    self.frame_target.cached_565(),
-                    now_us,
-                )
-                .unwrap_or(false)
+            if edge == NavigationTransitionEdge::HomeToArcade && !self.orientation.is_portrait() {
+                self.navigation_transition
+                    .begin_arcade_card(
+                        direction,
+                        geometry,
+                        self.frame_target.cached_565(),
+                        mister_magik_fb::launcher_presentation::arcade_cabinet_rgb565(),
+                        now_us,
+                    )
+                    .unwrap_or(false)
+            } else {
+                self.navigation_transition
+                    .begin(
+                        edge,
+                        direction,
+                        geometry,
+                        self.frame_target.cached_565(),
+                        now_us,
+                    )
+                    .unwrap_or(false)
+            }
         }
 
         fn finish_navigation_tick(&mut self) {
@@ -3998,6 +4010,7 @@ mod macos {
         let navigation = launcher.global::<NavigationView>();
         let settings = launcher.global::<SettingsView>();
         mister_magik_fb::launcher_presentation::install_settings_visual_assets(launcher);
+        mister_magik_fb::launcher_presentation::install_arcade_visual_assets(launcher);
         let information = launcher.global::<InformationView>();
         let input = launcher.global::<InputView>();
         let arcade = launcher.global::<ArcadeView>();

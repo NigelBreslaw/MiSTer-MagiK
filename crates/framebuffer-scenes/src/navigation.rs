@@ -82,6 +82,7 @@ enum NavigationTransitionRenderer {
     SuperScaler,
     SettingsPage,
     SettingsCog,
+    ArcadeCard,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -233,6 +234,21 @@ pub fn hdmi_navigation_geometry(
         height: 10,
     };
     let (label_ascii, label_len) = navigation_label_ascii(selected_label);
+    let (
+        list_x,
+        list_y,
+        list_width,
+        list_height,
+        selected_y,
+        preview_x,
+        preview_y,
+        footer_y,
+        footer_height,
+    ) = if edge == NavigationTransitionEdge::HomeToArcade {
+        (26, 124, 462, 370, 268, 572, 96, 498, 34)
+    } else {
+        (8, 56, 510, 452, 248, 560, 102, 512, 20)
+    };
     NavigationTransitionGeometry {
         label_signature: navigation_label_signature(selected_label),
         label_ascii,
@@ -243,28 +259,28 @@ pub fn hdmi_navigation_geometry(
         destination_title,
         destination_detail,
         destination_list: NavigationTransitionRect {
-            x: scale_hdmi_x(8, frame_width),
-            y: scale_hdmi_y(56, frame_height),
-            width: scale_hdmi_x(510, frame_width),
-            height: scale_hdmi_y(452, frame_height),
+            x: scale_hdmi_x(list_x, frame_width),
+            y: scale_hdmi_y(list_y, frame_height),
+            width: scale_hdmi_x(list_width, frame_width),
+            height: scale_hdmi_y(list_height, frame_height),
         },
         destination_selected_row: NavigationTransitionRect {
-            x: scale_hdmi_x(8, frame_width),
-            y: scale_hdmi_y(248, frame_height),
-            width: scale_hdmi_x(510, frame_width),
+            x: scale_hdmi_x(list_x, frame_width),
+            y: scale_hdmi_y(selected_y, frame_height),
+            width: scale_hdmi_x(list_width, frame_width),
             height: scale_hdmi_y(48, frame_height),
         },
         destination_preview: NavigationTransitionRect {
-            x: scale_hdmi_x(560, frame_width),
-            y: scale_hdmi_y(102, frame_height),
+            x: scale_hdmi_x(preview_x, frame_width),
+            y: scale_hdmi_y(preview_y, frame_height),
             width: scale_hdmi_x(320, frame_width),
             height: scale_hdmi_y(320, frame_height),
         },
         destination_footer: NavigationTransitionRect {
-            x: scale_hdmi_x(8, frame_width),
-            y: scale_hdmi_y(512, frame_height),
-            width: scale_hdmi_x(510, frame_width),
-            height: scale_hdmi_y(20, frame_height),
+            x: scale_hdmi_x(list_x, frame_width),
+            y: scale_hdmi_y(footer_y, frame_height),
+            width: scale_hdmi_x(list_width, frame_width),
+            height: scale_hdmi_y(footer_height, frame_height),
         },
     }
 }
@@ -662,6 +678,24 @@ impl NavigationTransitionRequest {
         }
     }
 
+    /// Home <-> Arcade card reveal. The buffers must carry the cabinet asset.
+    pub fn arcade_card(
+        direction: NavigationTransitionDirection,
+        geometry: NavigationTransitionGeometry,
+    ) -> Self {
+        Self {
+            edge: NavigationTransitionEdge::HomeToArcade,
+            direction,
+            geometry,
+            duration_us: u64::from(crate::arcade_card::ARCADE_CARD_DURATION_MS) * 1_000,
+            preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
+            renderer: NavigationTransitionRenderer::ArcadeCard,
+            settings_axis: SettingsPageTransitionAxis::Horizontal,
+            settings_style: SettingsPageTransitionStyle::WholePage,
+            settings_destination_content_x: 0,
+        }
+    }
+
     #[must_use]
     pub const fn is_super_scaler(self) -> bool {
         matches!(self.renderer, NavigationTransitionRenderer::SuperScaler)
@@ -672,11 +706,16 @@ impl NavigationTransitionRequest {
             NavigationTransitionRenderer::SuperScaler => "super-scaler",
             NavigationTransitionRenderer::SettingsPage => "settings-page",
             NavigationTransitionRenderer::SettingsCog => "settings-cog",
+            NavigationTransitionRenderer::ArcadeCard => "arcade-card",
         }
     }
 
     const fn is_settings_cog(self) -> bool {
         matches!(self.renderer, NavigationTransitionRenderer::SettingsCog)
+    }
+
+    const fn is_arcade_card(self) -> bool {
+        matches!(self.renderer, NavigationTransitionRenderer::ArcadeCard)
     }
 }
 
@@ -756,9 +795,9 @@ impl Default for NavigationTransitionFrame {
 pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
     let forward_cover = match request.renderer {
         NavigationTransitionRenderer::SuperScaler => SUPER_SCALER_COVER_PROGRESS,
-        NavigationTransitionRenderer::SettingsPage | NavigationTransitionRenderer::SettingsCog => {
-            PROGRESS_MAX / 2
-        }
+        NavigationTransitionRenderer::SettingsPage
+        | NavigationTransitionRenderer::SettingsCog
+        | NavigationTransitionRenderer::ArcadeCard => PROGRESS_MAX / 2,
     };
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
@@ -810,6 +849,7 @@ pub struct NavigationTransitionBuffers {
     source_ready: bool,
     destination_ready: bool,
     settings_cog_asset: Option<&'static [Rgb565Pixel]>,
+    arcade_cabinet_asset: Option<&'static [Rgb565Pixel]>,
 }
 
 impl NavigationTransitionBuffers {
@@ -907,6 +947,14 @@ impl NavigationTransitionBuffers {
         self.settings_cog_asset
     }
 
+    pub fn set_arcade_cabinet_asset(&mut self, asset: &'static [Rgb565Pixel]) {
+        self.arcade_cabinet_asset = Some(asset);
+    }
+
+    pub fn arcade_cabinet_asset(&self) -> Option<&'static [Rgb565Pixel]> {
+        self.arcade_cabinet_asset
+    }
+
     pub fn copy_source_to_working(&mut self) -> Result<usize, NavigationTransitionFailure> {
         if !self.source_ready || self.working.len() != self.source.len() {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
@@ -981,6 +1029,12 @@ pub fn render_navigation_transition(
         NavigationTransitionRenderer::SettingsCog => {
             let mut working = std::mem::take(&mut buffers.working);
             let result = render_settings_cog_into(buffers, request, frame, &mut working);
+            buffers.working = working;
+            result?
+        }
+        NavigationTransitionRenderer::ArcadeCard => {
+            let mut working = std::mem::take(&mut buffers.working);
+            let result = render_arcade_card_into(buffers, request, frame, &mut working);
             buffers.working = working;
             result?
         }
@@ -1377,6 +1431,9 @@ pub fn render_settings_page_transition_into(
     }
     if request.is_settings_cog() {
         return render_settings_cog_into(buffers, request, frame, output);
+    }
+    if request.is_arcade_card() {
+        return render_arcade_card_into(buffers, request, frame, output);
     }
     let source = buffers.source.as_slice();
     let destination = buffers
@@ -1831,6 +1888,52 @@ fn render_settings_cog_into(
         launcher,
         settings,
         cog,
+        t_ms,
+        output,
+    ) {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    stats.card_scale_us = elapsed_us(started);
+    stats.copied_pixels = output.len() as u64;
+    Ok(stats)
+}
+
+fn render_arcade_card_into(
+    buffers: &NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    let source = buffers.source.as_slice();
+    let mut stats = NavigationTransitionRenderStats::default();
+    if !buffers.source_ready || output.len() != source.len() {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    let (Some(destination), Some(cabinet)) = (
+        buffers
+            .destination_ready
+            .then_some(buffers.destination.as_slice()),
+        buffers.arcade_cabinet_asset,
+    ) else {
+        output.copy_from_slice(source);
+        stats.copied_pixels = source.len() as u64;
+        return Ok(stats);
+    };
+    let duration = crate::arcade_card::ARCADE_CARD_DURATION_MS;
+    let elapsed =
+        (u64::from(frame.progress_q16) * u64::from(duration) / PROGRESS_MAX as u64) as u32;
+    let (launcher, arcade, t_ms) = match request.direction {
+        NavigationTransitionDirection::Forward => (source, destination, elapsed),
+        NavigationTransitionDirection::Reverse => (destination, source, duration - elapsed),
+    };
+    let started = Instant::now();
+    if !crate::arcade_card::render_arcade_card_transition_into(
+        buffers.width,
+        buffers.height,
+        launcher,
+        arcade,
+        cabinet,
+        request.geometry.source_card,
         t_ms,
         output,
     ) {

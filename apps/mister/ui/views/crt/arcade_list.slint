@@ -1,54 +1,45 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12 } from "../../components/spleen_6x12.slint";
-
+import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import { PageTheme } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
-import { CrtTheme, CrtHeader, CrtFooter } from "../../components/crt_ui.slint";
 
 component SearchKey inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     in property <bool> keyboard-focused;
     in property <bool> acknowledged;
-
     accessible-role: button;
     accessible-label: root.label;
     accessible-description: "Search keyboard key";
     accessible-item-selected: root.selected;
     accessible-enabled: true;
-
-    height: MisterUi.footer-height;
-    background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
-    border-width: MisterUi.border;
-    border-color: selected ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
-
-    Spleen6x12 {
+    background: root.selected && root.keyboard-focused ? #3a1511 : #0b0b0d;
+    border-width: 1px;
+    border-color: root.selected && root.keyboard-focused ? #e7695a
+        : root.acknowledged ? #744038 : PageTheme.rule;
+    CrtLauncherText {
         text: root.label;
-        color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
-        size: MisterUi.crt-body-font;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+        text-color: root.selected && root.keyboard-focused ? #ffffff : PageTheme.cream;
+        x: (parent.width - self.preferred-width) / 2;
+        y: (parent.height - self.preferred-height) / 2;
     }
 }
 
 component SearchKeyboardRow inherits Rectangle {
     in property <int> start-index;
     in property <int> key-count;
-    height: MisterUi.footer-height;
-
+    height: CrtPageMetrics.len-y(16);
     HorizontalLayout {
-        spacing: 0px;
-
+        spacing: CrtPageMetrics.len-x(2);
         for key-offset in root.key-count : SearchKey {
             horizontal-stretch: 1;
             label: ArcadeView.search-keys[root.start-index + key-offset];
             selected: ArcadeView.selected-search-key-index == root.start-index + key-offset;
             keyboard-focused: ArcadeView.search-pane == ArcadeSearchPane.keyboard;
-            acknowledged: FeedbackView.acknowledged(
-                "", "key:" + (root.start-index + key-offset),
-                FeedbackView.revision);
+            acknowledged: FeedbackView.acknowledged("", "key:" + (root.start-index + key-offset), FeedbackView.revision);
         }
     }
 }
@@ -58,34 +49,26 @@ component SearchKeyboard inherits Rectangle {
     accessible-label: "Search keyboard";
     accessible-description: "Use the keyboard to enter an arcade search";
     accessible-enabled: true;
-    background: CrtTheme.background;
-
-    VerticalLayout {
-        padding: 0px;
-        spacing: 0px;
-
-        Rectangle {
-            height: MisterUi.footer-height;
-            background: CrtTheme.panel-alt;
-            border-width: MisterUi.border;
-            border-color: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? CrtTheme.accent : CrtTheme.border;
-            accessible-role: text-input;
-            accessible-label: "Search query";
-            accessible-value: ArcadeView.search-query;
-            accessible-enabled: true;
-
-            Spleen6x12 {
-                x: MisterUi.grid-x;
-                width: parent.width - 16px;
-                height: parent.height;
-                text: ArcadeView.search-query == "" ? "_" : ArcadeView.search-query;
-                color: CrtTheme.text;
-                size: MisterUi.crt-body-font;
-                vertical-alignment: center;
-                overflow: elide;
-            }
+    background: transparent;
+    Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: CrtPageMetrics.len-y(16);
+        background: #0b0b0d;
+        border-width: 1px;
+        border-color: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? #e7695a : PageTheme.rule;
+        accessible-role: text-input;
+        accessible-label: "Search query";
+        accessible-value: ArcadeView.search-query;
+        accessible-enabled: true;
+        CrtLauncherText {
+            x: CrtPageMetrics.len-x(4); y: CrtPageMetrics.len-y(2);
+            text: ArcadeView.search-query == "" ? "_" : ArcadeView.search-query + "_";
+            text-color: ArcadeView.search-query == "" ? PageTheme.muted : PageTheme.cream;
         }
-
+    }
+    VerticalLayout {
+        x: 0px; y: CrtPageMetrics.len-y(18); width: parent.width;
+        height: parent.height - self.y;
+        spacing: CrtPageMetrics.len-y(2);
         SearchKeyboardRow { start-index: 0; key-count: 8; }
         SearchKeyboardRow { start-index: 8; key-count: 8; }
         SearchKeyboardRow { start-index: 16; key-count: 8; }
@@ -97,7 +80,9 @@ component SearchKeyboard inherits Rectangle {
 
 export component ArcadeListScreen inherits Rectangle {
     property <int> count: ArcadeView.active-count;
-    background: CrtTheme.background;
+    property <bool> search: ArcadeView.search-mode == ArcadeSearchMode.active;
+    property <bool> ready: ArcadeView.load-state == ArcadeLoadState.ready;
+    background: transparent;
 
     if ArcadeView.drawer-open : Rectangle {
         accessible-role: list;
@@ -112,26 +97,25 @@ export component ArcadeListScreen inherits Rectangle {
         }
     }
 
-    CrtHeader {
-        x: LauncherLayout.crt-header.x * 1px;
-        y: LauncherLayout.crt-header.y * 1px;
-        width: LauncherLayout.crt-header.width * 1px;
-        background: transparent;
-        border-width: 0px;
-        border-color: transparent;
-        title: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search" : ArcadeView.active-title;
-        subtitle: "";
-        status: ArcadeView.search-mode == ArcadeSearchMode.active
-            ? (ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
-                (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
-                (root.count == 0 && ArcadeView.search-status == ArcadeSearchStatus.ready
-                    ? "No matches" : root.count + " matches")))
-            : root.count + " games";
+    CrtPageChrome {
+        section: root.search ? "ARCADE / SEARCH" : "ARCADE";
+        hint-a: root.ready ? "A PLAY" : "";
+        hint-b: "B BACK";
     }
 
-    if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard {
-        x: LauncherLayout.crt-keyboard.x * 1px;
-        y: LauncherLayout.crt-keyboard.y * 1px;
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(MisterUi.window-width - CrtPageMetrics.margin-x) - self.preferred-width;
+        y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 8 * CrtPageMetrics.sy);
+        text: root.search
+            ? (ArcadeView.search-status == ArcadeSearchStatus.searching ? "SEARCHING"
+                : root.count + (root.count == 1 ? " MATCH" : " MATCHES"))
+            : (ArcadeView.selected-game-index + 1) + " / " + root.count;
+        text-color: PageTheme.muted;
+    }
+
+    if root.search : SearchKeyboard {
+        x: (LauncherLayout.crt-keyboard.x - MisterUi.crt-content-x) * 1px;
+        y: (LauncherLayout.crt-keyboard.y - MisterUi.crt-content-y) * 1px;
         width: LauncherLayout.crt-keyboard.width * 1px;
         height: LauncherLayout.crt-keyboard.height * 1px;
     }
@@ -141,58 +125,34 @@ export component ArcadeListScreen inherits Rectangle {
         y: (LauncherLayout.arcade-list.y - MisterUi.crt-content-y) * 1px;
         width: LauncherLayout.arcade-list.width * 1px;
         height: LauncherLayout.arcade-list.height * 1px;
-        background: CrtTheme.panel-alt;
-        border-width: MisterUi.border;
-        border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? CrtTheme.accent : CrtTheme.border;
+        background: transparent;
         clip: true;
         accessible-role: list;
-        accessible-label: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search results" : "Arcade games";
+        accessible-label: root.search ? "Search results" : "Arcade games";
         accessible-value: "" + (ArcadeView.selected-game-index + 1);
-        accessible-description: root.count + (ArcadeView.search-mode == ArcadeSearchMode.active ? " matches" : " games");
+        accessible-description: root.count + (root.search ? " matches" : " games");
         accessible-enabled: true;
-
-        Spleen6x12 {
-            width: parent.width;
-            height: parent.height;
-            visible: ArcadeView.search-mode == ArcadeSearchMode.active
-                && (ArcadeView.search-status != ArcadeSearchStatus.ready || root.count == 0);
-            text: ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
-                (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
-                (root.count == 0 ? "No matches" : ""));
-            color: CrtTheme.muted;
-            size: MisterUi.crt-body-font;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
     }
 
-    if ArcadeView.load-state != ArcadeLoadState.ready : Rectangle {
+    if !root.ready || (root.search && root.count == 0) : Rectangle {
         x: (LauncherLayout.arcade-list.x - MisterUi.crt-content-x) * 1px;
         y: (LauncherLayout.arcade-list.y - MisterUi.crt-content-y) * 1px;
         width: LauncherLayout.arcade-list.width * 1px;
         height: LauncherLayout.arcade-list.height * 1px;
-        background: CrtTheme.panel-alt;
-        accessible-role: progress-indicator;
-        accessible-label: "Loading games";
-        accessible-description: "Loading arcade list";
-
-        Spleen6x12 {
-            text: ArcadeView.load-state == ArcadeLoadState.loading ? "Loading Arcade games…" : ArcadeView.load-state == ArcadeLoadState.failed ? "Arcade library unavailable.\nLibrary Refresh in Settings." : "No Arcade games found.\nLibrary Refresh in Settings.";
-            color: CrtTheme.muted;
-            size: MisterUi.crt-body-font;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        background: #000000aa;
+        CrtLauncherText {
+            text: !root.ready
+                ? (ArcadeView.load-state == ArcadeLoadState.loading ? "LOADING ARCADE GAMES" : "ARCADE LIBRARY UNAVAILABLE")
+                : "NO MATCHES";
+            text-color: PageTheme.muted;
+            x: CrtPageMetrics.len-x(4); y: CrtPageMetrics.len-y(4);
         }
     }
 
-    CrtFooter {
-        x: LauncherLayout.crt-footer.x * 1px;
-        y: LauncherLayout.crt-footer.y * 1px;
-        width: LauncherLayout.crt-footer.width * 1px;
-        background: transparent;
-        border-width: 0px;
-        border-color: transparent;
-        left-hint: ArcadeView.load-state == ArcadeLoadState.ready ? "A Launch   X Options   Y Search" : "";
-        right-hint: "B Back   HOME Launcher";
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(MisterUi.window-width - CrtPageMetrics.margin-x) - self.preferred-width;
+        y: CrtPageMetrics.px-y(CrtPageMetrics.footer-rule + 5 * CrtPageMetrics.sy);
+        text: root.search ? "Y CLOSE" : "X OPTIONS   Y SEARCH";
+        text-color: PageTheme.cream;
     }
 }

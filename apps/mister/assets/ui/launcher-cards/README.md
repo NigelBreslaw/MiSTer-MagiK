@@ -8,6 +8,10 @@ The accepted source renders were supplied in
 `MiSTer-MagiK-Blender-Dual-Scale-Satin-2026-09-20.zip`. The archive remains an
 external design source and is not committed here.
 
+`01_arcade` is the exception: its accepted source is `arcade-card.png` from
+the Arcade UI prototype. It follows the same linear-light downsample and
+sharpening pipeline below for both packed sizes.
+
 Do not convert a smooth near-black render and expect quantisation or runtime
 dithering to repair it: RGB565 exposes broad dark gradients as bands. Preserve
 fine matte texture, broad lighting planes and local contrast, especially on the

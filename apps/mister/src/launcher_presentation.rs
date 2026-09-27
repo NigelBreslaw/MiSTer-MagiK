@@ -421,6 +421,11 @@ struct SettingsViewPresenter {
     crt_visual_assets_geometry: Option<SettingsVisualAssetGeometry>,
 }
 
+#[derive(Default)]
+struct ArcadeViewPresenter {
+    fixed_visual_assets_installed: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SettingsVisualAssetGeometry {
     width: i32,
@@ -454,6 +459,22 @@ pub fn settings_cog_backdrop_rgb565() -> &'static [Rgb565Pixel] {
     })
 }
 
+const ARCADE_CABINET_WIDTH: usize = 483;
+const ARCADE_CABINET_HEIGHT: usize = 519;
+
+/// Front-on Arcade cabinet, packed at its exact HDMI destination size.
+pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
+    static PIXELS: std::sync::OnceLock<Vec<Rgb565Pixel>> = std::sync::OnceLock::new();
+    PIXELS.get_or_init(|| {
+        include_bytes!("../assets/ui/arcade/cabinet-483x519.rgb565")
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|packed| Rgb565Pixel(u16::from_le_bytes(*packed)))
+            .collect()
+    })
+}
+
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565
 /// software renderer's truncation return exactly the stored pixels.
 fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::Image {
@@ -479,6 +500,14 @@ fn settings_cog_backdrop_image() -> slint::Image {
         COG_ASSET_WIDTH,
         COG_ASSET_HEIGHT,
         settings_cog_backdrop_rgb565(),
+    )
+}
+
+fn arcade_cabinet_image() -> slint::Image {
+    rgb565_image(
+        ARCADE_CABINET_WIDTH,
+        ARCADE_CABINET_HEIGHT,
+        arcade_cabinet_rgb565(),
     )
 }
 
@@ -549,10 +578,16 @@ pub fn install_settings_visual_assets(app: &Launcher) {
     }
 }
 
+pub fn install_arcade_visual_assets(app: &Launcher) {
+    app.global::<ArcadeView>()
+        .set_cabinet_backdrop(arcade_cabinet_image());
+}
+
 #[derive(Default)]
 pub struct LauncherViewPresenters {
     navigation: NavigationViewPresenter,
     settings: SettingsViewPresenter,
+    arcade: ArcadeViewPresenter,
 }
 
 impl LauncherViewPresenters {
@@ -566,6 +601,10 @@ impl LauncherViewPresenters {
         active_display_fallback: Option<(u16, u16)>,
     ) {
         let navigation = app.global::<NavigationView>();
+        if !self.arcade.fixed_visual_assets_installed {
+            install_arcade_visual_assets(app);
+            self.arcade.fixed_visual_assets_installed = true;
+        }
         set_if_changed!(
             navigation,
             get_screen,
