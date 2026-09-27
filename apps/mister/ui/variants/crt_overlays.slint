@@ -323,15 +323,15 @@ export component ConfirmDialog inherits Rectangle {
             x: CrtPageMetrics.len-x(4);
             y: CrtPageMetrics.len-y(33);
             width: (parent.width - CrtPageMetrics.len-x(12)) / 2;
-            label: OverlayView.confirm-label;
-            focused: OverlayView.selected-choice == DialogChoice.confirm;
+            label: OverlayView.cancel-label;
+            focused: OverlayView.selected-choice == DialogChoice.cancel;
         }
         CrtInlineConfirmButton {
             x: parent.width / 2 + CrtPageMetrics.len-x(2);
             y: CrtPageMetrics.len-y(33);
             width: (parent.width - CrtPageMetrics.len-x(12)) / 2;
-            label: OverlayView.cancel-label;
-            focused: OverlayView.selected-choice == DialogChoice.cancel;
+            label: OverlayView.confirm-label;
+            focused: OverlayView.selected-choice == DialogChoice.confirm;
         }
     }
 }
