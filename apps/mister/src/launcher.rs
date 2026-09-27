@@ -1432,6 +1432,12 @@ impl LauncherNav {
         self.home_card_scroll.visual_index
     }
 
+    pub fn home_card_visual_prediction(&self, at: Instant) -> (usize, f32) {
+        let mut predicted = self.home_card_scroll.clone();
+        predicted.tick(ROOT_HOME_CARDS.len(), at);
+        (predicted.selected, predicted.visual_index)
+    }
+
     pub fn arcade_uses_menu_repeat(&self) -> bool {
         self.screen == Screen::Arcade
             && self.arcade_search.is_active(&self.arcade_filter.active)
@@ -6595,6 +6601,30 @@ mod tests {
         }
         assert_eq!(nav.selected, 1);
         assert!((nav.home_card_visual_index() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn home_card_prediction_advances_a_clone_without_mutating_navigation() {
+        let catalog = image_less_amiga_catalog();
+        let mut nav = LauncherNav::new();
+        let start = Instant::now();
+        let right = pad_with(|pad| pad.dpad_right = true);
+        nav.handle_input(&right, start, &catalog);
+        nav.handle_input(
+            &PadState::default(),
+            start + Duration::from_millis(8),
+            &catalog,
+        );
+        let current_selected = nav.selected;
+        let current_visual = nav.home_card_visual_index();
+
+        let predicted_at = start + Duration::from_millis(40);
+        let (predicted_selected, predicted_visual) = nav.home_card_visual_prediction(predicted_at);
+
+        assert_eq!(nav.selected, current_selected);
+        assert_eq!(nav.home_card_visual_index(), current_visual);
+        assert!(predicted_visual > current_visual);
+        assert_eq!(predicted_selected, 1);
     }
 
     #[test]

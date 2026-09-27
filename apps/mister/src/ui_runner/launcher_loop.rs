@@ -9432,12 +9432,18 @@ pub(super) fn run_launcher_loop(
             .set_custom_home_base(custom_home_active);
         if custom_home_active {
             if let Some(session) = launcher_card_home.as_mut() {
-                session.set_target_vblank(pacer.hits().saturating_add(1));
+                let prediction_lead = Duration::from_micros(pacer.period_us().saturating_mul(2));
+                let prediction_time = loop_start
+                    .checked_add(prediction_lead)
+                    .unwrap_or(loop_start);
+                let (predicted_selected, predicted_visual_index) =
+                    nav.home_card_visual_prediction(prediction_time);
+                session.set_target_vblank(pacer.hits().saturating_add(2));
                 session.update(
                     super::launcher_card_home::scene_for_display(ui, layout),
                     crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog),
-                    nav.selected,
-                    nav.home_card_visual_index(),
+                    predicted_selected,
+                    predicted_visual_index,
                     &last_clock_text,
                     loop_start.duration_since(run_start).as_millis() as u64,
                 );
