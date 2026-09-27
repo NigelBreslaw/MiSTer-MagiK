@@ -330,15 +330,6 @@ def launcher_motion(
         raise AssertionError("forced fallback did not execute")
     return {
         **window,
-        "card_vblank_contract_met": (
-            not instrumented
-            or (
-                window.get("card_redisplayed_presentations") == 0
-                and window.get("card_target_vblank_misses") == 0
-                and window.get("card_target_vblank_repeats") == 0
-                and window.get("card_target_vblank_skips") == 0
-            )
-        ),
         "workload": (
             "launcher-card-motion-rollover"
             if align_rollover
