@@ -131,6 +131,24 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
                 })
                 .map_err(|e| e.to_string());
         }
+        if cached.width() == buffer.width() && cached.height() == buffer.height() {
+            return buffer
+                .copy_rect_565_strided(
+                    rect.x0,
+                    rect.y0,
+                    rect.width(),
+                    rect.y1 - rect.y0,
+                    cached.pixels(),
+                    cached.stride(),
+                    rect.x0,
+                    rect.y0,
+                )
+                .map(|bytes| LatchCopyResult {
+                    bytes,
+                    path: LatchCopyPath::VerticalPartial,
+                })
+                .map_err(|e| e.to_string());
+        }
         buffer
             .copy_vertical_rect_with_sampling(
                 VerticalRgb565FrameView {
