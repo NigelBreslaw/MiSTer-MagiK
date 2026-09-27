@@ -912,6 +912,49 @@ struct PendingNavigationTransition {
     status_quiesce_started_at: Option<Instant>,
 }
 
+#[derive(Default)]
+struct DeferredSettingsActivation {
+    event: Option<crate::input_event::InputEvent>,
+}
+
+impl DeferredSettingsActivation {
+    fn intercept_while_cards_move(
+        &mut self,
+        nav: &LauncherNav,
+        card_home_animating: bool,
+        event: &mut Option<crate::input_event::InputEvent>,
+    ) -> bool {
+        if self.event.is_some()
+            || !card_home_animating
+            || nav.screen != Screen::Home
+            || nav.current_menu_id() != crate::launcher_taxonomy::ROOT_MENU_ID
+            || nav.selected != 5
+            || !event.as_ref().is_some_and(|event| {
+                event.phase == InputPhase::Pressed && event.action == LogicalAction::Activate
+            })
+        {
+            return false;
+        }
+        self.event = event.take();
+        true
+    }
+
+    fn take_when_settled(
+        &mut self,
+        card_home_animating: bool,
+    ) -> Option<crate::input_event::InputEvent> {
+        if card_home_animating {
+            None
+        } else {
+            self.event.take()
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.event.is_some()
+    }
+}
+
 const NAVIGATION_STATUS_QUIESCE_LIMIT: Duration = Duration::from_millis(50);
 
 fn system_entry_preview_terminal(
@@ -1086,6 +1129,19 @@ fn settings_cog_transition_eligible(
         && render_width == 960
         && render_height == 540
         && !reduce_motion
+}
+
+fn settings_cog_home_endpoint_is_live(
+    route: Option<NavigationTransitionRoute>,
+    request: Option<NavigationTransitionRequest>,
+    endpoint: Option<NavigationTransitionEndpoint>,
+) -> bool {
+    route == Some(NavigationTransitionRoute::HomeToSettings)
+        && request.is_some_and(|request| {
+            request.direction == NavigationTransitionDirection::Reverse
+                && request.renderer_label() == "settings-cog"
+        })
+        && endpoint == Some(NavigationTransitionEndpoint::Destination)
 }
 
 const fn settings_page_depth(screen: Screen) -> Option<u8> {
@@ -5176,6 +5232,7 @@ pub(super) fn run_launcher_loop(
     let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
     let mut pending_collection_entry: Option<PendingCollectionEntry> = None;
     let mut pending_navigation_transition: Option<PendingNavigationTransition> = None;
+    let mut deferred_settings_activation = DeferredSettingsActivation::default();
     let mut deferred_navigation_hydration_finish: Option<String> = None;
     let mut catalog_ready_deferred_since: Option<Instant> = None;
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
@@ -7611,6 +7668,11 @@ pub(super) fn run_launcher_loop(
                 let info = pad.info().clone();
                 loop {
                     let lifecycle_view = lifecycle.view();
+                    let card_home_animating = launcher_card_home.as_ref().is_some_and(
+                        super::launcher_card_home::LauncherCardHomeSession::is_animating,
+                    );
+                    let deferred_settings_event =
+                        deferred_settings_activation.take_when_settled(card_home_animating);
                     let focus = launcher_input_focus(
                         true,
                         false,
@@ -7620,16 +7682,17 @@ pub(super) fn run_launcher_loop(
                         nav.confirm_action.is_some(),
                         navigation_transition.is_active()
                             || orientation_transition.is_active()
-                            || full_screen_transition.state() != FullScreenTransitionState::Live,
+                            || full_screen_transition.state() != FullScreenTransitionState::Live
+                            || deferred_settings_activation.is_pending(),
                         &nav,
                     );
                     input_router.set_focus(focus);
                     let mut final_input_tick = false;
                     let mut input_dispatch_now = frame_now;
                     let mut direct_ui_action_this_loop = None;
-                    let routed_event_this_loop = if let Some(event) =
-                        incoming_input_events.pop_front()
-                    {
+                    let mut routed_event_this_loop = if let Some(event) = deferred_settings_event {
+                        Some(event)
+                    } else if let Some(event) = incoming_input_events.pop_front() {
                         if event.source.kind == InputSourceKind::MainProxy {
                             input_dispatch_now = main_proxy_event_instant(
                                 frame_now,
@@ -7815,6 +7878,13 @@ pub(super) fn run_launcher_loop(
                                 lifecycle_view.launch_failure_dialog().is_some();
                             let recovery_dialog_visible =
                                 lifecycle_view.catalog_recovery_dialog().is_some();
+                            if deferred_settings_activation.intercept_while_cards_move(
+                                &nav,
+                                card_home_animating,
+                                &mut routed_event_this_loop,
+                            ) {
+                                request_launcher_redraw!();
+                            }
                             let pending_collection_cancelled =
                                 cancel_pending_collection_entry_for_input(
                                     &mut pending_collection_entry,
@@ -10226,6 +10296,7 @@ pub(super) fn run_launcher_loop(
         }
         let mut slint_damage = DirtyRectList::new();
         let mut full_screen_transition_release_raster_rendered = false;
+        let mut full_screen_transition_live_endpoint_rendered = false;
         let mut full_screen_controlled_capture_rendered = false;
         let mut orientation_controlled_slint_raster_us = 0;
         let mut gui_raster_phase = GuiRasterProfilePhase::None;
@@ -10238,7 +10309,8 @@ pub(super) fn run_launcher_loop(
         macro_rules! render_launcher_base {
             ($full_slint_raster:expr) => {{
                 if custom_home_active
-                    && (custom_home_needs_render
+                    && ($full_slint_raster
+                        || custom_home_needs_render
                         || launcher_card_home.as_ref().is_some_and(
                             super::launcher_card_home::LauncherCardHomeSession::compositor_stale,
                         ))
@@ -11017,6 +11089,11 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
             if navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
                 settings_navigation_benchmark.note_rendered_endpoint(frames);
+                let endpoint_is_live = settings_cog_home_endpoint_is_live(
+                    navigation_transition.route(),
+                    navigation_transition.request(),
+                    navigation_transition.frame().endpoint,
+                );
                 let completion = navigation_transition.complete();
                 if completion.is_some() {
                     release_full_screen_transition(
@@ -11024,6 +11101,8 @@ pub(super) fn run_launcher_loop(
                         navigation_transition_generation,
                     );
                 }
+                full_screen_transition_live_endpoint_rendered =
+                    endpoint_is_live && completion.is_some();
                 let pending = pending_navigation_transition.take();
                 if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Destination
@@ -12185,7 +12264,8 @@ pub(super) fn run_launcher_loop(
                     .note_orientation_presented(nav.settings.screen_orientation);
             }
             if accepted_and_active_confirmed
-                && full_screen_transition_release_raster_rendered
+                && (full_screen_transition_release_raster_rendered
+                    || full_screen_transition_live_endpoint_rendered)
                 && let Some(generation) = full_screen_transition.generation()
             {
                 let owner = full_screen_transition.owner();
@@ -12234,7 +12314,11 @@ pub(super) fn run_launcher_loop(
                             }
                             _ => {}
                         }
-                        if retained_redraw {
+                        // The reverse cog endpoint is already the current card
+                        // launcher raster. Transition-owned redraw requests made
+                        // while the snapshot was locked must not replace it with
+                        // a redundant full-screen release frame.
+                        if retained_redraw && !full_screen_transition_live_endpoint_rendered {
                             request_launcher_redraw!();
                         }
                     }
@@ -14599,6 +14683,60 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_activation_waits_for_the_moving_card_then_fires_once() {
+        let mut nav = LauncherNav::new();
+        nav.selected = 5;
+        let activation = normalized_test_press(LogicalAction::Activate);
+        let mut routed = Some(activation);
+        let mut deferred = DeferredSettingsActivation::default();
+
+        assert!(deferred.intercept_while_cards_move(&nav, true, &mut routed));
+        assert!(routed.is_none());
+        assert!(deferred.is_pending());
+        assert!(deferred.take_when_settled(true).is_none());
+        let settled_activation = deferred
+            .take_when_settled(false)
+            .expect("settled card should release the queued activation");
+        assert_eq!(settled_activation, activation);
+        assert!(!deferred.is_pending());
+        assert!(deferred.take_when_settled(false).is_none());
+
+        let catalog = empty_arcade_catalog("/tmp");
+        assert!(
+            nav.handle_action_with_navigation_intents(
+                &settled_activation,
+                Instant::now(),
+                &catalog,
+            )
+            .is_none()
+        );
+        assert_eq!(nav.screen, Screen::Settings);
+    }
+
+    #[test]
+    fn only_the_reverse_settings_cog_home_endpoint_is_a_live_handoff() {
+        let reverse_cog =
+            NavigationTransitionRequest::settings_cog(NavigationTransitionDirection::Reverse);
+        assert!(settings_cog_home_endpoint_is_live(
+            Some(NavigationTransitionRoute::HomeToSettings),
+            Some(reverse_cog),
+            Some(NavigationTransitionEndpoint::Destination),
+        ));
+        assert!(!settings_cog_home_endpoint_is_live(
+            Some(NavigationTransitionRoute::HomeToSettings),
+            Some(NavigationTransitionRequest::settings_cog(
+                NavigationTransitionDirection::Forward,
+            )),
+            Some(NavigationTransitionEndpoint::Destination),
+        ));
+        assert!(!settings_cog_home_endpoint_is_live(
+            Some(NavigationTransitionRoute::HomeToSettings),
+            Some(reverse_cog),
+            Some(NavigationTransitionEndpoint::Source),
+        ));
+    }
 
     #[test]
     fn settings_cog_zoom_requires_a_settled_native_landscape_card() {
