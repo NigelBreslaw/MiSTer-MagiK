@@ -13,7 +13,6 @@ pub(super) struct Scratch {
     columns: Vec<Column>,
     texels: Vec<u32>,
     key: Option<(usize, usize, u32, Pose)>,
-    reflection_key: Option<(usize, usize, u32, Pose)>,
     blend: Vec<u32>,
     reflection_pixels: Vec<u16>,
 }
@@ -39,15 +38,9 @@ impl Scratch {
             columns: vec![Column::default(); screen_width],
             texels: vec![0; width * column_height],
             key: None,
-            reflection_key: None,
             blend: vec![0; column_height],
             reflection_pixels: vec![0; width * 64],
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn has_prepared_reflection(&self) -> bool {
-        self.reflection_key.is_some()
     }
 }
 
@@ -241,11 +234,11 @@ pub(super) fn draw_target<F: Fn(u16, usize, usize) -> u16>(
 ) {
     let reflection = &reflection as &dyn Fn(u16, usize, usize) -> u16;
     render(
-        Some(RenderTarget {
+        RenderTarget {
             pixels: destination,
             pitch: destination_pitch,
             origin: destination_origin,
-        }),
+        },
         face,
         pose,
         scratch,
@@ -291,11 +284,11 @@ pub(super) fn draw_occluded_target(
     occlusion: &BodyOcclusion,
 ) {
     render(
-        Some(RenderTarget {
+        RenderTarget {
             pixels: destination,
             pitch: destination_pitch,
             origin: destination_origin,
-        }),
+        },
         face,
         pose,
         scratch,
@@ -324,7 +317,7 @@ enum RenderPass<'a> {
 }
 
 fn render(
-    mut target: Option<RenderTarget<'_>>,
+    mut target: RenderTarget<'_>,
     face: &Face,
     pose: Pose,
     scratch: &mut Scratch,
@@ -552,7 +545,7 @@ fn render(
             .max()
             .unwrap_or(active_top);
         let active_width = active_right - active_left;
-        let target = target.as_mut().expect("body render requires a target");
+        let target = &mut target;
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("flip.compose");
         if flat {
@@ -612,7 +605,7 @@ fn render(
         }
     }
     if let RenderPass::Reflection(_reflection) = pass
-        && scratch.reflection_key != Some(key)
+        && rebuild
     {
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("reflection.prepare");
@@ -663,12 +656,9 @@ fn render(
                 }
             }
         }
-        scratch.reflection_key = Some(key);
     }
     if matches!(pass, RenderPass::Reflection(_)) {
-        let target = target
-            .as_mut()
-            .expect("reflection render requires a target");
+        let target = &mut target;
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("flip.reflection");
         for (x, c) in columns.iter().copied().enumerate().take(right).skip(left) {
@@ -999,17 +989,7 @@ mod tests {
                 body_clip: (296, 934),
                 vertical_clip: (120, 438, 495),
             };
-            let mut body = vec![Rgb565Pixel(0); 960 * 540];
             let mut reflected = vec![Rgb565Pixel(0xffff); 960 * 540];
-            draw(
-                &mut body,
-                &face,
-                pose,
-                &mut scratch,
-                |p, _, _| p,
-                false,
-                None,
-            );
             draw(
                 &mut reflected,
                 &face,
