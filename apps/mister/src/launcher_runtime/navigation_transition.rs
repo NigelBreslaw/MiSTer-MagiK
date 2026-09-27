@@ -1890,6 +1890,41 @@ mod tests {
     }
 
     #[test]
+    fn reverse_settings_cog_uses_live_settings_as_its_settings_pixels() {
+        let mut runtime = NavigationTransitionRuntime::new(8, 6, true);
+        let live_settings = vec![Rgb565Pixel(0x2222); 8 * 6];
+        let launcher = vec![Rgb565Pixel(0x1111); 8 * 6];
+        let cog = Box::leak(
+            vec![
+                SharedRgb565Pixel(0);
+                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+            ]
+            .into_boxed_slice(),
+        );
+
+        assert!(
+            runtime
+                .begin_settings_cog_physical(
+                    NavigationTransitionDirection::Reverse,
+                    8,
+                    6,
+                    &live_settings,
+                    cog,
+                    0,
+                )
+                .unwrap()
+        );
+        runtime.capture_destination(&launcher, 1).unwrap();
+
+        let input = runtime
+            .settings_cog_render_input()
+            .expect("captured settings cog transition");
+        assert!(input.launcher.iter().all(|pixel| pixel.0 == 0x1111));
+        assert!(input.settings.iter().all(|pixel| pixel.0 == 0x2222));
+    }
+
+    #[test]
     fn disabled_runtime_uses_empty_frame_buffers() {
         let poc = NavigationTransitionRuntime::new(960, 540, false);
         assert!(!poc.enabled());
