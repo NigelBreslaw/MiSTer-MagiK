@@ -10914,18 +10914,11 @@ pub(super) fn run_launcher_loop(
                     if settings_cog_render_ahead.is_none()
                         && let Some(input) = navigation_transition.settings_cog_render_input()
                     {
-                        let pipeline_started = Instant::now();
                         settings_cog_render_ahead = SettingsCogRenderAhead::start(
                             input.launcher.to_vec(),
                             input.settings.to_vec(),
                             input.cog,
                         );
-                        let pipeline_setup_us = pipeline_started
-                            .elapsed()
-                            .as_micros()
-                            .min(u128::from(u64::MAX))
-                            as u64;
-                        navigation_transition.delay_unstarted_animation(pipeline_setup_us);
                     }
                     if let (Some(pipeline), Some(input)) = (
                         settings_cog_render_ahead.as_mut(),
