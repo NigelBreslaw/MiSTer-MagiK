@@ -211,7 +211,9 @@ def launcher_navigation(application, screenshot_path):
     started = time.monotonic()
     _open_settings_card(application)
     try:
-        _wait(lambda: _settings_ready(application), "Settings transition did not settle")
+        _wait(
+            lambda: _settings_ready(application), "Settings transition did not settle"
+        )
         opened_ms = round((time.monotonic() - started) * 1000, 2)
         screenshot(application, screenshot_path)
     finally:
