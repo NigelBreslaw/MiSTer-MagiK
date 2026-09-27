@@ -305,36 +305,6 @@ static inline uint32x2_t interpolate2(const uint32_t *src, int32_t q0,
       vmlaq_u16(vmulq_u16(a, vsubq_u16(vdupq_n_u16(256), w)), b, w), 8));
 }
 
-static inline uint32x4_t interpolate4_sequential(const uint32_t *src,
-                                                  int32_t row, int32_t q0,
-                                                  int32_t step) {
-  const uint8x16_t a = vreinterpretq_u8_u32(vld1q_u32(src + row));
-  const uint8x16_t b = vreinterpretq_u8_u32(vld1q_u32(src + row + 1));
-  const uint16x8_t low_weights = vcombine_u16(
-      vdup_n_u16(((uint32_t)q0 & 65535) >> 8),
-      vdup_n_u16(((uint32_t)(q0 + step) & 65535) >> 8));
-  const uint16x8_t high_weights = vcombine_u16(
-      vdup_n_u16(((uint32_t)(q0 + 2 * step) & 65535) >> 8),
-      vdup_n_u16(((uint32_t)(q0 + 3 * step) & 65535) >> 8));
-  const uint16x8_t limit = vdupq_n_u16(256);
-  const uint16x8_t low = vmlaq_u16(
-      vmulq_u16(vmovl_u8(vget_low_u8(a)), vsubq_u16(limit, low_weights)),
-      vmovl_u8(vget_low_u8(b)), low_weights);
-  const uint16x8_t high = vmlaq_u16(
-      vmulq_u16(vmovl_u8(vget_high_u8(a)), vsubq_u16(limit, high_weights)),
-      vmovl_u8(vget_high_u8(b)), high_weights);
-  return vreinterpretq_u32_u8(
-      vcombine_u8(vshrn_n_u16(low, 8), vshrn_n_u16(high, 8)));
-}
-
-static inline uint16x4_t pack_opaque4(uint32x4_t p) {
-  const uint32x4_t red = vshlq_n_u32(vandq_u32(p, vdupq_n_u32(248)), 8);
-  const uint32x4_t green =
-      vshlq_n_u32(vandq_u32(vshrq_n_u32(p, 8), vdupq_n_u32(252)), 3);
-  const uint32x4_t blue = vandq_u32(vshrq_n_u32(p, 19), vdupq_n_u32(31));
-  return vmovn_u32(vorrq_u32(vorrq_u32(red, green), blue));
-}
-
 // Exact two-row perspective interpolation composed directly to RGB565.
 // Avoids writing and then rereading a projected RGBA image for each card.
 void magik_launcher_project_over_column(uint16_t *out, size_t pitch,
@@ -369,26 +339,6 @@ void magik_launcher_project_over_column(uint16_t *out, size_t pitch,
       int32_t last = q7 >> 16;
       if (r >= 0 && (size_t)r >= opaque_top &&
           (size_t)(last + 1) < opaque_bottom) {
-        int sequential = 1;
-        for (int lane = 1; lane < 8; ++lane)
-          sequential &= ((q + lane * step) >> 16) == r + lane;
-        if (sequential) {
-          const uint16x4_t first = pack_opaque4(
-              interpolate4_sequential(src, r, q, step));
-          const uint16x4_t second = pack_opaque4(
-              interpolate4_sequential(src, r + 4, q + 4 * step, step));
-          out[y * pitch] = vget_lane_u16(first, 0);
-          out[(y + 1) * pitch] = vget_lane_u16(first, 1);
-          out[(y + 2) * pitch] = vget_lane_u16(first, 2);
-          out[(y + 3) * pitch] = vget_lane_u16(first, 3);
-          out[(y + 4) * pitch] = vget_lane_u16(second, 0);
-          out[(y + 5) * pitch] = vget_lane_u16(second, 1);
-          out[(y + 6) * pitch] = vget_lane_u16(second, 2);
-          out[(y + 7) * pitch] = vget_lane_u16(second, 3);
-          y += 8;
-          q += 8 * step;
-          continue;
-        }
         for (size_t pair = 0; pair < 4; ++pair) {
           int32_t q0 = q + (int32_t)(pair * 2) * step;
           int32_t q1 = q0 + step;
