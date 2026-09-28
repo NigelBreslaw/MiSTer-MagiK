@@ -1957,11 +1957,10 @@ mod tests {
     }
 
     #[test]
-    fn light_bridge_sync_refreshes_active_system_header() {
+    fn light_bridge_sync_refreshes_active_system_count() {
         install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let arcade = app.global::<slint_ui::launcher::ArcadeView>();
-        arcade.set_active_title("AcornAtom".into());
         arcade.set_active_count(0);
 
         let catalog = ArcadeCatalog::new(
@@ -2013,7 +2012,6 @@ mod tests {
             &ui,
         );
 
-        assert_eq!(arcade.get_active_title().as_str(), "Arcade");
         assert_eq!(arcade.get_active_count(), 2);
 
         let mut effects = LifecycleEffects::new();

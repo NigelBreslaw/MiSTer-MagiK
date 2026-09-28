@@ -4,7 +4,7 @@
 import { SettingsView } from "../api.slint";
 import { MisterUi } from "../mister_window.slint";
 import { CrtLauncherText, CrtPageMetrics } from "crt_page_chrome.slint";
-import { PageTheme, SettingsFocusHighlight } from "page_chrome.slint";
+import { FocusHighlight, PageTheme } from "page_chrome.slint";
 
 // Shared CRT Settings-family backdrop. Its raw dimensions follow the CRT
 // sample axes, so the cog keeps the same displayed proportions after a
@@ -40,7 +40,7 @@ export component CrtSettingsRow inherits Rectangle {
     accessible-enabled: true;
     height: CrtPageMetrics.len-y(16);
 
-    if root.focused : SettingsFocusHighlight {
+    if root.focused : FocusHighlight {
         source: SettingsView.focus-highlight-crt-row;
         width: root.width;
         height: root.height;

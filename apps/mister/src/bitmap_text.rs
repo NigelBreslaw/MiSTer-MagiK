@@ -321,7 +321,7 @@ impl ConsoleFont {
         baseline.round() as isize
     }
 
-    fn text_width(&mut self, text: &str) -> usize {
+    pub(crate) fn text_width(&mut self, text: &str) -> usize {
         let mut width = 0usize;
         for ch in text.chars() {
             if let Some(glyph) = self.glyph(ch) {

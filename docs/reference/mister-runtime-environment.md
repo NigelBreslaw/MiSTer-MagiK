@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Current controls: 257. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Current controls: 256. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -22,7 +22,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Current controls: 257. H
 | `MISTER_ARCADE_ROOT` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls arcade root behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/launcher_loop.rs` |
 | `MISTER_ARCADE_SCROLL_SPEED_DIV` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | i64 | — | command | — | public | — | Controls arcade scroll speed div behavior; value policy: document | internal runtime | `apps/mister/src/launcher.rs` |
 | `MISTER_ARCADE_SELECTED_INDEX` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | command | — | public | — | Controls arcade selected index behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/ui_frame_target.rs` |
-| `MISTER_ARCADE_SELECTION_INVERT` | production | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls arcade selection invert behavior; value policy: document | internal runtime | `apps/mister/src/arcade_list_renderer.rs` |
 | `MISTER_ARCADE_SELECTION_SCALAR` | diagnostic | boolean token | uses the NEON selection kernel when unset or disabled | bool | — | instrumentation | — | public | — | Forces the scalar Arcade selection kernel for diagnostic A/B comparison; value policy: document | developer diagnostic | `apps/mister/src/arcade_list_renderer.rs` |
 | `MISTER_ARCHIE_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls archie preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_ATARI2600_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls atari2600 preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |

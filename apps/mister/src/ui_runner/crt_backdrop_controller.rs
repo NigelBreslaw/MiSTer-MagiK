@@ -620,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn forced_compose_repaints_settled_backdrop_but_preserves_chrome_text() {
+    fn forced_compose_repaints_settled_backdrop_but_preserves_chrome() {
         let display = UiDisplay::for_plan(
             UiDisplayPlan::from_mister_ini_text(
                 "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
@@ -676,7 +676,7 @@ mod tests {
         let background_index = content.y * controller.width() + content.x;
         assert!(restored.full_damage);
         assert_ne!(destination[background_index], sentinel);
-        assert_ne!(destination[header_background_index], sentinel);
+        assert_eq!(destination[header_background_index], sentinel);
         assert_eq!(destination[header_text_index], CRT_PRODUCT_HEADER_TEXT);
         assert_eq!(destination[footer_text_index], CRT_PRODUCT_FOOTER_TEXT);
     }

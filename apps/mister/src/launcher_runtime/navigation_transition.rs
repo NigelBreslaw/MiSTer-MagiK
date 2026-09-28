@@ -1696,7 +1696,9 @@ mod tests {
         assert_eq!(nested.destination_title.width, 120);
         assert_ne!(root.label_signature, nested.label_signature);
         let live_list_height = 452;
-        let live_row_height = crate::arcade_catalog::ARCADE_ROW_HEIGHT as usize;
+        // System-browser rows keep their existing 48px geometry; Arcade's
+        // denser 36px list is rendered by its dedicated card transition.
+        let live_row_height = 48;
         let live_selected_y = 56 + (live_list_height / live_row_height / 2) * live_row_height;
         let live_footer_y = 56 + live_list_height + 4;
         let live_footer_height = 540 - live_footer_y - 8;
@@ -1748,24 +1750,6 @@ mod tests {
             nested.destination_list.height % nested.destination_selected_row.height,
             20
         );
-
-        let arcade = hdmi_navigation_geometry(
-            960,
-            540,
-            0,
-            0,
-            true,
-            NavigationTransitionEdge::HomeToArcade,
-            "Arcade",
-        );
-        assert_eq!(arcade.destination_list.x, 26);
-        assert_eq!(arcade.destination_list.y, 124);
-        assert_eq!(arcade.destination_list.width, 462);
-        assert_eq!(arcade.destination_list.height, 370);
-        assert_eq!(arcade.destination_selected_row.y, 268);
-        assert_eq!(arcade.destination_preview.x, 572);
-        assert_eq!(arcade.destination_preview.y, 96);
-        assert_eq!(arcade.destination_footer.y, 498);
     }
 
     #[test]

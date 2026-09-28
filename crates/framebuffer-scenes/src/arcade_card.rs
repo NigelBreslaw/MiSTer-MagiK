@@ -19,6 +19,8 @@ const HDMI_CARD: NavigationTransitionRect = NavigationTransitionRect {
 };
 const HDMI_CABINET_X: i32 = 490;
 const HDMI_CABINET_Y: i32 = 35;
+const HDMI_CONTENT_TOP: usize = 77;
+const HDMI_CONTENT_BOTTOM: usize = 500;
 const HDMI_SCREEN: NavigationTransitionRect = NavigationTransitionRect {
     x: 572,
     y: 96,
@@ -28,7 +30,7 @@ const HDMI_SCREEN: NavigationTransitionRect = NavigationTransitionRect {
 const LIST_LEFT: usize = 26;
 const LIST_RIGHT: usize = 488;
 const LIST_BANDS: [(usize, usize); 11] = [
-    (101, 124),
+    (88, 124),
     (124, 160),
     (160, 196),
     (196, 232),
@@ -38,17 +40,12 @@ const LIST_BANDS: [(usize, usize); 11] = [
     (340, 376),
     (376, 412),
     (412, 448),
-    (448, 494),
+    (448, 484),
 ];
 const RED: u16 = rgb565(231, 105, 90);
 
 const fn rgb565(r: u16, g: u16, b: u16) -> u16 {
     ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-}
-
-#[must_use]
-pub fn supports_dimensions(width: usize, height: usize) -> bool {
-    width > 0 && height > 0 && width.saturating_mul(height) <= 960 * 576
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -63,7 +60,9 @@ pub fn render_arcade_card_transition_into(
     output: &mut [Rgb565Pixel],
 ) -> bool {
     let len = width.saturating_mul(height);
-    if !supports_dimensions(width, height)
+    if width == 0
+        || height == 0
+        || len > 960 * 576
         || launcher.len() != len
         || arcade.len() != len
         || output.len() != len
@@ -102,8 +101,13 @@ fn render_hdmi(
     for (index, pixel) in output.iter_mut().enumerate() {
         let x = index % W;
         let y = index / W;
-        let destination_is_subject = (490..960).contains(&x) && (35..540).contains(&y)
-            || (LIST_LEFT..LIST_RIGHT).contains(&x) && (96..500).contains(&y);
+        if y < HDMI_CONTENT_TOP {
+            *pixel = arcade[index];
+            continue;
+        }
+        let destination_is_subject = (HDMI_CABINET_X as usize..W).contains(&x)
+            && (HDMI_CONTENT_TOP..HDMI_CONTENT_BOTTOM).contains(&y)
+            || (LIST_LEFT..LIST_RIGHT).contains(&x) && (88..484).contains(&y);
         let chrome = if destination_is_subject {
             0
         } else {
@@ -126,8 +130,9 @@ fn render_hdmi(
     let inverse = (1_i64 << 32) / scale;
     let x0 = (cabinet_x >> 16).max(0) as usize;
     let x1 = (((cabinet_x + CABINET_WIDTH as i64 * scale) >> 16) + 1).clamp(0, W as i64) as usize;
-    let y0 = (cabinet_y >> 16).max(0) as usize;
-    let y1 = (((cabinet_y + CABINET_HEIGHT as i64 * scale) >> 16) + 1).clamp(0, H as i64) as usize;
+    let y0 = (cabinet_y >> 16).clamp(HDMI_CONTENT_TOP as i64, HDMI_CONTENT_BOTTOM as i64) as usize;
+    let y1 = (((cabinet_y + CABINET_HEIGHT as i64 * scale) >> 16) + 1)
+        .clamp(HDMI_CONTENT_TOP as i64, HDMI_CONTENT_BOTTOM as i64) as usize;
     for y in y0..y1 {
         let source_y = (((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16) >> 16;
         if !(0..CABINET_HEIGHT as i64).contains(&source_y) {
@@ -145,7 +150,15 @@ fn render_hdmi(
         }
     }
 
-    draw_outline(W, H, HDMI_CARD, t, output);
+    draw_outline(
+        W,
+        H,
+        HDMI_CARD,
+        t,
+        HDMI_CONTENT_TOP,
+        HDMI_CONTENT_BOTTOM,
+        output,
+    );
 
     let screen_alpha = alpha_of(ease_out(window_q16(t, 760, 160)));
     copy_rect_alpha(W, arcade, output, HDMI_SCREEN, screen_alpha, 0);
@@ -207,7 +220,7 @@ fn render_crt(
             output[destination_y * width + destination_x] = arcade[source_y * width + source_x];
         }
     }
-    draw_outline(width, height, card, t, output);
+    draw_outline(width, height, card, t, 0, height, output);
 }
 
 fn draw_outline(
@@ -215,6 +228,8 @@ fn draw_outline(
     height: usize,
     card: NavigationTransitionRect,
     t: u32,
+    clip_top: usize,
+    clip_bottom: usize,
     output: &mut [Rgb565Pixel],
 ) {
     let p = ease_in_out(window_q16(t, 0, 760));
@@ -231,7 +246,7 @@ fn draw_outline(
     if alpha == 0 {
         return;
     }
-    for row in 0..height {
+    for row in clip_top.min(height)..clip_bottom.min(height) {
         if let Some((outer0, outer1)) = rounded_span(
             row as i32,
             x - stroke,
@@ -336,5 +351,98 @@ mod tests {
             &mut output
         ));
         assert_eq!(output, arcade);
+    }
+
+    #[test]
+    fn hdmi_cabinet_animation_never_crosses_page_chrome() {
+        const W: usize = 960;
+        const H: usize = 540;
+        let launcher = vec![Rgb565Pixel(0); W * H];
+        let arcade = vec![Rgb565Pixel(0); W * H];
+        let cabinet = vec![Rgb565Pixel(0xffff); CABINET_WIDTH * CABINET_HEIGHT];
+        let mut output = vec![Rgb565Pixel(0); W * H];
+
+        for t_ms in [1, 80, 200, 400, 600, 839, 900, 999] {
+            assert!(render_arcade_card_transition_into(
+                W,
+                H,
+                &launcher,
+                &arcade,
+                &cabinet,
+                HDMI_CARD,
+                t_ms,
+                &mut output,
+            ));
+            assert!(
+                output[..HDMI_CONTENT_TOP * W]
+                    .iter()
+                    .all(|pixel| pixel.0 == 0)
+            );
+            assert!(
+                output[HDMI_CONTENT_BOTTOM * W..]
+                    .iter()
+                    .all(|pixel| pixel.0 == 0)
+            );
+        }
+    }
+
+    #[test]
+    fn hdmi_chrome_remains_visible_while_cabinet_finishes() {
+        const W: usize = 960;
+        const H: usize = 540;
+        const CHROME: Rgb565Pixel = Rgb565Pixel(0x1234);
+        let launcher = vec![Rgb565Pixel(0); W * H];
+        let arcade = vec![CHROME; W * H];
+        let cabinet = vec![Rgb565Pixel(0xffff); CABINET_WIDTH * CABINET_HEIGHT];
+        let mut output = vec![Rgb565Pixel(0); W * H];
+
+        assert!(render_arcade_card_transition_into(
+            W,
+            H,
+            &launcher,
+            &arcade,
+            &cabinet,
+            HDMI_CARD,
+            900,
+            &mut output,
+        ));
+        assert_eq!(output[50 * W + 600], CHROME);
+        assert_eq!(output[520 * W + 600], CHROME);
+    }
+
+    #[test]
+    fn hdmi_header_is_pixel_stable_for_every_transition_phase() {
+        const W: usize = 960;
+        const H: usize = 540;
+        const HEADER: Rgb565Pixel = Rgb565Pixel(0x1234);
+        let launcher = vec![Rgb565Pixel(0xabcd); W * H];
+        let arcade = vec![HEADER; W * H];
+        let cabinet = vec![Rgb565Pixel(0xffff); CABINET_WIDTH * CABINET_HEIGHT];
+        let mut output = vec![Rgb565Pixel(0); W * H];
+
+        for t_ms in [1, 80, 200, 400, 600, 839, 900, 999] {
+            assert!(render_arcade_card_transition_into(
+                W,
+                H,
+                &launcher,
+                &arcade,
+                &cabinet,
+                HDMI_CARD,
+                t_ms,
+                &mut output,
+            ));
+            assert_eq!(
+                &output[..HDMI_CONTENT_TOP * W],
+                &arcade[..HDMI_CONTENT_TOP * W]
+            );
+        }
+    }
+
+    #[test]
+    fn hdmi_list_transition_reveals_all_eleven_contiguous_rows() {
+        assert_eq!(LIST_BANDS.len(), 11);
+        assert_eq!(LIST_BANDS.first(), Some(&(88, 124)));
+        assert_eq!(LIST_BANDS.last(), Some(&(448, 484)));
+        assert!(LIST_BANDS.windows(2).all(|bands| bands[0].1 == bands[1].0));
     }
 }

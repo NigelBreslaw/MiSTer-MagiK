@@ -1012,7 +1012,7 @@ mod macos {
                     .iter()
                     .filter(|game| game.system_id.as_ref() == MENU_ARCADE_SYSTEM_ID)
                     .collect::<Vec<_>>();
-                apply_arcade_fixture_bridge(&self.launcher, "Arcade", &games, self.selection);
+                apply_arcade_fixture_bridge(&self.launcher, &games, self.selection);
             }
             self.slint_window.request_redraw();
         }
@@ -1661,19 +1661,16 @@ mod macos {
                 false,
                 None,
             );
-            let (fixture_title, fixture_system_id) = self
+            let fixture_system_id = self
                 .launcher_nav
                 .active_collection()
                 .map(|collection| {
-                    (
-                        collection.title.as_str(),
-                        collection
-                            .system_id
-                            .as_deref()
-                            .unwrap_or(collection.legacy_system_id.as_str()),
-                    )
+                    collection
+                        .system_id
+                        .as_deref()
+                        .unwrap_or(collection.legacy_system_id.as_str())
                 })
-                .unwrap_or(("Arcade", MENU_ARCADE_SYSTEM_ID));
+                .unwrap_or(MENU_ARCADE_SYSTEM_ID);
             let fixture_games = self
                 .catalog
                 .games
@@ -1682,7 +1679,6 @@ mod macos {
                 .collect::<Vec<_>>();
             apply_arcade_fixture_bridge(
                 &self.launcher,
-                fixture_title,
                 &fixture_games,
                 self.launcher_nav.arcade.selected,
             );
@@ -4010,7 +4006,6 @@ mod macos {
         let navigation = launcher.global::<NavigationView>();
         let settings = launcher.global::<SettingsView>();
         mister_magik_fb::launcher_presentation::install_settings_visual_assets(launcher);
-        mister_magik_fb::launcher_presentation::install_arcade_visual_assets(launcher);
         let information = launcher.global::<InformationView>();
         let input = launcher.global::<InputView>();
         let arcade = launcher.global::<ArcadeView>();
@@ -4469,13 +4464,11 @@ mod macos {
 
     fn apply_arcade_fixture_bridge(
         launcher: &Launcher,
-        title: &str,
         games: &[&ArcadeGameEntry],
         selected: usize,
     ) {
         let layout = launcher.global::<LauncherLayout>();
         let arcade = launcher.global::<ArcadeView>();
-        arcade.set_active_title(title.into());
         arcade.set_active_count(games.len() as i32);
         arcade.set_games(ModelRc::new(VecModel::from(
             games
@@ -4505,7 +4498,6 @@ mod macos {
             width: 510,
             height: 452,
         });
-        arcade.set_list_visible(true);
         arcade.set_preview_state(ViewPreviewState::Ready);
         arcade.set_preview_title(
             games

@@ -154,8 +154,8 @@
     },
     {
       "id": "hdmi-arcade",
-      "rgb565_hash": "145ffc72cbe37b22",
-      "provenance_sha256": "61004e6bbc6588560994882bc0496a5278c9e6b25fcc3feeb79492598e133e95",
+      "rgb565_hash": "8b029668aedf7e22",
+      "provenance_sha256": "851cf9544fb88485948adb44249d4b96016bdf02fae2b6f611e263bfdeed9688",
       "scenario": "arcade",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -198,8 +198,8 @@
     },
     {
       "id": "hdmi-navigation-transition-midpoint",
-      "rgb565_hash": "58a5c06dd4c1172f",
-      "provenance_sha256": "7e40fdd6551a8aa9122b4b961e28348c5e83b901c84f33d9ae4a607f4b7af016",
+      "rgb565_hash": "988ed3d38ef5ee8b",
+      "provenance_sha256": "d575e300bdc511aab8390b009891d6a7136331c9bfccf1c8c6fea7da419398c6",
       "scenario": "home",
       "frame": 17,
       "fixed_time_us": 900000,

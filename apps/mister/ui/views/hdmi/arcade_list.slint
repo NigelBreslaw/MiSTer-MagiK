@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Xerxes10 } from "../../components/xerxes_10.slint";
-import { LandscapePageChrome, PageTheme, PortraitPageChrome } from "../../components/page_chrome.slint";
+import { FocusHighlight, LandscapePageChrome, PageTheme, PortraitPageChrome } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
 
@@ -103,14 +103,19 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     if !MisterUi.portrait-layout : Rectangle {
-        Image {
-            x: 490px; y: 35px; width: 483px; height: 519px;
-            source: ArcadeView.cabinet-backdrop;
-            image-fit: fill;
-            image-rendering: pixelated;
-            accessible-role: none;
+        Rectangle {
+            x: 490px; y: 77px; width: 483px; height: 423px;
+            clip: true;
+
+            Image {
+                x: 0px; y: -42px; width: 483px; height: 519px;
+                source: ArcadeView.cabinet-backdrop;
+                image-fit: fill;
+                image-rendering: pixelated;
+                accessible-role: none;
+            }
+            Rectangle { x: 82px; y: 19px; width: 320px; height: 320px; background: black; }
         }
-        Rectangle { x: 572px; y: 96px; width: 320px; height: 320px; background: black; }
 
         LandscapePageChrome {
             hint-a: root.ready ? "A  PLAY" : "";
@@ -119,12 +124,12 @@ export component ArcadeListScreen inherits Rectangle {
         }
 
         Xerxes10 {
-            x: 26px; y: 101px;
+            x: 26px; y: 52px;
             text: root.search ? "ARCADE / SEARCH" : "ARCADE";
             color: PageTheme.muted;
         }
         Xerxes10 {
-            x: 368px; y: 101px; width: 120px;
+            x: 368px; y: 52px; width: 120px;
             text: root.search
                 ? (ArcadeView.search-status == ArcadeSearchStatus.searching ? "SEARCHING..."
                     : root.count + (root.count == 1 ? " MATCH" : " MATCHES"))
@@ -134,6 +139,15 @@ export component ArcadeListScreen inherits Rectangle {
         }
 
         if root.search : SearchKeyboard { x: 26px; y: 124px; width: 462px; height: 230px; }
+
+        if !root.search && root.ready : FocusHighlight {
+            x: 26px;
+            y: 196px;
+            width: 462px;
+            height: 36px;
+            source: ArcadeView.focus-highlight;
+            accent: #e7695a;
+        }
 
         Rectangle {
             x: LauncherLayout.arcade-list.x * 1px;

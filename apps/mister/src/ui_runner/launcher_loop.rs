@@ -1077,17 +1077,23 @@ fn settings_cog_transition_eligible(
         && !reduce_motion
 }
 
-fn settings_cog_home_endpoint_is_live(
+fn navigation_home_endpoint_is_live(
     route: Option<NavigationTransitionRoute>,
     request: Option<NavigationTransitionRequest>,
     endpoint: Option<NavigationTransitionEndpoint>,
 ) -> bool {
-    route == Some(NavigationTransitionRoute::HomeToSettings)
-        && request.is_some_and(|request| {
-            request.direction == NavigationTransitionDirection::Reverse
-                && request.renderer_label() == "settings-cog"
-        })
+    let Some(request) = request else {
+        return false;
+    };
+    request.direction == NavigationTransitionDirection::Reverse
         && endpoint == Some(NavigationTransitionEndpoint::Destination)
+        && matches!(
+            (route, request.renderer_label()),
+            (
+                Some(NavigationTransitionRoute::HomeToSettings),
+                "settings-cog"
+            ) | (Some(NavigationTransitionRoute::HomeToArcade), "arcade-card")
+        )
 }
 
 fn settings_navigation_input_candidate(
@@ -11068,7 +11074,7 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
             if navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
                 settings_navigation_benchmark.note_rendered_endpoint(frames);
-                let endpoint_is_live = settings_cog_home_endpoint_is_live(
+                let endpoint_is_live = navigation_home_endpoint_is_live(
                     navigation_transition.route(),
                     navigation_transition.request(),
                     navigation_transition.frame().endpoint,
@@ -12293,10 +12299,10 @@ pub(super) fn run_launcher_loop(
                             }
                             _ => {}
                         }
-                        // The reverse cog endpoint is already the current card
-                        // launcher raster. Transition-owned redraw requests made
-                        // while the snapshot was locked must not replace it with
-                        // a redundant full-screen release frame.
+                        // Reverse card/cog endpoints already contain the current
+                        // Home raster. Transition-owned redraw requests made while
+                        // the snapshot was locked must not replace them with a
+                        // redundant full-screen release frame.
                         if retained_redraw && !full_screen_transition_live_endpoint_rendered {
                             request_launcher_redraw!();
                         }
@@ -14695,26 +14701,69 @@ mod tests {
     }
 
     #[test]
-    fn only_the_reverse_settings_cog_home_endpoint_is_a_live_handoff() {
+    fn reverse_card_and_cog_home_endpoints_are_live_handoffs() {
         let reverse_cog =
             NavigationTransitionRequest::settings_cog(NavigationTransitionDirection::Reverse);
-        assert!(settings_cog_home_endpoint_is_live(
+        assert!(navigation_home_endpoint_is_live(
             Some(NavigationTransitionRoute::HomeToSettings),
             Some(reverse_cog),
             Some(NavigationTransitionEndpoint::Destination),
         ));
-        assert!(!settings_cog_home_endpoint_is_live(
+        assert!(navigation_home_endpoint_is_live(
+            Some(NavigationTransitionRoute::HomeToArcade),
+            Some(NavigationTransitionRequest::arcade_card(
+                NavigationTransitionDirection::Reverse,
+                NavigationTransitionGeometry::default(),
+            )),
+            Some(NavigationTransitionEndpoint::Destination),
+        ));
+        assert!(!navigation_home_endpoint_is_live(
             Some(NavigationTransitionRoute::HomeToSettings),
             Some(NavigationTransitionRequest::settings_cog(
                 NavigationTransitionDirection::Forward,
             )),
             Some(NavigationTransitionEndpoint::Destination),
         ));
-        assert!(!settings_cog_home_endpoint_is_live(
+        assert!(!navigation_home_endpoint_is_live(
             Some(NavigationTransitionRoute::HomeToSettings),
             Some(reverse_cog),
             Some(NavigationTransitionEndpoint::Source),
         ));
+        assert!(!navigation_home_endpoint_is_live(
+            Some(NavigationTransitionRoute::HomeToSettings),
+            Some(NavigationTransitionRequest::arcade_card(
+                NavigationTransitionDirection::Reverse,
+                NavigationTransitionGeometry::default(),
+            )),
+            Some(NavigationTransitionEndpoint::Destination),
+        ));
+    }
+
+    #[test]
+    fn reverse_arcade_live_handoff_consumes_retained_redraw_without_release_raster() {
+        let mut transition = FullScreenTransitionStateChart::default();
+        let generation = transition
+            .begin(FullScreenTransitionOwner::Navigation)
+            .unwrap();
+        transition.retain_redraw(generation).unwrap();
+        assert!(transition.take_controlled_capture(generation).unwrap());
+        transition.capture_completed(generation).unwrap();
+        transition.release(generation).unwrap();
+
+        let live_endpoint = navigation_home_endpoint_is_live(
+            Some(NavigationTransitionRoute::HomeToArcade),
+            Some(NavigationTransitionRequest::arcade_card(
+                NavigationTransitionDirection::Reverse,
+                NavigationTransitionGeometry::default(),
+            )),
+            Some(NavigationTransitionEndpoint::Destination),
+        );
+        let retained_redraw = transition.live_frame_presented(generation).unwrap();
+
+        assert!(live_endpoint);
+        assert!(retained_redraw);
+        assert!(!(retained_redraw && !live_endpoint));
+        assert_eq!(transition.state(), FullScreenTransitionState::Live);
     }
 
     #[test]
@@ -15868,9 +15917,9 @@ mod tests {
         assert_eq!(
             renderer.dirty_rect(),
             DirtyRect {
-                x0: 48,
-                y0: 128,
-                x1: 592,
+                x0: 66,
+                y0: 133,
+                x1: 428,
                 y1: 392,
             }
         );
@@ -15913,10 +15962,10 @@ mod tests {
         assert_eq!(
             hdmi_renderer.dirty_rect(),
             DirtyRect {
-                x0: 8,
-                y0: 56,
-                x1: 518,
-                y1: 508,
+                x0: 26,
+                y0: 88,
+                x1: 488,
+                y1: 484,
             }
         );
         assert_eq!(
@@ -15935,9 +15984,9 @@ mod tests {
         assert_eq!(
             crt_renderer.dirty_rect(),
             DirtyRect {
-                x0: 294,
-                y0: 128,
-                x1: 592,
+                x0: 331,
+                y0: 133,
+                x1: 574,
                 y1: 392,
             }
         );
@@ -15946,7 +15995,7 @@ mod tests {
     #[test]
     fn crt_routes_use_roomier_rows_in_normal_and_search_layouts() {
         for (pal, scandoubler, expected_row_height, expected_full_rows) in
-            [(0, 0, 32, 8), (1, 0, 19, 7), (0, 1, 32, 12), (1, 1, 39, 11)]
+            [(0, 0, 32, 8), (1, 0, 19, 8), (0, 1, 32, 10), (1, 1, 39, 10)]
         {
             let ini = format!(
                 "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
@@ -15968,14 +16017,16 @@ mod tests {
                 let (geometry, visible_height) = arcade_list_layout(&nav, &display);
                 assert_eq!(
                     visible_height / metrics.game_row_height as usize,
-                    expected_full_rows
+                    expected_full_rows,
+                    "pal={pal} scandoubler={scandoubler} search={search}"
                 );
                 let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
                 renderer.set_geometry_for_visible_height(geometry, visible_height);
                 assert_eq!(
                     (renderer.selection_rect().y0 - renderer.dirty_rect().y0)
                         / metrics.game_row_height as usize,
-                    (expected_full_rows / 2).saturating_sub(1)
+                    expected_full_rows.saturating_sub(1).min(3),
+                    "pal={pal} scandoubler={scandoubler} search={search}"
                 );
             }
         }

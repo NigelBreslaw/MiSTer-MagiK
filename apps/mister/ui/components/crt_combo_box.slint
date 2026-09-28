@@ -4,7 +4,7 @@
 import { FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
 import { MisterUi } from "../mister_window.slint";
 import { CrtLauncherText, CrtPageMetrics } from "crt_page_chrome.slint";
-import { PageTheme, SettingsFocusHighlight } from "page_chrome.slint";
+import { FocusHighlight, PageTheme } from "page_chrome.slint";
 
 component CrtChoiceRow inherits Rectangle {
     in property <string> label;
@@ -19,7 +19,7 @@ component CrtChoiceRow inherits Rectangle {
     accessible-enabled: true;
     height: CrtPageMetrics.len-y(12);
 
-    if root.focused : SettingsFocusHighlight {
+    if root.focused : FocusHighlight {
         source: SettingsView.focus-highlight-crt-menu;
         width: root.width;
         height: root.height;

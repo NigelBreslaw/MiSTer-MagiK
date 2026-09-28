@@ -6,7 +6,8 @@
 //! Device lifecycle, controller discovery, preview loading, and scanout remain
 //! in `ui_runner`; this presenter is deliberately shared with the macOS host.
 
-use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
+use crate::arcade_catalog::{ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeGameView};
+use crate::arcade_list_renderer::{ARCADE_LIST_W, arcade_focus_highlight_rgb565};
 use crate::launcher::{CatalogMenuItemStatus, DisplayTransactionPhase, LauncherNav, Screen};
 use crate::launcher_taxonomy::{LauncherMenuItemKind, ROOT_MENU_ID};
 use crate::launcher_view_types::{
@@ -16,6 +17,7 @@ use crate::launcher_view_types::{
     settings_section, system_hub_section,
 };
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
+use mister_magik_framebuffer_scenes::arcade_card::{CABINET_HEIGHT, CABINET_WIDTH};
 use mister_magik_framebuffer_scenes::dithered_gradient::{
     HorizontalGradientStop, Rgb8Color, horizontal_rgb565,
 };
@@ -421,11 +423,6 @@ struct SettingsViewPresenter {
     crt_visual_assets_geometry: Option<SettingsVisualAssetGeometry>,
 }
 
-#[derive(Default)]
-struct ArcadeViewPresenter {
-    fixed_visual_assets_installed: bool,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SettingsVisualAssetGeometry {
     width: i32,
@@ -458,9 +455,6 @@ pub fn settings_cog_backdrop_rgb565() -> &'static [Rgb565Pixel] {
             .collect()
     })
 }
-
-const ARCADE_CABINET_WIDTH: usize = 483;
-const ARCADE_CABINET_HEIGHT: usize = 519;
 
 /// Front-on Arcade cabinet, packed at its exact HDMI destination size.
 pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
@@ -504,11 +498,13 @@ fn settings_cog_backdrop_image() -> slint::Image {
 }
 
 fn arcade_cabinet_image() -> slint::Image {
-    rgb565_image(
-        ARCADE_CABINET_WIDTH,
-        ARCADE_CABINET_HEIGHT,
-        arcade_cabinet_rgb565(),
-    )
+    rgb565_image(CABINET_WIDTH, CABINET_HEIGHT, arcade_cabinet_rgb565())
+}
+
+fn arcade_focus_highlight_image() -> slint::Image {
+    let height = ARCADE_ROW_HEIGHT.max(1) as usize;
+    let pixels = arcade_focus_highlight_rgb565(ARCADE_LIST_W, height);
+    rgb565_image(ARCADE_LIST_W, height, &pixels)
 }
 
 fn settings_focus_highlight_image(width: usize, height: usize) -> slint::Image {
@@ -579,15 +575,16 @@ pub fn install_settings_visual_assets(app: &Launcher) {
 }
 
 pub fn install_arcade_visual_assets(app: &Launcher) {
-    app.global::<ArcadeView>()
-        .set_cabinet_backdrop(arcade_cabinet_image());
+    let arcade = app.global::<ArcadeView>();
+    arcade.set_cabinet_backdrop(arcade_cabinet_image());
+    arcade.set_focus_highlight(arcade_focus_highlight_image());
 }
 
 #[derive(Default)]
 pub struct LauncherViewPresenters {
     navigation: NavigationViewPresenter,
     settings: SettingsViewPresenter,
-    arcade: ArcadeViewPresenter,
+    arcade_visual_assets_installed: bool,
 }
 
 impl LauncherViewPresenters {
@@ -601,9 +598,9 @@ impl LauncherViewPresenters {
         active_display_fallback: Option<(u16, u16)>,
     ) {
         let navigation = app.global::<NavigationView>();
-        if !self.arcade.fixed_visual_assets_installed {
+        if !self.arcade_visual_assets_installed {
             install_arcade_visual_assets(app);
-            self.arcade.fixed_visual_assets_installed = true;
+            self.arcade_visual_assets_installed = true;
         }
         set_if_changed!(
             navigation,
@@ -887,7 +884,7 @@ impl LauncherViewPresenters {
         self.publish_selection_feedback(&app.global::<FeedbackView>());
 
         let games = active_game_view(catalog, nav);
-        let (title, count) = active_header(catalog, nav, games.len());
+        let count = active_count(catalog, nav, games.len());
         let arcade = app.global::<ArcadeView>();
         set_if_changed!(
             arcade,
@@ -901,7 +898,6 @@ impl LauncherViewPresenters {
             set_load_state,
             active_games_load_state(catalog, nav)
         );
-        set_view_string_if_changed!(arcade, get_active_title, set_active_title, &title);
         set_if_changed!(arcade, get_active_count, set_active_count, count as i32);
         if !(defer_arcade_overlay && nav.screen == Screen::Arcade) {
             set_if_changed!(
@@ -1235,27 +1231,16 @@ fn active_game_view<'a>(catalog: &'a ArcadeCatalog, nav: &'a LauncherNav) -> Arc
         .unwrap_or_else(ArcadeGameView::empty)
 }
 
-fn active_header(
-    catalog: &ArcadeCatalog,
-    nav: &LauncherNav,
-    fallback_count: usize,
-) -> (String, usize) {
+fn active_count(catalog: &ArcadeCatalog, nav: &LauncherNav, fallback_count: usize) -> usize {
     let Some(collection) = nav.active_collection() else {
-        return ("Games".to_string(), fallback_count);
-    };
-    let filter_label = nav.arcade_filter.active_label();
-    let title = if filter_label == "Games A-Z" {
-        collection.title.clone()
-    } else {
-        format!("{} - {filter_label}", collection.title)
+        return fallback_count;
     };
     let hydrated_count = nav.active_arcade_game_count(catalog, &collection.id);
-    let count = if hydrated_count == 0 && collection.count > 0 {
+    if hydrated_count == 0 && collection.count > 0 {
         collection.count
     } else {
         hydrated_count
-    };
-    (title, count)
+    }
 }
 
 pub(crate) fn active_games_load_state(

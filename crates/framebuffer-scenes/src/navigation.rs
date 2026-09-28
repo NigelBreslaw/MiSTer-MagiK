@@ -234,21 +234,6 @@ pub fn hdmi_navigation_geometry(
         height: 10,
     };
     let (label_ascii, label_len) = navigation_label_ascii(selected_label);
-    let (
-        list_x,
-        list_y,
-        list_width,
-        list_height,
-        selected_y,
-        preview_x,
-        preview_y,
-        footer_y,
-        footer_height,
-    ) = if edge == NavigationTransitionEdge::HomeToArcade {
-        (26, 124, 462, 370, 268, 572, 96, 498, 34)
-    } else {
-        (8, 56, 510, 452, 248, 560, 102, 512, 20)
-    };
     NavigationTransitionGeometry {
         label_signature: navigation_label_signature(selected_label),
         label_ascii,
@@ -259,28 +244,28 @@ pub fn hdmi_navigation_geometry(
         destination_title,
         destination_detail,
         destination_list: NavigationTransitionRect {
-            x: scale_hdmi_x(list_x, frame_width),
-            y: scale_hdmi_y(list_y, frame_height),
-            width: scale_hdmi_x(list_width, frame_width),
-            height: scale_hdmi_y(list_height, frame_height),
+            x: scale_hdmi_x(8, frame_width),
+            y: scale_hdmi_y(56, frame_height),
+            width: scale_hdmi_x(510, frame_width),
+            height: scale_hdmi_y(452, frame_height),
         },
         destination_selected_row: NavigationTransitionRect {
-            x: scale_hdmi_x(list_x, frame_width),
-            y: scale_hdmi_y(selected_y, frame_height),
-            width: scale_hdmi_x(list_width, frame_width),
+            x: scale_hdmi_x(8, frame_width),
+            y: scale_hdmi_y(248, frame_height),
+            width: scale_hdmi_x(510, frame_width),
             height: scale_hdmi_y(48, frame_height),
         },
         destination_preview: NavigationTransitionRect {
-            x: scale_hdmi_x(preview_x, frame_width),
-            y: scale_hdmi_y(preview_y, frame_height),
+            x: scale_hdmi_x(560, frame_width),
+            y: scale_hdmi_y(102, frame_height),
             width: scale_hdmi_x(320, frame_width),
             height: scale_hdmi_y(320, frame_height),
         },
         destination_footer: NavigationTransitionRect {
-            x: scale_hdmi_x(list_x, frame_width),
-            y: scale_hdmi_y(footer_y, frame_height),
-            width: scale_hdmi_x(list_width, frame_width),
-            height: scale_hdmi_y(footer_height, frame_height),
+            x: scale_hdmi_x(8, frame_width),
+            y: scale_hdmi_y(512, frame_height),
+            width: scale_hdmi_x(510, frame_width),
+            height: scale_hdmi_y(20, frame_height),
         },
     }
 }
