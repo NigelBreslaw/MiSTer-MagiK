@@ -14,8 +14,7 @@ void mister_magik_arcade_selection_rgb565(
     uint16_t border,
     uint16_t badge_fill,
     uint16_t selection_fill,
-    uint16_t selection_foreground,
-    uint8_t fixed_foreground
+    uint16_t selection_foreground
 ) {
     const uint16x8_t background_v = vdupq_n_u16(background);
     const uint16x8_t alternate_background_v = vdupq_n_u16(alternate_background);
@@ -34,12 +33,9 @@ void mister_magik_arcade_selection_rgb565(
         );
         background_mask = vorrq_u16(background_mask, vceqq_u16(pixels, border_v));
         background_mask = vorrq_u16(background_mask, vceqq_u16(pixels, badge_fill_v));
-        const uint16x8_t foreground = fixed_foreground
-            ? selection_foreground_v
-            : vmvnq_u16(pixels);
         vst1q_u16(
             destination + index,
-            vbslq_u16(background_mask, selection_fill_v, foreground)
+            vbslq_u16(background_mask, selection_fill_v, selection_foreground_v)
         );
     }
 
@@ -52,6 +48,6 @@ void mister_magik_arcade_selection_rgb565(
             pixel == badge_fill;
         destination[index] = is_background
             ? selection_fill
-            : (fixed_foreground ? selection_foreground : (uint16_t)~pixel);
+            : selection_foreground;
     }
 }

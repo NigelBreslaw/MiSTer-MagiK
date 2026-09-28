@@ -8,7 +8,7 @@ import { MisterUi } from "../mister_window.slint";
 import { CatalogView, ConfirmationKind, DialogChoice, FeedbackView, MediaPackRow, MediaPackState, MediaView, OverlayView, ScreenOrientation, SettingsView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 import { CrtLauncherText, CrtPageMetrics } from "../components/crt_page_chrome.slint";
-import { PageTheme, SettingsFocusHighlight } from "../components/page_chrome.slint";
+import { FocusHighlight, PageTheme } from "../components/page_chrome.slint";
 
 component CrtProgressRow inherits Rectangle {
     in property <MediaPackRow> pack;
@@ -205,7 +205,7 @@ component CrtInlineConfirmButton inherits Rectangle {
     border-width: 1px;
     border-color: root.focused ? PageTheme.settings-accent : #4a3d73;
 
-    if root.focused : SettingsFocusHighlight {
+    if root.focused : FocusHighlight {
         source: SettingsView.focus-highlight-crt-menu;
         width: parent.width;
         height: parent.height;

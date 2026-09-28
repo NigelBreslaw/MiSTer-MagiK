@@ -1317,7 +1317,7 @@ fn copy_rgb565_row_preserving(
             destination[..protected_start].copy_from_slice(&source[..protected_start]);
             if !preserved_colors.is_empty() {
                 for index in protected_start..protected_end {
-                    if !preserved_colors.contains(&destination[index]) {
+                    if !preserves_product_pixel(destination[index], preserved_colors) {
                         destination[index] = source[index];
                     }
                 }
@@ -1364,7 +1364,7 @@ fn copy_rgb565_row_preserving(
             let protected = protected_rects
                 .iter()
                 .any(|&(x0, y0, x1, y1)| row >= y0 && row < y1 && index >= x0 && index < x1);
-            if !protected || !preserved_colors.contains(&destination[index]) {
+            if !protected || !preserves_product_pixel(destination[index], preserved_colors) {
                 destination[index] = source[index];
             }
         }
@@ -1396,10 +1396,18 @@ fn copy_rgb565_preserving_colors(
         return;
     }
     for index in start..end {
-        if !preserved_colors.contains(&destination[index]) {
+        if !preserves_product_pixel(destination[index], preserved_colors) {
             destination[index] = source[index];
         }
     }
+}
+
+#[inline(always)]
+fn preserves_product_pixel(pixel: Rgb565Pixel, preserved_colors: &[Rgb565Pixel]) -> bool {
+    if std::ptr::eq(preserved_colors, CRT_PRODUCT_TEXT_COLORS) {
+        return pixel.0 != 0 && pixel != CRT_BACKDROP_BACKGROUND;
+    }
+    preserved_colors.contains(&pixel)
 }
 
 fn duration_us(duration: Duration) -> u64 {
@@ -1410,13 +1418,12 @@ pub fn product_chrome_rects(
     content: CrtContentRect,
     metrics: CrtUiMetrics,
 ) -> [(usize, usize, usize, usize); 2] {
-    let grid_x = metrics.grid_x.max(1) as usize;
     let grid_y = metrics.grid_y.max(1) as usize;
     let header = (
-        content.x + grid_x * 2,
-        content.y + grid_y * 2,
-        content.x + content.width - grid_x * 2,
-        content.y + grid_y * 2 + metrics.header_height.max(1) as usize,
+        content.x,
+        content.y,
+        content.x + content.width,
+        content.y + metrics.header_height.max(1) as usize + grid_y * 8,
     );
     let footer = (
         header.0,
@@ -2161,7 +2168,7 @@ mod tests {
     }
 
     #[test]
-    fn product_chrome_preserves_text_colors_but_repaints_container_pixels() {
+    fn product_chrome_preserves_non_background_foreground_pixels() {
         let marker = Rgb565Pixel(0xf81f);
         let source = [Rgb565Pixel(0xffff); 4];
         let mut destination = [
@@ -2182,7 +2189,7 @@ mod tests {
         assert_eq!(destination[0], source[0]);
         assert_eq!(destination[1], CRT_PRODUCT_HEADER_TEXT);
         assert_eq!(destination[2], CRT_PRODUCT_FOOTER_TEXT);
-        assert_eq!(destination[3], source[3]);
+        assert_eq!(destination[3], marker);
     }
 
     #[test]
@@ -2204,8 +2211,10 @@ mod tests {
         assert_eq!(destination[1], CRT_PRODUCT_HEADER_TEXT);
         assert_eq!(destination[8], CRT_PRODUCT_FOOTER_TEXT);
         for (index, pixel) in destination.iter().enumerate() {
-            if !matches!(index, 1 | 8) {
+            if !matches!(index, 1 | 2 | 7 | 8) {
                 assert_eq!(*pixel, source[index], "pixel {index}");
+            } else if !matches!(index, 1 | 8) {
+                assert_eq!(*pixel, marker, "pixel {index}");
             }
         }
     }

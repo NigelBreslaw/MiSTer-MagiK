@@ -4,7 +4,7 @@
 import { Jersey25, Jersey25Size } from "../../components/jersey_25.slint";
 import { Nocive15 } from "../../components/nocive_15.slint";
 import { Xerxes10 } from "../../components/xerxes_10.slint";
-import { LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome, SettingsFocusHighlight } from "../../components/page_chrome.slint";
+import { FocusHighlight, LandscapePageChrome, PageRule, PageTheme, PortraitPageChrome } from "../../components/page_chrome.slint";
 import { FeedbackView, InformationView, SettingsView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 
@@ -32,7 +32,7 @@ component LicensesRow inherits Rectangle {
     accessible-description: "Open source licenses";
     accessible-item-selected: true;
     accessible-enabled: true;
-    SettingsFocusHighlight {
+    FocusHighlight {
         source: MisterUi.portrait-layout
             ? SettingsView.focus-highlight-portrait
             : SettingsView.focus-highlight-wide;

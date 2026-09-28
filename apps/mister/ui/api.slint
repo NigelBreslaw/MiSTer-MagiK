@@ -188,12 +188,10 @@ export global SetupView {
 export global ArcadeView {
     in property <ArcadeListMode> list-mode;
     in property <ArcadeLoadState> load-state;
-    in property <string> active-title;
     in property <int> active-count;
     in property <[ArcadeGame]> games;
     in property <int> selected-game-index;
     in property <string> selected-game-id;
-    in property <bool> list-visible: true;
     in property <ArcadeSearchMode> search-mode;
     in property <string> search-query;
     in property <string> search-suggestion;
@@ -213,6 +211,12 @@ export global ArcadeView {
     in property <[string]> drawer-items;
     in property <int> drawer-selected-index;
     in property <string> active-filter-label;
+    // Front-on HDMI cabinet, installed once by Rust and drawn 1:1. Native
+    // preview pixels are composed into its 320x320 screen opening afterwards.
+    in property <image> cabinet-backdrop;
+    // Exact-size RGB565 focus fill shared with the physical list compositor.
+    // It remains 1:1 so ordered dithering is never resampled.
+    in property <image> focus-highlight;
 }
 
 export global CatalogView {

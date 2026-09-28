@@ -27,10 +27,11 @@ export component PageRule inherits Rectangle {
     background: PageTheme.rule;
 }
 
-// Shared focus fill for Settings and every About sub-view. `source` must have
+// Shared focus fill for Settings, About, and Arcade. `source` must have
 // the same dimensions as this component so RGB565 dithering remains 1:1.
-export component SettingsFocusHighlight inherits Rectangle {
+export component FocusHighlight inherits Rectangle {
     in property <image> source;
+    in property <color> accent: PageTheme.settings-accent;
 
     Image {
         source: root.source;
@@ -45,7 +46,7 @@ export component SettingsFocusHighlight inherits Rectangle {
         y: 0px;
         width: 4px;
         height: root.height;
-        background: PageTheme.settings-accent;
+        background: root.accent;
     }
 }
 

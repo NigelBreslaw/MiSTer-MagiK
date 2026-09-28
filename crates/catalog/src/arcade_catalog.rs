@@ -18,9 +18,9 @@ use std::sync::OnceLock;
 pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 
 /// Logical row height for the Rust-painted arcade list viewport.
-pub const ARCADE_ROW_HEIGHT: i32 = 48;
-/// Visible list height: 10 exact arcade rows (matches the Rust-painted viewport).
-pub const ARCADE_LIST_VISIBLE_H: i32 = ARCADE_ROW_HEIGHT * 10;
+pub const ARCADE_ROW_HEIGHT: i32 = 36;
+/// Visible list height: 11 exact arcade rows (matches the Rust-painted viewport).
+pub const ARCADE_LIST_VISIBLE_H: i32 = ARCADE_ROW_HEIGHT * 11;
 /// Canonical nested Home rail geometry at the original 960-wide layout.
 /// Presentation scales this stable navigation coordinate to the live viewport.
 pub const HOME_TILE_WIDTH: i32 = 191;

@@ -603,6 +603,31 @@ impl NavigationTransitionRuntime {
         Ok(started)
     }
 
+    /// Home <-> Arcade launcher-card reveal in the current logical raster.
+    pub fn begin_arcade_card(
+        &mut self,
+        direction: NavigationTransitionDirection,
+        geometry: NavigationTransitionGeometry,
+        source: &[Rgb565Pixel],
+        cabinet: &'static [SharedRgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        self.buffers.set_arcade_cabinet_asset(cabinet);
+        let mut request = NavigationTransitionRequest::arcade_card(direction, geometry);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
+        let started = self.begin_request(request, source, now_us, true)?;
+        if started {
+            self.route = Some(NavigationTransitionRoute::HomeToArcade);
+            if direction == NavigationTransitionDirection::Forward {
+                self.geometry_history
+                    .push((NavigationTransitionEdge::HomeToArcade, geometry));
+            }
+        }
+        Ok(started)
+    }
+
     pub fn begin_settings_page(
         &mut self,
         route: NavigationTransitionRoute,
@@ -1670,13 +1695,13 @@ mod tests {
         assert_eq!(nested.destination_title.y, 16);
         assert_eq!(nested.destination_title.width, 120);
         assert_ne!(root.label_signature, nested.label_signature);
-        let live_list_height =
-            crate::arcade_list_renderer::ArcadeListGeometry::NORMAL.visible_height(540);
-        let live_row_height = crate::arcade_catalog::ARCADE_ROW_HEIGHT as usize;
+        let live_list_height = 452;
+        // System-browser rows keep their existing 48px geometry; Arcade's
+        // denser 36px list is rendered by its dedicated card transition.
+        let live_row_height = 48;
         let live_selected_y = 56 + (live_list_height / live_row_height / 2) * live_row_height;
         let live_footer_y = 56 + live_list_height + 4;
         let live_footer_height = 540 - live_footer_y - 8;
-        assert_eq!(live_list_height, 452);
         assert_eq!(live_selected_y, 248);
         assert_eq!(
             nested.destination_list,

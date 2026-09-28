@@ -157,20 +157,6 @@ aliases = []
 documentation = { summary = "Controls arcade selected index behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_ARCADE_SELECTION_INVERT"
-owner = "apps/mister/src/arcade_list_renderer.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls arcade selection invert behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_ARCADE_SELECTION_SCALAR"
 owner = "apps/mister/src/arcade_list_renderer.rs"
 classification = "diagnostic"

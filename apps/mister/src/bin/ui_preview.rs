@@ -1012,7 +1012,7 @@ mod macos {
                     .iter()
                     .filter(|game| game.system_id.as_ref() == MENU_ARCADE_SYSTEM_ID)
                     .collect::<Vec<_>>();
-                apply_arcade_fixture_bridge(&self.launcher, "Arcade", &games, self.selection);
+                apply_arcade_fixture_bridge(&self.launcher, &games, self.selection);
             }
             self.slint_window.request_redraw();
         }
@@ -1511,15 +1511,27 @@ mod macos {
                     geometry
                 }
             };
-            self.navigation_transition
-                .begin(
-                    edge,
-                    direction,
-                    geometry,
-                    self.frame_target.cached_565(),
-                    now_us,
-                )
-                .unwrap_or(false)
+            if edge == NavigationTransitionEdge::HomeToArcade && !self.orientation.is_portrait() {
+                self.navigation_transition
+                    .begin_arcade_card(
+                        direction,
+                        geometry,
+                        self.frame_target.cached_565(),
+                        mister_magik_fb::launcher_presentation::arcade_cabinet_rgb565(),
+                        now_us,
+                    )
+                    .unwrap_or(false)
+            } else {
+                self.navigation_transition
+                    .begin(
+                        edge,
+                        direction,
+                        geometry,
+                        self.frame_target.cached_565(),
+                        now_us,
+                    )
+                    .unwrap_or(false)
+            }
         }
 
         fn finish_navigation_tick(&mut self) {
@@ -1649,19 +1661,16 @@ mod macos {
                 false,
                 None,
             );
-            let (fixture_title, fixture_system_id) = self
+            let fixture_system_id = self
                 .launcher_nav
                 .active_collection()
                 .map(|collection| {
-                    (
-                        collection.title.as_str(),
-                        collection
-                            .system_id
-                            .as_deref()
-                            .unwrap_or(collection.legacy_system_id.as_str()),
-                    )
+                    collection
+                        .system_id
+                        .as_deref()
+                        .unwrap_or(collection.legacy_system_id.as_str())
                 })
-                .unwrap_or(("Arcade", MENU_ARCADE_SYSTEM_ID));
+                .unwrap_or(MENU_ARCADE_SYSTEM_ID);
             let fixture_games = self
                 .catalog
                 .games
@@ -1670,7 +1679,6 @@ mod macos {
                 .collect::<Vec<_>>();
             apply_arcade_fixture_bridge(
                 &self.launcher,
-                fixture_title,
                 &fixture_games,
                 self.launcher_nav.arcade.selected,
             );
@@ -4456,13 +4464,11 @@ mod macos {
 
     fn apply_arcade_fixture_bridge(
         launcher: &Launcher,
-        title: &str,
         games: &[&ArcadeGameEntry],
         selected: usize,
     ) {
         let layout = launcher.global::<LauncherLayout>();
         let arcade = launcher.global::<ArcadeView>();
-        arcade.set_active_title(title.into());
         arcade.set_active_count(games.len() as i32);
         arcade.set_games(ModelRc::new(VecModel::from(
             games
@@ -4492,7 +4498,6 @@ mod macos {
             width: 510,
             height: 452,
         });
-        arcade.set_list_visible(true);
         arcade.set_preview_state(ViewPreviewState::Ready);
         arcade.set_preview_title(
             games

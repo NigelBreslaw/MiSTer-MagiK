@@ -9,7 +9,9 @@ use std::mem::{MaybeUninit, align_of, size_of};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+pub mod arcade_card;
 pub mod bitmap_text;
+mod card_page;
 pub mod dithered_gradient;
 pub mod launcher;
 mod launcher_flip;

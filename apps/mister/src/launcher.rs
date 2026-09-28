@@ -8702,19 +8702,19 @@ mod tests {
 
         assert_eq!(
             arcade_scroll_speed_for_row_height(ARCADE_NORMAL_PX_PER_SECOND, 16),
-            120.0
+            160.0
         );
         assert_eq!(
             arcade_scroll_speed_for_row_height(ARCADE_TURBO_PX_PER_SECOND, 16),
-            240.0
+            320.0
         );
         assert_eq!(
             arcade_scroll_speed_for_row_height(ARCADE_NORMAL_PX_PER_SECOND, 19),
-            142.5
+            190.0
         );
         assert_eq!(
             arcade_scroll_speed_for_row_height(ARCADE_TURBO_PX_PER_SECOND, 19),
-            285.0
+            380.0
         );
     }
 
