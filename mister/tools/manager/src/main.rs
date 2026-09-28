@@ -868,17 +868,33 @@ fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
     {
         return Err("latch metadata protocol identity mismatch".into());
     }
-    if !module_metadata
-        .get("vermagic")
-        .is_some_and(|value| value.starts_with("5.15.1-MiSTer "))
-    {
-        return Err("scanout module vermagic is incompatible".into());
+    let kernel = running_kernel_release()?;
+    if !module_matches_kernel(module_metadata.get("vermagic"), &kernel) {
+        return Err(
+            format!("scanout module vermagic does not match running kernel {kernel}").into(),
+        );
     }
     println!(
         "MiSTer MagiK: verified platform {}",
         fields["magik_revision"]
     );
     Ok(())
+}
+
+fn module_matches_kernel(vermagic: Option<&String>, kernel: &str) -> bool {
+    vermagic.is_some_and(|value| value.starts_with(&format!("{kernel} ")))
+}
+
+/// The module can only load into the kernel that is running now.
+fn running_kernel_release() -> Result<String> {
+    let mut name = MaybeUninit::<libc::utsname>::uninit();
+    // SAFETY: uname fully initializes the buffer when it returns zero.
+    if unsafe { libc::uname(name.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    // SAFETY: uname succeeded, and release is NUL-terminated.
+    let release = unsafe { std::ffi::CStr::from_ptr(name.assume_init_ref().release.as_ptr()) };
+    Ok(release.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -1347,7 +1363,8 @@ mod tests {
         fs::write(
             app.join("mister_magik_scanout_slots.metadata.txt"),
             format!(
-                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=5.15.1-MiSTer SMP\n"
+                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic={} SMP\n",
+                running_kernel_release().unwrap()
             ),
         )
         .unwrap();
@@ -1830,6 +1847,22 @@ mod tests {
         .unwrap();
         queue(&paths, [InputEvent::Down]);
         assert!(start(&paths, ManifestLayout::Development).is_err());
+
+        // A module built for another kernel cannot load into the running one.
+        let module = |value: &str| Some(value.to_owned());
+        assert!(module_matches_kernel(
+            module("6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ").as_ref(),
+            "6.18.38-MiSTer"
+        ));
+        assert!(!module_matches_kernel(
+            module("5.15.1-MiSTer SMP").as_ref(),
+            "6.18.38-MiSTer"
+        ));
+        assert!(!module_matches_kernel(
+            module("6.18.38-MiSTer2 SMP").as_ref(),
+            "6.18.38-MiSTer"
+        ));
+        assert!(!module_matches_kernel(None, "6.18.38-MiSTer"));
 
         assert!(start_layout(None).is_err());
         assert!(start_layout(Some("stock")).is_err());
