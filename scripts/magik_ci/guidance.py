@@ -132,7 +132,7 @@ def canonical_document(path: str) -> str:
     if path.startswith("mister/platform/kernel/"):
         return "docs/kernel-scanout-plugin-assurance.md"
     if path.startswith("mister/tools/manager/"):
-        return "docs/installer.md"
+        return "docs/start-magik.md"
     if path.startswith("scripts/release/") or "package-distribution" in path:
         return "docs/releases.md"
     return "none; start with source and tests"

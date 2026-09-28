@@ -202,18 +202,20 @@ development layout, and the development agent.
 
 ### No-reboot session start
 
-`scripts/start_magik.sh` is an experimental MiSTer Scripts entrypoint that
-starts the Dev layout for the current boot without changing `MiSTer.ini`. It
-verifies the Dev manager against its manifest and runs `mister-magik-manager
-start dev`. After Down confirmation and Dev platform verification, a detached
-helper stops stock Main and starts `MiSTer_MagiKDev` with
+`Scripts/Start_MagiK.sh` is the only MagiK Scripts entry. It starts the
+production layout for the current boot without changing `MiSTer.ini`. It
+verifies the public manager against its manifest and runs `mister-magik-manager
+start public`. After Down confirmation and platform verification, a detached
+helper stops stock Main and starts `MiSTer_MagiK` with
 `MISTER_MAGIK_SESSION_MAIN` set to that executable path. The fork then follows
 the normal boot sequence: latch RBF, scanout-module preflight, and supervised
 launcher. Main's exec restarts for core launches and launcher returns inherit
 the variable, and the fork skips the `main=` re-exec while it names the running
 executable, so the session survives games. Reboot clears it. If the session
 Main is not running after a bounded wait, the helper restarts stock Main. Only
-stock Main can hand off; a running MagiK Main refuses the start.
+stock Main can hand off; a running MagiK Main refuses the start. Development
+boards instead select `MiSTer_MagiKDev` with `[MiSTer] main=`, so Dev starts on
+every boot; `start dev` remains available to the manager for that layout.
 
 ## Framebuffer Ownership
 

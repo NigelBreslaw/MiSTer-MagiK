@@ -25,7 +25,7 @@ PUBLIC_SCANOUT_METADATA_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_SCAN
 PUBLIC_LATCH_RBF_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_LATCH_RBF")"
 PUBLIC_LATCH_METADATA_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_LATCH_METADATA")"
 DEFAULT_BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
-DEFAULT_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
+DEFAULT_INSTALLER="$ROOT/scripts/Start_MagiK.sh"
 DEFAULT_MANAGER="$ROOT/mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"
 
 BIN="$DEFAULT_BIN"
@@ -91,7 +91,7 @@ Options:
   -h, --help           Show this help.
 
 The zip is laid out relative to the MiSTer SD-card root:
-  Scripts/MiSTer-MagiK.sh
+  Scripts/Start_MagiK.sh
   $PUBLIC_GUI_RELATIVE
   $PUBLIC_MANAGER_RELATIVE
   $PUBLIC_ROOT_RELATIVE/magik-metadata-v1.bin
@@ -326,8 +326,8 @@ trap 'rm -rf "$STAGE" "$DATABASE_TMP"' EXIT
 
 mkdir -p "$STAGE/Scripts" "$(dirname "$STAGE/$PUBLIC_LATCH_RBF_RELATIVE")" \
   "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses"
-cp "$INSTALLER" "$STAGE/Scripts/MiSTer-MagiK.sh"
-chmod 755 "$STAGE/Scripts/MiSTer-MagiK.sh"
+cp "$INSTALLER" "$STAGE/Scripts/Start_MagiK.sh"
+chmod 755 "$STAGE/Scripts/Start_MagiK.sh"
 cp "$BIN" "$STAGE/$PUBLIC_GUI_RELATIVE"
 chmod 755 "$STAGE/$PUBLIC_GUI_RELATIVE"
 cp "$MANAGER" "$STAGE/$PUBLIC_MANAGER_RELATIVE"

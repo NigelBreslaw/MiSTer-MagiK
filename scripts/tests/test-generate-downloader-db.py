@@ -27,7 +27,7 @@ class DownloaderDatabaseTests(unittest.TestCase):
             root = Path(temporary)
             files = root / "files"
             files.mkdir()
-            asset = files / "mister-magik--Scripts--MiSTer-MagiK.sh"
+            asset = files / "mister-magik--Scripts--Start_MagiK.sh"
             asset.write_bytes(b"installer\n")
             receipt = {
                 "format": "mister-magik-release-assets-v1",
@@ -35,7 +35,7 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 "build_number": 42,
                 "files": [
                     {
-                        "path": "Scripts/MiSTer-MagiK.sh",
+                        "path": "Scripts/Start_MagiK.sh",
                         "asset": asset.name,
                         "size": asset.stat().st_size,
                         "md5": hashlib.md5(
@@ -69,7 +69,7 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 database_text = json.dumps(database).lower()
                 self.assertNotIn("reboot", database_text)
                 self.assertNotIn("restart", database_text)
-                item = database["files"]["Scripts/MiSTer-MagiK.sh"]
+                item = database["files"]["Scripts/Start_MagiK.sh"]
                 self.assertEqual(item["hash"], receipt["files"][0]["md5"])
                 self.assertIn(f"/releases/download/{tag}/", item["url"])
                 installer = output / f"mister-magik-{channel}-installer.zip"

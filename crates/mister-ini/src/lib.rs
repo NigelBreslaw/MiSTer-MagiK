@@ -203,20 +203,6 @@ impl Document {
     }
 }
 
-pub fn apply_install(document: &mut Document) {
-    document.set("MiSTer", "main", "MiSTer_MagiK");
-}
-
-pub fn apply_restore(document: &mut Document, backup: Option<&Document>) {
-    if let Some(value) = backup.and_then(|source| source.effective_value("MiSTer", "main")) {
-        document.set("MiSTer", "main", &value);
-    } else if backup.is_some() {
-        document.remove("MiSTer", "main", "MiSTer MagiK restored absent value");
-    } else {
-        document.set("MiSTer", "main", "MiSTer");
-    }
-}
-
 fn section_name(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if trimmed.starts_with(';') || trimmed.starts_with('#') || !trimmed.starts_with('[') {
@@ -307,50 +293,17 @@ mod tests {
     }
 
     #[test]
-    fn install_is_idempotent_and_only_deduplicates_main() {
+    fn main_selection_is_idempotent_and_only_deduplicates_main() {
         let input = b"[MiSTer]\nmain=MiSTer\nmain=Other\n[Menu]\ndirect_video=9\ndirect_video=8\nmenu_pal=9\nforced_scandoubler=9\ncustom=keep\n";
         let mut once = Document::parse(input).unwrap();
-        apply_install(&mut once);
+        once.set("MiSTer", "main", "MiSTer_MagiK");
         let rendered = once.render();
         let mut twice = Document::parse(&rendered).unwrap();
-        apply_install(&mut twice);
+        twice.set("MiSTer", "main", "MiSTer_MagiK");
         assert_eq!(twice.render(), rendered);
         assert_eq!(twice.active_count("MiSTer", "main"), 1);
         assert_eq!(twice.active_count("Menu", "direct_video"), 2);
         assert!(String::from_utf8(rendered).unwrap().contains("custom=keep"));
-    }
-
-    #[test]
-    fn restore_uses_backup_values_without_losing_later_user_lines() {
-        let mut live = Document::parse(b"[MiSTer]\nmain=MiSTer_MagiK\n[Menu]\ndirect_video=2\nmenu_pal=0\nforced_scandoubler=0\nuser=keep\n").unwrap();
-        let backup = Document::parse(b"[MiSTer]\nmain=Other\n[Menu]\ndirect_video=1\n").unwrap();
-        apply_restore(&mut live, Some(&backup));
-        let output = String::from_utf8(live.render()).unwrap();
-        assert!(output.contains("main=Other"));
-        assert!(output.contains("direct_video=2"));
-        assert!(output.contains("menu_pal=0"));
-        assert!(output.contains("user=keep"));
-    }
-
-    #[test]
-    fn restore_without_backup_selects_stock_without_removing_user_settings() {
-        let mut live =
-            Document::parse(b"[MiSTer]\nmain=MiSTer_MagiK\n[Menu]\ndirect_video=2\nuser=keep\n")
-                .unwrap();
-        apply_restore(&mut live, None);
-        assert_eq!(
-            live.effective_value("MiSTer", "main").as_deref(),
-            Some("MiSTer")
-        );
-        assert_eq!(
-            live.effective_value("Menu", "direct_video").as_deref(),
-            Some("2")
-        );
-        assert!(
-            String::from_utf8(live.render())
-                .unwrap()
-                .contains("user=keep")
-        );
     }
 
     #[test]
@@ -446,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_installs_preserve_unrelated_lines_and_converge() {
+    fn generated_main_selections_preserve_unrelated_lines_and_converge() {
         for seed in 0_usize..128 {
             let mut input = String::from("[MiSTer]\n");
             for duplicate in 0..=(seed % 11) {
@@ -461,10 +414,10 @@ mod tests {
             let expected_menu_tail = input.as_bytes()[menu_offset..].to_vec();
 
             let mut once = Document::parse(input.as_bytes()).unwrap();
-            apply_install(&mut once);
+            once.set("MiSTer", "main", "MiSTer_MagiK");
             let rendered = once.render();
             let mut twice = Document::parse(&rendered).unwrap();
-            apply_install(&mut twice);
+            twice.set("MiSTer", "main", "MiSTer_MagiK");
 
             assert_eq!(twice.render(), rendered);
             assert_eq!(twice.active_count("MiSTer", "main"), 1);
@@ -482,32 +435,6 @@ mod tests {
                 String::from_utf8(rendered)
                     .unwrap()
                     .contains(&format!("user_seed_{seed}=keep-{seed}"))
-            );
-        }
-    }
-
-    #[test]
-    fn generated_restore_uses_backup_without_replacing_live_context() {
-        for seed in 0..64 {
-            let backup_text = format!(
-                "[MiSTer]\nmain=stock-{seed}\n[Menu]\ndirect_video={}\n",
-                seed % 3
-            );
-            let live_text = format!(
-                "[MiSTer]\nmain=MiSTer_MagiK\n[Menu]\ndirect_video=2\npost_install_{seed}=keep\n"
-            );
-            let backup = Document::parse(backup_text.as_bytes()).unwrap();
-            let mut live = Document::parse(live_text.as_bytes()).unwrap();
-            apply_restore(&mut live, Some(&backup));
-            let expected = format!("stock-{seed}");
-            assert_eq!(
-                live.effective_value("MiSTer", "main").as_deref(),
-                Some(expected.as_str())
-            );
-            assert!(
-                String::from_utf8(live.render())
-                    .unwrap()
-                    .contains(&format!("post_install_{seed}=keep"))
             );
         }
     }
@@ -552,21 +479,6 @@ mod tests {
         assert_eq!(document.active_count("Menu", "video_mode"), 0);
         assert_eq!(document.active_count("Menu", "direct_video"), 0);
         assert_eq!(document.active_count("Menu", "user"), 1);
-    }
-
-    #[test]
-    fn restore_with_backup_missing_main_restores_the_absence() {
-        let mut live = Document::parse(b"[MiSTer]\nmain=MiSTer_MagiK\n").unwrap();
-        let backup = Document::parse(b"[Menu]\nvideo_mode=6\n").unwrap();
-
-        apply_restore(&mut live, Some(&backup));
-
-        assert_eq!(live.effective_value("MiSTer", "main"), None);
-        assert!(
-            String::from_utf8(live.render())
-                .unwrap()
-                .contains(";main=MiSTer_MagiK ; MiSTer MagiK restored absent value")
-        );
     }
 
     #[test]

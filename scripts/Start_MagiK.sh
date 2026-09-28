@@ -2,13 +2,12 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# MiSTer Scripts entrypoint: start MiSTer MagiK Dev for this boot without
+# MiSTer Scripts entrypoint: start MiSTer MagiK for this boot without
 # rebooting. MiSTer.ini is unchanged; the verified manager owns the handoff.
 set -eu
 
 FAT="${MISTER_MAGIK_FAT:-/media/fat}"
-LAYOUT=dev
-APP="$FAT/mister-magik-dev"
+APP="$FAT/mister-magik"
 MANIFEST="$APP/platform-v3.manifest"
 MANAGER="$APP/mister-magik-manager"
 
@@ -17,6 +16,9 @@ fail() {
   exit 1
 }
 
+for tool in grep sed sha256sum awk chmod env; do
+  command -v "$tool" >/dev/null 2>&1 || fail "required tool is unavailable: $tool"
+done
 [ -r "$MANIFEST" ] || fail "missing $MANIFEST"
 [ -f "$MANAGER" ] || fail "missing $MANAGER"
 [ "$(grep -c '^manager_sha256=' "$MANIFEST")" = 1 ] || \
@@ -29,4 +31,4 @@ chmod +x "$MANAGER" || fail "cannot make manager executable"
 exec env MISTER_MAGIK_FAT="$FAT" \
   MISTER_MAGIK_TEST_MODE="${MISTER_MAGIK_TEST_MODE:-0}" \
   MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \
-  "$MANAGER" start "$LAYOUT"
+  "$MANAGER" start public

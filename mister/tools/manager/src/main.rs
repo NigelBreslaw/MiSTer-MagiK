@@ -1,22 +1,22 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_ini::{Document, apply_install, apply_restore};
+use mister_magik_ini::Document;
 use mister_magik_platform_manifest_contract::{
     Layout as ManifestLayout, ParsedManifest, ValidationProfile,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::env;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, IsTerminal, Write};
+use std::fs::{self, File};
+use std::io::{self, IsTerminal};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Output, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process::{self, Command, Stdio};
+use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -132,61 +132,11 @@ fn terminal_error(action: &str, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("cannot {action}: {error}"))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Action {
-    Restore,
-    Uninstall,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WriteStep {
-    BeforeCreate,
-    AfterWrite,
-    AfterFlush,
-    AfterPendingReadback,
-    AfterRename,
-    AfterFinalReadback,
-    AfterDirectorySync,
-}
-
-trait WriteFaults {
-    fn check(&mut self, _path: &Path, _step: WriteStep) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-struct NoWriteFaults;
-impl WriteFaults for NoWriteFaults {}
-
-struct PreparedFile {
-    path: PathBuf,
-    original: Option<Vec<u8>>,
-    replacement: Vec<u8>,
-}
-
-impl PreparedFile {
-    fn new(path: PathBuf, replacement: Vec<u8>) -> Result<Self> {
-        let original = if path.exists() {
-            Some(fs::read(&path)?)
-        } else {
-            None
-        };
-        Ok(Self {
-            path,
-            original,
-            replacement,
-        })
-    }
-}
-
 struct Paths {
     fat: PathBuf,
     ini: PathBuf,
-    backup: PathBuf,
     app: PathBuf,
     manifest: PathBuf,
-    script: PathBuf,
-    script_constants: PathBuf,
     test_mode: bool,
     test_keys: RefCell<VecDeque<InputEvent>>,
 }
@@ -203,10 +153,7 @@ impl Paths {
         );
         Self {
             ini: fat.join("MiSTer.ini"),
-            backup: fat.join("MiSTer.ini.bak.before-magik"),
             manifest: app.join(mister_magik_platform_manifest_contract::FILE_NAME),
-            script: fat.join("Scripts/MiSTer-MagiK.sh"),
-            script_constants: fat.join("Scripts/MiSTer-MagiK.platform-v3.constants.sh"),
             test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
             test_keys: RefCell::new(
                 env::var("MISTER_MAGIK_TEST_KEYS")
@@ -248,21 +195,17 @@ fn run() -> Result<()> {
     let command = env::args().nth(1);
     match command.as_deref() {
         Some("status") => status(&paths),
-        Some("verify-platform") => verify_platform(&paths),
-        Some("install") => install(&paths),
+        Some("verify-platform") => {
+            verify_layout(&paths, start_layout(env::args().nth(2).as_deref())?)
+        }
         Some("start") => start(&paths, start_layout(env::args().nth(2).as_deref())?),
         Some(LIVE_HANDOFF_COMMAND) => live_handoff(start_layout(env::args().nth(2).as_deref())?),
-        Some("restore") => restore(&paths),
-        Some("uninstall") => uninstall(&paths),
-        Some(other) => Err(format!("unknown command {other}; expected install, start, restore, uninstall, status, or verify-platform").into()),
+        Some(other) => Err(format!(
+            "unknown command {other}; expected start, status, or verify-platform"
+        )
+        .into()),
         None => {
-            if selects_magik(&paths.ini)? {
-                match choose_installed_action(&paths)? {
-                    Some(Action::Restore) => restore(&paths),
-                    Some(Action::Uninstall) => uninstall(&paths),
-                    _ => Ok(()),
-                }
-            } else { install(&paths) }
+            Err("usage: mister-magik-manager start|verify-platform dev|public, or status".into())
         }
     }
 }
@@ -271,29 +214,6 @@ fn status(paths: &Paths) -> Result<()> {
     let selected = effective(&paths.ini, "MiSTer", "main")?.unwrap_or_else(|| "<unset>".into());
     println!("MiSTer MagiK: effective Main={selected}");
     Ok(())
-}
-
-fn install(paths: &Paths) -> Result<()> {
-    safety_confirmation(
-        paths,
-        "MiSTer MagiK will become the selected Main. Existing video and output settings will not be changed.",
-        "installation",
-    )?;
-    verify_platform(paths).map_err(|error| {
-        format!("platform verification failed; boot configuration was not changed: {error}")
-    })?;
-    snapshot(paths)?;
-    backup_ini(paths)?;
-    ensure_executable(paths.fat.join("MiSTer_MagiK"))?;
-    ensure_executable(paths.app.join("mister-magik-fb"))?;
-    ensure_executable(paths.app.join("mister-magik-manager"))?;
-    let ini = prepare_ini(&paths.ini, apply_install)?;
-    let files = vec![PreparedFile::new(paths.ini.clone(), ini)?];
-    replace_transaction(paths, &files, &mut NoWriteFaults, || {
-        validate_install(paths)
-    })?;
-    println!("MiSTer MagiK: installed. Rebooting to start MiSTer MagiK.");
-    reboot_now(paths)
 }
 
 const STOCK_MAIN: &str = "/media/fat/MiSTer";
@@ -492,60 +412,6 @@ fn live_handoff(layout: ManifestLayout) -> Result<()> {
     Err(format!("{main} did not stay running; stock Main was restarted").into())
 }
 
-fn restore(paths: &Paths) -> Result<()> {
-    restore_stock(paths)?;
-    println!("MiSTer MagiK: stock MiSTer boot restored. MiSTer MagiK files were preserved.");
-    offer_reboot(paths)
-}
-
-fn uninstall(paths: &Paths) -> Result<()> {
-    safety_confirmation(
-        paths,
-        "This permanently removes MiSTer MagiK, its settings, catalog, downloaded media, installer scripts, update_all entry, and saved backup. Stock MiSTer boot will be restored first.",
-        "uninstall",
-    )?;
-
-    if !paths.ini.is_file() {
-        return Err("MiSTer.ini is missing; uninstall refused and no files were removed".into());
-    }
-    let downloader = downloader_preflight(paths)?;
-    let recovery = env::var_os("MISTER_MAGIK_RECOVERY_MANAGER")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/mister-magik-manager-recovery"));
-    if downloader.is_some() {
-        stage_recovery_manager(&recovery)?;
-    }
-    restore_stock(paths)?;
-    stop_children(paths)?;
-    if let Some(tool) = downloader
-        && let Err(error) = downloader_uninstall(&tool, paths)
-    {
-        return Err(format!(
-            "uninstall incomplete: {error}. Retry with {} uninstall after resolving the Downloader error",
-            recovery.display()
-        ).into());
-    }
-    remove_owned(paths)?;
-    let _ = fs::remove_file(recovery);
-    println!("MiSTer MagiK: fully uninstalled.");
-    offer_reboot(paths)
-}
-
-fn restore_stock(paths: &Paths) -> Result<()> {
-    snapshot(paths)?;
-    let backup = if paths.backup.is_file() {
-        Some(Document::parse(&fs::read(&paths.backup)?)?)
-    } else {
-        None
-    };
-    let ini = prepare_ini(&paths.ini, |document| {
-        apply_restore(document, backup.as_ref())
-    })?;
-    let files = vec![PreparedFile::new(paths.ini.clone(), ini)?];
-    replace_transaction(paths, &files, &mut NoWriteFaults, || validate_stock(paths))
-}
-
 fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<()> {
     println!(
         "\n{message}\n\nPress Down on the keyboard or joystick to confirm. Any other input cancels."
@@ -554,36 +420,6 @@ fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<
         Some(InputEvent::Down) => Ok(()),
         Some(_) => Err(format!("{operation} cancelled; no changes made").into()),
         None => Err(format!("interactive input is unavailable; {operation} refused").into()),
-    }
-}
-
-fn choose_installed_action(paths: &Paths) -> Result<Option<Action>> {
-    let mut action = Action::Restore;
-    loop {
-        println!(
-            "MiSTer MagiK is installed and selected as Main.\nUse Up/Down to choose, A/Enter to continue, or B/Escape to cancel."
-        );
-        println!(
-            "{} Restore stock MiSTer\n{} Fully uninstall MiSTer MagiK",
-            if action == Action::Restore { '>' } else { ' ' },
-            if action == Action::Uninstall {
-                '>'
-            } else {
-                ' '
-            }
-        );
-        match read_event(paths)? {
-            Some(InputEvent::Up | InputEvent::Down) => {
-                action = if action == Action::Restore {
-                    Action::Uninstall
-                } else {
-                    Action::Restore
-                }
-            }
-            Some(InputEvent::Confirm) => return Ok(Some(action)),
-            Some(InputEvent::Cancel | InputEvent::Other) => return Ok(None),
-            None => return Ok(None),
-        }
     }
 }
 
@@ -696,145 +532,6 @@ fn effective(path: &Path, section: &str, key: &str) -> Result<Option<String>> {
     Ok(Document::parse(&fs::read(path)?)?.effective_value(section, key))
 }
 
-fn selects_magik(path: &Path) -> Result<bool> {
-    Ok(effective(path, "MiSTer", "main")?.as_deref() == Some("MiSTer_MagiK"))
-}
-
-fn prepare_ini(path: &Path, mutation: impl FnOnce(&mut Document)) -> Result<Vec<u8>> {
-    let input = if path.is_file() {
-        fs::read(path)?
-    } else {
-        Vec::new()
-    };
-    let mut document = Document::parse(&input)?;
-    mutation(&mut document);
-    let output = document.render();
-    Document::parse(&output)?;
-    Ok(output)
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    atomic_write_with_faults(path, bytes, &mut NoWriteFaults)
-}
-
-fn atomic_write_with_faults(path: &Path, bytes: &[u8], faults: &mut dyn WriteFaults) -> Result<()> {
-    let parent = path.parent().ok_or("target has no parent")?;
-    fs::create_dir_all(parent)?;
-    let pending = parent.join(format!(
-        ".{}.new.{}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .ok_or("invalid filename")?,
-        process::id()
-    ));
-    let result = (|| -> Result<()> {
-        faults.check(path, WriteStep::BeforeCreate)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&pending)?;
-        file.write_all(bytes)?;
-        faults.check(path, WriteStep::AfterWrite)?;
-        file.sync_all()?;
-        faults.check(path, WriteStep::AfterFlush)?;
-        drop(file);
-        if fs::read(&pending)? != bytes {
-            return Err("pending file read-back mismatch".into());
-        }
-        faults.check(path, WriteStep::AfterPendingReadback)?;
-        fs::rename(&pending, path)?;
-        faults.check(path, WriteStep::AfterRename)?;
-        if fs::read(path)? != bytes {
-            return Err("replaced file read-back mismatch".into());
-        }
-        faults.check(path, WriteStep::AfterFinalReadback)?;
-        File::open(parent)?.sync_all()?;
-        faults.check(path, WriteStep::AfterDirectorySync)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&pending);
-    }
-    result
-}
-
-fn replace_transaction(
-    paths: &Paths,
-    files: &[PreparedFile],
-    faults: &mut dyn WriteFaults,
-    validate: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    for (index, file) in files.iter().enumerate() {
-        let write_result = atomic_write_with_faults(&file.path, &file.replacement, faults);
-        if let Err(error) = write_result {
-            rollback_files(&files[..=index])?;
-            return Err(format!(
-                "cannot replace {}: {error}; rollback=complete",
-                file.path.display()
-            )
-            .into());
-        }
-    }
-    let finish = sync_storage(paths).and_then(|()| validate());
-    if let Err(error) = finish {
-        rollback_files(files)?;
-        sync_storage(paths)?;
-        return Err(
-            format!("boot configuration validation failed: {error}; rollback=complete").into(),
-        );
-    }
-    Ok(())
-}
-
-fn rollback_files(files: &[PreparedFile]) -> Result<()> {
-    for file in files.iter().rev() {
-        match &file.original {
-            Some(bytes) => atomic_write(&file.path, bytes)?,
-            None if file.path.exists() => fs::remove_file(&file.path)?,
-            None => {}
-        }
-    }
-    Ok(())
-}
-
-fn backup_ini(paths: &Paths) -> Result<()> {
-    if !paths.ini.is_file() || paths.backup.exists() {
-        return Ok(());
-    }
-    if selects_magik(&paths.ini)? {
-        println!(
-            "MiSTer MagiK: WARNING: backup missing; not creating it from a MagiK-active MiSTer.ini."
-        );
-        return Ok(());
-    }
-    atomic_write(&paths.backup, &fs::read(&paths.ini)?)
-}
-
-fn validate_install(paths: &Paths) -> Result<()> {
-    let document = Document::parse(&fs::read(&paths.ini)?)?;
-    if document.active_count("MiSTer", "main") != 1
-        || document.effective_value("MiSTer", "main").as_deref() != Some("MiSTer_MagiK")
-    {
-        return Err("MiSTer.main did not validate".into());
-    }
-    Ok(())
-}
-
-fn validate_stock(paths: &Paths) -> Result<()> {
-    let document = Document::parse(&fs::read(&paths.ini)?)?;
-    if document.effective_value("MiSTer", "main").as_deref() == Some("MiSTer_MagiK") {
-        return Err("MiSTer.ini still selects MiSTer MagiK".into());
-    }
-    if document.active_count("MiSTer", "main") > 1 {
-        return Err("MiSTer.main remains duplicated".into());
-    }
-    Ok(())
-}
-
-fn verify_platform(paths: &Paths) -> Result<()> {
-    verify_layout(paths, ManifestLayout::Public)
-}
-
 fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
     let manifest = parse_layout_manifest(&layout_manifest(paths, layout), layout)?;
     let fields = manifest.values();
@@ -868,7 +565,11 @@ fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
     {
         return Err("latch metadata protocol identity mismatch".into());
     }
-    let kernel = running_kernel_release()?;
+    let kernel = match env::var("MISTER_MAGIK_TEST_KERNEL_RELEASE") {
+        // Delivery smoke runs the ARM manager under emulation on a CI kernel.
+        Ok(release) if paths.test_mode() && !release.is_empty() => release,
+        _ => running_kernel_release()?,
+    };
     if !module_matches_kernel(module_metadata.get("vermagic"), &kernel) {
         return Err(
             format!("scanout module vermagic does not match running kernel {kernel}").into(),
@@ -979,277 +680,11 @@ fn digest(path: &Path) -> Result<String> {
         .to_string())
 }
 
-fn snapshot(paths: &Paths) -> Result<()> {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let directory = paths.app.join("snapshots").join(format!("{stamp}-manager"));
-    fs::create_dir_all(&directory)?;
-    for (source, name) in [(&paths.ini, "MiSTer.ini")] {
-        if source.is_file() {
-            fs::copy(source, directory.join(name))?;
-        }
-    }
-    if let Ok(output) = Command::new("ps").output()
-        && output.status.success()
-    {
-        fs::write(directory.join("ps.txt"), output.stdout)?;
-    }
-    for (source, name) in [
-        (
-            Path::new("/sys/module/MiSTer_fb/parameters/mode"),
-            "fb-mode.txt",
-        ),
-        (
-            Path::new("/tmp/mister-magik-main.log"),
-            "mister-magik-main.log",
-        ),
-        (Path::new("/tmp/mister-magik/status.json"), "status.json"),
-    ] {
-        if source.is_file() {
-            let _ = fs::copy(source, directory.join(name));
-        }
-    }
-    println!("MiSTer MagiK: snapshot: {}", directory.display());
-    Ok(())
-}
-
 fn ensure_executable(path: PathBuf) -> Result<()> {
     let mut permissions = fs::metadata(&path)?.permissions();
     permissions.set_mode(permissions.mode() | 0o755);
     fs::set_permissions(path, permissions)?;
     Ok(())
-}
-
-fn stop_children(paths: &Paths) -> Result<()> {
-    if paths.test_mode() {
-        return Ok(());
-    }
-    let output = Command::new("pidof").arg("mister-magik-fb").output()?;
-    for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-        let _ = Command::new("kill").args(["-TERM", pid]).status();
-    }
-    std::thread::sleep(Duration::from_secs(1));
-    let output = Command::new("pidof").arg("mister-magik-fb").output()?;
-    for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-        let _ = Command::new("kill").args(["-KILL", pid]).status();
-    }
-    let remaining = Command::new("pidof").arg("mister-magik-fb").output()?;
-    if remaining
-        .stdout
-        .iter()
-        .any(|byte| !byte.is_ascii_whitespace())
-    {
-        Err("mister-magik-fb did not stop within the bounded timeout".into())
-    } else {
-        Ok(())
-    }
-}
-
-const DOWNLOADER_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
-
-fn invoke_downloader(tool: &Path, paths: &Paths, args: &[&str]) -> Result<Output> {
-    let mut command = if fs::metadata(tool)?.permissions().mode() & 0o111 != 0 {
-        let mut command = Command::new(tool);
-        command.args(args);
-        command
-    } else {
-        let mut command = Command::new("python3");
-        command.arg(tool).args(args);
-        command
-    };
-    command
-        .current_dir(&paths.fat)
-        .env("DOWNLOADER_INI_PATH", paths.fat.join("downloader.ini"))
-        .env("FORCED_BASE_PATH", &paths.fat)
-        .env("ALLOW_REBOOT", "0")
-        .env("UPDATE_LINUX", "false")
-        .env("DOWNLOADER_OUTPUT", "dlp1-ltsv")
-        .env("PYTHONUNBUFFERED", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("cannot start cached Downloader {}: {error}", tool.display()))?;
-    let started = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return child
-                .wait_with_output()
-                .map_err(|error| format!("cannot collect Downloader output: {error}").into());
-        }
-        if started.elapsed() >= DOWNLOADER_COMMAND_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!(
-                "Downloader command timed out after {} seconds",
-                DOWNLOADER_COMMAND_TIMEOUT.as_secs()
-            )
-            .into());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn downloader_output(output: &Output) -> String {
-    format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
-fn output_has_event(output: &str, event: &str, db_id: &str) -> bool {
-    output.lines().any(|line| {
-        line.split('\t')
-            .any(|field| field == format!("event:{event}"))
-            && line.split('\t').any(|field| field == format!("db:{db_id}"))
-    })
-}
-
-fn downloader_preflight(paths: &Paths) -> Result<Option<PathBuf>> {
-    if Path::new("/tmp/downloader_run_signal").exists() {
-        return Err("Downloader is already running; retry uninstall after it finishes".into());
-    }
-    let cache = paths.fat.join("Scripts/.config/downloader");
-    let tools = [
-        cache.join("downloader_bin"),
-        cache.join("downloader_latest.zip"),
-    ];
-    if !tools.iter().any(|tool| tool.is_file()) {
-        let state_exists = [
-            "downloader.json",
-            "downloader.json.zip",
-            "downloader_fingerprints.json",
-            "downloader_sigs.json",
-            "previous_free_space.json",
-        ]
-        .iter()
-        .any(|name| cache.join(name).exists());
-        if state_exists {
-            return Err("Downloader state exists but its cached tool is missing; run update_all before uninstalling".into());
-        }
-        return Ok(None);
-    }
-    for tool in tools.iter().filter(|tool| tool.is_file()) {
-        let Ok(version) = invoke_downloader(tool, paths, &["--version"]) else {
-            continue;
-        };
-        if version.status.success()
-            && downloader_output(&version)
-                .lines()
-                .any(|line| line.trim().starts_with("2.4"))
-        {
-            return Ok(downloader_registered(tool, paths)?.then(|| tool.clone()));
-        }
-    }
-    Err("cached Downloader is unsupported; run update_all before uninstalling".into())
-}
-
-fn downloader_registered(tool: &Path, paths: &Paths) -> Result<bool> {
-    // A failed config write can leave the INI entry after installed state was
-    // cleared. Both must be absent before we report a complete uninstall.
-    let output = invoke_downloader(tool, paths, &["--list-dbs", "all"])?;
-    let text = downloader_output(&output);
-    if !output.status.success() || text.to_ascii_lowercase().contains("warning") {
-        return Err("Downloader registration state is unreadable; uninstall refused".into());
-    }
-    Ok(output_has_event(&text, "installed_db", "mister_magik")
-        || output_has_event(&text, "configured_db", "mister_magik"))
-}
-
-fn stage_recovery_manager(staging: &Path) -> Result<()> {
-    // Copy the running executable: the package copy may already have been
-    // removed by a partial uninstall. Never overwrite a running recovery copy.
-    let running = env::current_exe()?;
-    if fs::canonicalize(staging).ok().as_deref() != Some(running.as_path()) {
-        let temporary = staging.with_extension("new");
-        fs::copy(running, &temporary)?;
-        fs::rename(temporary, staging)?;
-    }
-    Ok(())
-}
-
-fn downloader_uninstall(tool: &Path, paths: &Paths) -> Result<()> {
-    let output = invoke_downloader(tool, paths, &["--uninstall", "mister_magik"])?;
-    if !output.status.success() {
-        return Err(format!(
-            "Downloader refused MagiK removal: {}",
-            downloader_output(&output)
-        )
-        .into());
-    }
-    if downloader_registered(tool, paths)? {
-        return Err("MagiK remains installed or configured in Downloader".into());
-    }
-    Ok(())
-}
-
-fn remove_owned(paths: &Paths) -> Result<()> {
-    let files = vec![
-        paths.fat.join("MiSTer_MagiK"),
-        paths.fat.join("Scripts/mister-magik.sh"),
-        paths.fat.join("Scripts/mister-magik-channel.sh"),
-        paths.fat.join("downloader_mister_magik.ini"),
-        paths.backup.clone(),
-        paths.fat.join("THIRD-PARTY-NOTICES.txt"),
-        paths.fat.join("SOURCE-OFFER.txt"),
-        paths.fat.join("licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"),
-        paths.fat.join("licenses/RUST-LIBRARIES.txt"),
-        paths.fat.join("licenses/FFMPEG-LGPL-2.1-or-later.txt"),
-        paths.fat.join("licenses/PRESS-START-2P-OFL-1.1.txt"),
-        paths.fat.join("licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"),
-    ];
-    for path in &files {
-        if path.is_file() {
-            fs::remove_file(path)?;
-        }
-    }
-    let mut stale = Vec::new();
-    for entry in fs::read_dir(&paths.fat)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("downloader_mister_magik.ini.tmp.")
-            || name.starts_with(".downloader_mister_magik.ini")
-            || name.starts_with(".MiSTer.ini.bak.before-magik.new.")
-            || name.starts_with(".MiSTer.ini.magik.new")
-        {
-            stale.push(entry.path());
-        }
-    }
-    for path in &stale {
-        if path.is_file() {
-            fs::remove_file(path)?;
-        }
-    }
-    let _ = fs::remove_dir(paths.fat.join("licenses"));
-    if paths.app.is_dir() {
-        fs::remove_dir_all(&paths.app)?;
-    }
-    if paths.script.is_file() {
-        fs::remove_file(&paths.script)?;
-    }
-    if paths.script_constants.is_file() {
-        fs::remove_file(&paths.script_constants)?;
-    }
-    let residue: Vec<_> = files
-        .iter()
-        .chain(stale.iter())
-        .chain([&paths.app, &paths.script, &paths.script_constants])
-        .filter(|path| path.exists())
-        .collect();
-    if residue.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "uninstall residue: {}",
-            residue
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-        .into())
-    }
 }
 
 fn sync_storage(paths: &Paths) -> Result<()> {
@@ -1262,62 +697,21 @@ fn sync_storage(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-fn offer_reboot(paths: &Paths) -> Result<()> {
-    println!("\nReboot now? Press A/Enter to reboot. Any other key exits without rebooting.");
-    if read_event(paths)? != Some(InputEvent::Confirm) {
-        println!("MiSTer MagiK: reboot skipped.");
-        return Ok(());
-    }
-    reboot_now(paths)
-}
-
-fn reboot_now(paths: &Paths) -> Result<()> {
-    if paths.test_mode() {
-        println!("MiSTer MagiK: TEST: normal reboot requested.");
-        return Ok(());
-    }
-    if !Command::new("sync").status()?.success() {
-        return Err("sync failed".into());
-    }
-    let status = Command::new("reboot").status()?;
-    if !status.success() {
-        return Err("reboot command failed".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
-    struct FailAt {
-        step: WriteStep,
-        suffix: &'static str,
-    }
-
-    impl WriteFaults for FailAt {
-        fn check(&mut self, path: &Path, step: WriteStep) -> io::Result<()> {
-            if step == self.step && path.ends_with(self.suffix) {
-                Err(io::Error::other("injected write failure"))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
     fn fixture_paths(root: &Path) -> Paths {
         Paths {
             fat: root.to_path_buf(),
             ini: root.join("MiSTer.ini"),
-            backup: root.join("backup"),
             app: root.join("mister-magik"),
             manifest: root.join("manifest"),
-            script: root.join("script"),
-            script_constants: root.join("script.constants"),
             test_mode: true,
             test_keys: RefCell::default(),
         }
@@ -1571,22 +965,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_file_collision_cannot_damage_the_original() {
-        let root = env::temp_dir().join(format!("mister-manager-collision-{}", process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let target = root.join("MiSTer.ini");
-        fs::write(&target, b"original\n").unwrap();
-        let pending = root.join(format!(".MiSTer.ini.new.{}", process::id()));
-        fs::write(&pending, b"hostile pending\n").unwrap();
-
-        assert!(atomic_write(&target, b"replacement\n").is_err());
-        assert_eq!(fs::read(&target).unwrap(), b"original\n");
-        assert!(!pending.exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn manifest_parser_rejects_duplicate_fields() {
         let root = env::temp_dir().join(format!("mister-manager-manifest-{}", process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -1663,152 +1041,6 @@ mod tests {
     }
 
     #[test]
-    fn every_write_boundary_rolls_back_all_replaced_files() {
-        for (index, step) in [
-            WriteStep::BeforeCreate,
-            WriteStep::AfterWrite,
-            WriteStep::AfterFlush,
-            WriteStep::AfterPendingReadback,
-            WriteStep::AfterRename,
-            WriteStep::AfterFinalReadback,
-            WriteStep::AfterDirectorySync,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let root =
-                env::temp_dir().join(format!("mister-manager-rollback-{}-{index}", process::id()));
-            let _ = fs::remove_dir_all(&root);
-            fs::create_dir_all(&root).unwrap();
-            let first = root.join("first");
-            let second = root.join("second");
-            fs::write(&first, b"first original").unwrap();
-            fs::write(&second, b"second original").unwrap();
-            let files = vec![
-                PreparedFile::new(first.clone(), b"first replacement".to_vec()).unwrap(),
-                PreparedFile::new(second.clone(), b"second replacement".to_vec()).unwrap(),
-            ];
-            let paths = fixture_paths(&root);
-            let error = replace_transaction(
-                &paths,
-                &files,
-                &mut FailAt {
-                    step,
-                    suffix: "second",
-                },
-                || Ok(()),
-            )
-            .unwrap_err();
-            assert!(error.to_string().contains("rollback=complete"));
-            assert_eq!(fs::read(&first).unwrap(), b"first original");
-            assert_eq!(fs::read(&second).unwrap(), b"second original");
-            fs::remove_dir_all(root).unwrap();
-        }
-    }
-
-    #[test]
-    fn validation_failure_restores_files_and_removes_new_targets() {
-        let root = env::temp_dir().join(format!("mister-manager-validation-{}", process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let existing = root.join("existing");
-        let created = root.join("created");
-        fs::write(&existing, b"original").unwrap();
-        let files = vec![
-            PreparedFile::new(existing.clone(), b"replacement".to_vec()).unwrap(),
-            PreparedFile::new(created.clone(), b"new".to_vec()).unwrap(),
-        ];
-        let paths = fixture_paths(&root);
-        assert!(
-            replace_transaction(&paths, &files, &mut NoWriteFaults, || Err(
-                "invalid result".into()
-            ))
-            .is_err()
-        );
-        assert_eq!(fs::read(existing).unwrap(), b"original");
-        assert!(!created.exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn confirmation_and_installed_action_routes_are_fail_closed() {
-        let root = fixture_root("routing");
-        let paths = fixture_paths(&root);
-
-        queue(&paths, [InputEvent::Cancel]);
-        let error = safety_confirmation(&paths, "warning", "installation").unwrap_err();
-        assert_eq!(error.to_string(), "installation cancelled; no changes made");
-
-        queue(&paths, [InputEvent::Down]);
-        safety_confirmation(&paths, "warning", "installation").unwrap();
-
-        queue(&paths, [InputEvent::Down, InputEvent::Confirm]);
-        assert_eq!(
-            choose_installed_action(&paths).unwrap(),
-            Some(Action::Uninstall)
-        );
-        queue(&paths, [InputEvent::Up, InputEvent::Confirm]);
-        assert_eq!(
-            choose_installed_action(&paths).unwrap(),
-            Some(Action::Uninstall)
-        );
-        queue(&paths, [InputEvent::Other]);
-        assert_eq!(choose_installed_action(&paths).unwrap(), None);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn invalid_platform_preflight_preserves_boot_configuration() {
-        let root = fixture_root("invalid-platform");
-        let paths = fixture_paths(&root);
-        fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer\n").unwrap();
-        fs::write(&paths.manifest, b"format=unsupported\n").unwrap();
-        queue(&paths, [InputEvent::Down]);
-
-        let error = install(&paths).unwrap_err();
-        assert!(error.to_string().contains("platform verification failed"));
-        assert_eq!(fs::read(&paths.ini).unwrap(), b"[MiSTer]\nmain=MiSTer\n");
-        assert!(!paths.backup.exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn test_mode_install_restore_and_uninstall_preserve_unowned_files() {
-        let root = fixture_root("workflows");
-        let paths = fixture_paths(&root);
-        let original_ini = b"[MiSTer]\nmain=MiSTer\nvideo_mode=8\n";
-        fs::write(&paths.ini, original_ini).unwrap();
-        write_valid_platform(&paths);
-        queue(&paths, [InputEvent::Down]);
-
-        install(&paths).unwrap();
-        assert!(selects_magik(&paths.ini).unwrap());
-        assert_eq!(fs::read(&paths.backup).unwrap(), original_ini);
-        validate_install(&paths).unwrap();
-
-        restore(&paths).unwrap();
-        assert_eq!(
-            effective(&paths.ini, "MiSTer", "main").unwrap().as_deref(),
-            Some("MiSTer")
-        );
-        validate_stock(&paths).unwrap();
-
-        fs::write(root.join("unowned.txt"), b"keep").unwrap();
-        fs::create_dir_all(root.join("Scripts")).unwrap();
-        fs::write(&paths.script, b"owned").unwrap();
-        fs::write(&paths.script_constants, b"owned").unwrap();
-        queue(&paths, [InputEvent::Down]);
-        uninstall(&paths).unwrap();
-        assert!(!paths.app.exists());
-        assert!(!paths.backup.exists());
-        assert!(!paths.script.exists());
-        assert!(!paths.script_constants.exists());
-        assert_eq!(fs::read(root.join("unowned.txt")).unwrap(), b"keep");
-        validate_stock(&paths).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn start_dev_leaves_boot_configuration_and_public_state_unchanged() {
         let root = fixture_root("start-dev");
         let paths = fixture_paths(&root);
@@ -1819,7 +1051,6 @@ mod tests {
 
         start(&paths, ManifestLayout::Development).unwrap();
         assert_eq!(fs::read(&paths.ini).unwrap(), ini);
-        assert!(!paths.backup.exists());
         assert!(!paths.app.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -1872,18 +1103,6 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(public_root).unwrap();
-    }
-
-    #[test]
-    fn restore_without_backup_removes_magik_selection() {
-        let root = fixture_root("restore-no-backup");
-        let paths = fixture_paths(&root);
-        fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer_MagiK\n").unwrap();
-
-        restore_stock(&paths).unwrap();
-        assert!(!selects_magik(&paths.ini).unwrap());
-        validate_stock(&paths).unwrap();
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
