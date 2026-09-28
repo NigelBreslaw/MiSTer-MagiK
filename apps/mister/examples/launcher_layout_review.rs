@@ -9,7 +9,10 @@ use mister_magik_fb::bitmap_font_resource::{
 use mister_magik_fb::launcher_home::{LauncherHomeCounts, LauncherHomeSnapshot};
 use mister_magik_framebuffer_scenes::{
     Rgb565Pixel,
-    launcher::{LauncherData, LauncherScene, LauncherTypography},
+    launcher::{
+        LEVEL_TRICK_MILLIS, LauncherCard, LauncherCardId, LauncherData, LauncherLevel,
+        LauncherScene, LauncherTypography, LevelChange, NestedLevel, PreparedLauncher,
+    },
     launcher_navigation::{BrowseDirection, BrowseFrame, BrowsePhase},
 };
 use std::io::Write;
@@ -97,6 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             collections: 77,
             favourites: 1,
             clock: "07:28",
+            level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
         };
         let mut prepared = if scene.uses_responsive_layout() {
             scene
@@ -140,6 +144,119 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         eprintln!("{name}: {} bytes cached", prepared.cached_raster_bytes());
+        if name.ends_with("landscape") && (name.starts_with("hdmi") || name.starts_with("crt-240"))
+        {
+            review_level_trick(&output, name, scene, &mut prepared, fonts)?;
+        }
+    }
+    Ok(())
+}
+
+/// Consoles opened from the root: generic maker cards, breadcrumb and the
+/// level-change trick from the Consoles root card.
+fn review_level_trick(
+    output: &std::path::Path,
+    name: &str,
+    scene: LauncherScene,
+    root: &mut PreparedLauncher,
+    fonts: LauncherTypography<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const CONSOLES: u16 = 0x2a7f;
+    let makers = [
+        ("ATARI", 1353),
+        ("SEGA", 1897),
+        ("SONY PLAYSTATION", 1291),
+        ("NINTENDO", 4170),
+        ("NEC", 1103),
+        ("SNK NEOGEO", 184),
+    ]
+    .map(|(name, games)| LauncherCard {
+        id: LauncherCardId::Consoles,
+        name,
+        games: Some(games),
+        colour: CONSOLES,
+    });
+    let data = LauncherData {
+        cards: &makers,
+        selected: 0,
+        library_games: 0,
+        collections: 0,
+        favourites: 0,
+        clock: "07:28",
+        level: LauncherLevel::Nested(NestedLevel {
+            path: &["CONSOLES"],
+            games: 9998,
+            children: makers.len() as u32,
+            children_label: "MAKERS",
+            favourites: 3,
+            accent: CONSOLES,
+        }),
+    };
+    let mut consoles = if scene.uses_responsive_layout() {
+        scene
+            .prepare_initial_with_rgb888_artwork_and_typography(data, &[], fonts)
+            .finish()
+    } else {
+        scene
+            .prepare_initial_with_artwork_and_typography(data, &[], fonts)
+            .finish()
+    };
+    root.render_frame(BrowseFrame {
+        selected: 1,
+        target: 1,
+        phase: BrowsePhase::Settled,
+        direction: None,
+        progress_millis: 0,
+        duration_millis: 0,
+    });
+    root.restore_chrome();
+    root.render_frame(BrowseFrame {
+        selected: 1,
+        target: 1,
+        phase: BrowsePhase::Settled,
+        direction: None,
+        progress_millis: 0,
+        duration_millis: 0,
+    });
+    for t in [0, 150, 300, 380, 430, 520, 640, LEVEL_TRICK_MILLIS] {
+        consoles.render_level_trick(root, 1, 0, LevelChange::Descend, t);
+        write_ppm(
+            &output.join(format!("{name}-trick-{t:04}.ppm")),
+            scene,
+            consoles.pixels(),
+        )?;
+    }
+    consoles.render_frame(BrowseFrame {
+        selected: 3,
+        target: 3,
+        phase: BrowsePhase::Settled,
+        direction: None,
+        progress_millis: 0,
+        duration_millis: 0,
+    });
+    write_ppm(
+        &output.join(format!("{name}-consoles-nintendo.ppm")),
+        scene,
+        consoles.pixels(),
+    )?;
+    Ok(())
+}
+
+fn write_ppm(
+    path: &std::path::Path,
+    scene: LauncherScene,
+    pixels: &[Rgb565Pixel],
+) -> std::io::Result<()> {
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    write!(file, "P6\n{} {}\n255\n", scene.width, scene.height)?;
+    for pixel in pixels {
+        let p = pixel.0;
+        let (r, g, b) = ((p >> 11) as u8, ((p >> 5) & 63) as u8, (p & 31) as u8);
+        file.write_all(&[
+            (r << 3) | (r >> 2),
+            (g << 2) | (g >> 4),
+            (b << 3) | (b >> 2),
+        ])?;
     }
     Ok(())
 }

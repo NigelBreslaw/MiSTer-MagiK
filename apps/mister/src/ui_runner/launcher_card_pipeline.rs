@@ -477,6 +477,7 @@ mod tests {
             collections: 2,
             favourites: 3,
             clock: "21:37",
+            level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
         })
     }
 

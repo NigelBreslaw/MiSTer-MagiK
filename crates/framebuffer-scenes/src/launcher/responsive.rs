@@ -9,14 +9,28 @@ use std::borrow::Cow;
 
 // CRT roles share one scaled font; HDMI borrows the supplied role fonts.
 pub(super) enum Fonts<'a> {
-    Uniform(Cow<'a, BitmapFont>),
+    /// The route's scaled cell, plus the same font at native width for
+    /// labels that would not fit the doubled cell.
+    Uniform(Cow<'a, BitmapFont>, Cow<'a, BitmapFont>),
     Roles(LauncherTypography<'a>),
 }
 
 impl Fonts<'_> {
+    /// A card title that fits `width`: the heading, or a narrower face.
+    fn card_title(&self, text: &str, width: usize) -> &BitmapFont {
+        let heading = self.get(TextRole::Heading);
+        if heading.measure(text) <= width {
+            return heading;
+        }
+        match self {
+            Self::Uniform(_, narrow) => narrow,
+            Self::Roles(fonts) => fonts.font_for(TextRole::Metadata, text),
+        }
+    }
+
     fn get(&self, role: TextRole) -> &BitmapFont {
         match self {
-            Self::Uniform(font) => font,
+            Self::Uniform(font, _) => font,
             Self::Roles(fonts) => match role {
                 TextRole::Heading => fonts.heading,
                 TextRole::Number => fonts.number,
@@ -111,11 +125,19 @@ impl Layout {
         let font = typography
             .map(|fonts| Cow::Borrowed(fonts.fallback))
             .unwrap_or_else(|| Cow::Owned(legacy_font()));
-        Fonts::Uniform(if (self.sx, self.sy) == (1, 1) {
-            font
+        let narrow = if self.sy == 1 {
+            font.clone()
         } else {
-            Cow::Owned(scale_font(&font, self.sx, self.sy))
-        })
+            Cow::Owned(scale_font(&font, 1, self.sy))
+        };
+        Fonts::Uniform(
+            if (self.sx, self.sy) == (1, 1) {
+                font
+            } else {
+                Cow::Owned(scale_font(&font, self.sx, self.sy))
+            },
+            narrow,
+        )
     }
 
     pub fn chrome(&self, pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, fonts: &Fonts<'_>) {
@@ -140,7 +162,28 @@ impl Layout {
                 colour,
             );
         };
-        draw(pixels, heading, left, self.margin_y, "MISTER MAGIK", CREAM);
+        if let LauncherLevel::Nested(level) = data.level {
+            // `CONSOLES / NINTENDO`: ancestors muted, the current group in cream.
+            let mut x = left;
+            for (index, name) in level.path.iter().enumerate() {
+                let last = index + 1 == level.path.len();
+                draw(
+                    pixels,
+                    heading,
+                    x,
+                    self.margin_y,
+                    name,
+                    if last { CREAM } else { MUTED },
+                );
+                x += heading.measure(name);
+                if !last {
+                    draw(pixels, heading, x, self.margin_y, " / ", MUTED);
+                    x += heading.measure(" / ");
+                }
+            }
+        } else {
+            draw(pixels, heading, left, self.margin_y, "MISTER MAGIK", CREAM);
+        }
         draw(
             pixels,
             heading,
@@ -151,14 +194,30 @@ impl Layout {
         );
         let header_bottom = self.margin_y + if self.crt { 18 * self.sy } else { 46 };
         self.rule(pixels, header_bottom);
+        let section = match data.level {
+            LauncherLevel::Root => "COLLECTIONS",
+            LauncherLevel::Nested(level) => level.children_label,
+        };
         draw(
             pixels,
             metadata,
             left,
             header_bottom + 8 * self.sy,
-            "COLLECTIONS",
+            section,
             MUTED,
         );
+        if let LauncherLevel::Nested(level) = data.level {
+            // CRT has no sidebar: the group total sits opposite the section.
+            let total = format_games(level.games);
+            draw(
+                pixels,
+                metadata,
+                right.saturating_sub(metadata.measure(&total)),
+                header_bottom + 8 * self.sy,
+                &total,
+                MUTED,
+            );
+        }
         let footer_rule = self.height.saturating_sub(self.margin_y + 20 * self.sy);
         self.rule(pixels, footer_rule);
         draw(
@@ -194,35 +253,37 @@ impl Layout {
         let number = fonts.get(TextRole::Number);
         self.rule(pixels, self.library_y);
         let y = self.library_y + 24;
-        draw(pixels, metadata, left, y, "YOUR LIBRARY", MUTED);
-        draw(
-            pixels,
-            number,
-            left,
-            y + 38,
-            &data.library_games.to_string(),
-            CREAM,
-        );
+        let (title, games, children, children_label, favourites) = match data.level {
+            LauncherLevel::Root => (
+                "YOUR LIBRARY",
+                data.library_games,
+                data.collections,
+                "COLLECTIONS",
+                data.favourites,
+            ),
+            LauncherLevel::Nested(level) => (
+                level.path.last().copied().unwrap_or(""),
+                level.games,
+                level.children,
+                level.children_label,
+                level.favourites,
+            ),
+        };
+        draw(pixels, metadata, left, y, title, MUTED);
+        draw(pixels, number, left, y + 38, &games.to_string(), CREAM);
         draw(pixels, metadata, left, y + 90, "GAMES READY TO PLAY", MUTED);
         let counts_y = y + (footer_rule.saturating_sub(y) * 48 / 100);
         self.rule(pixels, counts_y - 16);
-        draw(
-            pixels,
-            number,
-            left,
-            counts_y,
-            &data.collections.to_string(),
-            CREAM,
-        );
+        draw(pixels, number, left, counts_y, &children.to_string(), CREAM);
         draw(
             pixels,
             number,
             self.width / 2,
             counts_y,
-            &data.favourites.to_string(),
+            &favourites.to_string(),
             CREAM,
         );
-        draw(pixels, metadata, left, counts_y + 48, "COLLECTIONS", MUTED);
+        draw(pixels, metadata, left, counts_y + 48, children_label, MUTED);
         draw(
             pixels,
             metadata,
@@ -231,6 +292,13 @@ impl Layout {
             "FAVOURITES",
             MUTED,
         );
+        if let LauncherLevel::Nested(level) = data.level {
+            for y in footer_rule.saturating_sub(38)..footer_rule.saturating_sub(31) {
+                pixels[y * self.width + left..y * self.width + right]
+                    .fill(Rgb565Pixel(level.accent));
+            }
+            return;
+        }
         let bar_w = (right - left) / 4;
         for (index, colour) in [
             rgb(226, 52, 67),
@@ -259,7 +327,7 @@ impl Layout {
     pub fn faces(&self, card: &PreparedCard<'_>, fonts: &Fonts<'_>) -> CardFaces {
         let (w, h) = (self.card_w, self.card_h);
         let (mut pixels, alpha) = artwork::native_surface(card, w, h);
-        let title = fonts.get(TextRole::Heading);
+        let title = fonts.card_title(card.name, w.saturating_sub(8 * self.sx));
         let metadata = fonts.get(TextRole::Metadata);
         let detail_y = if self.crt {
             (h * 86 / 100).min(h.saturating_sub(14 * self.sy))
@@ -303,6 +371,7 @@ impl Layout {
         pixels: &mut [Rgb565Pixel],
         faces: &[CardFaces],
         frame: BrowseFrame,
+        cyclic: bool,
         scratch: &mut [crate::launcher_flip::Scratch],
     ) {
         let clip = (self.margin_x, self.width - self.margin_x);
@@ -312,9 +381,24 @@ impl Layout {
         if faces.is_empty() {
             return;
         }
-        let mut plan = build_carousel_plan(faces, frame);
-        // Reuse the same navigation, flip, occlusion and reflection contract.
-        // Only the route-owned card geometry changes.
+        let mut plan = build_carousel_plan(faces, frame, cyclic);
+        self.map_plan(&mut plan);
+        self.draw_plan(pixels, &plan, scratch);
+    }
+
+    /// Carousel rows owned by the card renderer: cleared before every frame.
+    pub fn clear_carousel(&self, pixels: &mut [Rgb565Pixel]) {
+        let clip = (self.margin_x, self.width - self.margin_x);
+        for y in self.top..self.bottom {
+            pixels[y * self.width + clip.0..y * self.width + clip.1].fill(Rgb565Pixel(BACKGROUND));
+        }
+    }
+
+    /// Map landscape-logical poses to this route's card geometry. Reuse the
+    /// same navigation, flip, occlusion and reflection contract; only the
+    /// route-owned card geometry changes.
+    pub fn map_plan(&self, plan: &mut CarouselPlan<'_>) {
+        let clip = (self.margin_x, self.width - self.margin_x);
         let near = self.card_w as i64 * 4 / 5;
         let far = (self.width - 2 * self.margin_x) as i64 / 2 - self.card_w as i64 * 31 / 100;
         let offset = |x: i64| {
@@ -332,24 +416,46 @@ impl Layout {
                 + offset(old.x + old.width / 2 - 610 * GEOMETRY_ONE);
             let width = old.width * self.card_w as i64 / 180;
             let height = old.height * self.card_h as i64 / 252;
+            // Vertical displacement from the resting row scales with the card.
+            let lift = (old.top + old.height / 2 - 284 * GEOMETRY_ONE) * self.card_h as i64 / 252;
             item.pose.x = centre - width / 2;
-            item.pose.top = self.centre_y as i64 * GEOMETRY_ONE - height / 2;
+            item.pose.top = self.centre_y as i64 * GEOMETRY_ONE + lift - height / 2;
             item.pose.width = width;
             item.pose.height = height;
             item.pose.clip = clip;
             item.pose.body_clip = clip;
             item.pose.vertical_clip = (self.top, self.bottom, self.bottom);
         }
+    }
+
+    pub fn draw_plan(
+        &self,
+        pixels: &mut [Rgb565Pixel],
+        plan: &CarouselPlan<'_>,
+        scratch: &mut [crate::launcher_flip::Scratch],
+    ) {
+        let clip = (self.margin_x, self.width - self.margin_x);
         for left in (clip.0..clip.1).step_by(crate::launcher_flip::STRIP_WIDTH) {
             draw_carousel_plan(
                 pixels,
                 self.width,
                 (0, 0),
-                &plan,
+                plan,
                 scratch,
                 (left, (left + crate::launcher_flip::STRIP_WIDTH).min(clip.1)),
             );
         }
+    }
+
+    /// Chrome rows that differ between hierarchy levels: the header with the
+    /// breadcrumb and section label, and the portrait group summary.
+    pub fn level_chrome_rows(&self) -> [(usize, usize); 2] {
+        let summary = if self.crt {
+            (0, 0)
+        } else {
+            (self.library_y, self.height)
+        };
+        [(0, self.top), summary]
     }
 }
 
@@ -476,6 +582,7 @@ mod tests {
                 collections: 77,
                 favourites: 1,
                 clock: "07:28",
+                level: LauncherLevel::Root,
             });
             prepared.render_frame(BrowseFrame {
                 selected: 0,
@@ -509,6 +616,7 @@ mod tests {
             collections: 77,
             favourites: 1,
             clock: "07:28",
+            level: LauncherLevel::Root,
         };
         let changed = LauncherData {
             library_games: 42,

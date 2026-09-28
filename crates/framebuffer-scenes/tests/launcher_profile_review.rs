@@ -20,6 +20,7 @@ fn explicit_profiling_preserves_pixels_and_drains_at_window_boundaries() {
         collections: 18,
         favourites: 126,
         clock: "21:37",
+        level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
     });
     let frames: Vec<_> = (1..460)
         .step_by(40)

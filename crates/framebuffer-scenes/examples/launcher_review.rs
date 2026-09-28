@@ -51,6 +51,7 @@ fn main() -> std::io::Result<()> {
         collections: 18,
         favourites: 126,
         clock: "21:37",
+        level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
     });
     eprintln!(
         "Preparation: {:?}; raster capacity: {} bytes",

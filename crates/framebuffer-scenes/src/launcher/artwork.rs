@@ -33,7 +33,10 @@ pub(super) fn surface(
 ) -> Vec<Rgb565Pixel> {
     let height = card_height(width);
     let mut canvas = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
-    let base = if detail {
+    let icon = category_icon(card.id);
+    // Generic collection cards keep one dark tint of the collection colour on
+    // both faces; the count label, not a colour flood, marks the focused card.
+    let base = if detail && icon.is_none() {
         if card.id == LauncherCardId::Arcade {
             rgb(222, 35, 52)
         } else {
@@ -78,6 +81,28 @@ pub(super) fn surface(
                     }
                 }
             }
+        } else if let Some(bits) = icon {
+            // The collection's pixel symbol with a shadow in its own colour.
+            let scale = 5;
+            let left = (width - 16 * scale) / 2;
+            let top = height * 22 / 100;
+            let shadow = mix_colour(card.colour, BACKGROUND, 150);
+            for (offset, colour) in [(3, shadow), (0, ink)] {
+                for (y, row) in bits.iter().enumerate() {
+                    for x in 0..16 {
+                        if row & (1 << (15 - x)) != 0 {
+                            draw_rect(
+                                &mut canvas,
+                                left + x * scale + offset,
+                                top + y * scale + offset,
+                                scale,
+                                scale,
+                                colour,
+                            );
+                        }
+                    }
+                }
+            }
         } else {
             // A restrained collection monogram for artwork-free consumers.
             let initial = text_mask(&card.name.chars().next().unwrap_or('?').to_string());
@@ -96,7 +121,13 @@ pub(super) fn surface(
     if !labels {
         // Responsive faces add native-size bitmap labels after artwork resampling.
     } else if let Some(fonts) = typography {
-        fonts.font_for(TextRole::Heading, card.name).draw_centered(
+        let heading = fonts.font_for(TextRole::Heading, card.name);
+        let title = if heading.measure(card.name) + 12 <= width {
+            heading
+        } else {
+            fonts.font_for(TextRole::Metadata, card.name)
+        };
+        title.draw_centered(
             &mut canvas,
             LOGICAL_WIDTH,
             LOGICAL_HEIGHT,
@@ -147,6 +178,62 @@ pub(super) fn surface(
                 .copied()
         })
         .collect()
+}
+
+/// 16-pixel-wide symbols for generic cards below the Consoles, Computers and
+/// Handhelds root cards. Every group and system in a collection shares one.
+fn category_icon(id: LauncherCardId) -> Option<&'static [u16]> {
+    const GAMEPAD: [u16; 10] = [
+        0b0011111111111100,
+        0b0111111111111110,
+        0b1110111111111011,
+        0b1100011111110101,
+        0b1110111111111011,
+        0b1111111111111111,
+        0b1111110000111111,
+        0b1111100000011111,
+        0b0111000000001110,
+        0b0010000000000100,
+    ];
+    const COMPUTER: [u16; 14] = [
+        0b0111111111111110,
+        0b0100000000000010,
+        0b0101111111111010,
+        0b0101000000001010,
+        0b0101000000001010,
+        0b0101111111111010,
+        0b0100000000000010,
+        0b0111111111111110,
+        0b0000001111000000,
+        0b0000111111110000,
+        0b0000000000000000,
+        0b1111111111111111,
+        0b1010101010101011,
+        0b1111111111111111,
+    ];
+    const HANDHELD: [u16; 15] = [
+        0b0001111111111000,
+        0b0001000000001000,
+        0b0001011111101000,
+        0b0001010000101000,
+        0b0001010000101000,
+        0b0001010000101000,
+        0b0001011111101000,
+        0b0001000000001000,
+        0b0001001000001000,
+        0b0001011100011000,
+        0b0001001000011000,
+        0b0001000000001000,
+        0b0001000011001000,
+        0b0001000000001000,
+        0b0001111111111000,
+    ];
+    match id {
+        LauncherCardId::Consoles => Some(&GAMEPAD),
+        LauncherCardId::Computers => Some(&COMPUTER),
+        LauncherCardId::Handhelds => Some(&HANDHELD),
+        _ => None,
+    }
 }
 
 // Eighth-pixel coordinates for preparation-only 4x4 coverage sampling.
@@ -589,7 +676,7 @@ mod tests {
         let card = test_card(0x2c92);
         for detail in [false, true] {
             let face = face(&card, 180, detail, None);
-            let base = if detail {
+            let base = if detail && category_icon(card.id).is_none() {
                 card.colour
             } else {
                 mix_colour(rgb(12, 22, 30), card.colour, 44)

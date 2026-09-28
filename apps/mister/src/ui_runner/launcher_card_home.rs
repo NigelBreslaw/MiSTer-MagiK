@@ -226,6 +226,7 @@ impl LauncherCardHomeSession {
                         collections: self.snapshot.collections,
                         favourites: self.snapshot.favourites,
                         clock: &self.clock,
+                        level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
                     },
                     Some(self.fonts.typography()),
                 );
@@ -490,6 +491,7 @@ fn prepare(
         collections: snapshot.collections,
         favourites: snapshot.favourites,
         clock,
+        level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
     };
     if scene.uses_responsive_layout() {
         scene
