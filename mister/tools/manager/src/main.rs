@@ -13,6 +13,7 @@ use std::io::{self, IsTerminal, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -249,9 +250,11 @@ fn run() -> Result<()> {
         Some("status") => status(&paths),
         Some("verify-platform") => verify_platform(&paths),
         Some("install") => install(&paths),
+        Some("start") => start(&paths, start_layout(env::args().nth(2).as_deref())?),
+        Some(LIVE_HANDOFF_COMMAND) => live_handoff(start_layout(env::args().nth(2).as_deref())?),
         Some("restore") => restore(&paths),
         Some("uninstall") => uninstall(&paths),
-        Some(other) => Err(format!("unknown command {other}; expected install, restore, uninstall, status, or verify-platform").into()),
+        Some(other) => Err(format!("unknown command {other}; expected install, start, restore, uninstall, status, or verify-platform").into()),
         None => {
             if selects_magik(&paths.ini)? {
                 match choose_installed_action(&paths)? {
@@ -291,6 +294,202 @@ fn install(paths: &Paths) -> Result<()> {
     })?;
     println!("MiSTer MagiK: installed. Rebooting to start MiSTer MagiK.");
     reboot_now(paths)
+}
+
+const STOCK_MAIN: &str = "/media/fat/MiSTer";
+const SESSION_MAIN_ENV: &str = "MISTER_MAGIK_SESSION_MAIN";
+const LIVE_HANDOFF_COMMAND: &str = "live-handoff";
+const LIVE_HANDOFF_LOG: &str = "/tmp/mister-magik-start.log";
+// Lets the Scripts session release tty2 before MagiK starts its launcher there.
+const LIVE_HANDOFF_DELAY: Duration = Duration::from_secs(2);
+const STOCK_MAIN_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_MAIN_START_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn start_layout(value: Option<&str>) -> Result<ManifestLayout> {
+    let value = value.ok_or("start requires a layout: dev or public")?;
+    ManifestLayout::parse(value)
+        .map_err(|_| format!("unknown start layout {value}; expected dev or public").into())
+}
+
+fn layout_main_name(layout: ManifestLayout) -> &'static str {
+    layout
+        .paths()
+        .main
+        .rsplit('/')
+        .next()
+        .expect("layout Main has a file name")
+}
+
+fn fat_path(paths: &Paths, installed: &str) -> PathBuf {
+    paths.fat.join(installed.trim_start_matches("/media/fat/"))
+}
+
+fn layout_app(paths: &Paths, layout: ManifestLayout) -> PathBuf {
+    match layout {
+        ManifestLayout::Public => paths.app.clone(),
+        ManifestLayout::Development => fat_path(paths, layout.paths().root),
+    }
+}
+
+fn layout_manifest(paths: &Paths, layout: ManifestLayout) -> PathBuf {
+    match layout {
+        ManifestLayout::Public => paths.manifest.clone(),
+        ManifestLayout::Development => {
+            layout_app(paths, layout).join(mister_magik_platform_manifest_contract::FILE_NAME)
+        }
+    }
+}
+
+/// Starts the layout's Main for this boot only. MiSTer.ini is never changed:
+/// the fork keeps itself selected while `MISTER_MAGIK_SESSION_MAIN` names its
+/// own executable, and Main's exec restarts for core launches and returns
+/// inherit that environment. A reboot returns to the configured Main.
+fn start(paths: &Paths, layout: ManifestLayout) -> Result<()> {
+    let main = layout_main_name(layout);
+    match running_magik_main(paths)? {
+        Some(running) if running == main => {
+            println!("MiSTer MagiK: {main} is already running.");
+            return Ok(());
+        }
+        Some(running) => {
+            return Err(format!(
+                "{running} is running; only stock Main can hand off to {main} without rebooting"
+            )
+            .into());
+        }
+        None => {}
+    }
+    safety_confirmation(
+        paths,
+        &format!(
+            "{main} will start now without rebooting. MiSTer.ini is not changed; rebooting returns to the configured Main."
+        ),
+        "start",
+    )?;
+    verify_layout(paths, layout)?;
+    if !paths.test_mode() && !process_running("MiSTer")? {
+        return Err("stock Main is not running; nothing was changed".into());
+    }
+    ensure_executable(fat_path(paths, layout.paths().main))?;
+    ensure_executable(fat_path(paths, layout.paths().gui))?;
+    sync_storage(paths)?;
+    spawn_live_handoff(paths, layout)?;
+    println!(
+        "MiSTer MagiK: starting {main} in {} seconds. The screen goes black briefly.",
+        LIVE_HANDOFF_DELAY.as_secs()
+    );
+    Ok(())
+}
+
+fn process_running(name: &str) -> Result<bool> {
+    let output = Command::new("pidof").arg(name).output()?;
+    Ok(output.stdout.iter().any(|byte| !byte.is_ascii_whitespace()))
+}
+
+fn running_magik_main(paths: &Paths) -> Result<Option<&'static str>> {
+    if paths.test_mode() {
+        return Ok(None);
+    }
+    for layout in [ManifestLayout::Development, ManifestLayout::Public] {
+        let main = layout_main_name(layout);
+        if process_running(main)? {
+            return Ok(Some(main));
+        }
+    }
+    Ok(None)
+}
+
+fn detached(command: &mut Command) -> &mut Command {
+    // SAFETY: setsid is async-signal-safe and runs in the forked child only.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })
+    }
+}
+
+fn spawn_live_handoff(paths: &Paths, layout: ManifestLayout) -> Result<()> {
+    if paths.test_mode() {
+        println!("MiSTer MagiK: TEST: live handoff requested.");
+        return Ok(());
+    }
+    let log = File::create(LIVE_HANDOFF_LOG)?;
+    let layout_arg = match layout {
+        ManifestLayout::Public => "public",
+        ManifestLayout::Development => "dev",
+    };
+    // The helper must outlive this Scripts session and stock Main.
+    detached(
+        Command::new(env::current_exe()?)
+            .args([LIVE_HANDOFF_COMMAND, layout_arg])
+            .stdin(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log),
+    )
+    .spawn()?;
+    Ok(())
+}
+
+fn wait_until(timeout: Duration, mut done: impl FnMut() -> Result<bool>) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if done()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn start_main(path: &str, session: bool) -> Result<()> {
+    let mut command = Command::new(path);
+    command
+        .current_dir("/")
+        .env_remove("MISTER_MAGIK_FAT")
+        .env_remove("MISTER_MAGIK_TEST_MODE")
+        .env_remove("MISTER_MAGIK_TEST_OUTPUT_MODE")
+        .env_remove("MISTER_MAGIK_TEST_KEYS")
+        .env_remove(SESSION_MAIN_ENV)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if session {
+        command.env(SESSION_MAIN_ENV, path);
+    }
+    detached(&mut command).spawn()?;
+    Ok(())
+}
+
+/// Detached helper: replaces stock Main with the session Main. If the session
+/// Main is not running after a bounded wait, stock Main is started again so
+/// the device is never left without a Main.
+fn live_handoff(layout: ManifestLayout) -> Result<()> {
+    let main_path = layout.paths().main;
+    let main = layout_main_name(layout);
+    std::thread::sleep(LIVE_HANDOFF_DELAY);
+    let _ = Command::new("killall").args(["-TERM", "MiSTer"]).status();
+    if !wait_until(STOCK_MAIN_STOP_TIMEOUT, || Ok(!process_running("MiSTer")?))? {
+        let _ = Command::new("killall").args(["-KILL", "MiSTer"]).status();
+        if !wait_until(Duration::from_secs(1), || Ok(!process_running("MiSTer")?))? {
+            return Err("stock Main did not stop; MagiK was not started".into());
+        }
+    }
+    println!("MiSTer MagiK: stock Main stopped; starting {main_path}.");
+    start_main(main_path, true)?;
+    // Main replaces its own process while it loads the latch RBF, so check by name.
+    std::thread::sleep(SESSION_MAIN_START_TIMEOUT);
+    if process_running(main)? {
+        println!("MiSTer MagiK: {main} is running for this boot.");
+        return Ok(());
+    }
+    println!("MiSTer MagiK: {main} is not running; restarting stock Main.");
+    start_main(STOCK_MAIN, false)?;
+    Err(format!("{main} did not stay running; stock Main was restarted").into())
 }
 
 fn restore(paths: &Paths) -> Result<()> {
@@ -633,18 +832,23 @@ fn validate_stock(paths: &Paths) -> Result<()> {
 }
 
 fn verify_platform(paths: &Paths) -> Result<()> {
-    let manifest = parse_manifest(&paths.manifest)?;
+    verify_layout(paths, ManifestLayout::Public)
+}
+
+fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
+    let manifest = parse_layout_manifest(&layout_manifest(paths, layout), layout)?;
     let fields = manifest.values();
-    for (name, expected) in ManifestLayout::Public.paths().components() {
-        let local = paths.fat.join(expected.trim_start_matches("/media/fat/"));
+    for (name, expected) in layout.paths().components() {
+        let local = fat_path(paths, expected);
         if digest(&local)? != fields[&format!("{name}_sha256")] {
             return Err(format!("hash mismatch for {}", local.display()).into());
         }
     }
+    let app = layout_app(paths, layout);
     let module_metadata =
-        parse_component_metadata(&paths.app.join("mister_magik_scanout_slots.metadata.txt"))?;
+        parse_component_metadata(&app.join("mister_magik_scanout_slots.metadata.txt"))?;
     let latch_metadata =
-        parse_component_metadata(&paths.app.join("fpga/menu-magik-vblank-latch.metadata.txt"))?;
+        parse_component_metadata(&app.join("fpga/menu-magik-vblank-latch.metadata.txt"))?;
     if module_metadata.get("module_sha256") != Some(&fields["scanout_module_sha256"]) {
         return Err("scanout metadata module hash mismatch".into());
     }
@@ -677,14 +881,15 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn parse_manifest(path: &Path) -> Result<ParsedManifest> {
+    parse_layout_manifest(path, ManifestLayout::Public)
+}
+
+fn parse_layout_manifest(path: &Path, layout: ManifestLayout) -> Result<ParsedManifest> {
     let text = fs::read_to_string(path)?;
-    mister_magik_platform_manifest_contract::parse(
-        &text,
-        ManifestLayout::Public,
-        ValidationProfile::ManagerLegacy,
-    )
-    .map_err(|error| manager_manifest_error(&error).into())
+    mister_magik_platform_manifest_contract::parse(&text, layout, ValidationProfile::ManagerLegacy)
+        .map_err(|error| manager_manifest_error(&error).into())
 }
 
 fn manager_manifest_error(
@@ -1115,11 +1320,15 @@ mod tests {
     }
 
     fn write_valid_platform(paths: &Paths) {
-        let app = &paths.app;
+        write_layout_platform(paths, ManifestLayout::Public);
+    }
+
+    fn write_layout_platform(paths: &Paths, layout: ManifestLayout) {
+        let app = &layout_app(paths, layout);
         let fpga = app.join("fpga");
         fs::create_dir_all(&fpga).unwrap();
         let files = [
-            (paths.fat.join("MiSTer_MagiK"), b"main".as_slice()),
+            (fat_path(paths, layout.paths().main), b"main".as_slice()),
             (app.join("mister-magik-fb"), b"gui".as_slice()),
             (app.join("mister-magik-manager"), b"manager".as_slice()),
             (
@@ -1156,7 +1365,7 @@ mod tests {
             "3".repeat(64),
             "4".repeat(64)
         );
-        for (name, installed_path) in ManifestLayout::Public.paths().components() {
+        for (name, installed_path) in layout.paths().components() {
             let local_path = paths
                 .fat
                 .join(installed_path.trim_start_matches("/media/fat/"));
@@ -1183,7 +1392,7 @@ mod tests {
                 mister_magik_platform_manifest_contract::qualification_candidate_id(&values)
             ),
         );
-        fs::write(&paths.manifest, manifest).unwrap();
+        fs::write(layout_manifest(paths, layout), manifest).unwrap();
     }
 
     fn pseudo_terminal() -> (OwnedFd, OwnedFd) {
@@ -1580,6 +1789,56 @@ mod tests {
         assert_eq!(fs::read(root.join("unowned.txt")).unwrap(), b"keep");
         validate_stock(&paths).unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn start_dev_leaves_boot_configuration_and_public_state_unchanged() {
+        let root = fixture_root("start-dev");
+        let paths = fixture_paths(&root);
+        let ini = b"[MiSTer]\nmain=MiSTer\nvideo_mode=8\n";
+        fs::write(&paths.ini, ini).unwrap();
+        write_layout_platform(&paths, ManifestLayout::Development);
+        queue(&paths, [InputEvent::Down]);
+
+        start(&paths, ManifestLayout::Development).unwrap();
+        assert_eq!(fs::read(&paths.ini).unwrap(), ini);
+        assert!(!paths.backup.exists());
+        assert!(!paths.app.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn start_refuses_without_confirmation_or_valid_platform() {
+        let root = fixture_root("start-refused");
+        let paths = fixture_paths(&root);
+        write_layout_platform(&paths, ManifestLayout::Development);
+        queue(&paths, [InputEvent::Confirm]);
+        let error = start(&paths, ManifestLayout::Development).unwrap_err();
+        assert!(error.to_string().contains("start cancelled"));
+
+        // A Public-only install does not satisfy a Development start.
+        let public_root = fixture_root("start-public-only");
+        let public_paths = fixture_paths(&public_root);
+        write_valid_platform(&public_paths);
+        queue(&public_paths, [InputEvent::Down]);
+        assert!(start(&public_paths, ManifestLayout::Development).is_err());
+
+        fs::write(
+            layout_manifest(&paths, ManifestLayout::Development),
+            b"format=unsupported\n",
+        )
+        .unwrap();
+        queue(&paths, [InputEvent::Down]);
+        assert!(start(&paths, ManifestLayout::Development).is_err());
+
+        assert!(start_layout(None).is_err());
+        assert!(start_layout(Some("stock")).is_err());
+        assert_eq!(
+            layout_main_name(ManifestLayout::Development),
+            "MiSTer_MagiKDev"
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(public_root).unwrap();
     }
 
     #[test]
