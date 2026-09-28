@@ -144,15 +144,22 @@ pub enum LevelSummary {
 
 impl CardLevelSnapshot {
     pub fn from_runtime(nav: &LauncherNav, catalog: &ArcadeCatalog) -> Self {
-        if nav.current_menu_id() == ROOT_MENU_ID {
+        Self::for_menu(nav, catalog, nav.current_menu_id())
+    }
+
+    /// The level shown when `menu_id` is the current menu. Used to prepare a
+    /// level before it is entered.
+    pub fn for_menu(nav: &LauncherNav, catalog: &ArcadeCatalog, menu_id: &str) -> Self {
+        if menu_id == ROOT_MENU_ID {
             return Self::root(&LauncherHomeSnapshot::from_runtime(nav, catalog));
         }
-        let (id, accent) = match nav.current_menu_root_id() {
+        let path = nav.menu_path_to(menu_id).unwrap_or_default();
+        let (id, accent) = match path.get(1).map(String::as_str) {
             Some(COMPUTERS_MENU_ID) => (LauncherCardId::Computers, COMPUTERS_COLOUR),
             Some(HANDHELDS_MENU_ID) => (LauncherCardId::Handhelds, HANDHELDS_COLOUR),
             _ => (LauncherCardId::Consoles, CONSOLES_COLOUR),
         };
-        let items = nav.current_menu_items();
+        let items = nav.menu_items_of(menu_id);
         let cards: Vec<_> = items
             .iter()
             .map(|item| LevelCard {
@@ -166,11 +173,11 @@ impl CardLevelSnapshot {
             .iter()
             .any(|item| item.kind == LauncherMenuItemKind::Menu);
         Self {
-            menu_id: nav.current_menu_id().to_owned(),
-            depth: nav.current_menu_depth(),
+            menu_id: menu_id.to_owned(),
+            depth: path.len().saturating_sub(1),
             summary: LevelSummary::Nested {
                 path: nav
-                    .current_menu_path_titles()
+                    .menu_path_titles_of(menu_id)
                     .into_iter()
                     .map(str::to_uppercase)
                     .collect(),
@@ -178,7 +185,7 @@ impl CardLevelSnapshot {
                     sum.saturating_add(saturating_u32(item.count))
                 }),
                 children_label: if groups { "MAKERS" } else { "SYSTEMS" },
-                systems: groups.then(|| saturating_u32(nav.current_menu_collection_count())),
+                systems: groups.then(|| saturating_u32(nav.menu_collection_count_of(menu_id))),
                 accent,
             },
             cards,

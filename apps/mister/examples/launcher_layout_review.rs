@@ -193,6 +193,7 @@ fn review_level_trick(
             accent: CONSOLES,
         }),
     };
+    let prepare_started = std::time::Instant::now();
     let mut consoles = if scene.uses_responsive_layout() {
         scene
             .prepare_initial_with_rgb888_artwork_and_typography(data, &[], fonts)
@@ -202,6 +203,10 @@ fn review_level_trick(
             .prepare_initial_with_artwork_and_typography(data, &[], fonts)
             .finish()
     };
+    eprintln!(
+        "{name}: nested level prepared in {:?}",
+        prepare_started.elapsed()
+    );
     for t in [0, 150, 300, 380, 430, 520, 640, LEVEL_TRICK_MILLIS] {
         let frame = if t < LEVEL_TRICK_EDGE_MILLIS {
             root.render_level_gather(1, LevelChange::Descend, t);

@@ -11,6 +11,98 @@ struct Raster {
     reflection: Vec<Rgb565Pixel>,
     opaque: Vec<(u16, u16)>,
 }
+type NativeEntry = (
+    (LauncherCardId, u16, usize, usize),
+    (Vec<Rgb565Pixel>, Vec<u8>),
+);
+
+/// Card bodies that do not depend on the label, shared by every generic card
+/// of a level. Drawing a body costs a 16-sample antialiased pass over every
+/// pixel; on the device that is most of a level change, so it runs once per
+/// distinct body rather than once per card and face.
+#[derive(Default)]
+pub(super) struct BodyCache {
+    surfaces: Vec<((LauncherCardId, u16, bool), Vec<Rgb565Pixel>)>,
+    native: Vec<NativeEntry>,
+}
+
+impl BodyCache {
+    fn surface(&mut self, card: &PreparedCard<'_>, detail: bool) -> &[Rgb565Pixel] {
+        let key = (card.id, card.colour, detail);
+        let index = match self.surfaces.iter().position(|(k, _)| *k == key) {
+            Some(index) => index,
+            None => {
+                self.surfaces
+                    .push((key, surface(card, 180, detail, None, false)));
+                self.surfaces.len() - 1
+            }
+        };
+        &self.surfaces[index].1
+    }
+
+    pub(super) fn native(
+        &mut self,
+        card: &PreparedCard<'_>,
+        width: usize,
+        height: usize,
+    ) -> (Vec<Rgb565Pixel>, Vec<u8>) {
+        if card.artwork.is_some() || card.rgb888.is_some() {
+            return native_surface(card, width, height);
+        }
+        let key = (card.id, card.colour, width, height);
+        if let Some((_, cached)) = self.native.iter().find(|(k, _)| *k == key) {
+            return cached.clone();
+        }
+        let made = native_surface(card, width, height);
+        self.native.push((key, made.clone()));
+        made
+    }
+}
+
+/// `face`, reusing the label-free body when the card has no artwork and the
+/// production fonts draw the labels.
+pub(super) fn face_cached(
+    card: &PreparedCard<'_>,
+    width: usize,
+    detail: bool,
+    typography: Option<LauncherTypography<'_>>,
+    cache: &mut BodyCache,
+) -> crate::launcher_flip::Face {
+    let (Some(fonts), 180, None) = (typography, width, card.artwork) else {
+        return face(card, width, detail, typography);
+    };
+    let height = card_height(width);
+    let mut pixels = cache.surface(card, detail).to_vec();
+    let heading = fonts.font_for(TextRole::Heading, card.name);
+    let title = if heading.measure(card.name) + 12 <= width {
+        heading
+    } else {
+        fonts.font_for(TextRole::Metadata, card.name)
+    };
+    title.draw_centered(
+        &mut pixels,
+        width,
+        height,
+        (width / 2) as i32,
+        (height * 73 / 100) as i32,
+        card.name,
+        CREAM,
+    );
+    if detail && let Some(game_count) = card.games {
+        let games = format_games(game_count);
+        fonts.font_for(TextRole::Metadata, &games).draw_centered(
+            &mut pixels,
+            width,
+            height,
+            (width / 2) as i32,
+            (height * 86 / 100) as i32,
+            &games,
+            CREAM,
+        );
+    }
+    crate::launcher_flip::Face::new(pixels, width, height)
+}
+
 pub(super) fn face(
     card: &PreparedCard<'_>,
     width: usize,
@@ -52,7 +144,13 @@ pub(super) fn surface(
             if !rounded_contains(x, y, width, height) {
                 continue;
             }
-            let colour = framed_surface(card, base, trim, width, height, x, y);
+            let mut colour = framed_surface(card, base, trim, width, height, x, y);
+            if icon.is_some()
+                && card.artwork.is_none()
+                && inside_inset(x * 8 + 4, y * 8 + 4, width, height, 8)
+            {
+                colour = lit_body(card.colour, width, height, x, y);
+            }
             canvas[y * LOGICAL_WIDTH + x] = Rgb565Pixel(colour);
         }
     }
@@ -178,6 +276,30 @@ pub(super) fn surface(
                 .copied()
         })
         .collect()
+}
+
+/// The interior of a generic card: the collection colour lit from above and
+/// fading to near black, with a soft diagonal sheen. Ordered dithering keeps
+/// the dark gradient from banding in RGB565.
+fn lit_body(colour: u16, width: usize, height: usize, x: usize, y: usize) -> u16 {
+    const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let top = mix_colour(rgb(12, 22, 30), colour, 88);
+    let bottom = mix_colour(rgb(5, 8, 12), colour, 22);
+    let t = (y * 256 / height.max(1)) as u32;
+    let threshold = BAYER[y % 4][x % 4] * 16 + 8;
+    let channel = |shift: u32, bits: u32| {
+        let mask = (1_u16 << bits) - 1;
+        let a = u32::from((top >> shift) & mask);
+        let b = u32::from((bottom >> shift) & mask);
+        (((a * (256 - t) + b * t) * 256 / 256 + threshold) / 256).min(u32::from(mask)) as u16
+    };
+    let lit = (channel(11, 5) << 11) | (channel(5, 6) << 5) | channel(0, 5);
+    // Sheen: a diagonal band, as on the flat cards.
+    if x * 2 + y > width * 2 && x * 2 + y < width * 5 / 2 {
+        mix_colour(lit, CREAM, 22)
+    } else {
+        lit
+    }
 }
 
 /// 16-pixel-wide symbols for generic cards below the Consoles, Computers and
@@ -685,10 +807,14 @@ mod tests {
             for (xs, ys) in [(12..30, 14..22), (70..112, 230..235), (80..100, 0..8)] {
                 for y in ys {
                     for x in xs.clone() {
-                        assert_eq!(
-                            face.pixels[y * 180 + x].0,
+                        let expected = if category_icon(card.id).is_some()
+                            && inside_inset(x * 8 + 4, y * 8 + 4, 180, 252, 8)
+                        {
+                            lit_body(card.colour, 180, 252, x, y)
+                        } else {
                             framed_surface(&card, base, trim, 180, 252, x, y)
-                        );
+                        };
+                        assert_eq!(face.pixels[y * 180 + x].0, expected);
                     }
                 }
             }

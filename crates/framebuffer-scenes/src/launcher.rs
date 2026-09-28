@@ -493,8 +493,9 @@ fn bake_face(
     width: usize,
     selected: bool,
     typography: Option<LauncherTypography<'_>>,
+    cache: &mut artwork::BodyCache,
 ) -> crate::launcher_flip::Face {
-    artwork::face(card, width, selected, typography)
+    artwork::face_cached(card, width, selected, typography, cache)
 }
 
 struct PreparedCard<'a> {
@@ -609,14 +610,15 @@ impl PreparedLauncher {
         } else {
             render_logical(&mut chrome, data, typography);
         }
+        let mut bodies = artwork::BodyCache::default();
         let faces: Vec<_> = cards
             .map(|card| {
                 if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
-                    layout.faces(&card, fonts)
+                    layout.faces(&card, fonts, &mut bodies)
                 } else {
                     CardFaces {
-                        compact: bake_face(&card, 180, false, typography),
-                        detail: bake_face(&card, 180, true, typography),
+                        compact: bake_face(&card, 180, false, typography, &mut bodies),
+                        detail: bake_face(&card, 180, true, typography, &mut bodies),
                     }
                 }
             })

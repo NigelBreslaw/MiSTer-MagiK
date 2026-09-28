@@ -1704,27 +1704,31 @@ impl LauncherNav {
         self.current_menu_items().len()
     }
 
-    /// Menu titles from the first level below the root to the current menu.
-    pub fn current_menu_path_titles(&self) -> Vec<&str> {
-        self.menu_path
+    /// Root-to-menu IDs for any menu, or `None` for an unknown menu.
+    pub fn menu_path_to(&self, menu_id: &str) -> Option<Vec<String>> {
+        self.taxonomy.path_to_menu(menu_id)
+    }
+
+    pub fn menu_items_of(&self, menu_id: &str) -> &[LauncherMenuItem] {
+        self.taxonomy
+            .menu(menu_id)
+            .map(|menu| menu.items.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Titles of a menu's ancestors below the root, then the menu itself.
+    pub fn menu_path_titles_of(&self, menu_id: &str) -> Vec<&str> {
+        self.taxonomy
+            .path_to_menu(menu_id)
+            .unwrap_or_default()
             .iter()
             .skip(1)
             .filter_map(|id| self.taxonomy.menu(id).map(|menu| menu.title.as_str()))
             .collect()
     }
 
-    /// The root collection a nested menu belongs to, such as Consoles.
-    pub fn current_menu_root_id(&self) -> Option<&str> {
-        self.menu_path.get(1).map(String::as_str)
-    }
-
-    /// Levels below the root: 0 at the root, 1 for Consoles, and so on.
-    pub fn current_menu_depth(&self) -> usize {
-        self.menu_path.len().saturating_sub(1)
-    }
-
-    /// Game collections reachable from the current menu, at any depth.
-    pub fn current_menu_collection_count(&self) -> usize {
+    /// Game collections reachable from a menu, at any depth.
+    pub fn menu_collection_count_of(&self, menu_id: &str) -> usize {
         fn count(taxonomy: &LauncherTaxonomy, menu_id: &str, depth: usize) -> usize {
             let Some(menu) = taxonomy.menu(menu_id).filter(|_| depth < 8) else {
                 return 0;
@@ -1737,7 +1741,22 @@ impl LauncherNav {
                 })
                 .sum()
         }
-        count(&self.taxonomy, self.current_menu_id(), 0)
+        count(&self.taxonomy, menu_id, 0)
+    }
+
+    /// The menu the selected card opens, if it opens one.
+    pub fn selected_child_menu_id(&self) -> Option<&str> {
+        let id = self.current_menu_selected_item_id();
+        (id.starts_with("menu:") && self.taxonomy.menu(id).is_some()).then_some(id)
+    }
+
+    /// The menu one level up, or `None` at the root.
+    pub fn parent_menu_id(&self) -> Option<&str> {
+        self.menu_path
+            .len()
+            .checked_sub(2)
+            .and_then(|index| self.menu_path.get(index))
+            .map(String::as_str)
     }
 
     pub(crate) fn home_navigation_count(&self) -> usize {

@@ -326,9 +326,14 @@ impl Layout {
         }
     }
 
-    pub fn faces(&self, card: &PreparedCard<'_>, fonts: &Fonts<'_>) -> CardFaces {
+    pub fn faces(
+        &self,
+        card: &PreparedCard<'_>,
+        fonts: &Fonts<'_>,
+        bodies: &mut artwork::BodyCache,
+    ) -> CardFaces {
         let (w, h) = (self.card_w, self.card_h);
-        let (mut pixels, alpha) = artwork::native_surface(card, w, h);
+        let (mut pixels, alpha) = bodies.native(card, w, h);
         let title = fonts.card_title(card.name, w.saturating_sub(8 * self.sx));
         let metadata = fonts.get(TextRole::Metadata);
         let detail_y = if self.crt {

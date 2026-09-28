@@ -5957,6 +5957,8 @@ pub(super) fn run_launcher_loop(
     // One snapshot of the visible card level, rebuilt only when it no longer
     // matches navigation so the render loop does not allocate labels per frame.
     let mut card_level = crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
+    // The level and card the neighbours were last prepared for.
+    let mut card_prefetch_key: (String, usize) = (String::new(), usize::MAX);
     let mut launcher_card_home = match super::launcher_card_home::LauncherCardHomeSession::new(
         super::launcher_card_home::scene_for_display(ui, layout),
         card_level.clone(),
@@ -9514,6 +9516,22 @@ pub(super) fn run_launcher_loop(
                     loop_start.duration_since(run_start).as_millis() as u64,
                     !nav.settings.reduce_motion,
                 );
+                // Idle on a card: prepare the level it opens and the parent, so
+                // the level trick never waits on preparation.
+                if !session.is_animating()
+                    && (card_prefetch_key.0 != nav.current_menu_id()
+                        || card_prefetch_key.1 != nav.selected)
+                {
+                    card_prefetch_key = (nav.current_menu_id().to_owned(), nav.selected);
+                    let levels = [nav.selected_child_menu_id(), nav.parent_menu_id()]
+                        .into_iter()
+                        .flatten()
+                        .map(|id| {
+                            crate::launcher_home::CardLevelSnapshot::for_menu(&nav, &catalog, id)
+                        })
+                        .collect();
+                    session.prefetch(levels);
+                }
             }
         } else if let Some(session) = launcher_card_home.as_mut() {
             session.set_inactive();
