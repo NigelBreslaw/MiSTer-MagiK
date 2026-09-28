@@ -253,20 +253,20 @@ impl Layout {
         let number = fonts.get(TextRole::Number);
         self.rule(pixels, self.library_y);
         let y = self.library_y + 24;
-        let (title, games, children, children_label, favourites) = match data.level {
+        let (title, games, children, children_label, detail) = match data.level {
             LauncherLevel::Root => (
                 "YOUR LIBRARY",
                 data.library_games,
                 data.collections,
                 "COLLECTIONS",
-                data.favourites,
+                Some((data.favourites, "FAVOURITES")),
             ),
             LauncherLevel::Nested(level) => (
                 level.path.last().copied().unwrap_or(""),
                 level.games,
                 level.children,
                 level.children_label,
-                level.favourites,
+                level.detail,
             ),
         };
         draw(pixels, metadata, left, y, title, MUTED);
@@ -275,23 +275,25 @@ impl Layout {
         let counts_y = y + (footer_rule.saturating_sub(y) * 48 / 100);
         self.rule(pixels, counts_y - 16);
         draw(pixels, number, left, counts_y, &children.to_string(), CREAM);
-        draw(
-            pixels,
-            number,
-            self.width / 2,
-            counts_y,
-            &favourites.to_string(),
-            CREAM,
-        );
         draw(pixels, metadata, left, counts_y + 48, children_label, MUTED);
-        draw(
-            pixels,
-            metadata,
-            self.width / 2,
-            counts_y + 48,
-            "FAVOURITES",
-            MUTED,
-        );
+        if let Some((value, label)) = detail {
+            draw(
+                pixels,
+                number,
+                self.width / 2,
+                counts_y,
+                &value.to_string(),
+                CREAM,
+            );
+            draw(
+                pixels,
+                metadata,
+                self.width / 2,
+                counts_y + 48,
+                label,
+                MUTED,
+            );
+        }
         if let LauncherLevel::Nested(level) = data.level {
             for y in footer_rule.saturating_sub(38)..footer_rule.saturating_sub(31) {
                 pixels[y * self.width + left..y * self.width + right]

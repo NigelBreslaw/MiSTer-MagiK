@@ -10,8 +10,9 @@ use mister_magik_fb::launcher_home::{LauncherHomeCounts, LauncherHomeSnapshot};
 use mister_magik_framebuffer_scenes::{
     Rgb565Pixel,
     launcher::{
-        LEVEL_TRICK_MILLIS, LauncherCard, LauncherCardId, LauncherData, LauncherLevel,
-        LauncherScene, LauncherTypography, LevelChange, NestedLevel, PreparedLauncher,
+        LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherCard, LauncherCardId, LauncherData,
+        LauncherLevel, LauncherScene, LauncherTypography, LevelChange, NestedLevel,
+        PreparedLauncher,
     },
     launcher_navigation::{BrowseDirection, BrowseFrame, BrowsePhase},
 };
@@ -188,7 +189,7 @@ fn review_level_trick(
             games: 9998,
             children: makers.len() as u32,
             children_label: "MAKERS",
-            favourites: 3,
+            detail: Some((17, "SYSTEMS")),
             accent: CONSOLES,
         }),
     };
@@ -201,31 +202,21 @@ fn review_level_trick(
             .prepare_initial_with_artwork_and_typography(data, &[], fonts)
             .finish()
     };
-    root.render_frame(BrowseFrame {
-        selected: 1,
-        target: 1,
-        phase: BrowsePhase::Settled,
-        direction: None,
-        progress_millis: 0,
-        duration_millis: 0,
-    });
-    root.restore_chrome();
-    root.render_frame(BrowseFrame {
-        selected: 1,
-        target: 1,
-        phase: BrowsePhase::Settled,
-        direction: None,
-        progress_millis: 0,
-        duration_millis: 0,
-    });
     for t in [0, 150, 300, 380, 430, 520, 640, LEVEL_TRICK_MILLIS] {
-        consoles.render_level_trick(root, 1, 0, LevelChange::Descend, t);
+        let frame = if t < LEVEL_TRICK_EDGE_MILLIS {
+            root.render_level_gather(1, LevelChange::Descend, t);
+            root.pixels()
+        } else {
+            consoles.render_level_deal(0, LevelChange::Descend, t);
+            consoles.pixels()
+        };
         write_ppm(
             &output.join(format!("{name}-trick-{t:04}.ppm")),
             scene,
-            consoles.pixels(),
+            frame,
         )?;
     }
+    root.restore_chrome();
     consoles.render_frame(BrowseFrame {
         selected: 3,
         target: 3,

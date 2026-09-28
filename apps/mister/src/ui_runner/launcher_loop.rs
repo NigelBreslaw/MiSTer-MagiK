@@ -1009,9 +1009,19 @@ fn configure_arcade_list_renderer_geometry(
 fn navigation_transition_for_intent(
     nav: &LauncherNav,
     event: &launcher::LauncherEvent,
+    card_levels: bool,
 ) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
     use crate::launcher_taxonomy::ROOT_MENU_ID;
 
+    // The card launcher plays its own level trick between Home levels.
+    let home_level_change = nav.screen == Screen::Home
+        && matches!(
+            event.action,
+            LauncherAction::OpenMenu | LauncherAction::NavigateBack | LauncherAction::NavigateHome
+        );
+    if card_levels && home_level_change {
+        return None;
+    }
     match event.action {
         LauncherAction::OpenMenu => Some((
             NavigationTransitionEdge::HomeToConsoles,
@@ -5944,11 +5954,12 @@ pub(super) fn run_launcher_loop(
     }
     nav.set_arcade_exit_locked(return_capsule_active);
     apply_home_selected(&mut nav, &catalog, benchmark_config.home_selected(), start);
-    let initial_home_snapshot =
-        crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog);
+    // One snapshot of the visible card level, rebuilt only when it no longer
+    // matches navigation so the render loop does not allocate labels per frame.
+    let mut card_level = crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
     let mut launcher_card_home = match super::launcher_card_home::LauncherCardHomeSession::new(
         super::launcher_card_home::scene_for_display(ui, layout),
-        initial_home_snapshot,
+        card_level.clone(),
         nav.selected,
         &last_clock_text,
     ) {
@@ -8125,8 +8136,11 @@ pub(super) fn run_launcher_loop(
                                             }
                                         }
 
-                                        let transition_spec =
-                                            navigation_transition_for_intent(&nav, &event);
+                                        let transition_spec = navigation_transition_for_intent(
+                                            &nav,
+                                            &event,
+                                            launcher_card_home.is_some(),
+                                        );
                                         if transition_spec.is_some()
                                             && nav.screen == Screen::Arcade
                                             && !crt_layout
@@ -9474,9 +9488,8 @@ pub(super) fn run_launcher_loop(
         } else {
             AutomationFrameStamp::default()
         };
-        let custom_home_active = launcher_card_home.is_some()
-            && nav.screen == Screen::Home
-            && nav.current_menu_id() == crate::launcher_taxonomy::ROOT_MENU_ID;
+        // Every Home level is the Rust card launcher, not only the root.
+        let custom_home_active = launcher_card_home.is_some() && nav.screen == Screen::Home;
         app.global::<slint_ui::launcher::MisterUi>()
             .set_custom_home_base(custom_home_active);
         if custom_home_active {
@@ -9488,13 +9501,18 @@ pub(super) fn run_launcher_loop(
                 let (predicted_selected, predicted_visual_index) =
                     nav.home_card_visual_prediction(prediction_time);
                 session.set_target_vblank(pacer.hits().saturating_add(2));
+                if !card_level.matches_runtime(&nav, &catalog) {
+                    card_level =
+                        crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
+                }
                 session.update(
                     super::launcher_card_home::scene_for_display(ui, layout),
-                    crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog),
+                    &card_level,
                     predicted_selected,
                     predicted_visual_index,
                     &last_clock_text,
                     loop_start.duration_since(run_start).as_millis() as u64,
+                    !nav.settings.reduce_motion,
                 );
             }
         } else if let Some(session) = launcher_card_home.as_mut() {
@@ -16296,7 +16314,7 @@ mod tests {
             .handle_action_with_navigation_intents(&event, now, &catalog)
             .expect("Arcade Back should produce a navigation intent");
         assert_eq!(navigation.action, LauncherAction::NavigateBack);
-        assert!(navigation_transition_for_intent(&nav, &navigation).is_some());
+        assert!(navigation_transition_for_intent(&nav, &navigation, false).is_some());
         assert!(nav.commit_navigation_intent(&navigation, &catalog));
         let destination_screen = nav.screen;
         assert_ne!(destination_screen, Screen::Arcade);

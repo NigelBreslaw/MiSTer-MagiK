@@ -434,6 +434,8 @@ pub struct ArcadeNav {
     row_height: i32,
     step_rows: usize,
     input_policy: ScrollInputPolicy,
+    /// Card carousels wrap only at the root; nested levels stop at their ends.
+    wraps: bool,
     scroll: ArcadeScrollState,
     scroll_animation: SpringAnimation,
     scroll_velocity_animation: SpringAnimation,
@@ -474,6 +476,7 @@ impl ArcadeNav {
     fn new_cyclic() -> Self {
         let mut nav = Self::new();
         nav.input_policy = ScrollInputPolicy::RootCards;
+        nav.wraps = true;
         let spring = SpringConfiguration::smooth_with_response(ROOT_CARD_SPRING_RESPONSE);
         nav.scroll_animation = SpringAnimation::new(0.0, spring);
         nav.scroll_velocity_animation = SpringAnimation::new(0.0, spring);
@@ -492,6 +495,7 @@ impl ArcadeNav {
             row_height: row_height.max(1),
             step_rows: step_rows.max(1),
             input_policy: ScrollInputPolicy::Arcade,
+            wraps: false,
             scroll: ArcadeScrollState::default(),
             scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
             scroll_velocity_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
@@ -518,6 +522,11 @@ impl ArcadeNav {
 
     pub fn row_height(&self) -> i32 {
         self.row_height
+    }
+
+    /// Switch a card carousel between the wrapping root and a linear level.
+    fn set_wraps(&mut self, wraps: bool) {
+        self.wraps = wraps;
     }
 
     fn set_row_height(&mut self, row_height: i32) {
@@ -684,7 +693,7 @@ impl ArcadeNav {
                 .set_target(self.scroll.held_dir as f64 * target_speed);
             let velocity = self.scroll_velocity_animation.advance(motion_delta);
             let value = self.scroll_animation.value() + velocity * motion_delta.as_secs_f64();
-            let value = if self.input_policy == ScrollInputPolicy::RootCards {
+            let value = if self.wraps {
                 value
             } else {
                 value.clamp(0.0, self.max_scroll_y(count) as f64)
@@ -697,7 +706,7 @@ impl ArcadeNav {
             } else {
                 (value / self.row_height as f64).floor()
             };
-            let row = if self.input_policy == ScrollInputPolicy::RootCards {
+            let row = if self.wraps {
                 row as i64
             } else {
                 row.clamp(0.0, count.saturating_sub(1) as f64) as i64
@@ -834,7 +843,11 @@ impl ArcadeNav {
                 } else {
                     (value / pitch).floor()
                 };
-                let target = row * pitch;
+                let target = if self.wraps {
+                    row * pitch
+                } else {
+                    (row * pitch).clamp(0.0, f64::from(self.max_scroll_y(count)))
+                };
                 let max_velocity = (target - value).abs()
                     * self.scroll_animation.configuration().angular_frequency();
                 self.scroll_animation.set_state(
@@ -896,7 +909,11 @@ impl ArcadeNav {
         }
         let next = if self.input_policy == ScrollInputPolicy::RootCards {
             let current = (self.scroll_animation.target() / self.row_height as f64).round() as i64;
-            current + i64::from(dir.signum()) * self.step_rows as i64
+            let next = current + i64::from(dir.signum()) * self.step_rows as i64;
+            if !self.wraps && !(0..count as i64).contains(&next) {
+                return;
+            }
+            next
         } else if dir > 0 {
             self.scroll
                 .target_index
@@ -1364,10 +1381,16 @@ impl LauncherNav {
         self.portrait_layout = portrait_layout;
         self.home_scroll = HomeScrollState::default();
         self.home_scroll_animation.snap_to(self.scroll_x as f64);
+        self.restore_home_card_scroll();
+    }
+
+    fn restore_home_card_scroll(&mut self) {
+        self.home_card_scroll
+            .set_wraps(self.current_menu_id() == ROOT_MENU_ID);
         self.home_card_scroll.restore_position(
             self.selected,
             self.selected as i32 * ARCADE_ROW_HEIGHT,
-            ROOT_HOME_CARDS.len(),
+            self.home_navigation_count(),
         );
     }
 
@@ -1402,14 +1425,15 @@ impl LauncherNav {
         self.orientation_highlighted = self.orientation_selected;
     }
 
-    fn root_card_home_active(&self) -> bool {
-        self.screen == Screen::Home && self.current_menu_id() == ROOT_MENU_ID
+    /// Every Home level is a card carousel; only the root wraps.
+    fn card_home_active(&self) -> bool {
+        self.screen == Screen::Home
     }
 
     pub fn home_horizontal_held(&self) -> bool {
         self.screen == Screen::Home
             && !self.portrait_layout
-            && if self.root_card_home_active() {
+            && if self.card_home_active() {
                 self.home_card_scroll.scroll.held_dir != 0
             } else {
                 self.home_scroll.held_dir != 0
@@ -1419,7 +1443,7 @@ impl LauncherNav {
     pub fn home_horizontal_repeat_active(&self) -> bool {
         self.screen == Screen::Home
             && !self.portrait_layout
-            && if self.root_card_home_active() {
+            && if self.card_home_active() {
                 self.home_card_scroll.scroll.continuous_active
             } else {
                 self.home_scroll.active
@@ -1429,7 +1453,7 @@ impl LauncherNav {
     pub fn home_horizontal_direction(
         &self,
     ) -> Option<mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection> {
-        let dir = if self.root_card_home_active() {
+        let dir = if self.card_home_active() {
             self.home_card_scroll.scroll.held_dir
         } else {
             self.home_scroll.held_dir
@@ -1447,7 +1471,7 @@ impl LauncherNav {
 
     pub fn home_card_visual_prediction(&self, at: Instant) -> (usize, f32) {
         let mut predicted = self.home_card_scroll.clone();
-        predicted.tick(ROOT_HOME_CARDS.len(), at);
+        predicted.tick(self.home_navigation_count(), at);
         (predicted.selected, predicted.visual_index)
     }
 
@@ -1678,6 +1702,42 @@ impl LauncherNav {
 
     pub fn current_menu_count(&self) -> usize {
         self.current_menu_items().len()
+    }
+
+    /// Menu titles from the first level below the root to the current menu.
+    pub fn current_menu_path_titles(&self) -> Vec<&str> {
+        self.menu_path
+            .iter()
+            .skip(1)
+            .filter_map(|id| self.taxonomy.menu(id).map(|menu| menu.title.as_str()))
+            .collect()
+    }
+
+    /// The root collection a nested menu belongs to, such as Consoles.
+    pub fn current_menu_root_id(&self) -> Option<&str> {
+        self.menu_path.get(1).map(String::as_str)
+    }
+
+    /// Levels below the root: 0 at the root, 1 for Consoles, and so on.
+    pub fn current_menu_depth(&self) -> usize {
+        self.menu_path.len().saturating_sub(1)
+    }
+
+    /// Game collections reachable from the current menu, at any depth.
+    pub fn current_menu_collection_count(&self) -> usize {
+        fn count(taxonomy: &LauncherTaxonomy, menu_id: &str, depth: usize) -> usize {
+            let Some(menu) = taxonomy.menu(menu_id).filter(|_| depth < 8) else {
+                return 0;
+            };
+            menu.items
+                .iter()
+                .map(|item| match item.kind {
+                    LauncherMenuItemKind::Menu => count(taxonomy, &item.id, depth + 1),
+                    LauncherMenuItemKind::Collection => 1,
+                })
+                .sum()
+        }
+        count(&self.taxonomy, self.current_menu_id(), 0)
     }
 
     pub(crate) fn home_navigation_count(&self) -> usize {
@@ -2325,11 +2385,7 @@ impl LauncherNav {
         self.home_scroll = HomeScrollState::default();
         self.home_scroll_animation.snap_to(self.scroll_x as f64);
         self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
-        self.home_card_scroll.restore_position(
-            self.selected,
-            self.selected as i32 * ARCADE_ROW_HEIGHT,
-            ROOT_HOME_CARDS.len(),
-        );
+        self.restore_home_card_scroll();
     }
 
     fn pop_menu(&mut self) -> bool {
@@ -2862,7 +2918,7 @@ impl LauncherNav {
     }
 
     fn update_home_scroll(&mut self, held: &PadState, frame_now: Instant, count: usize) {
-        if self.root_card_home_active() {
+        if self.card_home_active() {
             self.update_root_card_scroll(held, frame_now, count);
             return;
         }
@@ -7027,7 +7083,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_home_hold_accelerates_to_constant_speed_then_spring_settles_forward() {
+    fn nested_card_levels_hold_to_browse_and_stop_at_the_last_card() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..10)
@@ -7037,64 +7093,40 @@ mod tests {
         let mut nav = LauncherNav::new();
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_menu("menu:consoles:other"));
+        let count = nav.current_menu_count();
+        assert!(count > 3);
         let held_right = pad_with(|pad| pad.dpad_right = true);
         let start = Instant::now();
-
-        nav.handle_input(&held_right, start, &catalog);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(nav.scroll_x, 0);
-        assert!(!nav.home_horizontal_repeat_active());
-
-        nav.handle_input(&held_right, start + Duration::from_millis(199), &catalog);
-        assert_eq!(nav.scroll_x, 0);
-        assert!(!nav.home_horizontal_repeat_active());
-
-        let mut previous_scroll = nav.scroll_x;
-        for frame in 0..30 {
+        let mut previous = nav.home_card_visual_index();
+        for frame in 0..400 {
             nav.handle_input(
                 &held_right,
-                start + Duration::from_millis(200 + frame * 16),
+                start + Duration::from_millis(frame * 16),
                 &catalog,
             );
-            assert!(nav.home_horizontal_repeat_active());
-            assert!(nav.scroll_x >= previous_scroll);
-            previous_scroll = nav.scroll_x;
-
-            let selected_left = nav.selected as i32 * home_tile_pitch();
-            let selected_right = selected_left + HOME_TILE_WIDTH;
-            assert!(selected_left >= nav.scroll_x);
-            assert!(selected_right <= nav.scroll_x + HOME_LIST_VISIBLE_W);
+            let visual = nav.home_card_visual_index();
+            // A linear level never wraps back to the first card.
+            assert!(
+                visual >= previous - 0.001,
+                "frame {frame}: {visual} < {previous}"
+            );
+            assert!(visual <= (count - 1) as f32 + 0.001);
+            previous = visual;
         }
-        assert!(
-            (nav.home_scroll_animation.velocity() - HOME_SCROLL_SPEED_PX_PER_SECOND).abs() < 1e-9
-        );
-
-        nav.handle_input(
-            &PadState::default(),
-            start + Duration::from_millis(680),
-            &catalog,
-        );
-        assert!(!nav.home_horizontal_repeat_active());
-        assert!(nav.scroll_x >= previous_scroll);
-        let target = nav.home_scroll_animation.target();
-        assert!(target >= nav.scroll_x as f64);
-
-        let mut previous = nav.scroll_x;
-        for frame in 1..=120 {
+        assert_eq!(nav.selected, count - 1);
+        for frame in 0..120 {
             nav.handle_input(
                 &PadState::default(),
-                start + Duration::from_millis(680 + frame * 16),
+                start + Duration::from_millis(6_400 + frame * 16),
                 &catalog,
             );
-            assert!(nav.scroll_x >= previous);
-            previous = nav.scroll_x;
         }
-        assert!(nav.home_scroll_animation.is_settled());
-        assert_eq!(nav.scroll_x as f64, target);
+        assert_eq!(nav.selected, count - 1);
+        assert!((nav.home_card_visual_index() - (count - 1) as f32).abs() < 0.001);
     }
 
     #[test]
-    fn launcher_home_discrete_moves_animate_only_when_the_viewport_pages() {
+    fn nested_card_levels_step_one_card_per_tap_and_ignore_left_at_the_first() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..10)
@@ -7104,45 +7136,28 @@ mod tests {
         let mut nav = LauncherNav::new();
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_menu("menu:consoles:other"));
-        let held_right = pad_with(|pad| pad.dpad_right = true);
         let start = Instant::now();
-
-        for step in 0..3 {
-            let pressed_at = start + Duration::from_millis(step * 100);
-            nav.handle_input(&held_right, pressed_at, &catalog);
-            nav.handle_input(
-                &PadState::default(),
-                pressed_at + Duration::from_millis(40),
-                &catalog,
+        let mut now = start;
+        let mut tap = |nav: &mut LauncherNav, pad: PadState| {
+            nav.handle_input(&pad, now, &catalog);
+            // Let the card spring settle completely before the next tap.
+            for _ in 0..125 {
+                now += Duration::from_millis(16);
+                nav.handle_input(&PadState::default(), now, &catalog);
+            }
+        };
+        tap(&mut nav, pad_with(|pad| pad.dpad_left = true));
+        assert_eq!(nav.selected, 0);
+        assert!(nav.home_card_visual_index().abs() < 0.001);
+        for step in 1..=3 {
+            tap(&mut nav, pad_with(|pad| pad.dpad_right = true));
+            assert_eq!(nav.selected, step);
+            let visual = nav.home_card_visual_index();
+            assert!(
+                (visual - step as f32).abs() < 0.001,
+                "step {step}: visual {visual}"
             );
         }
-
-        assert_eq!(nav.selected, 3);
-        assert_eq!(nav.scroll_x, 0);
-        assert!(nav.home_scroll_animation.is_settled());
-
-        let page_press_at = start + Duration::from_millis(300);
-        nav.handle_input(&held_right, page_press_at, &catalog);
-        assert_eq!(nav.selected, 4);
-        assert_eq!(nav.scroll_x, 0);
-        assert_eq!(
-            nav.home_scroll_animation.target(),
-            (4 * home_tile_pitch()) as f64
-        );
-        assert!(!nav.home_scroll_animation.is_settled());
-
-        let mut previous_scroll = nav.scroll_x;
-        for frame in 1..=120 {
-            nav.handle_input(
-                &PadState::default(),
-                page_press_at + Duration::from_millis(frame * 16),
-                &catalog,
-            );
-            assert!(nav.scroll_x >= previous_scroll);
-            previous_scroll = nav.scroll_x;
-        }
-        assert_eq!(nav.scroll_x, 4 * home_tile_pitch());
-        assert!(nav.home_scroll_animation.is_settled());
     }
 
     #[test]

@@ -14,7 +14,7 @@ mod artwork;
 mod level_trick;
 mod responsive;
 use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
-pub use level_trick::{LEVEL_TRICK_MILLIS, LevelChange};
+pub use level_trick::{LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LevelChange};
 
 pub const LOGICAL_WIDTH: usize = 960;
 pub const LOGICAL_HEIGHT: usize = 540;
@@ -64,9 +64,10 @@ pub struct NestedLevel<'a> {
     pub path: &'a [&'a str],
     pub games: u32,
     pub children: u32,
-    /// Plural noun for the cards on this level, for example `SYSTEMS`.
+    /// Plural noun for the cards on this level, for example `MAKERS`.
     pub children_label: &'a str,
-    pub favourites: u32,
+    /// A second figure for the group, for example `(17, "SYSTEMS")`.
+    pub detail: Option<(u32, &'a str)>,
     /// The collection colour carried by every card below its root card.
     pub accent: u16,
 }
@@ -958,7 +959,9 @@ fn draw_group_sidebar(
     );
     draw_line(pixels, 28, 239, 240, 239, RULE);
     draw_role_number(pixels, typography, 30, 265, level.children, CREAM, 3);
-    draw_role_number(pixels, typography, 150, 265, level.favourites, CREAM, 3);
+    if let Some((value, _)) = level.detail {
+        draw_role_number(pixels, typography, 150, 265, value, CREAM, 3);
+    }
     draw_role_text(
         pixels,
         typography,
@@ -969,16 +972,18 @@ fn draw_group_sidebar(
         MUTED,
         1,
     );
-    draw_role_text(
-        pixels,
-        typography,
-        TextRole::Metadata,
-        150,
-        310,
-        "FAVOURITES",
-        MUTED,
-        1,
-    );
+    if let Some((_, label)) = level.detail {
+        draw_role_text(
+            pixels,
+            typography,
+            TextRole::Metadata,
+            150,
+            310,
+            label,
+            MUTED,
+            1,
+        );
+    }
     draw_line(pixels, 28, 340, 240, 340, RULE);
     draw_rect(pixels, 29, 436, 210, 7, level.accent);
 }
