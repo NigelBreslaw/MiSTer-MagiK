@@ -266,9 +266,12 @@ for artifact in "$MAIN_BIN" "$SCANOUT_MODULE" "$SCANOUT_METADATA" "$LATCH_RBF" "
     exit 1
   fi
 done
-SCANOUT_SOURCE_REVISION="$(sed -n 's/^source_revision=//p' "$SCANOUT_METADATA")"
+SCANOUT_SOURCE_REVISION="$(sed -n 's/^component_revision=//p' "$SCANOUT_METADATA")"
+if [[ -z "$SCANOUT_SOURCE_REVISION" ]]; then
+  SCANOUT_SOURCE_REVISION="$(sed -n 's/^source_revision=//p' "$SCANOUT_METADATA")"
+fi
 if [[ ! "$SCANOUT_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "ERROR: scanout metadata lacks a valid source_revision." >&2
+  echo "ERROR: scanout metadata lacks a valid component_revision or legacy source_revision." >&2
   exit 1
 fi
 LATCH_SOURCE_REVISION="$(sed -n 's/^source_commit=//p' "$LATCH_METADATA")"

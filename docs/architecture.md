@@ -215,9 +215,10 @@ executable, so the session survives games. Reboot clears it. If the session
 Main is not running after a bounded wait, or any later step fails, the helper
 restarts stock Main unless a Main is already running. Only stock Main can hand
 off, one handoff at a time under a lock; a running MagiK Main refuses the start.
-The manager refuses platforms the frontend would reject (6.18 is
-Development-only) and Main binaries without the session guard. Development
-boards instead select `MiSTer_MagiKDev` with `[MiSTer] main=`, so Dev starts on
+The manager and frontend accept the legacy 5.15 profile and the exact pinned
+stock 6.18 profile in public and Development layouts. They reject mismatched
+kernel, provider and artifact identities and Main binaries without the session
+guard. Development boards instead select `MiSTer_MagiKDev` with `[MiSTer] main=`, so Dev starts on
 every boot; `start dev` remains available to the manager for that layout.
 
 ## Framebuffer Ownership

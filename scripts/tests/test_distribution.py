@@ -73,6 +73,21 @@ class DistributionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "nonexecutable|missing"):
             dist.verify(self.fixture.package(), channel="beta", write_receipt=True)
 
+    def test_manager_verification_uses_public_layout_and_shipped_kernel(self):
+        metadata = self.fixture.stage / dist.PUBLIC["scanout_metadata"].removeprefix(
+            "/media/fat/"
+        )
+        metadata.write_text("vermagic=6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 \n")
+        self.fixture.refresh()
+        dist.verify_root(self.fixture.stage)
+        self.assertEqual(
+            self.manager.call_args.args[0], [__file__, "verify-platform", "public"]
+        )
+        self.assertEqual(
+            self.manager.call_args.kwargs["env"]["MISTER_MAGIK_TEST_KERNEL_RELEASE"],
+            "6.18.38-MiSTer",
+        )
+
     def test_layout_inventory_does_not_rehash_every_payload(self):
         with patch.object(dist, "sha256_file", wraps=dist.sha256_file) as digest:
             dist.verify_root(self.fixture.stage)

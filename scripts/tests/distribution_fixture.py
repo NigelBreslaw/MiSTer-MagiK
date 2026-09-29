@@ -31,6 +31,9 @@ class CandidateFixture:
             target = self.stage / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"fixture 0.2.42\n")
+        (
+            self.stage / dist.PUBLIC["scanout_metadata"].removeprefix("/media/fat/")
+        ).write_text("vermagic=5.15.1-MiSTer SMP mod_unload ARMv7 p2v8 \n")
         self.fields = manifest.parse_fields(
             (
                 manifest.SCHEMA_PATH.parent / "generated/platform-v3.public.fixture"

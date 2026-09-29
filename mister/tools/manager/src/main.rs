@@ -684,7 +684,7 @@ fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
         );
     }
     // The frontend refuses platforms this rule rejects, so refuse them before
-    // stock Main is stopped: 6.18 is Development-only.
+    // stock Main is stopped. Both layouts use the exact pinned kernel identity.
     let metadata_release = module_metadata
         .get("kernel_release")
         .map_or(kernel.as_str(), String::as_str);
@@ -694,7 +694,6 @@ fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
                 &kernel,
                 module_metadata.get("platform_profile").map(String::as_str),
                 module_metadata.get("provider_identity").map(String::as_str),
-                layout == ManifestLayout::Development,
             )
         })
         .flatten()
@@ -1285,26 +1284,19 @@ mod tests {
     }
 
     #[test]
-    fn public_start_accepts_legacy_and_refuses_development_only_kernels() {
+    fn public_start_accepts_legacy_and_exact_stock_618_profiles() {
         let root = fixture_root("public-kernels");
         let paths = fixture_paths(&root);
         write_valid_platform(&paths);
         verify_layout(&paths, ManifestLayout::Public).unwrap();
 
-        // 6.18 platforms are Development-only, so a public start must refuse
-        // before stock Main is stopped.
+        // The pinned 6.18 platform supports the public layout too.
         let root618 = fixture_root("public-618");
         let mut paths618 = development_paths(&root618);
         write_platform(&paths618, ManifestLayout::Public, true, true);
-        let error = verify_layout(&paths618, ManifestLayout::Public).unwrap_err();
-        assert!(error.to_string().contains("unsupported kernel/layout"));
+        verify_layout(&paths618, ManifestLayout::Public).unwrap();
         queue(&paths618, [InputEvent::Down]);
-        assert!(
-            start(&paths618, ManifestLayout::Public)
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported kernel/layout")
-        );
+        start(&paths618, ManifestLayout::Public).unwrap();
 
         // The same module is accepted for the Development layout.
         let dev_root = fixture_root("dev-618");

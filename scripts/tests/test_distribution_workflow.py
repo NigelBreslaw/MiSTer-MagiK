@@ -1,7 +1,11 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import os
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 from scripts.magik_ci.distribution import ROOT
 
@@ -28,6 +32,43 @@ class DistributionWorkflowTests(unittest.TestCase):
         self.assertIn("needs: [release-metadata, distribution, promotion]", publish)
         for forbidden in ("--clobber", "release delete", "require-alpha-promotion"):
             self.assertNotIn(forbidden, workflow)
+
+    def test_scanout_source_offer_accepts_current_and_legacy_provenance(self):
+        packaging = (ROOT / "scripts/package-distribution.sh").read_text()
+        block = (
+            "SCANOUT_SOURCE_REVISION="
+            + packaging.split("\nSCANOUT_SOURCE_REVISION=", 1)[1].split(
+                "\nLATCH_SOURCE_REVISION=", 1
+            )[0]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "provenance.txt"
+            current, legacy = "a" * 40, "b" * 40
+            for text, expected in (
+                (f"component_revision={current}\n", current),
+                (f"source_revision={legacy}\n", legacy),
+                (f"component_revision={current}\nsource_revision={legacy}\n", current),
+                ("component_revision=invalid\n", None),
+                ("builder_revision=" + current + "\n", None),
+            ):
+                with self.subTest(metadata=text):
+                    metadata.write_text(text)
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-ec",
+                            block + '\nprintf "%s" "$SCANOUT_SOURCE_REVISION"',
+                        ],
+                        env={**os.environ, "SCANOUT_METADATA": str(metadata)},
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if expected is None:
+                        self.assertNotEqual(result.returncode, 0)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, expected)
 
     def test_shipped_installer_gate_runs_before_candidate_upload(self):
         workflow = (ROOT / ".github/workflows/distribution.yml").read_text()
