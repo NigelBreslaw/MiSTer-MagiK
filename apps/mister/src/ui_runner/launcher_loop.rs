@@ -16337,8 +16337,10 @@ mod tests {
         let focus = launcher_input_focus(true, false, false, false, true, false, &nav);
         router.set_focus(focus);
         assert_eq!(focus, initial_focus);
-        let mut held = PadState::default();
-        held.btn_a = router.action_held(LogicalAction::Activate);
+        let held = PadState {
+            btn_a: router.action_held(LogicalAction::Activate),
+            ..PadState::default()
+        };
         assert!(held.btn_a);
         assert!(
             nav.handle_held_tick_with_navigation_intents(
