@@ -40,7 +40,6 @@ pub fn resolve_profile(
     kernel_release: &str,
     platform_contract_id: Option<&str>,
     provider_identity: Option<&str>,
-    development_layout: bool,
 ) -> Option<PlatformProfile> {
     if kernel_release == LEGACY_KERNEL_RELEASE
         && platform_contract_id.is_none_or(|value| value == LEGACY_PLATFORM_CONTRACT_ID)
@@ -48,8 +47,7 @@ pub fn resolve_profile(
     {
         return Some(LEGACY_PROFILE);
     }
-    if development_layout
-        && kernel_release == DEVELOPMENT_KERNEL_RELEASE
+    if kernel_release == DEVELOPMENT_KERNEL_RELEASE
         && platform_contract_id == Some(DEVELOPMENT_PLATFORM_CONTRACT_ID)
         && provider_identity == Some(DEVELOPMENT_PROVIDER_IDENTITY)
     {
@@ -141,7 +139,7 @@ mod tests {
     #[test]
     fn legacy_profile_remains_compatible_with_historical_metadata() {
         assert_eq!(
-            resolve_profile(LEGACY_KERNEL_RELEASE, None, None, false),
+            resolve_profile(LEGACY_KERNEL_RELEASE, None, None),
             Some(LEGACY_PROFILE)
         );
         assert_eq!(
@@ -149,38 +147,30 @@ mod tests {
                 LEGACY_KERNEL_RELEASE,
                 Some(LEGACY_PLATFORM_CONTRACT_ID),
                 None,
-                true,
             ),
             Some(LEGACY_PROFILE)
         );
     }
 
     #[test]
-    fn development_profile_requires_exact_identity_and_dev_layout() {
+    fn stock_618_profile_requires_exact_identity_in_either_layout() {
         assert_eq!(
             resolve_profile(
                 DEVELOPMENT_KERNEL_RELEASE,
                 Some(DEVELOPMENT_PLATFORM_CONTRACT_ID),
                 Some(DEVELOPMENT_PROVIDER_IDENTITY),
-                true,
             ),
             Some(DEVELOPMENT_PROFILE)
         );
-        for (contract, provider, development) in [
-            (
-                Some(DEVELOPMENT_PLATFORM_CONTRACT_ID),
-                Some(DEVELOPMENT_PROVIDER_IDENTITY),
-                false,
-            ),
-            (Some(DEVELOPMENT_PLATFORM_CONTRACT_ID), None, true),
+        for (contract, provider) in [
+            (Some(DEVELOPMENT_PLATFORM_CONTRACT_ID), None),
             (
                 Some(LEGACY_PLATFORM_CONTRACT_ID),
                 Some(DEVELOPMENT_PROVIDER_IDENTITY),
-                true,
             ),
         ] {
             assert_eq!(
-                resolve_profile(DEVELOPMENT_KERNEL_RELEASE, contract, provider, development),
+                resolve_profile(DEVELOPMENT_KERNEL_RELEASE, contract, provider),
                 None
             );
         }
@@ -193,7 +183,6 @@ mod tests {
                 LEGACY_KERNEL_RELEASE,
                 Some(DEVELOPMENT_PLATFORM_CONTRACT_ID),
                 Some(DEVELOPMENT_PROVIDER_IDENTITY),
-                true,
             ),
             None
         );
@@ -202,10 +191,9 @@ mod tests {
                 DEVELOPMENT_KERNEL_RELEASE,
                 Some(LEGACY_PLATFORM_CONTRACT_ID),
                 None,
-                true,
             ),
             None
         );
-        assert_eq!(resolve_profile("6.18.39-MiSTer", None, None, true), None);
+        assert_eq!(resolve_profile("6.18.39-MiSTer", None, None), None);
     }
 }

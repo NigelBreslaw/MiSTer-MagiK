@@ -189,12 +189,19 @@ def verify_root(root: Path) -> dict[str, str]:
     )
     if not manager.is_file():
         raise FileNotFoundError(f"host manager missing: {manager}")
+    metadata = manifest._metadata(
+        root / PUBLIC["scanout_metadata"].removeprefix("/media/fat/")
+    )
+    vermagic = metadata.get("vermagic", "").split()
+    if not vermagic:
+        raise ValueError("scanout metadata missing vermagic")
     result = subprocess.run(
-        [str(manager), "verify-platform"],
+        [str(manager), "verify-platform", "public"],
         env={
             **os.environ,
             "MISTER_MAGIK_FAT": str(root),
             "MISTER_MAGIK_TEST_MODE": "1",
+            "MISTER_MAGIK_TEST_KERNEL_RELEASE": vermagic[0],
         },
         capture_output=True,
         text=True,

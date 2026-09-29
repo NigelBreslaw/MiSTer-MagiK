@@ -55,16 +55,17 @@ def smoke(root: Path) -> None:
             check=False,
         )
 
-    result = execute([str(manager), "verify-platform", "public"])
-    if result.returncode or "verified platform" not in result.stdout:
-        raise ValueError(
-            f"shipped platform verification failed: {result.stdout[-1500:]} {result.stderr[-1500:]}"
-        )
-    # The launcher must reach the verified manager, which then refuses a cancel.
+    # Downloader cannot carry executable modes. The shipped launcher validates
+    # the manager hash and makes it executable before invoking it, just as on FAT.
     result = execute(["/bin/sh", str(root / dist.LAUNCHER)], keys="cancel")
     if not result.returncode or "start cancelled" not in result.stderr:
         raise ValueError(
             f"shipped launcher did not reach the manager: {result.stdout[-1500:]} {result.stderr[-1500:]}"
+        )
+    result = execute([str(manager), "verify-platform", "public"])
+    if result.returncode or "verified platform" not in result.stdout:
+        raise ValueError(
+            f"shipped platform verification failed: {result.stdout[-1500:]} {result.stderr[-1500:]}"
         )
     if before != dist._inventory(root):
         raise ValueError("installer verification changed package bytes")

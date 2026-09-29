@@ -58,27 +58,26 @@ fn resolve_installed_with_runtime(
                 metadata_release,
                 metadata.get("platform_profile").map(String::as_str),
                 metadata.get("provider_identity").map(String::as_str),
-                layout == Layout::Development,
             )
             .filter(|profile| *profile == LEGACY_PROFILE)
             .ok_or_else(|| "legacy scanout profile identity mismatch".to_owned());
         }
         return Ok(LEGACY_PROFILE);
     }
-    if kernel_release != DEVELOPMENT_KERNEL_RELEASE || layout != Layout::Development {
+    if kernel_release != DEVELOPMENT_KERNEL_RELEASE {
         return Err(format!(
             "unsupported kernel/layout: {kernel_release} {layout:?}"
         ));
     }
 
     let manifest_text = fs::read_to_string(paths.manifest_path())
-        .map_err(|error| format!("development platform manifest unavailable: {error}"))?;
+        .map_err(|error| format!("installed platform manifest unavailable: {error}"))?;
     let manifest = mister_magik_platform_manifest_contract::parse(
         &manifest_text,
-        Layout::Development,
+        layout,
         ValidationProfile::AgentStrict,
     )
-    .map_err(|error| format!("development platform manifest invalid: {error}"))?;
+    .map_err(|error| format!("installed platform manifest invalid: {error}"))?;
     verify_artifact(
         &manifest,
         "scanout_module_sha256",
@@ -274,7 +273,11 @@ mod tests {
     }
 
     fn development_fixture(root: &Path) -> DevicePaths {
-        let paths = DevicePaths::remapped(Layout::Development, root);
+        stock_618_fixture(root, Layout::Development)
+    }
+
+    fn stock_618_fixture(root: &Path, layout: Layout) -> DevicePaths {
+        let paths = DevicePaths::remapped(layout, root);
         fs::create_dir_all(paths.app_dir()).unwrap();
         fs::write(paths.scanout_module_path(), b"module").unwrap();
         fs::write(paths.gui_path(), b"runtime").unwrap();
@@ -306,7 +309,7 @@ mod tests {
         values.insert("qualification_candidate_id".to_owned(), "0".repeat(64));
         values.insert("latch_protocol_version".to_owned(), "5".to_owned());
         values.insert("latch_capability_mask".to_owned(), "0x03ff".to_owned());
-        for (name, installed) in Layout::Development.paths().components() {
+        for (name, installed) in layout.paths().components() {
             values.insert(format!("{name}_path"), installed.to_owned());
             values.insert(format!("{name}_sha256"), "c".repeat(64));
         }
@@ -353,13 +356,36 @@ mod tests {
     }
 
     #[test]
-    fn development_release_is_never_accepted_in_public_layout() {
-        let paths = DevicePaths::remapped(Layout::Public, "/missing");
+    fn public_618_requires_its_own_manifest_and_loaded_module_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-scanout-profile-public-{}",
+            std::process::id()
+        ));
+        let paths = stock_618_fixture(&root, Layout::Public);
+        let resolve = || {
+            resolve_installed_with_runtime(
+                DEVELOPMENT_KERNEL_RELEASE,
+                Layout::Public,
+                &paths,
+                &root.join("module.note.gnu.build-id"),
+            )
+        };
+        assert_eq!(resolve(), Ok(DEVELOPMENT_PROFILE));
+        fs::write(root.join("module.note.gnu.build-id"), build_id_note(0x33)).unwrap();
+        assert!(resolve().unwrap_err().contains("module_build_id mismatch"));
+        fs::write(root.join("module.note.gnu.build-id"), build_id_note(0x22)).unwrap();
+        let manifest = fs::read_to_string(paths.manifest_path()).unwrap();
+        fs::write(
+            paths.manifest_path(),
+            manifest.replace("/media/fat/mister-magik/", "/media/fat/mister-magik-dev/"),
+        )
+        .unwrap();
         assert!(
-            resolve_installed(DEVELOPMENT_KERNEL_RELEASE, Layout::Public, &paths)
+            resolve()
                 .unwrap_err()
-                .contains("unsupported kernel/layout")
+                .contains("installed platform manifest invalid")
         );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

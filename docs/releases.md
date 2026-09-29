@@ -81,6 +81,15 @@ rebooting or running `Start_MagiK`; incomplete packages fail verification.
 
 ## Device and platform delivery
 
+Public alpha supports the pinned stock Linux 6.18 scanout profile as well as the
+legacy 5.15 profile. Historical `development_only` metadata and `DEVELOPMENT_*`
+constant names remain provenance for the original 6.18 trial; they do not select
+the installed layout. Public and Development retain separate manifest paths,
+Main names and data roots. The public 6.18 frontend still checks the exact kernel
+release, kernel revision, provider, module hash, vermagic and loaded module build
+ID. Local package verification uses the shipped module's kernel identity; it
+does not qualify physical scanout or Main handoff.
+
 Platform component IDs hash selected input contents; the last-changing Git
 revision remains provenance, not part of the cache key. The platform workflow
 contributes each component's build job and shared build settings, rather than
