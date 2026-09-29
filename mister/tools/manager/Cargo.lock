@@ -100,6 +100,7 @@ dependencies = [
  "libc",
  "mister-magik-ini",
  "mister-magik-platform-manifest-contract",
+ "mister-magik-scanout-contract",
 ]
 
 [[package]]
@@ -110,6 +111,10 @@ dependencies = [
  "sha2",
  "toml",
 ]
+
+[[package]]
+name = "mister-magik-scanout-contract"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"

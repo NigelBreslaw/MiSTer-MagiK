@@ -5,10 +5,13 @@ use mister_magik_ini::Document;
 use mister_magik_platform_manifest_contract::{
     Layout as ManifestLayout, ParsedManifest, ValidationProfile,
 };
+use mister_magik_scanout_contract::{
+    DEVELOPMENT_KERNEL_REVISION, DEVELOPMENT_PROFILE, resolve_profile,
+};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, RawFd};
@@ -138,6 +141,8 @@ struct Paths {
     app: PathBuf,
     manifest: PathBuf,
     test_mode: bool,
+    /// Test-mode stand-in for the running kernel (emulated CI, host fixtures).
+    kernel_release: Option<String>,
     test_keys: RefCell<VecDeque<InputEvent>>,
 }
 
@@ -151,10 +156,14 @@ impl Paths {
                 .strip_prefix("/media/fat")
                 .expect("public app root is below /media/fat"),
         );
+        let test_mode = env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1");
         Self {
             ini: fat.join("MiSTer.ini"),
             manifest: app.join(mister_magik_platform_manifest_contract::FILE_NAME),
-            test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
+            test_mode,
+            kernel_release: env::var("MISTER_MAGIK_TEST_KERNEL_RELEASE")
+                .ok()
+                .filter(|release| test_mode && !release.is_empty()),
             test_keys: RefCell::new(
                 env::var("MISTER_MAGIK_TEST_KEYS")
                     .unwrap_or_default()
@@ -170,6 +179,13 @@ impl Paths {
 
     fn test_mode(&self) -> bool {
         self.test_mode
+    }
+
+    fn kernel_release(&self) -> Result<String> {
+        match &self.kernel_release {
+            Some(release) => Ok(release.clone()),
+            None => running_kernel_release(),
+        }
     }
 }
 
@@ -220,6 +236,7 @@ const STOCK_MAIN: &str = "/media/fat/MiSTer";
 const SESSION_MAIN_ENV: &str = "MISTER_MAGIK_SESSION_MAIN";
 const LIVE_HANDOFF_COMMAND: &str = "live-handoff";
 const LIVE_HANDOFF_LOG: &str = "/tmp/mister-magik-start.log";
+const LIVE_HANDOFF_LOCK: &str = "/tmp/mister-magik-start.lock";
 // Lets the Scripts session release tty2 before MagiK starts its launcher there.
 const LIVE_HANDOFF_DELAY: Duration = Duration::from_secs(2);
 const STOCK_MAIN_STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -266,7 +283,12 @@ fn layout_manifest(paths: &Paths, layout: ManifestLayout) -> PathBuf {
 /// inherit that environment. A reboot returns to the configured Main.
 fn start(paths: &Paths, layout: ManifestLayout) -> Result<()> {
     let main = layout_main_name(layout);
-    match running_magik_main(paths)? {
+    let running = if paths.test_mode() {
+        None
+    } else {
+        running_magik_main()?
+    };
+    match running {
         Some(running) if running == main => {
             println!("MiSTer MagiK: {main} is already running.");
             return Ok(());
@@ -278,6 +300,9 @@ fn start(paths: &Paths, layout: ManifestLayout) -> Result<()> {
             .into());
         }
         None => {}
+    }
+    if !paths.test_mode() && try_lock(Path::new(LIVE_HANDOFF_LOCK))?.is_none() {
+        return Err("a MagiK start is already in progress".into());
     }
     safety_confirmation(
         paths,
@@ -306,10 +331,7 @@ fn process_running(name: &str) -> Result<bool> {
     Ok(output.stdout.iter().any(|byte| !byte.is_ascii_whitespace()))
 }
 
-fn running_magik_main(paths: &Paths) -> Result<Option<&'static str>> {
-    if paths.test_mode() {
-        return Ok(None);
-    }
+fn running_magik_main() -> Result<Option<&'static str>> {
     for layout in [ManifestLayout::Development, ManifestLayout::Public] {
         let main = layout_main_name(layout);
         if process_running(main)? {
@@ -374,6 +396,7 @@ fn start_main(path: &str, session: bool) -> Result<()> {
         .env_remove("MISTER_MAGIK_TEST_MODE")
         .env_remove("MISTER_MAGIK_TEST_OUTPUT_MODE")
         .env_remove("MISTER_MAGIK_TEST_KEYS")
+        .env_remove("MISTER_MAGIK_TEST_KERNEL_RELEASE")
         .env_remove(SESSION_MAIN_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -385,31 +408,120 @@ fn start_main(path: &str, session: bool) -> Result<()> {
     Ok(())
 }
 
-/// Detached helper: replaces stock Main with the session Main. If the session
-/// Main is not running after a bounded wait, stock Main is started again so
-/// the device is never left without a Main.
-fn live_handoff(layout: ManifestLayout) -> Result<()> {
-    let main_path = layout.paths().main;
-    let main = layout_main_name(layout);
-    std::thread::sleep(LIVE_HANDOFF_DELAY);
-    let _ = Command::new("killall").args(["-TERM", "MiSTer"]).status();
-    if !wait_until(STOCK_MAIN_STOP_TIMEOUT, || Ok(!process_running("MiSTer")?))? {
-        let _ = Command::new("killall").args(["-KILL", "MiSTer"]).status();
-        if !wait_until(Duration::from_secs(1), || Ok(!process_running("MiSTer")?))? {
-            return Err("stock Main did not stop; MagiK was not started".into());
+/// Exclusive handoff lock. The kernel drops it when the holder exits, so a
+/// crashed helper cannot leave a stale lock behind.
+fn try_lock(path: &Path) -> Result<Option<File>> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    // SAFETY: flock only uses the descriptor number of the open file.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(file));
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(None)
+    } else {
+        Err(error.into())
+    }
+}
+
+/// Process operations behind the handoff, so its failure paths are testable.
+trait Processes {
+    fn running(&mut self, name: &str) -> Result<bool>;
+    fn stop_stock(&mut self) -> Result<()>;
+    fn start(&mut self, path: &str, session: bool) -> Result<()>;
+    fn settle(&mut self);
+}
+
+struct SystemProcesses;
+
+impl Processes for SystemProcesses {
+    fn running(&mut self, name: &str) -> Result<bool> {
+        process_running(name)
+    }
+
+    fn stop_stock(&mut self) -> Result<()> {
+        let _ = Command::new("killall").args(["-TERM", "MiSTer"]).status();
+        if !wait_until(STOCK_MAIN_STOP_TIMEOUT, || Ok(!process_running("MiSTer")?))? {
+            let _ = Command::new("killall").args(["-KILL", "MiSTer"]).status();
+            if !wait_until(Duration::from_secs(1), || Ok(!process_running("MiSTer")?))? {
+                return Err("stock Main did not stop".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn start(&mut self, path: &str, session: bool) -> Result<()> {
+        start_main(path, session)
+    }
+
+    fn settle(&mut self) {
+        // Main replaces its own process while it loads the latch RBF, so callers
+        // check by name after this bounded wait.
+        std::thread::sleep(SESSION_MAIN_START_TIMEOUT);
+    }
+}
+
+fn replace_stock_main(system: &mut dyn Processes, main_path: &str, main: &str) -> Result<()> {
+    system.stop_stock()?;
+    println!("MiSTer MagiK: stock Main stopped; starting {main_path}.");
+    system.start(main_path, true)?;
+    system.settle();
+    if system.running(main)? {
+        println!("MiSTer MagiK: {main} is running for this boot.");
+        Ok(())
+    } else {
+        Err(format!("{main} did not stay running").into())
+    }
+}
+
+/// Never starts a second Main: stock Main is restarted only when the process
+/// table positively shows that no Main is running.
+fn restore_stock_main(system: &mut dyn Processes, main: &str) -> Result<&'static str> {
+    if system.running("MiSTer")? || system.running(main)? {
+        return Ok("a Main is already running");
+    }
+    system.start(STOCK_MAIN, false)?;
+    Ok("stock Main was restarted")
+}
+
+/// Replaces stock Main with the session Main. Every failure after stock Main
+/// may have stopped goes through recovery, and both errors are reported.
+fn run_handoff(system: &mut dyn Processes, main_path: &str, main: &str) -> Result<()> {
+    for layout in [ManifestLayout::Development, ManifestLayout::Public] {
+        let running = layout_main_name(layout);
+        if system.running(running)? {
+            return Err(format!("{running} is already running; nothing was changed").into());
         }
     }
-    println!("MiSTer MagiK: stock Main stopped; starting {main_path}.");
-    start_main(main_path, true)?;
-    // Main replaces its own process while it loads the latch RBF, so check by name.
-    std::thread::sleep(SESSION_MAIN_START_TIMEOUT);
-    if process_running(main)? {
-        println!("MiSTer MagiK: {main} is running for this boot.");
-        return Ok(());
+    if !system.running("MiSTer")? {
+        return Err("stock Main is not running; nothing was changed".into());
     }
-    println!("MiSTer MagiK: {main} is not running; restarting stock Main.");
-    start_main(STOCK_MAIN, false)?;
-    Err(format!("{main} did not stay running; stock Main was restarted").into())
+    let Err(primary) = replace_stock_main(system, main_path, main) else {
+        return Ok(());
+    };
+    println!("MiSTer MagiK: {primary}; recovering stock Main.");
+    match restore_stock_main(system, main) {
+        Ok(outcome) => Err(format!("{primary}; recovery: {outcome}").into()),
+        Err(recovery) => Err(format!("{primary}; recovery failed: {recovery}").into()),
+    }
+}
+
+/// Detached helper. Holds the handoff lock so concurrent starts cannot both
+/// replace stock Main; a second helper does nothing.
+fn live_handoff(layout: ManifestLayout) -> Result<()> {
+    let Some(_lock) = try_lock(Path::new(LIVE_HANDOFF_LOCK))? else {
+        return Err("another MagiK start is in progress; nothing was changed".into());
+    };
+    std::thread::sleep(LIVE_HANDOFF_DELAY);
+    run_handoff(
+        &mut SystemProcesses,
+        layout.paths().main,
+        layout_main_name(layout),
+    )
 }
 
 fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<()> {
@@ -565,21 +677,56 @@ fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
     {
         return Err("latch metadata protocol identity mismatch".into());
     }
-    let kernel = match env::var("MISTER_MAGIK_TEST_KERNEL_RELEASE") {
-        // Delivery smoke runs the ARM manager under emulation on a CI kernel.
-        Ok(release) if paths.test_mode() && !release.is_empty() => release,
-        _ => running_kernel_release()?,
-    };
+    let kernel = paths.kernel_release()?;
     if !module_matches_kernel(module_metadata.get("vermagic"), &kernel) {
         return Err(
             format!("scanout module vermagic does not match running kernel {kernel}").into(),
         );
+    }
+    // The frontend refuses platforms this rule rejects, so refuse them before
+    // stock Main is stopped: 6.18 is Development-only.
+    let metadata_release = module_metadata
+        .get("kernel_release")
+        .map_or(kernel.as_str(), String::as_str);
+    let profile = (metadata_release == kernel)
+        .then(|| {
+            resolve_profile(
+                &kernel,
+                module_metadata.get("platform_profile").map(String::as_str),
+                module_metadata.get("provider_identity").map(String::as_str),
+                layout == ManifestLayout::Development,
+            )
+        })
+        .flatten()
+        .ok_or_else(|| format!("unsupported kernel/layout: {kernel} {layout:?}"))?;
+    if profile == DEVELOPMENT_PROFILE
+        && module_metadata.get("kernel_revision").map(String::as_str)
+            != Some(DEVELOPMENT_KERNEL_REVISION)
+    {
+        return Err("scanout metadata kernel revision mismatch".into());
+    }
+    let main_path = fat_path(paths, layout.paths().main);
+    if !main_supports_session(&main_path)? {
+        return Err(format!(
+            "{} predates no-reboot sessions ({SESSION_MAIN_ENV}); publish a platform with the session Main",
+            main_path.display()
+        )
+        .into());
     }
     println!(
         "MiSTer MagiK: verified platform {}",
         fields["magik_revision"]
     );
     Ok(())
+}
+
+/// Main keeps a session across core restarts only if it carries the guard that
+/// reads the session variable. The binary is hash-bound by the manifest.
+fn main_supports_session(main: &Path) -> Result<bool> {
+    let marker = SESSION_MAIN_ENV.as_bytes();
+    Ok(fs::read(main)?
+        .windows(marker.len())
+        .any(|window| window == marker))
 }
 
 fn module_matches_kernel(vermagic: Option<&String>, kernel: &str) -> bool {
@@ -713,7 +860,15 @@ mod tests {
             app: root.join("mister-magik"),
             manifest: root.join("manifest"),
             test_mode: true,
+            kernel_release: Some("5.15.1-MiSTer".into()),
             test_keys: RefCell::default(),
+        }
+    }
+
+    fn development_paths(root: &Path) -> Paths {
+        Paths {
+            kernel_release: Some("6.18.38-MiSTer".into()),
+            ..fixture_paths(root)
         }
     }
 
@@ -734,11 +889,29 @@ mod tests {
     }
 
     fn write_layout_platform(paths: &Paths, layout: ManifestLayout) {
+        write_platform(paths, layout, layout == ManifestLayout::Development, true);
+    }
+
+    /// `development_kernel` selects 6.18 development-only module metadata;
+    /// `session_main` selects a Main carrying the session guard marker.
+    fn write_platform(
+        paths: &Paths,
+        layout: ManifestLayout,
+        development_kernel: bool,
+        session_main: bool,
+    ) {
         let app = &layout_app(paths, layout);
         let fpga = app.join("fpga");
         fs::create_dir_all(&fpga).unwrap();
         let files = [
-            (fat_path(paths, layout.paths().main), b"main".as_slice()),
+            (
+                fat_path(paths, layout.paths().main),
+                if session_main {
+                    b"main MISTER_MAGIK_SESSION_MAIN".as_slice()
+                } else {
+                    b"main".as_slice()
+                },
+            ),
             (app.join("mister-magik-fb"), b"gui".as_slice()),
             (app.join("mister-magik-manager"), b"manager".as_slice()),
             (
@@ -754,12 +927,18 @@ mod tests {
         let module_sha = digest(&app.join("mister_magik_scanout_slots.ko")).unwrap();
         let rbf_sha = digest(&fpga.join("menu-magik-vblank-latch.rbf")).unwrap();
         let contract = "1".repeat(64);
+        let module_metadata = if development_kernel {
+            format!(
+                "kernel_release=6.18.38-MiSTer\nkernel_revision={DEVELOPMENT_KERNEL_REVISION}\nplatform_profile=stock-6.18-latch-reuse-v3\nprovider_identity=stock-6.18-latch-reuse-v3\ndevelopment_only=1\nmodule_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 \n"
+            )
+        } else {
+            format!(
+                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=5.15.1-MiSTer SMP mod_unload ARMv7 p2v8 \n"
+            )
+        };
         fs::write(
             app.join("mister_magik_scanout_slots.metadata.txt"),
-            format!(
-                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic={} SMP\n",
-                running_kernel_release().unwrap()
-            ),
+            module_metadata,
         )
         .unwrap();
         fs::write(
@@ -1043,7 +1222,7 @@ mod tests {
     #[test]
     fn start_dev_leaves_boot_configuration_and_public_state_unchanged() {
         let root = fixture_root("start-dev");
-        let paths = fixture_paths(&root);
+        let paths = development_paths(&root);
         let ini = b"[MiSTer]\nmain=MiSTer\nvideo_mode=8\n";
         fs::write(&paths.ini, ini).unwrap();
         write_layout_platform(&paths, ManifestLayout::Development);
@@ -1058,7 +1237,7 @@ mod tests {
     #[test]
     fn start_refuses_without_confirmation_or_valid_platform() {
         let root = fixture_root("start-refused");
-        let paths = fixture_paths(&root);
+        let paths = development_paths(&root);
         write_layout_platform(&paths, ManifestLayout::Development);
         queue(&paths, [InputEvent::Confirm]);
         let error = start(&paths, ManifestLayout::Development).unwrap_err();
@@ -1066,7 +1245,7 @@ mod tests {
 
         // A Public-only install does not satisfy a Development start.
         let public_root = fixture_root("start-public-only");
-        let public_paths = fixture_paths(&public_root);
+        let public_paths = development_paths(&public_root);
         write_valid_platform(&public_paths);
         queue(&public_paths, [InputEvent::Down]);
         assert!(start(&public_paths, ManifestLayout::Development).is_err());
@@ -1103,6 +1282,217 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(public_root).unwrap();
+    }
+
+    #[test]
+    fn public_start_accepts_legacy_and_refuses_development_only_kernels() {
+        let root = fixture_root("public-kernels");
+        let paths = fixture_paths(&root);
+        write_valid_platform(&paths);
+        verify_layout(&paths, ManifestLayout::Public).unwrap();
+
+        // 6.18 platforms are Development-only, so a public start must refuse
+        // before stock Main is stopped.
+        let root618 = fixture_root("public-618");
+        let mut paths618 = development_paths(&root618);
+        write_platform(&paths618, ManifestLayout::Public, true, true);
+        let error = verify_layout(&paths618, ManifestLayout::Public).unwrap_err();
+        assert!(error.to_string().contains("unsupported kernel/layout"));
+        queue(&paths618, [InputEvent::Down]);
+        assert!(
+            start(&paths618, ManifestLayout::Public)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported kernel/layout")
+        );
+
+        // The same module is accepted for the Development layout.
+        let dev_root = fixture_root("dev-618");
+        let dev = development_paths(&dev_root);
+        write_layout_platform(&dev, ManifestLayout::Development);
+        verify_layout(&dev, ManifestLayout::Development).unwrap();
+
+        // A module built for another kernel than the running one is refused.
+        paths618.kernel_release = Some("5.15.1-MiSTer".into());
+        write_platform(&paths618, ManifestLayout::Development, true, true);
+        assert!(verify_layout(&paths618, ManifestLayout::Development).is_err());
+
+        // Wrong development profile revision is refused.
+        let metadata = layout_app(&dev, ManifestLayout::Development)
+            .join("mister_magik_scanout_slots.metadata.txt");
+        let text = fs::read_to_string(&metadata).unwrap();
+        fs::write(
+            &metadata,
+            text.replace(DEVELOPMENT_KERNEL_REVISION, &"0".repeat(40)),
+        )
+        .unwrap();
+        assert!(verify_layout(&dev, ManifestLayout::Development).is_err());
+
+        for root in [root, root618, dev_root] {
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn main_without_the_session_guard_is_refused_before_anything_stops() {
+        let root = fixture_root("no-session-main");
+        let paths = fixture_paths(&root);
+        write_platform(&paths, ManifestLayout::Public, false, false);
+        let error = verify_layout(&paths, ManifestLayout::Public).unwrap_err();
+        assert!(error.to_string().contains("predates no-reboot sessions"));
+        queue(&paths, [InputEvent::Down]);
+        assert!(start(&paths, ManifestLayout::Public).is_err());
+
+        write_valid_platform(&paths);
+        verify_layout(&paths, ManifestLayout::Public).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn handoff_lock_admits_one_holder_at_a_time() {
+        let root = fixture_root("lock");
+        let path = root.join("start.lock");
+        let first = try_lock(&path).unwrap();
+        assert!(first.is_some());
+        assert!(try_lock(&path).unwrap().is_none());
+        drop(first);
+        assert!(try_lock(&path).unwrap().is_some());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    struct FakeProcesses {
+        running: Vec<&'static str>,
+        stop_error: bool,
+        start_error: Option<&'static str>,
+        check_error_after_start: bool,
+        session_survives: bool,
+        log: Vec<String>,
+        started: bool,
+    }
+
+    impl FakeProcesses {
+        fn stock_only() -> Self {
+            Self {
+                running: vec!["MiSTer"],
+                stop_error: false,
+                start_error: None,
+                check_error_after_start: false,
+                session_survives: true,
+                log: Vec::new(),
+                started: false,
+            }
+        }
+    }
+
+    impl Processes for FakeProcesses {
+        fn running(&mut self, name: &str) -> Result<bool> {
+            if self.check_error_after_start && self.started {
+                return Err("pidof failed".into());
+            }
+            Ok(self.running.contains(&name))
+        }
+
+        fn stop_stock(&mut self) -> Result<()> {
+            self.log.push("stop".into());
+            if self.stop_error {
+                return Err("stock Main did not stop".into());
+            }
+            self.running.retain(|name| *name != "MiSTer");
+            Ok(())
+        }
+
+        fn start(&mut self, path: &str, session: bool) -> Result<()> {
+            self.log.push(format!("start {path} session={session}"));
+            if let Some(error) = self.start_error.filter(|_| session) {
+                return Err(error.into());
+            }
+            self.started = true;
+            if session {
+                if self.session_survives {
+                    self.running.push("MiSTer_MagiKDev");
+                }
+            } else {
+                self.running.push("MiSTer");
+            }
+            Ok(())
+        }
+
+        fn settle(&mut self) {
+            self.log.push("settle".into());
+        }
+    }
+
+    const DEV_MAIN: &str = "/media/fat/MiSTer_MagiKDev";
+
+    #[test]
+    fn handoff_replaces_stock_main_without_recovery() {
+        let mut system = FakeProcesses::stock_only();
+        run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap();
+        assert_eq!(
+            system.log,
+            [
+                "stop",
+                "start /media/fat/MiSTer_MagiKDev session=true",
+                "settle"
+            ]
+        );
+    }
+
+    #[test]
+    fn handoff_recovers_stock_main_after_every_post_stop_failure() {
+        // The session Main cannot be spawned.
+        let mut system = FakeProcesses::stock_only();
+        system.start_error = Some("spawn failed");
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("spawn failed") && text.contains("stock Main was restarted"));
+        assert!(system.running.contains(&"MiSTer"));
+
+        // The session Main dies during the settle window.
+        let mut system = FakeProcesses::stock_only();
+        system.session_survives = false;
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        assert!(error.to_string().contains("did not stay running"));
+        assert!(system.running.contains(&"MiSTer"));
+
+        // The post-start process check itself fails: no recovery target can be
+        // proven, so nothing more is started and both errors are reported.
+        let mut system = FakeProcesses::stock_only();
+        system.check_error_after_start = true;
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("pidof failed") && text.contains("recovery failed"));
+        assert_eq!(
+            system
+                .log
+                .iter()
+                .filter(|line| line.contains("start"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn handoff_never_starts_a_second_main() {
+        // Stock Main would not stop: it is still running, so recovery is a no-op.
+        let mut system = FakeProcesses::stock_only();
+        system.stop_error = true;
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        assert!(error.to_string().contains("a Main is already running"));
+        assert_eq!(system.log, ["stop"]);
+
+        // A concurrent start already brought MagiK up: nothing is changed.
+        let mut system = FakeProcesses::stock_only();
+        system.running.push("MiSTer_MagiKDev");
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        assert!(error.to_string().contains("already running"));
+        assert!(system.log.is_empty());
+
+        // Stock Main is gone before the helper runs: nothing is changed.
+        let mut system = FakeProcesses::stock_only();
+        system.running.clear();
+        assert!(run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").is_err());
+        assert!(system.log.is_empty());
     }
 
     #[test]

@@ -32,10 +32,11 @@ def smoke(root: Path) -> None:
         raise ValueError("delivery smoke requires the shipped ARM ELF manager")
     before = dist._inventory(root)
     metadata = root / dist.PUBLIC["scanout_metadata"].removeprefix("/media/fat/")
+    # The first vermagic token is the kernel the module was built for.
     kernel = next(
-        line.removeprefix("kernel_release=")
+        line.removeprefix("vermagic=").split()[0]
         for line in metadata.read_text().splitlines()
-        if line.startswith("kernel_release=")
+        if line.startswith("vermagic=")
     )
     environment = {
         **os.environ,

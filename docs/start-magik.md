@@ -13,9 +13,15 @@ the public `platform-v3.manifest`, then replaces itself with that Rust process
 running `start public`. A missing hashing tool, manifest, or manager, or a
 mismatched manager, fails before anything starts.
 
-The manager verifies the complete public platform: every manifest component
-hash, the scanout and latch metadata bindings, and that the scanout module was
-built for the running kernel. A mismatch is reported and nothing is stopped.
+The manager verifies the complete public platform before anything is stopped:
+every manifest component hash, the scanout and latch metadata bindings, and that
+the scanout module was built for the running kernel. It applies the shared
+`mister-magik-scanout-contract` profile rule, so a platform the frontend would
+refuse is refused up front; 6.18 platforms are Development-only and never start
+from the public layout. It also requires the hash-bound Main to carry the
+session guard (`MISTER_MAGIK_SESSION_MAIN`). A platform whose Main predates it
+fails `verify-platform`, and therefore the release delivery smoke, instead of
+losing MagiK on the first game launch.
 
 ## Confirmation input
 
@@ -32,7 +38,11 @@ After confirmation a detached helper, logging to `/tmp/mister-magik-start.log`,
 stops stock Main and starts `MiSTer_MagiK` with `MISTER_MAGIK_SESSION_MAIN`
 naming that executable. The Main fork keeps that session across game launches
 and launcher returns. If MagiK Main is not running after a bounded wait, the
-helper restarts stock Main. A running MagiK Main refuses the start. See
+helper restarts stock Main whenever any step after stopping it fails, and
+reports both errors. Recovery never starts a second Main. An exclusive lock
+(`/tmp/mister-magik-start.lock`, released by the kernel if the helper dies)
+admits one handoff at a time; the helper re-checks the running Mains under the
+lock. A running MagiK Main refuses the start. See
 [the boot and process model](architecture.md#no-reboot-session-start).
 
 Development boards select `MiSTer_MagiKDev` through `[MiSTer] main=` instead
