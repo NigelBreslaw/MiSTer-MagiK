@@ -95,3 +95,13 @@ and exact-output comparisons are outside the two timed sorting samples.
 The same Mini System allocator adapter runs on both revisions; accounting is
 disabled during timing. Cached keys trade bounded temporary storage for fewer
 allocations; this workload does not measure complete catalog rebuild time.
+
+`preview-shards` runs the actual incremental source builder for a SNES-only
+and Saturn-only request, and the actual bulk builder for both systems. An
+isolated development SD fixture contains 10,000 metadata items per shard and
+one playable row per system. Setup and fixture removal are outside timing;
+profile discovery, metadata loading, decoding, title indexing and enrichment
+are included. Exact family asset keys and launch plans are required in every
+case. The same per-thread, test-only software decode counter is enabled on both
+revisions. Catalog diagnostics go to a fixture file to preserve the bounded
+native result pipe. These are warm filesystem samples, not cold-media latency.

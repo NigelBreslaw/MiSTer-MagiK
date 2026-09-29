@@ -86,6 +86,18 @@ fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[2] != "--mode" {
         return Err("expected --bench WORKLOAD --mode MODE".into());
     }
+    if args[1] == "preview-shards" {
+        if args[3] != "timing" {
+            return Err("preview-shards supports timing mode".into());
+        }
+        // Benchmark dispatch precedes initialization and is single-threaded.
+        // Existing catalog protocol routing reserves stdout for the result.
+        unsafe {
+            std::env::set_var("MISTER_CATALOG_PROTOCOL_STDOUT", "1");
+        }
+        println!("{}", crate::preview_shards::run()?);
+        return Ok(());
+    }
     if args[1] == "catalog-sort" {
         if args[3] != "timing" {
             return Err("catalog-sort supports timing mode".into());

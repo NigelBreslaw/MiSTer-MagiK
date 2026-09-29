@@ -6,7 +6,15 @@
 use std::cell::Cell;
 
 thread_local! {
+    static SOFTWARE_DECODES: Cell<u64> = const { Cell::new(0) };
     static READ_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
+}
+
+pub fn software_decodes() -> u64 {
+    SOFTWARE_DECODES.get()
+}
+pub(crate) fn record_software_decode() {
+    SOFTWARE_DECODES.set(SOFTWARE_DECODES.get() + 1);
 }
 
 pub fn read_attempts() -> u64 {
