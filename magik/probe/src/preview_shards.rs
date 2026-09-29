@@ -12,12 +12,12 @@ const ITEMS: usize = 10_000;
 const FIXTURE: &str = "a2c50bc0f679d7118307f17f0a6846d335a1d2afeeb3fa1756cd197624720bdf";
 // Catalog diagnostics can exceed the service output bound. Keep the same
 // production log writes in an isolated fixture file, preserving the result pipe.
-struct QuietLogs {
+pub(super) struct QuietLogs {
     #[cfg(unix)]
     saved: std::os::fd::OwnedFd,
 }
 impl QuietLogs {
-    fn new(root: &Path) -> Result<Self, String> {
+    pub(super) fn new(root: &Path) -> Result<Self, String> {
         #[cfg(unix)]
         {
             use std::os::fd::{AsRawFd, FromRawFd};

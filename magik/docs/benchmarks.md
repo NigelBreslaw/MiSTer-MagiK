@@ -105,3 +105,16 @@ are included. Exact family asset keys and launch plans are required in every
 case. The same per-thread, test-only software decode counter is enabled on both
 revisions. Catalog diagnostics go to a fixture file to preserve the bounded
 native result pipe. These are warm filesystem samples, not cold-media latency.
+
+`incremental-refresh` mutates one loose file in each sample and runs the actual
+incremental planner, rebuild and publication against an isolated development
+SD source/catalog fixture. Source setup and the initial cold publication are
+outside timing. Distinct publisher-directory timestamps are set outside timing
+to exercise a changed system independently of SD timestamp granularity. Watch
+state is compared with an independent full-tree capture; published artifacts
+are compared with a fresh source snapshot outside timing. Counters observe
+logical source-walk calls and fallback watch-tree calls, rather than syscalls.
+Linux's complete fd observations can be reused. Streaming WalkDir, uncertain
+entries, pruned directories or exceeded 65,536-entry / 16 MiB observed-path
+limits retain the existing full watch capture. Those limits bound observation
+capture; they are not an exact total allocation budget.

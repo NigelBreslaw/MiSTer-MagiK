@@ -86,6 +86,17 @@ fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[2] != "--mode" {
         return Err("expected --bench WORKLOAD --mode MODE".into());
     }
+    if args[1] == "incremental-refresh" {
+        if args[3] != "timing" {
+            return Err("incremental-refresh supports timing mode".into());
+        }
+        // Single-threaded benchmark dispatch; reserve stdout for its result.
+        unsafe {
+            std::env::set_var("MISTER_CATALOG_PROTOCOL_STDOUT", "1");
+        }
+        println!("{}", crate::incremental_refresh::run()?);
+        return Ok(());
+    }
     if args[1] == "preview-shards" {
         if args[3] != "timing" {
             return Err("preview-shards supports timing mode".into());

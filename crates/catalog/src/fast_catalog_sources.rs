@@ -372,19 +372,53 @@ fn build_and_record_prepared_system(
     Ok(())
 }
 
+pub(crate) struct IndependentSystemRebuild {
+    pub(crate) system: FastFiveSystem,
+    pub(crate) report: FastSourceSystemReport,
+    pub(crate) observations: Option<GenericSourceWatchObservations>,
+}
+
 pub fn rebuild_independent_system(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    system_id: &str,
+) -> Result<Option<(FastFiveSystem, FastSourceSystemReport)>, String> {
+    rebuild_independent_system_impl(storage_root, snapshot, system_id, false)
+        .map(|result| result.map(|r| (r.system, r.report)))
+}
+
+pub(crate) fn rebuild_independent_system_with_observations(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    system_id: &str,
+) -> Result<Option<IndependentSystemRebuild>, String> {
+    rebuild_independent_system_impl(storage_root, snapshot, system_id, true)
+}
+
+fn rebuild_independent_system_impl(
     storage_root: &Path,
     _snapshot: &FastFiveSnapshot,
     system_id: &str,
-) -> Result<Option<(FastFiveSystem, FastSourceSystemReport)>, String> {
+    capture_watch: bool,
+) -> Result<Option<IndependentSystemRebuild>, String> {
     let started = Instant::now();
     let mut family_resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
     let prepared = PREPARED_SYSTEM_IDS
         .contains(&system_id)
         .then(|| build_prepared_system(storage_root, system_id, false, &mut family_resolver))
         .transpose()?;
+    let mut observations = None;
     let generic = if prepared.is_some() {
         None
+    } else if capture_watch {
+        crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
+            storage_root,
+            system_id,
+        )?
+        .map(|r| {
+            observations = r.observations;
+            (r.system, r.report)
+        })
     } else {
         rebuild_installed_generic_system(storage_root, system_id)?
     };
@@ -448,7 +482,11 @@ pub fn rebuild_independent_system(
     if system.games.is_empty() && system.variants.is_empty() {
         Ok(None)
     } else {
-        Ok(Some((system, report)))
+        Ok(Some(IndependentSystemRebuild {
+            system,
+            report,
+            observations,
+        }))
     }
 }
 

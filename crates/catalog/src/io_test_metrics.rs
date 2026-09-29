@@ -6,6 +6,9 @@
 use std::cell::Cell;
 
 thread_local! {
+    static SOURCE_WALKS: Cell<u64> = const { Cell::new(0) };
+    static WATCH_TREE_WALKS: Cell<u64> = const { Cell::new(0) };
+    static WATCH_REUSES: Cell<u64> = const { Cell::new(0) };
     static SOFTWARE_DECODES: Cell<u64> = const { Cell::new(0) };
     static READ_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
 }
@@ -64,4 +67,26 @@ mod tests {
         assert_eq!(child, 0);
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+pub fn source_walks() -> u64 {
+    SOURCE_WALKS.get()
+}
+pub fn watch_tree_walks() -> u64 {
+    WATCH_TREE_WALKS.get()
+}
+pub fn watch_reuses() -> u64 {
+    WATCH_REUSES.get()
+}
+#[cfg(feature = "builder")]
+pub(crate) fn record_source_walk() {
+    SOURCE_WALKS.set(SOURCE_WALKS.get() + 1);
+}
+#[cfg(feature = "builder")]
+pub(crate) fn record_watch_tree_walk() {
+    WATCH_TREE_WALKS.set(WATCH_TREE_WALKS.get() + 1);
+}
+#[cfg(feature = "builder")]
+pub(crate) fn record_watch_reuse() {
+    WATCH_REUSES.set(WATCH_REUSES.get() + 1);
 }
