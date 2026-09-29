@@ -628,6 +628,8 @@ pub struct LauncherViewPresenters {
     /// The device backdrop currently installed, and the images already built.
     arcade_device_installed: Option<mister_magik_ui::launcher::DeviceKind>,
     device_images: [Option<slint::Image>; 4],
+    drawer_projection: Option<std::sync::Arc<Vec<crate::launcher::ArcadeDrawerItem>>>,
+    drawer_initialized: bool,
 }
 
 impl LauncherViewPresenters {
@@ -1077,15 +1079,27 @@ impl LauncherViewPresenters {
             set_active_filter_label,
             nav.arcade_filter.active_label()
         );
-        let drawer_items = if nav.screen == Screen::Arcade && nav.arcade_filter.drawer_open {
-            nav.arcade_filter_items(catalog, nav.active_collection_scope_id(catalog))
-                .into_iter()
-                .map(|item| SharedString::from(item.label))
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
+        let projection =
+            (nav.screen == Screen::Arcade && nav.arcade_filter.drawer_open).then(|| {
+                nav.arcade_filter_projection(catalog, nav.active_collection_scope_id(catalog))
+            });
+        let unchanged = match (&self.drawer_projection, &projection) {
+            (Some(previous), Some(current)) => std::sync::Arc::ptr_eq(previous, current),
+            (None, None) => self.drawer_initialized,
+            _ => false,
         };
-        arcade.set_drawer_items(ModelRc::from(Rc::new(VecModel::from(drawer_items))));
+        if !unchanged {
+            let drawer_items = projection.as_ref().map_or_else(Vec::new, |items| {
+                items
+                    .iter()
+                    .map(|item| SharedString::from(item.label.as_str()))
+                    .collect()
+            });
+            arcade.set_drawer_items(ModelRc::from(Rc::new(VecModel::from(drawer_items))));
+            bridge_churn_record_model_replacements(1);
+            self.drawer_projection = projection;
+            self.drawer_initialized = true;
+        }
     }
 
     pub fn menu_items(&mut self, nav: &LauncherNav, catalog_version: usize) -> ModelRc<MenuItem> {

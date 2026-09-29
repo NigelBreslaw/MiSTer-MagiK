@@ -6,6 +6,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct ArcadeDrawerViewCache {
     key: Option<ArcadeDrawerViewKey>,
+    projection: Option<std::sync::Arc<Vec<launcher::ArcadeDrawerItem>>>,
     items: Vec<ArcadeListItem>,
     pub(super) rebuilds: u64,
 }
@@ -34,9 +35,15 @@ impl ArcadeDrawerViewCache {
             level: nav.arcade_filter.level,
             active_filter: arcade_filter_cache_token(&nav.arcade_filter.active),
         };
-        if self.key.as_ref() != Some(&key) {
+        let projection = nav.arcade_filter_projection(catalog, system_id);
+        let same_projection = self
+            .projection
+            .as_ref()
+            .is_some_and(|previous| std::sync::Arc::ptr_eq(previous, &projection));
+        if self.key.as_ref() != Some(&key) || !same_projection {
             self.items = arcade_filter_list_items_for_system(catalog, nav, system_id);
             self.key = Some(key);
+            self.projection = Some(projection);
             self.rebuilds = self.rebuilds.wrapping_add(1);
         }
         &self.items
