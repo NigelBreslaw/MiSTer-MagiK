@@ -547,6 +547,19 @@ impl ArcadeNav {
             && !self.is_scroll_active()
     }
 
+    /// Whether the carousel is visibly resting on the selected card: no queued
+    /// or held steps, and the drawn position within a fiftieth of a card.
+    /// The spring's long tail is not motion anyone can see, so this is what
+    /// decides when a press on a card may act.
+    pub fn is_visually_at_rest(&self, count: usize) -> bool {
+        if count == 0 || self.scroll.intent_queue != 0 || self.scroll.held_dir != 0 {
+            return false;
+        }
+        let nearest = self.visual_index.round();
+        (self.visual_index - nearest).abs() < 0.02
+            && (nearest as i64).rem_euclid(count as i64) as usize == self.selected
+    }
+
     pub fn restore_position(&mut self, selected: usize, scroll_y: i32, count: usize) {
         if count == 0 {
             self.reset();
@@ -2894,7 +2907,7 @@ impl LauncherNav {
             self.pending_home_activation = false;
         }
         let card_turning =
-            self.card_home_active() && !self.home_card_scroll.is_settled_at_selected();
+            self.card_home_active() && !self.home_card_scroll.is_visually_at_rest(item_count);
         if pressed.btn_a && card_turning {
             self.pending_home_activation = true;
         }
@@ -11246,5 +11259,27 @@ mod tests {
         }
         // Outside a collection there is no device: Arcade keeps the cabinet.
         assert_eq!(LauncherNav::new().device_kind(), None);
+    }
+
+    #[test]
+    fn a_pressed_while_cards_turn_opens_the_card_that_settles() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let t0 = Instant::now();
+        let at = |frame: u64| t0 + Duration::from_millis(frame * 16);
+        // Step right once, then press A while the cards are still turning.
+        let _ = nav.handle_input(&pad_with(|pad| pad.dpad_right = true), at(0), &catalog);
+        let _ = nav.handle_input(&PadState::default(), at(1), &catalog);
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), at(2), &catalog);
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID, "A waits for the cards");
+        // Once they are visibly at rest, the card that finished selected opens.
+        for frame in 3..240 {
+            let _ = nav.handle_input(&PadState::default(), at(frame), &catalog);
+            if nav.current_menu_id() != ROOT_MENU_ID {
+                break;
+            }
+        }
+        assert_eq!(nav.current_menu_id(), "menu:consoles");
     }
 }
