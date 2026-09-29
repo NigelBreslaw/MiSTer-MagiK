@@ -152,7 +152,12 @@ extern "C" fn stop_after_frame(_signal: libc::c_int) {
     STOP_REQUESTED.store(true, Ordering::Relaxed);
 }
 
+mod benchmarks;
+
 fn main() -> Result<(), String> {
+    if let Some(result) = benchmarks::requested() {
+        return result;
+    }
     // A signal only sets a lock-free flag. Finish any SPI transaction and exit
     // at the next frame boundary so a replacement never inherits asserted CS.
     for signal in [libc::SIGTERM, libc::SIGINT] {

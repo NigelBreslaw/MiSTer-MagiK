@@ -383,7 +383,7 @@ impl Layout {
     pub fn render(
         &self,
         pixels: &mut [Rgb565Pixel],
-        faces: &[CardFaces],
+        faces: &[Arc<CardFaces>],
         frame: BrowseFrame,
         cyclic: bool,
         scratch: &mut [crate::launcher_flip::Scratch],

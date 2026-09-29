@@ -9540,6 +9540,9 @@ pub(super) fn run_launcher_loop(
         } else if let Some(session) = launcher_card_home.as_mut() {
             session.set_inactive();
         }
+        let custom_home_scene_ready = launcher_card_home.as_ref().is_some_and(|session| {
+            session.scene_ready(super::launcher_card_home::scene_for_display(ui, layout))
+        });
         let custom_home_needs_render = launcher_card_home
             .as_ref()
             .is_some_and(super::launcher_card_home::LauncherCardHomeSession::needs_render);
@@ -9957,7 +9960,8 @@ pub(super) fn run_launcher_loop(
         if !card_motion_only && let Some(session) = launcher_card_home.as_mut() {
             session.invalidate_compositor();
         }
-        let card_direct_path_eligible = !force_card_fallback && card_motion_only;
+        let card_direct_path_eligible =
+            !force_card_fallback && card_motion_only && custom_home_scene_ready;
         if let Some(session) = launcher_card_home.as_mut() {
             session.set_render_ahead_enabled(card_direct_path_eligible);
         }
@@ -10332,6 +10336,7 @@ pub(super) fn run_launcher_loop(
         macro_rules! render_launcher_base {
             ($full_slint_raster:expr) => {{
                 if custom_home_active
+                    && custom_home_scene_ready
                     && ($full_slint_raster
                         || custom_home_needs_render
                         || launcher_card_home.as_ref().is_some_and(
@@ -10863,8 +10868,15 @@ pub(super) fn run_launcher_loop(
                         && full_screen_transition.capture_issued());
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
                     && controlled_destination_raster_ready;
-                let mut destination_layers_ready =
-                    destination_raster_ready && nav.screen != Screen::Arcade;
+                let mut destination_layers_ready = destination_raster_ready
+                    && nav.screen != Screen::Arcade
+                    && (nav.screen != Screen::Home
+                        || launcher_card_home.as_ref().is_none_or(|session| {
+                            session.content_ready(
+                                super::launcher_card_home::scene_for_display(ui, layout),
+                                &card_level,
+                            )
+                        }));
                 if destination_raster_ready && nav.screen == Screen::Arcade {
                     let preview_expected = selected_arcade_game_has_preview(&nav, &catalog);
                     let preview_exact = preview_expected

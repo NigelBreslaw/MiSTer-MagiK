@@ -2540,6 +2540,7 @@ dependencies = [
  "fontique",
  "libc",
  "mister-magik-core",
+ "mister-magik-framebuffer-scenes",
  "mister-magik-latch-contract",
  "mister-magik-mister-runtime",
  "mister-magik-tooling-support",

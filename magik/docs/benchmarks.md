@@ -71,3 +71,10 @@ branches, UI controls, automatic matrices, or a campaign engine.
 
 A focused local oracle test and one bounded invocation should establish a new
 workload. Stop and discuss inconsistent or slow results instead of tuning in a loop.
+
+`home-count-refresh` measures one root and one nested count refresh in each
+of its two timing samples. It uses the production portable card renderer at
+960x540 with six generic cards and changes only the first count. Cache seeding
+and an exact cold-render pixel comparison run outside timing. Preparation,
+resting raster generation and disposal run inside timing. It does not measure
+physical input or UI-thread latency; validate those with the real app journey.

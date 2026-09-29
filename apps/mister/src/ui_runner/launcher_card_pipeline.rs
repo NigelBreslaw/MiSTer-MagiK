@@ -79,7 +79,6 @@ impl CardPipelineCounters {
             .saturating_add(other.secondary_wait_us);
     }
 
-    #[cfg(any(feature = "tooling", test))]
     pub(super) fn delta(self, previous: Self) -> Self {
         Self {
             submitted: self.submitted.saturating_sub(previous.submitted),
