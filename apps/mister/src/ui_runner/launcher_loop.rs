@@ -9958,6 +9958,9 @@ pub(super) fn run_launcher_loop(
             session.invalidate_compositor();
         }
         let card_direct_path_eligible = !force_card_fallback && card_motion_only;
+        if let Some(session) = launcher_card_home.as_mut() {
+            session.set_render_ahead_enabled(card_direct_path_eligible);
+        }
         if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
             let now_us = loop_start.duration_since(run_start).as_micros() as u64;
             if let Some(frame) =

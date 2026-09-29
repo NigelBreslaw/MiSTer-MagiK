@@ -136,6 +136,7 @@ pub(super) struct LauncherCardHomeSession {
     aside: Vec<Aside>,
     now_ms: u64,
     render_ahead: Option<LauncherCardRenderAhead>,
+    render_ahead_enabled: bool,
     presented_frame: Option<RenderedCardFrame>,
     navigation_generation: u64,
     request_sequence: u64,
@@ -179,6 +180,7 @@ impl LauncherCardHomeSession {
             aside: Vec::new(),
             now_ms: 0,
             render_ahead,
+            render_ahead_enabled: true,
             presented_frame: None,
             navigation_generation: 1,
             request_sequence: 0,
@@ -197,6 +199,24 @@ impl LauncherCardHomeSession {
             measure_preparation: std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
             preparation_measurement: None,
         })
+    }
+
+    /// Acknowledge the route chosen by the compositor. In-flight work may
+    /// finish, but fallback owns rendering until the direct route is restored.
+    pub(super) fn set_render_ahead_enabled(&mut self, enabled: bool) {
+        if self.render_ahead_enabled == enabled {
+            return;
+        }
+        self.render_ahead_enabled = enabled;
+        self.release_presented_frame();
+        self.bump_navigation_generation();
+        if let Some(pipeline) = self.render_ahead.as_ref() {
+            pipeline.invalidate_content_generation(self.content_generation);
+        }
+        if enabled && self.active {
+            self.content_dirty = true;
+            self.submit_render_ahead();
+        }
     }
 
     pub(super) fn set_inactive(&mut self) {
@@ -520,10 +540,11 @@ impl LauncherCardHomeSession {
             && (self.content_dirty
                 || self.trick.is_some()
                 || self.is_animating()
-                || self
-                    .render_ahead
-                    .as_ref()
-                    .is_some_and(LauncherCardRenderAhead::has_ready))
+                || self.render_ahead_enabled
+                    && self
+                        .render_ahead
+                        .as_ref()
+                        .is_some_and(LauncherCardRenderAhead::has_ready))
     }
 
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
@@ -596,7 +617,7 @@ impl LauncherCardHomeSession {
         now_us: u64,
         maximum_age_us: u64,
     ) -> Option<RenderedCardFrame> {
-        if self.trick.is_some() {
+        if self.trick.is_some() || !self.render_ahead_enabled {
             return None;
         }
         self.render_ahead.as_ref()?.try_take(
@@ -636,6 +657,9 @@ impl LauncherCardHomeSession {
     }
 
     fn submit_render_ahead(&mut self) {
+        if !self.render_ahead_enabled {
+            return;
+        }
         let Some(render_ahead) = self.render_ahead.as_ref() else {
             return;
         };
@@ -839,6 +863,79 @@ mod tests {
                 accent: 0x2a7f,
             },
         }
+    }
+
+    #[test]
+    fn fallback_route_stops_new_producer_work_and_preserves_pixels() {
+        let mut submissions = Vec::new();
+        for level in [snapshot(), consoles()] {
+            let scene = LauncherScene::new(960, 540);
+            let mut session =
+                LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+            session.render_ahead = Some(LauncherCardRenderAhead::start(
+                session.prepared.frame_preparer(),
+                true,
+            ));
+            session.update(scene, &level, 0, 0.0, "07:28", 0, false);
+            session.set_render_ahead_enabled(false);
+            let before = session.render_ahead.as_ref().unwrap().counters().submitted;
+            let mut serial = prepare(scene, &level, 0, "07:28", &session.artwork, &session.fonts);
+            for tick in 1..=120 {
+                let position = if tick % 2 == 0 { 0.25 } else { 0.75 };
+                session.update(scene, &level, 0, position, "07:28", tick * 16, false);
+                serial.render_frame(session.frame);
+                assert!(
+                    session.render() == serial.pixels(),
+                    "fallback pixels differ at {tick}"
+                );
+            }
+            let submitted = session.render_ahead.as_ref().unwrap().counters().submitted - before;
+            println!(
+                "fallback_new_producer_submissions={} level={}",
+                submitted, level.menu_id
+            );
+            submissions.push(submitted);
+            session.set_render_ahead_enabled(true);
+            let request_sequence = session.request_sequence;
+            session.update(scene, &level, 0, 0.5, "07:28", 1936, false);
+            assert!(
+                session.request_sequence > request_sequence,
+                "direct route did not resume"
+            );
+        }
+        assert_eq!(submissions, vec![0, 0]);
+    }
+
+    #[test]
+    fn direct_reentry_takes_only_the_current_route_generation() {
+        let scene = LauncherScene::new(960, 540);
+        let level = snapshot();
+        let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        session.update(scene, &level, 0, 0.25, "07:28", 16, false);
+        let old_generation = session.navigation_generation;
+        session.set_render_ahead_enabled(false);
+        session.update(scene, &level, 1, 1.75, "07:28", 32, false);
+        assert!(session.try_take_render_ahead(32_000, u64::MAX).is_none());
+        session.set_render_ahead_enabled(true);
+        assert!(session.navigation_generation > old_generation);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let frame = loop {
+            if let Some(frame) = session.try_take_render_ahead(32_000, u64::MAX) {
+                break frame;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "direct route did not produce a current frame"
+            );
+            std::thread::yield_now();
+        };
+        assert_eq!(
+            frame.request().navigation_generation,
+            session.navigation_generation
+        );
+        assert_eq!(frame.request().render.timestamp_us, 32_000);
+        assert_eq!(frame.request().render.frame, session.frame);
+        session.recycle_render_ahead(frame);
     }
 
     #[test]
