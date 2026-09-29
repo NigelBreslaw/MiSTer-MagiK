@@ -345,6 +345,7 @@ pub enum LauncherAction {
     RemoveFavourite,
     ExitToMister,
     RefreshDatabase,
+    PurgeLibraryData,
     Restart,
     ContinueWithStaleLibrary,
     RebuildLibrary,
@@ -1014,6 +1015,8 @@ pub struct LauncherNav {
     pub system_hub_selected: usize,
     pub scroll_x: i32,
     pub settings_selected: usize,
+    refresh_hold: Option<(Instant, bool)>,
+    pub library_reset_error: Option<String>,
     pub display_combo_open: bool,
     pub display_selected: usize,
     pub display_highlighted: usize,
@@ -1474,6 +1477,8 @@ impl LauncherNav {
             system_hub_selected: 0,
             scroll_x: 0,
             settings_selected: 0,
+            refresh_hold: None,
+            library_reset_error: None,
             display_combo_open: false,
             display_selected: usize::MAX,
             display_highlighted: 0,
@@ -2725,6 +2730,16 @@ impl LauncherNav {
             ..
         } = input;
         self.sync_launcher_taxonomy(catalog);
+        if self.handle_refresh_hold(input) {
+            return Some(LauncherEvent {
+                action: LauncherAction::PurgeLibraryData,
+                path: None,
+                settings: None,
+            });
+        }
+        if self.confirm_action != Some(ConfirmAction::LibraryUpdateFailed) {
+            self.library_reset_error = None;
+        }
         if self.confirm_action.is_some() {
             self.handle_confirm(pressed)
         } else {
@@ -3263,6 +3278,54 @@ impl LauncherNav {
         None
     }
 
+    // A tap opens the usual refresh confirmation on release. Only an
+    // uninterrupted hold on this row authorizes the destructive reset.
+    fn handle_refresh_hold(&mut self, input: NavigationInput<'_>) -> bool {
+        let eligible = self.screen == Screen::Settings
+            && self.settings_selected == SETTINGS_REFRESH_SELECTED
+            && self.confirm_action.is_none()
+            && !self.display_combo_open
+            && !self.orientation_combo_open;
+        if !eligible
+            || input.pressed.btn_b
+            || input.pressed.btn_home
+            || input.pressed.dpad_up
+            || input.pressed.dpad_down
+            || input.pressed.dpad_left
+            || input.pressed.dpad_right
+        {
+            self.refresh_hold = None;
+            return false;
+        }
+        if input.pressed.btn_a && self.refresh_hold.is_none() {
+            self.refresh_hold = Some((input.frame_now, false));
+        }
+        let Some((started, fired)) = self.refresh_hold else {
+            return false;
+        };
+        if input.released.btn_a {
+            self.refresh_hold = None;
+            if !fired {
+                if input.frame_now.saturating_duration_since(started) >= Duration::from_secs(7) {
+                    return true;
+                }
+                self.confirm_action = Some(ConfirmAction::RefreshDatabase);
+                self.confirm_selected = 0;
+            }
+        } else if input.tick_continuous {
+            if !input.held.btn_a {
+                // Lost input ownership or disconnected controller cancels the hold.
+                self.refresh_hold = None;
+            } else if !fired
+                && input.frame_now.saturating_duration_since(started) >= Duration::from_secs(7)
+            {
+                self.refresh_hold = Some((started, true));
+                return true;
+            }
+        }
+        false
+    }
+
     fn handle_settings(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
         if self.display_combo_open {
             let count = settings_display_resolution_count();
@@ -3380,7 +3443,7 @@ impl LauncherNav {
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
                 SETTINGS_EXIT_SELECTED => ConfirmAction::ExitToMister,
-                SETTINGS_REFRESH_SELECTED => ConfirmAction::RefreshDatabase,
+                SETTINGS_REFRESH_SELECTED => return None,
                 _ => return None,
             });
         }
@@ -5891,12 +5954,57 @@ pub struct PurgeLibraryDataOutcome {
 }
 
 pub fn purge_library_data() -> Result<PurgeLibraryDataOutcome, String> {
-    let asset_dir = std::env::var("MISTER_MEDIA_ASSET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| mister_magik_catalog::device_layout::current_app_path("assets"));
-    purge_library_data_with(&asset_dir, || {
-        mister_magik_catalog::fast_catalog_refresh::remove_default_catalog_artifacts()
+    let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+    // Keep the lease through screenshot cleanup, not just catalog removal.
+    let lease = mister_magik_catalog::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    purge_library_data_at_with_lease(&paths, &lease)
+}
+
+fn purge_library_data_at_with_lease(
+    paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    lease: &mister_magik_catalog::catalog_lease::CatalogMutationLease,
+) -> Result<PurgeLibraryDataOutcome, String> {
+    let outcome = purge_library_data_with(paths.media_asset_dir(), || {
+        mister_magik_catalog::predecessor_cleanup::remove_generated_catalog_artifacts_with_lease(
+            paths, lease,
+        )
+    })?;
+    let additional = if paths.preview_cache_dir() != paths.media_asset_dir() {
+        delete_screenshot_packs_at(paths.preview_cache_dir())?
+    } else {
+        0
+    };
+    Ok(PurgeLibraryDataOutcome {
+        screenshot_artifacts_removed: outcome.screenshot_artifacts_removed + additional,
+        ..outcome
     })
+}
+
+/// Cleanup completes and reaches storage before Main receives its reboot command.
+/// Hold the lease until the reboot request has been accepted.
+pub fn purge_library_data_and_reboot() -> Result<PurgeLibraryDataOutcome, String> {
+    let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+    let lease = mister_magik_catalog::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    purge_then_reboot_with(
+        || purge_library_data_at_with_lease(&paths, &lease),
+        || unsafe {
+            libc::sync();
+        },
+        reboot_mister,
+    )
+}
+
+fn purge_then_reboot_with(
+    purge: impl FnOnce() -> Result<PurgeLibraryDataOutcome, String>,
+    sync: impl FnOnce(),
+    reboot: impl FnOnce() -> Result<(), String>,
+) -> Result<PurgeLibraryDataOutcome, String> {
+    let outcome = purge()?;
+    sync();
+    reboot().map_err(|error| format!("Database deleted, but reboot failed: {error}"))?;
+    Ok(outcome)
 }
 
 fn purge_library_data_with(
@@ -5945,7 +6053,7 @@ fn delete_screenshot_packs_at_with_fault_control(
         let file_type = entry
             .file_type()
             .map_err(|e| format!("stat screenshot asset {}: {e}", path.display()))?;
-        if !file_type.is_file() {
+        if !file_type.is_file() && !file_type.is_symlink() {
             continue;
         }
         let name = entry.file_name();
@@ -9181,6 +9289,15 @@ mod tests {
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.confirm_action, None);
+        assert!(
+            nav.handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(1),
+                &catalog
+            )
+            .is_none()
+        );
         assert_eq!(nav.confirm_action, Some(ConfirmAction::RefreshDatabase));
         assert_eq!(nav.confirm_selected, 0);
         assert!(
@@ -9214,6 +9331,121 @@ mod tests {
         assert_eq!(event.path, None);
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn refresh_hold_fires_at_seven_seconds_once_and_release_does_not_refresh() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = SETTINGS_REFRESH_SELECTED;
+        let now = Instant::now();
+        let held = pad_with(|pad| pad.btn_a = true);
+        assert!(nav.handle_input(&held, now, &catalog).is_none());
+        assert!(
+            nav.handle_input(&held, now + Duration::from_millis(6999), &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.confirm_action, None);
+        let event = nav
+            .handle_input(&held, now + Duration::from_secs(7), &catalog)
+            .unwrap();
+        assert_eq!(event.action, LauncherAction::PurgeLibraryData);
+        assert!(
+            nav.handle_input(&held, now + Duration::from_secs(9), &catalog)
+                .is_none()
+        );
+        assert!(
+            nav.handle_input(
+                &PadState::default(),
+                now + Duration::from_secs(10),
+                &catalog
+            )
+            .is_none()
+        );
+        assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    fn refresh_hold_cancels_on_navigation_and_lost_input_ownership() {
+        let catalog = multi_system_catalog();
+        let now = Instant::now();
+        let held = pad_with(|pad| pad.btn_a = true);
+        for cancel in [
+            crate::input_event::LogicalAction::Down,
+            crate::input_event::LogicalAction::Back,
+        ] {
+            let mut nav = LauncherNav::new();
+            nav.screen = Screen::Settings;
+            nav.settings_selected = SETTINGS_REFRESH_SELECTED;
+            assert!(nav.handle_input(&held, now, &catalog).is_none());
+            let mut interrupted = held.clone();
+            interrupted.set_logical_action(cancel, true);
+            assert!(
+                nav.handle_input(&interrupted, now + Duration::from_secs(2), &catalog)
+                    .is_none()
+            );
+            assert!(
+                nav.handle_input(&held, now + Duration::from_secs(8), &catalog)
+                    .is_none()
+            );
+        }
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = SETTINGS_REFRESH_SELECTED;
+        assert!(nav.handle_input(&held, now, &catalog).is_none());
+        assert!(
+            nav.handle_held_tick_with_navigation_intents(
+                &PadState::default(),
+                now + Duration::from_secs(2),
+                &catalog
+            )
+            .is_none()
+        );
+        assert!(
+            nav.handle_input(&held, now + Duration::from_secs(8), &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    fn full_reset_syncs_before_reboot_and_never_reboots_after_cleanup_failure() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let result = purge_then_reboot_with(
+            || {
+                calls.borrow_mut().push("purge");
+                Ok(PurgeLibraryDataOutcome::default())
+            },
+            || calls.borrow_mut().push("sync"),
+            || {
+                calls.borrow_mut().push("reboot");
+                Ok(())
+            },
+        );
+        assert!(result.is_ok());
+        assert_eq!(*calls.borrow(), ["purge", "sync", "reboot"]);
+        calls.borrow_mut().clear();
+        let result = purge_then_reboot_with(
+            || {
+                calls.borrow_mut().push("purge");
+                Err("delete failed".into())
+            },
+            || calls.borrow_mut().push("sync"),
+            || {
+                calls.borrow_mut().push("reboot");
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err(), "delete failed");
+        assert_eq!(*calls.borrow(), ["purge"]);
+        let error = purge_then_reboot_with(
+            || Ok(PurgeLibraryDataOutcome::default()),
+            || {},
+            || Err("FIFO unavailable".into()),
+        )
+        .unwrap_err();
+        assert!(error.contains("Database deleted, but reboot failed"));
     }
 
     #[test]
@@ -9606,7 +9838,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_screenshot_pack_matcher_is_limited_to_supported_pack_files() {
+    fn reset_screenshot_pack_matcher_includes_retired_systems() {
         assert!(screenshot_reset_deletes_file(
             "arcade-screenshots-320x320.mmlz4b"
         ));
@@ -9625,10 +9857,8 @@ mod tests {
             ".arcade-screenshots-320x320.mmlz4b.tmp-123"
         ));
 
-        assert!(!screenshot_reset_deletes_file(
-            "pcengine-screenshots.mmlz4b"
-        ));
-        assert!(!screenshot_reset_deletes_file(
+        assert!(screenshot_reset_deletes_file("pcengine-screenshots.mmlz4b"));
+        assert!(screenshot_reset_deletes_file(
             "arcade-screenshots-large.mmlz4b"
         ));
         assert!(!screenshot_reset_deletes_file(
@@ -9643,6 +9873,9 @@ mod tests {
         for name in [
             "arcade-screenshots-320x320.mmlz4b",
             "neogeo-screenshots.mmlz4b",
+            "pcengine-screenshots.mmlz4b",
+            "arcade-screenshots-large.mmlz4b",
+            ".arcade-screenshots-320x320.mmlz4b",
             "saturn-screenshots-240x240.mmlz4b.tmp",
             "arcade-screenshots-320x320.mmlz4b.idx",
             ".neogeo-screenshots.mmlz4b.tmp-123",
@@ -9650,11 +9883,7 @@ mod tests {
         ] {
             std::fs::write(root.join(name), b"pack").expect("write removable asset");
         }
-        for name in [
-            "pcengine-screenshots.mmlz4b",
-            "arcade-screenshots-large.mmlz4b",
-            "manual.pdf",
-        ] {
+        for name in ["manual.pdf", "arcade-preview-cache.raw565"] {
             std::fs::write(root.join(name), b"keep").expect("write retained asset");
         }
         std::fs::create_dir(root.join("arcade-screenshots-320x320.mmlz4b.dir"))
@@ -9664,20 +9893,22 @@ mod tests {
         let removed = delete_screenshot_packs_at_with_fault_control(&root, &mut fault_control)
             .expect("delete screenshot packs");
 
-        assert_eq!(removed, 6);
+        assert_eq!(removed, 9);
+        assert!(!root.join("pcengine-screenshots.mmlz4b").exists());
         assert!(!root.join("arcade-screenshots-320x320.mmlz4b").exists());
         assert!(!root.join("neogeo-screenshots.mmlz4b").exists());
         assert!(!root.join("saturn-screenshots-240x240.mmlz4b.tmp").exists());
         assert!(!root.join("arcade-screenshots-320x320.mmlz4b.idx").exists());
         assert!(!root.join(".neogeo-screenshots.mmlz4b.tmp-123").exists());
         assert!(!root.join(STATE_FILENAME).exists());
-        assert!(root.join("pcengine-screenshots.mmlz4b").exists());
-        assert!(root.join("arcade-screenshots-large.mmlz4b").exists());
+        assert!(!root.join("arcade-screenshots-large.mmlz4b").exists());
+        assert!(!root.join(".arcade-screenshots-320x320.mmlz4b").exists());
+        assert!(root.join("arcade-preview-cache.raw565").exists());
         assert!(root.join("manual.pdf").exists());
         assert!(root.join("arcade-screenshots-320x320.mmlz4b.dir").exists());
         assert_eq!(
             fault_control.points,
-            vec!["reset_delete.screenshot_asset.after_remove"; 6]
+            vec!["reset_delete.screenshot_asset.after_remove"; 9]
         );
 
         let _ = std::fs::remove_dir_all(root);

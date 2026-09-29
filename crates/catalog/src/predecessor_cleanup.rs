@@ -51,6 +51,55 @@ pub fn remove_predecessor_catalog_artifacts(
     )
 }
 
+/// Explicit full reset of generated catalog state. The caller holds the
+/// mutation lease until associated screenshot deletion is complete.
+pub fn remove_generated_catalog_artifacts_with_lease(
+    paths: &CatalogPaths,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
+) -> Result<usize, String> {
+    remove_generated_catalog_artifacts_at(paths, Path::new("/tmp/mister-magik"))
+}
+
+fn remove_generated_catalog_artifacts_at(
+    paths: &CatalogPaths,
+    volatile: &Path,
+) -> Result<usize, String> {
+    let app = installed_app_dir(paths.sharded_catalog_dir()).ok_or_else(|| {
+        format!(
+            "refusing to reset unexpected catalog path {}",
+            paths.sharded_catalog_dir().display()
+        )
+    })?;
+    let mut removed = remove_catalog_artifacts_at(
+        paths.library_sqlite(),
+        paths.library_sqlite_build_dir(),
+        None,
+        volatile,
+        &app.join("rebuild-on-next-boot"),
+    )?;
+    for path in [
+        paths.sharded_catalog_dir().to_path_buf(),
+        app.join(PREDECESSOR_CATALOG_DIR_NAME),
+        app.join("diagnostics/catalog"),
+        volatile.join("catalog-worker"),
+        volatile.join("fast-five-catalog"),
+        volatile.join("fast-five-catalog-serial"),
+    ] {
+        removed += usize::from(remove_dir_or_symlink_if_exists(&path)?);
+    }
+    for path in [
+        app.join(PREDECESSOR_ARCADE_BOOTSTRAP_NAME),
+        volatile.join("launcher-return-catalog.json"),
+        volatile.join("launcher-return-catalog.json.tmp"),
+    ] {
+        removed += usize::from(remove_file_if_exists_counted(
+            &path,
+            "catalog reset artifact",
+        )?);
+    }
+    Ok(removed)
+}
+
 fn installed_app_dir(fast_catalog_root: &Path) -> Option<&Path> {
     (fast_catalog_root.file_name().and_then(|name| name.to_str()) == Some(FAST_CATALOG_DIR_NAME))
         .then(|| fast_catalog_root.parent())
@@ -153,7 +202,8 @@ fn remove_catalog_artifacts_at(
         )?);
     }
     removed += remove_matching_files(default_snapshot_dir, "catalog ready snapshot", |name| {
-        name.starts_with("catalog-ready-") && name.ends_with(".nav.lz4b")
+        name.starts_with("catalog-ready-")
+            && (name.ends_with(".nav.lz4b") || name.ends_with(".nav.lz4b.tmp"))
     })?;
     Ok(removed)
 }
@@ -265,6 +315,73 @@ mod tests {
             "mister-magik-predecessor-{label}-{}-{nonce}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn full_reset_removes_all_generated_outputs_without_touching_user_or_source_data() {
+        use crate::device_layout::{CatalogPathOverrides, DevicePaths};
+        let root = unique_temp_dir("full-reset");
+        let device = DevicePaths::remapped(
+            mister_magik_platform_manifest_contract::Layout::Public,
+            root.clone(),
+        );
+        let app = device.app_dir();
+        let volatile = root.join("volatile");
+        let build = volatile.join("sqlite-build");
+        let paths = CatalogPaths::derive(
+            &device,
+            CatalogPathOverrides::capture_with(|name| {
+                (name == "MISTER_LIBRARY_SQLITE_BUILD_DIR").then_some(build.as_path())
+            }),
+        );
+        let removable = [
+            app.join("catalog-fast-v1/systems/arcade/generation.navpack"),
+            app.join("catalog-fast-v1/systems/arcade/generation.sqlite3-wal"),
+            app.join("catalog-fast-v1/fast-refresh-v4/snapshot.bin"),
+            app.join("catalog-v3/systems/old.navpack"),
+            app.join("library.sqlite3"),
+            app.join("library.sqlite3-wal"),
+            app.join("library.sqlite3-shm"),
+            app.join("library.sqlite3-journal"),
+            app.join("library.summary.json"),
+            app.join("library.nav.lz4b"),
+            app.join(".library.sqlite3.tmp.crashed"),
+            app.join("database-build-time.txt"),
+            app.join("arcade-bootstrap.nav.lz4b"),
+            app.join("rebuild-on-next-boot"),
+            app.join("diagnostics/catalog/latest.json"),
+            build.join(".library.sqlite3.build.crashed"),
+            volatile.join("catalog-ready-123.nav.lz4b"),
+            volatile.join("catalog-worker/seed.bin"),
+            volatile.join("fast-five-catalog/run/system.sqlite3"),
+            volatile.join("fast-five-catalog-serial/run/system.navpack"),
+            volatile.join("launcher-return-catalog.json"),
+        ];
+        let retained = [
+            app.join("user-state.sqlite3"),
+            app.join("settings.json"),
+            app.join("magik-metadata-v1.bin"),
+            app.join("mame.sqlite3"),
+            app.join("assets/manual.pdf"),
+            root.join("games/game.rom"),
+            volatile.join("other-worker/state.json"),
+        ];
+        for path in removable.iter().chain(retained.iter()) {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"fixture").unwrap();
+        }
+        assert!(remove_generated_catalog_artifacts_at(&paths, &volatile).unwrap() > 0);
+        for path in &removable {
+            assert!(!path.exists(), "left generated file {}", path.display());
+        }
+        for path in &retained {
+            assert_eq!(fs::read(path).unwrap(), b"fixture");
+        }
+        assert_eq!(
+            remove_generated_catalog_artifacts_at(&paths, &volatile).unwrap(),
+            0
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

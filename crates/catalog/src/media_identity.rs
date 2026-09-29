@@ -469,13 +469,12 @@ pub fn screenshot_reset_deletes_filename(name: &str) -> bool {
     {
         return true;
     }
-    let (hidden, candidate) = name
-        .strip_prefix('.')
-        .map_or((false, name), |candidate| (true, candidate));
+    let candidate = name.strip_prefix('.').unwrap_or(name);
     let Some((system, rest)) = candidate.split_once("-screenshots") else {
         return false;
     };
-    if ScreenshotPackId::parse(system).is_none() {
+    // Reset also removes packs for systems retired from the supported list.
+    if system.is_empty() {
         return false;
     }
     let suffix = if let Some(suffix) = rest.strip_prefix(".mmlz4b") {
@@ -487,7 +486,8 @@ pub fn screenshot_reset_deletes_filename(name: &str) -> bool {
         let Some((image_size, suffix)) = rest.split_once(".mmlz4b") else {
             return false;
         };
-        if !valid_screenshot_image_size(image_size) {
+        // A full reset includes packs with obsolete or invalid size labels.
+        if image_size.is_empty() {
             return false;
         }
         suffix
@@ -496,9 +496,6 @@ pub fn screenshot_reset_deletes_filename(name: &str) -> bool {
         || suffix.starts_with(".tmp-")
         || suffix.starts_with(".idx.tmp-")
         || (suffix.starts_with(".bench-") && suffix.ends_with(".tmp"));
-    if hidden && !temporary {
-        return false;
-    }
     matches!(suffix, "" | ".gz" | ".br" | ".idx") || temporary
 }
 
@@ -700,16 +697,16 @@ mod tests {
         assert!(screenshot_reset_deletes_filename(
             ".arcade-screenshots-320x320.mmlz4b.tmp-123"
         ));
-        assert!(!screenshot_reset_deletes_filename(
+        assert!(screenshot_reset_deletes_filename(
             "pcengine-screenshots.mmlz4b"
         ));
-        assert!(!screenshot_reset_deletes_filename(
+        assert!(screenshot_reset_deletes_filename(
             "arcade-screenshots-large.mmlz4b"
         ));
         assert!(!screenshot_reset_deletes_filename(
             "arcade-preview-cache.raw565"
         ));
-        assert!(!screenshot_reset_deletes_filename(
+        assert!(screenshot_reset_deletes_filename(
             ".arcade-screenshots-320x320.mmlz4b"
         ));
     }

@@ -116,8 +116,8 @@ export component SettingsScreen inherits Rectangle {
             y: (6 * root.row-h + 2 * root.gap) * 1px; width: parent.width;
             label: "REFRESH DATABASE";
             accessible-name: "Refresh database";
-            detail: "Refresh changed library systems";
-            value: "CHANGED SYSTEMS";
+            detail: "Hold A 7s: delete catalog + packs, reboot";
+            value: "HOLD A 7S: RESET";
             focused: SettingsView.section == SettingsSection.refresh;
             acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
         }
