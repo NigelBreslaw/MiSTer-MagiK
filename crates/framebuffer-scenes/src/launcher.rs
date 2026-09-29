@@ -72,11 +72,25 @@ pub struct NestedLevel<'a> {
     pub accent: u16,
 }
 
+/// A nested level cycles like the root once it has enough cards to fill the
+/// carousel without showing any card twice; smaller levels stop at their ends.
+pub const CYCLIC_LEVEL_MIN_CARDS: usize = 5;
+
 impl LauncherLevel<'_> {
-    /// Nested levels have a first and last card; only the root wraps.
+    /// The root always cycles; a nested level cycles when it is large enough.
     #[must_use]
     pub const fn cyclic(&self) -> bool {
-        matches!(self, Self::Root)
+        match self {
+            Self::Root => true,
+            Self::Nested(level) => level.children as usize >= CYCLIC_LEVEL_MIN_CARDS,
+        }
+    }
+
+    /// Nested levels slide their cards; only the end cards flip. The root
+    /// keeps its flipping selection.
+    #[must_use]
+    pub const fn slides(&self) -> bool {
+        matches!(self, Self::Nested(_))
     }
 }
 
@@ -283,6 +297,11 @@ pub struct PreparedLauncher {
 struct CardFaces {
     compact: crate::launcher_flip::Face,
     detail: crate::launcher_flip::Face,
+    /// The MagiK reverse of a generic card; `None` for cards with artwork.
+    back: Option<crate::launcher_flip::Face>,
+    /// The level's browse style, shared by all of its faces: cards slide
+    /// between slots and only the end cards flip.
+    slides: bool,
 }
 
 /// Exact state represented by a prepared buffer. Consumers own the clock and
@@ -614,11 +633,13 @@ impl PreparedLauncher {
         let faces: Vec<_> = cards
             .map(|card| {
                 if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
-                    layout.faces(&card, fonts, &mut bodies)
+                    layout.faces(&card, fonts, &mut bodies, data.level.slides())
                 } else {
                     CardFaces {
                         compact: bake_face(&card, 180, false, typography, &mut bodies),
                         detail: bake_face(&card, 180, true, typography, &mut bodies),
+                        back: bodies.back_face(&card),
+                        slides: data.level.slides(),
                     }
                 }
             })
@@ -1089,6 +1110,10 @@ fn ease_in_out_sine(progress: i64) -> i64 {
     (GEOMETRY_ONE - cosine) / 2
 }
 
+/// How far an end card turns as it leaves or enters a sliding level: 150
+/// degrees, so a generic card shows its MagiK back before it is gone.
+const SLIDE_FLIP: i64 = GEOMETRY_ONE * 5 / 6;
+
 fn flip_spin(right: bool) -> i64 {
     if right { -1 } else { 1 }
 }
@@ -1127,6 +1152,7 @@ fn build_carousel_plan<'a>(
         smooth_progress(motion.progress_millis, motion.duration_millis)
     };
     let right = motion.direction == Some(BrowseDirection::Right);
+    let slide = faces.first().is_some_and(|face| face.slides);
     let relatives: &[isize] = if settled {
         &[2, -2, 1, -1, 0]
     } else if progress * 2 > GEOMETRY_ONE {
@@ -1176,11 +1202,31 @@ fn build_carousel_plan<'a>(
             0
         };
         let incoming = destination == 0 && *relative != 0;
-        let flipping_card = (incoming || *relative == 0)
+        // Sliding levels never flip the selection. The card leaving through
+        // one end turns away, and the card entering at the other end turns
+        // in, showing its MagiK back part of the way.
+        let in_motion = !settled && progress > 0 && progress < GEOMETRY_ONE;
+        let leaving = slide && in_motion && relative.abs() == 2 && destination.abs() == 3;
+        let entering = slide && in_motion && relative.abs() == 3 && destination.abs() == 2;
+        let flipping_card = !slide
+            && (incoming || *relative == 0)
             && progress > 0
             && progress < GEOMETRY_ONE
             && motion.phase == crate::launcher_navigation::BrowsePhase::Flipping;
-        let (face, blend) = if flipping_card {
+        let (face, blend) = if leaving || entering {
+            let turn = if leaving {
+                progress
+            } else {
+                progress - GEOMETRY_ONE
+            };
+            let extra = flip_spin(right) * SLIDE_FLIP * turn / GEOMETRY_ONE;
+            pose.angle += extra;
+            let face = match &faces[index].back {
+                Some(back) if extra.abs() > GEOMETRY_ONE / 2 => back,
+                _ => &faces[index].compact,
+            };
+            (face, None)
+        } else if flipping_card {
             let outgoing = *relative == 0;
             let angle = pose.angle + flip_spin(right) * ease_in_out_sine(progress);
             let (_, cos) = crate::launcher_flip::sin_cos(angle);

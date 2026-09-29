@@ -64,6 +64,16 @@ pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
     }
 }
 
+pub const fn device_kind(kind: Option<crate::device_art::DeviceKind>) -> view::DeviceKind {
+    use crate::device_art::DeviceKind;
+    match kind {
+        None => view::DeviceKind::Cabinet,
+        Some(DeviceKind::Tv) => view::DeviceKind::Tv,
+        Some(DeviceKind::Monitor) => view::DeviceKind::Monitor,
+        Some(DeviceKind::Handheld) => view::DeviceKind::Handheld,
+    }
+}
+
 pub const fn system_hub_section(index: usize) -> view::SystemHubSection {
     match index {
         0 => view::SystemHubSection::Games,

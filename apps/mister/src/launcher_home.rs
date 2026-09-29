@@ -247,6 +247,13 @@ impl CardLevelSnapshot {
             })
     }
 
+    /// Whether browsing wraps: always at the root, and in a nested level once
+    /// it has enough cards to fill the carousel without repeating one.
+    pub fn cycles(&self) -> bool {
+        self.is_root()
+            || self.cards.len() >= mister_magik_framebuffer_scenes::launcher::CYCLIC_LEVEL_MIN_CARDS
+    }
+
     pub const fn is_root(&self) -> bool {
         matches!(self.summary, LevelSummary::Root { .. })
     }

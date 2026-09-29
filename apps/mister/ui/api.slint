@@ -11,6 +11,8 @@ import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 export enum LauncherScreen { home, system-hub, controller, arcade, settings, about, licenses, license-text }
 export enum MenuHierarchy { root, nested }
 export enum SystemHubSection { games, recent, favourites, information }
+// The generic device drawn behind a collection: only Arcade has the cabinet.
+export enum DeviceKind { cabinet, tv, monitor, handheld }
 export enum HomeScrollPhase { idle, held, repeating }
 export enum NavigationTransitionState { idle, active }
 export enum SettingsSection { display, orientation, reduce-motion, screensaver-delay, screensaver-preview, exit, refresh, about }
@@ -71,6 +73,12 @@ export global NavigationView {
     in property <int> system-hub-games-count;
     in property <int> system-hub-recent-count;
     in property <int> system-hub-favourites-count;
+    // The system page's title block: `NINTENDO / 1990 / 16-BIT` and the device.
+    in property <string> system-title;
+    in property <string> system-subtitle;
+    in property <DeviceKind> system-device;
+    // The device scaled to the CRT raster; empty on HDMI and portrait CRT.
+    in property <image> system-hero;
     in property <image> system-artwork;
     in property <bool> system-artwork-available;
     in property <int> home-selected-index;
@@ -211,9 +219,13 @@ export global ArcadeView {
     in property <[string]> drawer-items;
     in property <int> drawer-selected-index;
     in property <string> active-filter-label;
-    // Front-on HDMI cabinet, installed once by Rust and drawn 1:1. Native
-    // preview pixels are composed into its 320x320 screen opening afterwards.
-    in property <image> cabinet-backdrop;
+    // Front-on HDMI device (Arcade cabinet, TV, monitor or handheld), drawn
+    // 1:1. Native preview pixels are composed into its 320x320 screen opening
+    // afterwards. Rust swaps the image when the collection's device changes.
+    in property <image> device-backdrop;
+    in property <DeviceKind> device;
+    // Section label of the list: `ARCADE`, or the system's own name.
+    in property <string> collection-title;
     // Exact-size RGB565 focus fill shared with the physical list compositor.
     // It remains 1:1 so ordered dithering is never resampled.
     in property <image> focus-highlight;

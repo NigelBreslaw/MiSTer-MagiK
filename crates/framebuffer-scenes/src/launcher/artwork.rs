@@ -12,7 +12,7 @@ struct Raster {
     opaque: Vec<(u16, u16)>,
 }
 type NativeEntry = (
-    (LauncherCardId, u16, usize, usize),
+    (LauncherCardId, u16, usize, usize, bool),
     (Vec<Rgb565Pixel>, Vec<u8>),
 );
 
@@ -23,10 +23,30 @@ type NativeEntry = (
 #[derive(Default)]
 pub(super) struct BodyCache {
     surfaces: Vec<((LauncherCardId, u16, bool), Vec<Rgb565Pixel>)>,
+    backs: Vec<((LauncherCardId, u16), Vec<Rgb565Pixel>)>,
     native: Vec<NativeEntry>,
 }
 
+/// Generic cards have a reverse side: the MagiK back, in the card's colour.
+/// Cards with approved artwork are not generic and have none.
+pub(super) fn has_back(card: &PreparedCard<'_>) -> bool {
+    category_icon(card.id).is_some() && card.artwork.is_none() && card.rgb888.is_none()
+}
+
 impl BodyCache {
+    /// The 180x252 MagiK back for a generic card's colour.
+    fn back(&mut self, card: &PreparedCard<'_>) -> &[Rgb565Pixel] {
+        let key = (card.id, card.colour);
+        let index = match self.backs.iter().position(|(k, _)| *k == key) {
+            Some(index) => index,
+            None => {
+                self.backs.push((key, back_surface(card)));
+                self.backs.len() - 1
+            }
+        };
+        &self.backs[index].1
+    }
+
     fn surface(&mut self, card: &PreparedCard<'_>, detail: bool) -> &[Rgb565Pixel] {
         let key = (card.id, card.colour, detail);
         let index = match self.surfaces.iter().position(|(k, _)| *k == key) {
@@ -40,23 +60,86 @@ impl BodyCache {
         &self.surfaces[index].1
     }
 
+    /// A native-size face: the front, or with `back` the MagiK reverse.
     pub(super) fn native(
         &mut self,
         card: &PreparedCard<'_>,
         width: usize,
         height: usize,
+        back: bool,
     ) -> (Vec<Rgb565Pixel>, Vec<u8>) {
         if card.artwork.is_some() || card.rgb888.is_some() {
-            return native_surface(card, width, height);
+            return native_surface(card, width, height, None);
         }
-        let key = (card.id, card.colour, width, height);
+        let key = (card.id, card.colour, width, height, back);
         if let Some((_, cached)) = self.native.iter().find(|(k, _)| *k == key) {
             return cached.clone();
         }
-        let made = native_surface(card, width, height);
+        let made = if back {
+            let source = self.back(card).to_vec();
+            native_surface(card, width, height, Some(&source))
+        } else {
+            native_surface(card, width, height, None)
+        };
         self.native.push((key, made.clone()));
         made
     }
+
+    /// The HDMI landscape back face, when the card has one.
+    pub(super) fn back_face(
+        &mut self,
+        card: &PreparedCard<'_>,
+    ) -> Option<crate::launcher_flip::Face> {
+        has_back(card).then(|| {
+            crate::launcher_flip::Face::new(self.back(card).to_vec(), 180, card_height(180))
+        })
+    }
+}
+
+/// The MagiK back: the card's frame around a dark crosshatch, with the M
+/// emblem in a diamond. Drawn over a generic card's own surface so the frame,
+/// corners and silhouette match its front exactly.
+fn back_surface(card: &PreparedCard<'_>) -> Vec<Rgb565Pixel> {
+    const W: usize = 180;
+    let height = card_height(W);
+    let mut pixels = surface(card, W, false, None, false);
+    let base = mix_colour(rgb(5, 8, 13), card.colour, 34);
+    let line = mix_colour(base, card.colour, 70);
+    let (cx, cy) = (W as i64 / 2, height as i64 / 2);
+    let m = glyph('M');
+    for y in 0..height {
+        for x in 0..W {
+            if !rounded_contains(x, y, W, height)
+                || !inside_inset(x * 8 + 4, y * 8 + 4, W, height, 8)
+            {
+                continue;
+            }
+            let (dx, dy) = ((x as i64 - cx).abs(), (y as i64 - cy).abs());
+            let mut colour = if (x + y).is_multiple_of(14) || (x + 2 * W - y).is_multiple_of(14) {
+                line
+            } else {
+                base
+            };
+            let diamond = dx + dy;
+            if diamond <= 46 {
+                colour = if diamond >= 42 {
+                    card.colour
+                } else {
+                    rgb(4, 6, 10)
+                };
+            }
+            // The M: a 5x7 glyph at 7x, centred in the diamond.
+            let (gx, gy) = (x as i64 - (cx - 17), y as i64 - (cy - 24));
+            if diamond < 42 && (0..35).contains(&gx) && (0..49).contains(&gy) {
+                let (col, row) = ((gx / 7) as usize, (gy / 7) as usize);
+                if m[row] & (1 << (4 - col)) != 0 {
+                    colour = CREAM;
+                }
+            }
+            pixels[y * W + x] = Rgb565Pixel(colour);
+        }
+    }
+    pixels
 }
 
 /// `face`, reusing the label-free body when the card has no artwork and the
@@ -555,12 +638,15 @@ pub(super) fn native_surface(
     card: &PreparedCard<'_>,
     width: usize,
     height: usize,
+    source_override: Option<&[Rgb565Pixel]>,
 ) -> (Vec<Rgb565Pixel>, Vec<u8>) {
     let fallback;
     let (source_w, source_h, rgb888, rgb565) = if let Some(rgb) = card.rgb888 {
         (360, 504, Some(rgb), None)
     } else {
-        let pixels = if let Some(rgb) = card.artwork {
+        let pixels = if let Some(rgb) = source_override {
+            rgb
+        } else if let Some(rgb) = card.artwork {
             rgb
         } else {
             fallback = surface(card, 180, true, None, false);
@@ -725,7 +811,7 @@ mod tests {
         let source = vec![128; 360 * 504 * 3];
         card.rgb888 = Some(&source);
         for (w, h) in [(160, 112), (72, 200), (160, 134)] {
-            let (pixels, alpha) = native_surface(&card, w, h);
+            let (pixels, alpha) = native_surface(&card, w, h, None);
             assert_eq!(alpha[0], 0);
             assert_eq!(alpha[w / 2], 255);
             assert_eq!(pixels[w / 2].0, mix_colour(card.colour, CREAM, 48));

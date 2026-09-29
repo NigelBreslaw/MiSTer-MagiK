@@ -1,0 +1,187 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Static facts shown on a system's page: maker, release year and generation.
+//! Keyed by catalog system ID (see the taxonomy); unknown systems simply show
+//! less rather than something invented.
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SystemFacts {
+    pub maker: &'static str,
+    pub year: u16,
+    pub generation: &'static str,
+}
+
+const fn facts(maker: &'static str, year: u16, generation: &'static str) -> Option<SystemFacts> {
+    Some(SystemFacts {
+        maker,
+        year,
+        generation,
+    })
+}
+
+pub fn system_facts(system_id: &str) -> Option<SystemFacts> {
+    match system_id {
+        // Consoles.
+        "atari2600" => facts("ATARI", 1977, "8-BIT"),
+        "atari5200" => facts("ATARI", 1982, "8-BIT"),
+        "atari7800" => facts("ATARI", 1986, "8-BIT"),
+        "jaguar" => facts("ATARI", 1993, "64-BIT"),
+        "sg1000" => facts("SEGA", 1983, "8-BIT"),
+        "sms" => facts("SEGA", 1985, "8-BIT"),
+        "megadrive" => facts("SEGA", 1988, "16-BIT"),
+        "megacd" => facts("SEGA", 1991, "16-BIT"),
+        "s32x" => facts("SEGA", 1994, "32-BIT"),
+        "saturn" => facts("SEGA", 1994, "32-BIT"),
+        "psx" => facts("SONY", 1994, "32-BIT"),
+        "nes" => facts("NINTENDO", 1983, "8-BIT"),
+        "fds" => facts("NINTENDO", 1986, "8-BIT"),
+        "snes" => facts("NINTENDO", 1990, "16-BIT"),
+        "satellaview" => facts("NINTENDO", 1995, "16-BIT"),
+        "n64" => facts("NINTENDO", 1996, "64-BIT"),
+        "tgfx16" => facts("NEC", 1987, "8-BIT"),
+        "tgfx16-cd" => facts("NEC", 1988, "8-BIT"),
+        "supergrafx" => facts("NEC", 1989, "8-BIT"),
+        "neogeo" | "neo-geo" | "snk-neo-geo" => facts("SNK", 1990, "16-BIT"),
+        "neogeo-cd" => facts("SNK", 1994, "16-BIT"),
+        // Handhelds.
+        "gb" | "gameboy" | "gameboy2p" => facts("NINTENDO", 1989, "8-BIT"),
+        "gbc" => facts("NINTENDO", 1998, "8-BIT"),
+        "gba" | "gba2p" => facts("NINTENDO", 2001, "32-BIT"),
+        "sgb" | "sgb2" => facts("NINTENDO", 1994, "16-BIT"),
+        "pokemonmini" => facts("NINTENDO", 2001, "8-BIT"),
+        "gamegear" => facts("SEGA", 1990, "8-BIT"),
+        "atarilynx" => facts("ATARI", 1989, "16-BIT"),
+        "neogeopocket" => facts("SNK", 1998, "16-BIT"),
+        "ngpc" => facts("SNK", 1999, "16-BIT"),
+        "wonderswan" => facts("BANDAI", 1999, "16-BIT"),
+        "wonderswancolor" => facts("BANDAI", 2000, "16-BIT"),
+        // Computers.
+        "acornatom" => facts("ACORN", 1979, "8-BIT"),
+        "acornelectron" => facts("ACORN", 1983, "8-BIT"),
+        "bbcmicro" => facts("ACORN", 1981, "8-BIT"),
+        "archie" => facts("ACORN", 1987, "32-BIT"),
+        "apple-ii" => facts("APPLE", 1977, "8-BIT"),
+        "macplus" => facts("APPLE", 1986, "16-BIT"),
+        "maclc" => facts("APPLE", 1990, "32-BIT"),
+        "amiga" => facts("COMMODORE", 1985, "32-BIT"),
+        "amigacd32" => facts("COMMODORE", 1993, "32-BIT"),
+        "c64" => facts("COMMODORE", 1982, "8-BIT"),
+        "c128" => facts("COMMODORE", 1985, "8-BIT"),
+        "c16" => facts("COMMODORE", 1984, "8-BIT"),
+        "vic20" => facts("COMMODORE", 1980, "8-BIT"),
+        "pet2001" => facts("COMMODORE", 1977, "8-BIT"),
+        "atari800" => facts("ATARI", 1979, "8-BIT"),
+        "atarist" => facts("ATARI", 1985, "16-BIT"),
+        "zx81" => facts("SINCLAIR", 1981, "8-BIT"),
+        "zx-spectrum" => facts("SINCLAIR", 1982, "8-BIT"),
+        "ql" => facts("SINCLAIR", 1984, "16-BIT"),
+        "trs-80" => facts("TANDY", 1977, "8-BIT"),
+        "coco2" => facts("TANDY", 1980, "8-BIT"),
+        "coco3" => facts("TANDY", 1986, "8-BIT"),
+        "msx" => facts("MSX", 1983, "8-BIT"),
+        "msx2" => facts("MSX", 1985, "8-BIT"),
+        "pc88" => facts("NEC", 1981, "8-BIT"),
+        "pc98" => facts("NEC", 1982, "16-BIT"),
+        "x68000" => facts("SHARP", 1987, "16-BIT"),
+        "x1" | "sharp-x1" => facts("SHARP", 1982, "8-BIT"),
+        "fm7" => facts("FUJITSU", 1982, "8-BIT"),
+        "fmtowns" => facts("FUJITSU", 1989, "32-BIT"),
+        _ => None,
+    }
+}
+
+/// `NINTENDO / 1990 / 16-BIT`, or whatever part is known; empty if none is.
+pub fn system_subtitle(system_id: &str) -> String {
+    system_facts(system_id).map_or_else(String::new, |facts| {
+        format!("{} / {} / {}", facts.maker, facts.year, facts.generation)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_systems_have_a_subtitle_and_unknown_ones_stay_empty() {
+        assert_eq!(system_subtitle("snes"), "NINTENDO / 1990 / 16-BIT");
+        assert_eq!(system_subtitle("gamegear"), "SEGA / 1990 / 8-BIT");
+        assert_eq!(system_subtitle("not-a-system"), "");
+    }
+
+    #[test]
+    fn every_taxonomy_system_has_facts() {
+        // The curated taxonomy lists these IDs (see docs/architecture.md).
+        for id in [
+            "atari2600",
+            "atari5200",
+            "atari7800",
+            "jaguar",
+            "sg1000",
+            "sms",
+            "megadrive",
+            "megacd",
+            "s32x",
+            "saturn",
+            "psx",
+            "nes",
+            "fds",
+            "snes",
+            "satellaview",
+            "n64",
+            "tgfx16",
+            "tgfx16-cd",
+            "supergrafx",
+            "neogeo",
+            "neogeo-cd",
+            "gb",
+            "gameboy",
+            "gameboy2p",
+            "gbc",
+            "gba",
+            "gba2p",
+            "sgb",
+            "sgb2",
+            "pokemonmini",
+            "gamegear",
+            "atarilynx",
+            "neogeopocket",
+            "ngpc",
+            "wonderswan",
+            "wonderswancolor",
+            "acornatom",
+            "acornelectron",
+            "bbcmicro",
+            "archie",
+            "apple-ii",
+            "macplus",
+            "maclc",
+            "amiga",
+            "amigacd32",
+            "c64",
+            "c128",
+            "c16",
+            "vic20",
+            "pet2001",
+            "atari800",
+            "atarist",
+            "zx81",
+            "zx-spectrum",
+            "ql",
+            "trs-80",
+            "coco2",
+            "coco3",
+            "msx",
+            "msx2",
+            "pc88",
+            "pc98",
+            "x68000",
+            "x1",
+            "sharp-x1",
+            "fm7",
+            "fmtowns",
+        ] {
+            assert!(system_facts(id).is_some(), "{id}");
+        }
+    }
+}

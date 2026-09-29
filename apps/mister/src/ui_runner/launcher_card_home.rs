@@ -246,7 +246,7 @@ impl LauncherCardHomeSession {
             self.last_visual_index,
             previous_frame,
             count,
-            level.is_root(),
+            level.cycles(),
         );
         self.last_visual_index = visual_index;
         self.frame_timestamp_us = now_ms.saturating_mul(1_000);

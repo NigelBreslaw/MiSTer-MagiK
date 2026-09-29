@@ -11,7 +11,7 @@ use crate::arcade_list_renderer::{ARCADE_LIST_W, arcade_focus_highlight_rgb565};
 use crate::launcher::{CatalogMenuItemStatus, DisplayTransactionPhase, LauncherNav, Screen};
 use crate::launcher_taxonomy::{LauncherMenuItemKind, ROOT_MENU_ID};
 use crate::launcher_view_types::{
-    active_display_choice, arcade_list_mode, arcade_search_pane, arcade_search_status,
+    active_display_choice, arcade_list_mode, arcade_search_pane, arcade_search_status, device_kind,
     display_transaction_state, home_scroll_phase, launcher_screen, menu_hierarchy, orientation_at,
     screen_orientation, selected_display_choice, settings_display_choice, settings_popup,
     settings_section, system_hub_section,
@@ -401,6 +401,12 @@ fn bridge_churn_record(update: impl FnOnce(&mut BridgeChurnCounters)) {
 
 #[derive(Default)]
 struct NavigationViewPresenter {
+    /// Favourite and recent counts of the system page, recomputed only when
+    /// the collection or its user lists change.
+    hub_counts_key: Option<(String, u64, usize, Option<String>)>,
+    hub_counts: (usize, usize),
+    /// The CRT hero currently installed: its device and raster size.
+    hero_key: Option<(crate::device_art::DeviceKind, usize, usize)>,
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     menu_item_presentation: Option<Rc<VecModel<MenuItemPresentation>>>,
@@ -497,6 +503,40 @@ fn settings_cog_backdrop_image() -> slint::Image {
     )
 }
 
+/// Raster size of the CRT system page's hero: 232 display pixels wide, with
+/// half-height rows on the native 15 kHz rasters. Portrait has no room for it.
+fn crt_hero_dims(width: i32, height: i32) -> Option<(usize, usize)> {
+    if width <= height {
+        return None;
+    }
+    let display_height = 232 * crate::device_art::VISIBLE_HEIGHT / crate::device_art::DEVICE_WIDTH;
+    let native_rows = height <= 288 && width >= 640;
+    Some((
+        232,
+        if native_rows {
+            display_height / 2
+        } else {
+            display_height
+        },
+    ))
+}
+
+/// A generic TV, monitor or handheld backdrop, or the cabinet for `None`.
+fn device_image(kind: Option<crate::device_art::DeviceKind>) -> slint::Image {
+    let Some(kind) = kind else {
+        return arcade_cabinet_image();
+    };
+    let pixels: Vec<Rgb565Pixel> = crate::device_art::device_rgb565(kind)
+        .iter()
+        .map(|pixel| Rgb565Pixel(*pixel))
+        .collect();
+    rgb565_image(
+        crate::device_art::DEVICE_WIDTH,
+        crate::device_art::DEVICE_HEIGHT,
+        &pixels,
+    )
+}
+
 fn arcade_cabinet_image() -> slint::Image {
     rgb565_image(CABINET_WIDTH, CABINET_HEIGHT, arcade_cabinet_rgb565())
 }
@@ -576,7 +616,7 @@ pub fn install_settings_visual_assets(app: &Launcher) {
 
 pub fn install_arcade_visual_assets(app: &Launcher) {
     let arcade = app.global::<ArcadeView>();
-    arcade.set_cabinet_backdrop(arcade_cabinet_image());
+    arcade.set_device_backdrop(arcade_cabinet_image());
     arcade.set_focus_highlight(arcade_focus_highlight_image());
 }
 
@@ -585,6 +625,9 @@ pub struct LauncherViewPresenters {
     navigation: NavigationViewPresenter,
     settings: SettingsViewPresenter,
     arcade_visual_assets_installed: bool,
+    /// The device backdrop currently installed, and the images already built.
+    arcade_device_installed: Option<mister_magik_ui::launcher::DeviceKind>,
+    device_images: [Option<slint::Image>; 4],
 }
 
 impl LauncherViewPresenters {
@@ -601,6 +644,8 @@ impl LauncherViewPresenters {
         if !self.arcade_visual_assets_installed {
             install_arcade_visual_assets(app);
             self.arcade_visual_assets_installed = true;
+            self.arcade_device_installed = Some(mister_magik_ui::launcher::DeviceKind::Cabinet);
+            self.device_images[0] = Some(app.global::<ArcadeView>().get_device_backdrop());
         }
         set_if_changed!(
             navigation,
@@ -655,22 +700,88 @@ impl LauncherViewPresenters {
         );
         set_if_changed!(
             navigation,
-            get_system_hub_games_count,
-            set_system_hub_games_count,
-            catalog.system_game_count("snes") as i32
+            get_system_device,
+            set_system_device,
+            device_kind(nav.device_kind())
         );
-        set_if_changed!(
-            navigation,
-            get_system_hub_recent_count,
-            set_system_hub_recent_count,
-            nav.recent_count() as i32
-        );
-        set_if_changed!(
-            navigation,
-            get_system_hub_favourites_count,
-            set_system_hub_favourites_count,
-            nav.favourite_count() as i32
-        );
+        if nav.screen == Screen::SystemHub {
+            let collection = nav.active_collection();
+            let system_id = collection
+                .map(|collection| {
+                    collection
+                        .system_id
+                        .as_deref()
+                        .unwrap_or(&collection.legacy_system_id)
+                })
+                .unwrap_or("");
+            set_view_string_if_changed!(
+                navigation,
+                get_system_title,
+                set_system_title,
+                collection.map_or_else(String::new, |collection| collection.title.to_uppercase())
+            );
+            set_view_string_if_changed!(
+                navigation,
+                get_system_subtitle,
+                set_system_subtitle,
+                crate::system_facts::system_subtitle(system_id)
+            );
+            set_if_changed!(
+                navigation,
+                get_system_hub_games_count,
+                set_system_hub_games_count,
+                collection.map_or(0, |collection| collection.count) as i32
+            );
+            let key = (
+                nav.active_collection_id().unwrap_or("").to_owned(),
+                nav.favourite_launch_refs_revision(),
+                nav.recent_count(),
+                nav.recent_launch_refs().first().cloned(),
+            );
+            if self.navigation.hub_counts_key.as_ref() != Some(&key) {
+                self.navigation.hub_counts = (
+                    nav.active_collection_recent_count(catalog),
+                    nav.active_collection_favourite_count(catalog),
+                );
+                self.navigation.hub_counts_key = Some(key);
+            }
+            // CRT shows the device scaled to its raster; HDMI reads the list's
+            // backdrop directly, so it gets no hero image.
+            let ui = app.global::<MisterUi>();
+            let hero = ui
+                .get_crt_layout()
+                .then(|| crt_hero_dims(ui.get_window_width(), ui.get_window_height()))
+                .flatten()
+                .zip(nav.device_kind())
+                .map(|((width, height), kind)| (kind, width, height));
+            if self.navigation.hero_key != hero {
+                navigation.set_system_hero(match hero {
+                    Some((kind, width, height)) => {
+                        let pixels: Vec<Rgb565Pixel> =
+                            crate::device_art::hero_rgb565(kind, width, height)
+                                .into_iter()
+                                .map(Rgb565Pixel)
+                                .collect();
+                        rgb565_image(width, height, &pixels)
+                    }
+                    None => slint::Image::default(),
+                });
+                self.navigation.hero_key = hero;
+            }
+            let (recent, favourites) = self.navigation.hub_counts;
+            set_if_changed!(
+                navigation,
+                get_system_hub_recent_count,
+                set_system_hub_recent_count,
+                recent as i32
+            );
+            set_if_changed!(
+                navigation,
+                get_system_hub_favourites_count,
+                set_system_hub_favourites_count,
+                favourites as i32
+            );
+        }
         let settings = app.global::<SettingsView>();
         if !self.settings.fixed_visual_assets_installed {
             install_fixed_settings_visual_assets(&settings);
@@ -886,6 +997,25 @@ impl LauncherViewPresenters {
         let games = active_game_view(catalog, nav);
         let count = active_count(catalog, nav, games.len());
         let arcade = app.global::<ArcadeView>();
+        let device = device_kind(nav.device_kind());
+        set_if_changed!(arcade, get_device, set_device, device);
+        if self.arcade_device_installed != Some(device) {
+            let index = device as usize;
+            let image = self.device_images[index]
+                .get_or_insert_with(|| device_image(nav.device_kind()))
+                .clone();
+            arcade.set_device_backdrop(image);
+            self.arcade_device_installed = Some(device);
+        }
+        set_view_string_if_changed!(
+            arcade,
+            get_collection_title,
+            set_collection_title,
+            nav.active_collection().map_or_else(
+                || "ARCADE".to_owned(),
+                |collection| collection.title.to_uppercase()
+            )
+        );
         set_if_changed!(
             arcade,
             get_list_mode,

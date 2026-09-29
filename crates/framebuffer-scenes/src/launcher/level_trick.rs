@@ -124,10 +124,28 @@ impl PreparedLauncher {
             let dealt = ease_out_quart(window(t, at, DEAL_MILLIS));
             let rest = settled_pose(relative);
             let mut pose = lerp_pose(scaled_centre(BEHIND_SCALE), rest, dealt);
+            // A generic card emerges showing its MagiK back, 150 degrees round,
+            // and turns face-up on its way out. Cards with artwork have no
+            // back and simply turn in from edge-on.
+            let back = faces[index].back.as_ref();
+            if dealt == 0 && back.is_some() {
+                // Still hidden behind the chosen card: a card showing its back
+                // must not appear during the edge-on hold or before its turn.
+                continue;
+            }
+            let start = if back.is_some() {
+                EDGE_ON * 5 / 3
+            } else {
+                EDGE_ON
+            };
             pose.angle = rest.angle * dealt / GEOMETRY_ONE
-                - relative.signum() as i64 * EDGE_ON * (GEOMETRY_ONE - dealt) / GEOMETRY_ONE;
+                - relative.signum() as i64 * start * (GEOMETRY_ONE - dealt) / GEOMETRY_ONE;
+            let face = match back {
+                Some(back) if pose.angle.abs() > EDGE_ON => back,
+                _ => &faces[index].compact,
+            };
             items[count] = Some(CarouselItem {
-                face: &faces[index].compact,
+                face,
                 blend: None,
                 pose,
             });

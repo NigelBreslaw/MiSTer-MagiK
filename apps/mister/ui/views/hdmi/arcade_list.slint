@@ -109,7 +109,7 @@ export component ArcadeListScreen inherits Rectangle {
 
             Image {
                 x: 0px; y: -42px; width: 483px; height: 519px;
-                source: ArcadeView.cabinet-backdrop;
+                source: ArcadeView.device-backdrop;
                 image-fit: fill;
                 image-rendering: pixelated;
                 accessible-role: none;
@@ -125,7 +125,7 @@ export component ArcadeListScreen inherits Rectangle {
 
         Xerxes10 {
             x: 26px; y: 52px;
-            text: root.search ? "ARCADE / SEARCH" : "ARCADE";
+            text: root.search ? ArcadeView.collection-title + " / SEARCH" : ArcadeView.collection-title;
             color: PageTheme.muted;
         }
         Xerxes10 {
@@ -183,7 +183,7 @@ export component ArcadeListScreen inherits Rectangle {
 
     if MisterUi.portrait-layout : Rectangle {
         PortraitPageChrome {
-            section: root.search ? "ARCADE / SEARCH" : "ARCADE";
+            section: root.search ? ArcadeView.collection-title + " / SEARCH" : ArcadeView.collection-title;
             hint-a: root.ready ? "A PLAY" : "";
             hint-b: "B BACK";
         }

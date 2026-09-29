@@ -331,9 +331,10 @@ impl Layout {
         card: &PreparedCard<'_>,
         fonts: &Fonts<'_>,
         bodies: &mut artwork::BodyCache,
+        slides: bool,
     ) -> CardFaces {
         let (w, h) = (self.card_w, self.card_h);
-        let (mut pixels, alpha) = bodies.native(card, w, h);
+        let (mut pixels, alpha) = bodies.native(card, w, h, false);
         let title = fonts.card_title(card.name, w.saturating_sub(8 * self.sx));
         let metadata = fonts.get(TextRole::Metadata);
         let detail_y = if self.crt {
@@ -367,9 +368,15 @@ impl Layout {
                 CREAM,
             );
         }
+        let back = artwork::has_back(card).then(|| {
+            let (pixels, alpha) = bodies.native(card, w, h, true);
+            crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h)
+        });
         CardFaces {
             compact,
             detail: crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h),
+            back,
+            slides,
         }
     }
 

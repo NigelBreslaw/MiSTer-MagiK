@@ -1297,9 +1297,8 @@ fn commit_pending_collection_entry(
     if !nav.activate_collection(catalog, &entry.collection_id) {
         return false;
     }
-    if entry.open_game_list_directly && nav.screen == Screen::SystemHub {
-        nav.set_arcade_user_list_mode(catalog, launcher::ArcadeUserListMode::Games);
-        nav.screen = Screen::Arcade;
+    if entry.open_game_list_directly {
+        nav.skip_system_page(catalog);
     }
     print_startup_event(
         start,
@@ -14648,7 +14647,7 @@ fn apply_start_system_from_env(
     system_id: &str,
     forced_arcade_selected: Option<usize>,
 ) -> bool {
-    if !nav.open_system(catalog, system_id) {
+    if !nav.open_system_game_list(catalog, system_id) {
         return false;
     }
     nav.arcade_filter.drawer_open = false;
@@ -16864,7 +16863,7 @@ mod tests {
     fn pending_launch_return_deduplicates_a_second_registry_shard_request() {
         let full_catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&full_catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&full_catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &full_catalog,
@@ -16962,7 +16961,7 @@ mod tests {
             vec![arcade_system("c64", 3)],
         );
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&catalog, "c64"));
         launched_nav
             .arcade
             .restore_position(2, 2 * launched_nav.arcade.row_height(), 3);
@@ -17118,7 +17117,7 @@ mod tests {
     fn return_session_timeout_explicitly_falls_back_to_root_home() {
         let catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &catalog,
@@ -17144,7 +17143,7 @@ mod tests {
     fn return_preview_timeout_falls_back_even_when_exact_context_was_restored() {
         let catalog = catalog_for_media_systems(&["c64"]);
         let mut nav = LauncherNav::new();
-        assert!(nav.open_system(&catalog, "c64"));
+        assert!(nav.open_system_game_list(&catalog, "c64"));
         let state =
             launcher::capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/c64.mra")
                 .expect("return state");
@@ -17166,7 +17165,7 @@ mod tests {
     fn rejected_capsule_restores_from_the_urgent_system_shard() {
         let full_catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&full_catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&full_catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &full_catalog,
@@ -17189,7 +17188,7 @@ mod tests {
     fn rejected_capsule_restores_immediately_from_validated_registry_rows() {
         let catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &catalog,
@@ -17484,11 +17483,15 @@ mod tests {
             &hydrated,
             Instant::now()
         ));
-        assert_eq!(nav.screen, Screen::Arcade);
+        // Every console, computer and handheld opens its own page first.
+        assert_eq!(nav.screen, Screen::SystemHub);
         assert!(pending.is_none());
         assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
         assert!(!empty_collection_invariant_violated(&hydrated, &nav));
-        assert_eq!(LauncherProjectionKey::from_nav(&nav).screen, Screen::Arcade);
+        assert_eq!(
+            LauncherProjectionKey::from_nav(&nav).screen,
+            Screen::SystemHub
+        );
     }
 
     #[test]
@@ -17597,7 +17600,7 @@ mod tests {
             vec![crate::test_support::arcade_system("c64", 18_851)],
         );
         let mut nav = LauncherNav::new();
-        assert!(nav.open_system(&catalog, "c64"));
+        assert!(nav.open_system_game_list(&catalog, "c64"));
 
         assert!(empty_collection_invariant_violated(&catalog, &nav));
         nav.recover_empty_collection_to_home();

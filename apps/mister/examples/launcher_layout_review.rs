@@ -235,6 +235,23 @@ fn review_level_trick(
         scene,
         consoles.pixels(),
     )?;
+    // Browsing a nested level: every card slides one slot and only the end
+    // cards flip (one turns away, one turns in showing its MagiK back).
+    for progress in [80, 160, 240, 320, 400] {
+        consoles.render_frame(BrowseFrame {
+            selected: 3,
+            target: 4,
+            phase: BrowsePhase::Flipping,
+            direction: Some(BrowseDirection::Right),
+            progress_millis: progress,
+            duration_millis: 460,
+        });
+        write_ppm(
+            &output.join(format!("{name}-browse-{progress:03}.ppm")),
+            scene,
+            consoles.pixels(),
+        )?;
+    }
     Ok(())
 }
 
