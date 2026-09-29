@@ -447,7 +447,8 @@ The MiSTer MagiK patch applied to that source is:
 FFmpeg 8.1.2 source, used by the production UI build:
   https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 The exact configure flags and cross-build procedure are in:
-  magik/host/magik/ffmpeg.py
+  scripts/magik_ci/ffmpeg.py (CI)
+  magik/host/magik/ffmpeg.py (local Apple Container)
 at the MiSTer MagiK source revision above.
 The MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
 needed to rebuild the application and relink it with a modified FFmpeg build.

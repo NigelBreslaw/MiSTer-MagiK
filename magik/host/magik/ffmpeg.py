@@ -5,11 +5,21 @@ from pathlib import Path
 
 CONFIGURE = "./configure --prefix=/workspace/apps/mister/target/ffmpeg-minimal/armv7/dist --cross-prefix=arm-linux-gnueabihf- --arch=arm --cpu=cortex-a9 --target-os=linux --enable-cross-compile --extra-cflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --extra-cxxflags='-O3 -mcpu=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard' --enable-static --disable-shared --enable-pic --disable-autodetect --disable-programs --disable-doc --disable-debug --enable-stripping --disable-everything --disable-avdevice --disable-avfilter --enable-swresample --enable-avcodec --enable-avformat --enable-avutil --disable-swscale --enable-decoder=h264 --enable-decoder=aac --enable-decoder=pcm_s16le --enable-parser=aac --enable-parser=h264 --enable-demuxer=mov --enable-protocol=file"
 
+RECIPE = (
+    CONFIGURE
+    + "\n"
+    + "\n".join(
+        f"grep -q '^#define CONFIG_{flag} 0$' config.h"
+        for flag in ("GPL", "VERSION3", "NONFREE")
+    )
+    + "\nmake -j4 install"
+)
+
 
 def prepare_ffmpeg(repository: Path, container: str, runner) -> None:
     work = repository / "apps/mister/target/ffmpeg-minimal/armv7"
     stamp = work / "dist/.magik-recipe"
-    fingerprint = hashlib.sha256(CONFIGURE.encode()).hexdigest()
+    fingerprint = hashlib.sha256(RECIPE.encode()).hexdigest()
     libraries = ("avcodec", "avformat", "avutil", "swresample")
     if (
         stamp.is_file()
@@ -41,7 +51,7 @@ def prepare_ffmpeg(repository: Path, container: str, runner) -> None:
             container,
             "sh",
             "-ec",
-            CONFIGURE + " && make -j4 install",
+            RECIPE,
         ],
         check=True,
     )
