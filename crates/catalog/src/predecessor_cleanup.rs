@@ -73,7 +73,6 @@ fn remove_generated_catalog_artifacts_at(
     let mut removed = remove_catalog_artifacts_at(
         paths.library_sqlite(),
         paths.library_sqlite_build_dir(),
-        None,
         volatile,
         &app.join("rebuild-on-next-boot"),
     )?;
@@ -92,10 +91,7 @@ fn remove_generated_catalog_artifacts_at(
         volatile.join("launcher-return-catalog.json"),
         volatile.join("launcher-return-catalog.json.tmp"),
     ] {
-        removed += usize::from(remove_file_if_exists_counted(
-            &path,
-            "catalog reset artifact",
-        )?);
+        removed += usize::from(remove_file_if_exists(&path, "catalog reset artifact")?);
     }
     Ok(removed)
 }
@@ -130,7 +126,6 @@ fn remove_predecessor_catalog_artifacts_at(
     removed_artifacts = removed_artifacts.saturating_add(remove_catalog_artifacts_at(
         &app_dir.join(PREDECESSOR_SQLITE_NAME),
         build_dir,
-        None,
         snapshot_dir,
         &app_dir.join("rebuild-on-next-boot"),
     )?);
@@ -148,7 +143,6 @@ fn remove_predecessor_catalog_artifacts_at(
 fn remove_catalog_artifacts_at(
     sqlite_path: &Path,
     build_dir: &Path,
-    configured_snapshot: Option<&Path>,
     default_snapshot_dir: &Path,
     rebuild_marker: &Path,
 ) -> Result<usize, String> {
@@ -169,7 +163,7 @@ fn remove_catalog_artifacts_at(
         ),
         (rebuild_marker.to_path_buf(), "catalog rebuild marker"),
     ] {
-        removed += usize::from(remove_file_if_exists_counted(&path, label)?);
+        removed += usize::from(remove_file_if_exists(&path, label)?);
     }
 
     let sqlite_name = sqlite_path
@@ -195,12 +189,6 @@ fn remove_catalog_artifacts_at(
     removed += remove_matching_files(build_dir, "catalog build temp", |name| {
         name.starts_with(&build_prefix)
     })?;
-    if let Some(snapshot) = configured_snapshot {
-        removed += usize::from(remove_file_if_exists_counted(
-            snapshot,
-            "configured catalog ready snapshot",
-        )?);
-    }
     removed += remove_matching_files(default_snapshot_dir, "catalog ready snapshot", |name| {
         name.starts_with("catalog-ready-")
             && (name.ends_with(".nav.lz4b") || name.ends_with(".nav.lz4b.tmp"))
@@ -228,18 +216,10 @@ fn remove_matching_files(
             continue;
         };
         if (file_type.is_file() || file_type.is_symlink()) && matches(&name) {
-            removed += usize::from(remove_file_if_exists_counted(&entry.path(), label)?);
+            removed += usize::from(remove_file_if_exists(&entry.path(), label)?);
         }
     }
     Ok(removed)
-}
-
-fn remove_file_if_exists_counted(path: &Path, label: &str) -> Result<bool, String> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("remove {label} {}: {error}", path.display())),
-    }
 }
 
 fn predecessor_adjacent_file(name: &str) -> bool {

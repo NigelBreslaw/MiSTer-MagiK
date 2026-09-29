@@ -43,6 +43,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
+enum LibraryResetState {
+    Idle,
+    Deleting(std::sync::mpsc::Receiver<Result<launcher::PurgeLibraryDataOutcome, String>>),
+    RebootRequested,
+}
+
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(1_000);
@@ -5442,10 +5448,7 @@ pub(super) fn run_launcher_loop(
         input_observation_probe.clone(),
     );
     let mut loading_title = String::new();
-    let mut library_reset_worker: Option<
-        std::sync::mpsc::Receiver<Result<launcher::PurgeLibraryDataOutcome, String>>,
-    > = None;
-    let mut library_reset_waiting_reboot = false;
+    let mut library_reset = LibraryResetState::Idle;
     let mut library_reset_bridge_dirty = false;
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -6321,21 +6324,19 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
-        let mut library_reset_failed = false;
-        if library_reset_waiting_reboot {
-            let _pace = pacer.wait();
-            continue 'launcher;
-        }
-        if let Some(worker) = library_reset_worker.as_ref() {
-            match worker.try_recv() {
+        match &library_reset {
+            LibraryResetState::RebootRequested => {
+                let _pace = pacer.wait();
+                continue 'launcher;
+            }
+            LibraryResetState::Deleting(worker) => match worker.try_recv() {
                 Ok(Ok(outcome)) => {
                     crate::ui_logln!(
                         "library_reset_reboot_requested catalog_removed={} screenshot_removed={}",
                         outcome.catalog_artifacts_removed,
                         outcome.screenshot_artifacts_removed
                     );
-                    library_reset_worker = None;
-                    library_reset_waiting_reboot = true;
+                    library_reset = LibraryResetState::RebootRequested;
                     continue 'launcher;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -6348,15 +6349,14 @@ pub(super) fn run_launcher_loop(
                         _ => "Database reset worker stopped unexpectedly".to_string(),
                     };
                     crate::ui_errln!("library reset failed: {error}");
-                    library_reset_worker = None;
+                    library_reset = LibraryResetState::Idle;
                     loading_title.clear();
-                    nav.library_reset_error = Some(error);
-                    nav.confirm_action = Some(launcher::ConfirmAction::LibraryUpdateFailed);
-                    nav.confirm_selected = 0;
-                    library_reset_failed = true;
+                    nav.show_library_reset_error(error);
+                    library_reset_bridge_dirty = true;
                     request_launcher_redraw!();
                 }
-            }
+            },
+            LibraryResetState::Idle => {}
         }
         let slint_timer_dispatch_started = Instant::now();
         let gui_timer_dispatch_pmu = gui_profiling.span("gui.timer-dispatch");
@@ -6401,7 +6401,6 @@ pub(super) fn run_launcher_loop(
         }
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending)
-            || library_reset_failed
             || std::mem::take(&mut library_reset_bridge_dirty);
         if startup_intro.is_none() {
             #[cfg(test)]
@@ -7708,10 +7707,7 @@ pub(super) fn run_launcher_loop(
                     let mut routed_event_this_loop = if let Some(event) = deferred_settings_event {
                         Some(event)
                     } else if let Some(event) = incoming_input_events.pop_front() {
-                        if event.source.kind == InputSourceKind::MainProxy
-                            || (event.source.kind == InputSourceKind::RawDevice
-                                && nav.screen == Screen::Settings)
-                        {
+                        if event.source.kind == InputSourceKind::MainProxy {
                             input_dispatch_now = main_proxy_event_instant(
                                 frame_now,
                                 frame_clock_us,
@@ -8471,10 +8467,7 @@ pub(super) fn run_launcher_loop(
                                             && (!scheduler.catalog_worker_available()
                                                 || scheduler.media_worker_running())
                                         {
-                                            nav.library_reset_error = Some("Catalog or screenshot work is still running. Wait for it to finish, then hold A for 7 seconds again.".into());
-                                            nav.confirm_action =
-                                                Some(launcher::ConfirmAction::LibraryUpdateFailed);
-                                            nav.confirm_selected = 0;
+                                            nav.show_library_reset_error("Catalog or screenshot work is still running. Wait for it to finish, then hold A for 7 seconds again.".into());
                                             library_reset_bridge_dirty = true;
                                             request_launcher_redraw!();
                                             continue 'launcher;
@@ -8521,14 +8514,15 @@ pub(super) fn run_launcher_loop(
                                                         launcher::purge_library_data_and_reboot(),
                                                     );
                                                 }) {
-                                                Ok(_) => library_reset_worker = Some(receiver),
+                                                Ok(_) => {
+                                                    library_reset =
+                                                        LibraryResetState::Deleting(receiver)
+                                                }
                                                 Err(error) => {
                                                     loading_title.clear();
-                                                    nav.library_reset_error = Some(format!(
+                                                    nav.show_library_reset_error(format!(
                                                         "Could not start database reset: {error}"
                                                     ));
-                                                    nav.confirm_action = Some(launcher::ConfirmAction::LibraryUpdateFailed);
-                                                    nav.confirm_selected = 0;
                                                     library_reset_bridge_dirty = true;
                                                     request_launcher_redraw!();
                                                 }

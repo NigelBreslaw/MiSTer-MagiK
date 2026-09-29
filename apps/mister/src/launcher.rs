@@ -1351,6 +1351,13 @@ impl Default for LauncherNav {
 }
 
 impl LauncherNav {
+    #[cfg(any(feature = "ui", test))]
+    pub(crate) fn show_library_reset_error(&mut self, error: String) {
+        self.library_reset_error = Some(error);
+        self.confirm_action = Some(ConfirmAction::LibraryUpdateFailed);
+        self.confirm_selected = 0;
+    }
+
     pub fn for_crt_layout(crt_layout: bool) -> Self {
         Self::for_crt_layout_with_row_height(crt_layout, ARCADE_ROW_HEIGHT)
     }
@@ -5965,19 +5972,17 @@ fn purge_library_data_at_with_lease(
     paths: &mister_magik_catalog::device_layout::CatalogPaths,
     lease: &mister_magik_catalog::catalog_lease::CatalogMutationLease,
 ) -> Result<PurgeLibraryDataOutcome, String> {
-    let outcome = purge_library_data_with(paths.media_asset_dir(), || {
+    let catalog_artifacts_removed =
         mister_magik_catalog::predecessor_cleanup::remove_generated_catalog_artifacts_with_lease(
             paths, lease,
-        )
-    })?;
-    let additional = if paths.preview_cache_dir() != paths.media_asset_dir() {
-        delete_screenshot_packs_at(paths.preview_cache_dir())?
-    } else {
-        0
-    };
+        )?;
+    let mut screenshot_artifacts_removed = delete_screenshot_packs_at(paths.media_asset_dir())?;
+    if paths.preview_cache_dir() != paths.media_asset_dir() {
+        screenshot_artifacts_removed += delete_screenshot_packs_at(paths.preview_cache_dir())?;
+    }
     Ok(PurgeLibraryDataOutcome {
-        screenshot_artifacts_removed: outcome.screenshot_artifacts_removed + additional,
-        ..outcome
+        catalog_artifacts_removed,
+        screenshot_artifacts_removed,
     })
 }
 
@@ -6005,18 +6010,6 @@ fn purge_then_reboot_with(
     sync();
     reboot().map_err(|error| format!("Database deleted, but reboot failed: {error}"))?;
     Ok(outcome)
-}
-
-fn purge_library_data_with(
-    asset_dir: &Path,
-    remove_catalog: impl FnOnce() -> Result<usize, String>,
-) -> Result<PurgeLibraryDataOutcome, String> {
-    let catalog_artifacts_removed = remove_catalog()?;
-    let screenshot_artifacts_removed = delete_screenshot_packs_at(asset_dir)?;
-    Ok(PurgeLibraryDataOutcome {
-        catalog_artifacts_removed,
-        screenshot_artifacts_removed,
-    })
 }
 
 pub fn delete_screenshot_packs() -> Result<usize, String> {
@@ -6060,7 +6053,7 @@ fn delete_screenshot_packs_at_with_fault_control(
         let Some(name) = name.to_str() else {
             continue;
         };
-        if screenshot_reset_deletes_file(name) {
+        if screenshot_reset_deletes_filename(name) {
             fs::remove_file(&path)
                 .map_err(|e| format!("delete screenshot asset {}: {e}", path.display()))?;
             mister_magik_catalog::fs_fault::maybe_fault_with_control(
@@ -6072,10 +6065,6 @@ fn delete_screenshot_packs_at_with_fault_control(
         }
     }
     Ok(removed)
-}
-
-fn screenshot_reset_deletes_file(name: &str) -> bool {
-    screenshot_reset_deletes_filename(name)
 }
 
 pub fn request_library_rebuild_on_next_boot() -> Result<(), String> {
@@ -9838,36 +9827,6 @@ mod tests {
     }
 
     #[test]
-    fn reset_screenshot_pack_matcher_includes_retired_systems() {
-        assert!(screenshot_reset_deletes_file(
-            "arcade-screenshots-320x320.mmlz4b"
-        ));
-        assert!(screenshot_reset_deletes_file(
-            "neogeo-screenshots-240x240.mmlz4b.tmp-123"
-        ));
-        assert!(screenshot_reset_deletes_file("nes-screenshots.mmlz4b"));
-        assert!(screenshot_reset_deletes_file(STATE_FILENAME));
-        assert!(screenshot_reset_deletes_file(
-            ".screenshot-media-state.json.tmp-123"
-        ));
-        assert!(screenshot_reset_deletes_file(
-            "arcade-screenshots-320x320.mmlz4b.idx"
-        ));
-        assert!(screenshot_reset_deletes_file(
-            ".arcade-screenshots-320x320.mmlz4b.tmp-123"
-        ));
-
-        assert!(screenshot_reset_deletes_file("pcengine-screenshots.mmlz4b"));
-        assert!(screenshot_reset_deletes_file(
-            "arcade-screenshots-large.mmlz4b"
-        ));
-        assert!(!screenshot_reset_deletes_file(
-            "arcade-preview-cache.raw565"
-        ));
-        assert!(!screenshot_reset_deletes_file("manual.pdf"));
-    }
-
-    #[test]
     fn reset_screenshot_pack_cleanup_removes_packs_and_state_only() {
         let root = unique_temp_dir("screenshot-pack-reset");
         for name in [
@@ -9910,31 +9869,30 @@ mod tests {
             fault_control.points,
             vec!["reset_delete.screenshot_asset.after_remove"; 9]
         );
+        assert_eq!(
+            delete_screenshot_packs_at_with_fault_control(&root, &mut fault_control)
+                .expect("repeat screenshot cleanup"),
+            0
+        );
+        assert_eq!(fault_control.points.len(), 9);
 
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn library_purge_reports_catalog_and_screenshot_counts_and_is_idempotent() {
-        let root = unique_temp_dir("library-purge");
-        std::fs::write(root.join("arcade-screenshots-320x320.mmlz4b"), b"pack")
-            .expect("write screenshot pack");
-        std::fs::write(root.join("manual.pdf"), b"keep").expect("write unrelated asset");
-
-        let outcome =
-            purge_library_data_with(&root, || Ok(7)).expect("purge catalog and screenshots");
-        assert_eq!(
-            outcome,
-            PurgeLibraryDataOutcome {
-                catalog_artifacts_removed: 7,
-                screenshot_artifacts_removed: 1,
-            }
+    fn library_purge_and_reboot_fail_busy_before_cleanup() {
+        let _lease = mister_magik_catalog::catalog_lease::CatalogMutationLease::acquire_default()
+            .expect("hold catalog lease");
+        assert!(
+            purge_library_data()
+                .expect_err("purge must respect held lease")
+                .contains("busy")
         );
-        assert!(root.join("manual.pdf").exists());
-
-        let repeated = purge_library_data_with(&root, || Ok(0)).expect("repeat purge");
-        assert_eq!(repeated, PurgeLibraryDataOutcome::default());
-        let _ = std::fs::remove_dir_all(root);
+        assert!(
+            purge_library_data_and_reboot()
+                .expect_err("reset must respect held lease")
+                .contains("busy")
+        );
     }
 
     #[test]
@@ -9942,7 +9900,11 @@ mod tests {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
-        nav.confirm_action = Some(ConfirmAction::LibraryUpdateFailed);
+        nav.confirm_selected = 1;
+        nav.show_library_reset_error("delete failed".into());
+        assert_eq!(nav.library_reset_error.as_deref(), Some("delete failed"));
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::LibraryUpdateFailed));
+        assert_eq!(nav.confirm_selected, 0);
 
         assert!(
             nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog)
