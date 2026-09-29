@@ -34,6 +34,6 @@ runs:
         scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
         scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
         scripts/cargo test --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml
-        scripts/tests/test-mister-magik-installer.sh
+        scripts/tests/test-start-magik.sh
         scripts/magik-ci ci distribution verify "$CANDIDATE" --channel "$CHANNEL" --write-receipt
         scripts/magik-ci ci distribution test-delivery "$CANDIDATE" --channel "$CHANNEL" --downloader-source build/release-downloader

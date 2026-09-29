@@ -467,7 +467,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_tools_assurance_runs_the_local_installer_after_manager_build(self) -> None:
         tools_commands = commands("tools")
-        installer = ["scripts/tests/test-mister-magik-installer.sh"]
+        installer = ["scripts/tests/test-start-magik.sh"]
         manager_test = [
             "cargo",
             "test",

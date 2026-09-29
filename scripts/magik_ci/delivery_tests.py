@@ -31,21 +31,40 @@ def smoke(root: Path) -> None:
     if header[:6] != b"\x7fELF\x01\x01" or header[18:20] != b"\x28\x00":
         raise ValueError("delivery smoke requires the shipped ARM ELF manager")
     before = dist._inventory(root)
-    result = subprocess.run(
-        ["/bin/sh", str(root / dist.LAUNCHER), "verify-platform"],
-        env={
-            **os.environ,
-            "MISTER_MAGIK_FAT": str(root),
-            "MISTER_MAGIK_TEST_MODE": "1",
-        },
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+    metadata = root / dist.PUBLIC["scanout_metadata"].removeprefix("/media/fat/")
+    # The first vermagic token is the kernel the module was built for.
+    kernel = next(
+        line.removeprefix("vermagic=").split()[0]
+        for line in metadata.read_text().splitlines()
+        if line.startswith("vermagic=")
     )
+    environment = {
+        **os.environ,
+        "MISTER_MAGIK_FAT": str(root),
+        "MISTER_MAGIK_TEST_MODE": "1",
+        "MISTER_MAGIK_TEST_KERNEL_RELEASE": kernel,
+    }
+
+    def execute(command, keys=""):
+        return subprocess.run(
+            command,
+            env={**environment, "MISTER_MAGIK_TEST_KEYS": keys},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    result = execute([str(manager), "verify-platform", "public"])
     if result.returncode or "verified platform" not in result.stdout:
         raise ValueError(
-            f"shipped installer verification failed: {result.stdout[-1500:]} {result.stderr[-1500:]}"
+            f"shipped platform verification failed: {result.stdout[-1500:]} {result.stderr[-1500:]}"
+        )
+    # The launcher must reach the verified manager, which then refuses a cancel.
+    result = execute(["/bin/sh", str(root / dist.LAUNCHER)], keys="cancel")
+    if not result.returncode or "start cancelled" not in result.stderr:
+        raise ValueError(
+            f"shipped launcher did not reach the manager: {result.stdout[-1500:]} {result.stderr[-1500:]}"
         )
     if before != dist._inventory(root):
         raise ValueError("installer verification changed package bytes")
@@ -109,7 +128,7 @@ def downloader_test(
                 "size": len(legacy),
                 "hash": hashlib.md5(legacy, usedforsecurity=False).hexdigest(),
             }
-            previous["files"][dist.LAUNCHER] = {
+            previous["files"][dist.RETIRED_LAUNCHER] = {
                 "url": base + "/old-launcher",
                 "size": len(old_launcher),
                 "hash": hashlib.md5(old_launcher, usedforsecurity=False).hexdigest(),
@@ -190,8 +209,11 @@ def downloader_test(
                             raise ValueError(
                                 f"Downloader changed/missed payload: {name}; {output[-2000:]}"
                             )
-                    if (fat / dist.LEGACY_HELPER).exists() != (deletion != 1):
-                        raise ValueError(f"Downloader deletion policy mismatch: {case}")
+                    for retired in (dist.LEGACY_HELPER, dist.RETIRED_LAUNCHER):
+                        if (fat / retired).exists() != (deletion != 1):
+                            raise ValueError(
+                                f"Downloader deletion policy mismatch: {case} {retired}"
+                            )
                     if {
                         name: (fat / name).read_bytes() for name in protected
                     } != protected:

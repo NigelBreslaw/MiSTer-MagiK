@@ -200,6 +200,26 @@ bundle, syncs it, and activates the manifest last. Distribution packages
 contain only the public layout and deliberately exclude root `menu.rbf`, the
 development layout, and the development agent.
 
+### No-reboot session start
+
+`Scripts/Start_MagiK.sh` is the only MagiK Scripts entry. It starts the
+production layout for the current boot without changing `MiSTer.ini`. It
+verifies the public manager against its manifest and runs `mister-magik-manager
+start public`. After Down confirmation and platform verification, a detached
+helper stops stock Main and starts `MiSTer_MagiK` with
+`MISTER_MAGIK_SESSION_MAIN` set to that executable path. The fork then follows
+the normal boot sequence: latch RBF, scanout-module preflight, and supervised
+launcher. Main's exec restarts for core launches and launcher returns inherit
+the variable, and the fork skips the `main=` re-exec while it names the running
+executable, so the session survives games. Reboot clears it. If the session
+Main is not running after a bounded wait, or any later step fails, the helper
+restarts stock Main unless a Main is already running. Only stock Main can hand
+off, one handoff at a time under a lock; a running MagiK Main refuses the start.
+The manager refuses platforms the frontend would reject (6.18 is
+Development-only) and Main binaries without the session guard. Development
+boards instead select `MiSTer_MagiKDev` with `[MiSTer] main=`, so Dev starts on
+every boot; `start dev` remains available to the manager for that layout.
+
 ## Framebuffer Ownership
 
 The launcher path uses a planned Linux framebuffer and explicit presentation

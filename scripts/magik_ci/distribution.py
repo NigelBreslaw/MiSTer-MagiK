@@ -27,7 +27,8 @@ EVIDENCE = "delivery-evidence.json"
 CHANNELS = ("alpha", "beta", "release")
 PUBLIC = manifest.LAYOUTS["public"]
 APP = PUBLIC["root"].removeprefix("/media/fat/")
-LAUNCHER = "Scripts/MiSTer-MagiK.sh"
+LAUNCHER = "Scripts/Start_MagiK.sh"
+RETIRED_LAUNCHER = "Scripts/MiSTer-MagiK.sh"
 LEGACY_HELPER = "Scripts/MiSTer-MagiK.platform-v3.constants.sh"
 ARTWORK = {
     f"{APP}/assets/snes/snes-small-v1.rgb565a": "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766",
@@ -167,11 +168,7 @@ def verify_root(root: Path) -> dict[str, str]:
     missing = REQUIRED - names
     if missing:
         raise ValueError(f"missing package files: {', '.join(sorted(missing))}")
-    scripts = {
-        name
-        for name in names
-        if name.casefold().startswith("Scripts/MiSTer-MagiK".casefold())
-    }
+    scripts = {name for name in names if name.startswith("Scripts/")}
     if scripts != {LAUNCHER}:
         raise ValueError("package must expose exactly one MagiK Scripts entry")
     for name in names:

@@ -247,7 +247,7 @@ def commands(group: str) -> list[list[str]]:
                     "--bin",
                     "platform-manifest-check",
                 ],
-                ["scripts/tests/test-mister-magik-installer.sh"],
+                ["scripts/tests/test-start-magik.sh"],
             ]
         )
         return result

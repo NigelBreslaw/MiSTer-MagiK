@@ -39,7 +39,7 @@ class DistributionWorkflowTests(unittest.TestCase):
             )
         action = (ROOT / ".github/actions/verify-distribution/action.yml").read_text()
         self.assertIn("ci distribution test-delivery", action)
-        self.assertIn("scripts/tests/test-mister-magik-installer.sh", action)
+        self.assertIn("scripts/tests/test-start-magik.sh", action)
         self.assertIn("update-binfmts --enable qemu-arm", action)
 
 

@@ -73,11 +73,11 @@ never installed bytes, manifest fields, sizes or hashes.
 - [ ] Publish alpha through the workflow and verify its downloaded artifacts.
 - [ ] Promote those identical bytes to beta through the approval gate.
 - [ ] Confirm the public beta feed references that immutable version, then tell
-      affected users to rerun `update_all` and run the MagiK installer.
+      affected users to rerun `update_all` and run `Scripts` -> `Start_MagiK`.
 
 Immutable hosting prevents server-side mixed releases. It does not make an
 interrupted SD-card update atomic. Users should let Downloader complete before
-rebooting or running the installer; incomplete packages fail verification.
+rebooting or running `Start_MagiK`; incomplete packages fail verification.
 
 ## Device and platform delivery
 

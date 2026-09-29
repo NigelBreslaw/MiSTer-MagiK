@@ -1,21 +1,25 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_ini::{Document, apply_install, apply_restore};
+use mister_magik_ini::Document;
 use mister_magik_platform_manifest_contract::{
     Layout as ManifestLayout, ParsedManifest, ValidationProfile,
+};
+use mister_magik_scanout_contract::{
+    DEVELOPMENT_KERNEL_REVISION, DEVELOPMENT_PROFILE, resolve_profile,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Output, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process::{self, Command, Stdio};
+use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -131,62 +135,14 @@ fn terminal_error(action: &str, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("cannot {action}: {error}"))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Action {
-    Restore,
-    Uninstall,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WriteStep {
-    BeforeCreate,
-    AfterWrite,
-    AfterFlush,
-    AfterPendingReadback,
-    AfterRename,
-    AfterFinalReadback,
-    AfterDirectorySync,
-}
-
-trait WriteFaults {
-    fn check(&mut self, _path: &Path, _step: WriteStep) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-struct NoWriteFaults;
-impl WriteFaults for NoWriteFaults {}
-
-struct PreparedFile {
-    path: PathBuf,
-    original: Option<Vec<u8>>,
-    replacement: Vec<u8>,
-}
-
-impl PreparedFile {
-    fn new(path: PathBuf, replacement: Vec<u8>) -> Result<Self> {
-        let original = if path.exists() {
-            Some(fs::read(&path)?)
-        } else {
-            None
-        };
-        Ok(Self {
-            path,
-            original,
-            replacement,
-        })
-    }
-}
-
 struct Paths {
     fat: PathBuf,
     ini: PathBuf,
-    backup: PathBuf,
     app: PathBuf,
     manifest: PathBuf,
-    script: PathBuf,
-    script_constants: PathBuf,
     test_mode: bool,
+    /// Test-mode stand-in for the running kernel (emulated CI, host fixtures).
+    kernel_release: Option<String>,
     test_keys: RefCell<VecDeque<InputEvent>>,
 }
 
@@ -200,13 +156,14 @@ impl Paths {
                 .strip_prefix("/media/fat")
                 .expect("public app root is below /media/fat"),
         );
+        let test_mode = env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1");
         Self {
             ini: fat.join("MiSTer.ini"),
-            backup: fat.join("MiSTer.ini.bak.before-magik"),
             manifest: app.join(mister_magik_platform_manifest_contract::FILE_NAME),
-            script: fat.join("Scripts/MiSTer-MagiK.sh"),
-            script_constants: fat.join("Scripts/MiSTer-MagiK.platform-v3.constants.sh"),
-            test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
+            test_mode,
+            kernel_release: env::var("MISTER_MAGIK_TEST_KERNEL_RELEASE")
+                .ok()
+                .filter(|release| test_mode && !release.is_empty()),
             test_keys: RefCell::new(
                 env::var("MISTER_MAGIK_TEST_KEYS")
                     .unwrap_or_default()
@@ -222,6 +179,13 @@ impl Paths {
 
     fn test_mode(&self) -> bool {
         self.test_mode
+    }
+
+    fn kernel_release(&self) -> Result<String> {
+        match &self.kernel_release {
+            Some(release) => Ok(release.clone()),
+            None => running_kernel_release(),
+        }
     }
 }
 
@@ -247,19 +211,17 @@ fn run() -> Result<()> {
     let command = env::args().nth(1);
     match command.as_deref() {
         Some("status") => status(&paths),
-        Some("verify-platform") => verify_platform(&paths),
-        Some("install") => install(&paths),
-        Some("restore") => restore(&paths),
-        Some("uninstall") => uninstall(&paths),
-        Some(other) => Err(format!("unknown command {other}; expected install, restore, uninstall, status, or verify-platform").into()),
+        Some("verify-platform") => {
+            verify_layout(&paths, start_layout(env::args().nth(2).as_deref())?)
+        }
+        Some("start") => start(&paths, start_layout(env::args().nth(2).as_deref())?),
+        Some(LIVE_HANDOFF_COMMAND) => live_handoff(start_layout(env::args().nth(2).as_deref())?),
+        Some(other) => Err(format!(
+            "unknown command {other}; expected start, status, or verify-platform"
+        )
+        .into()),
         None => {
-            if selects_magik(&paths.ini)? {
-                match choose_installed_action(&paths)? {
-                    Some(Action::Restore) => restore(&paths),
-                    Some(Action::Uninstall) => uninstall(&paths),
-                    _ => Ok(()),
-                }
-            } else { install(&paths) }
+            Err("usage: mister-magik-manager start|verify-platform dev|public, or status".into())
         }
     }
 }
@@ -270,81 +232,296 @@ fn status(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-fn install(paths: &Paths) -> Result<()> {
-    safety_confirmation(
-        paths,
-        "MiSTer MagiK will become the selected Main. Existing video and output settings will not be changed.",
-        "installation",
-    )?;
-    verify_platform(paths).map_err(|error| {
-        format!("platform verification failed; boot configuration was not changed: {error}")
-    })?;
-    snapshot(paths)?;
-    backup_ini(paths)?;
-    ensure_executable(paths.fat.join("MiSTer_MagiK"))?;
-    ensure_executable(paths.app.join("mister-magik-fb"))?;
-    ensure_executable(paths.app.join("mister-magik-manager"))?;
-    let ini = prepare_ini(&paths.ini, apply_install)?;
-    let files = vec![PreparedFile::new(paths.ini.clone(), ini)?];
-    replace_transaction(paths, &files, &mut NoWriteFaults, || {
-        validate_install(paths)
-    })?;
-    println!("MiSTer MagiK: installed. Rebooting to start MiSTer MagiK.");
-    reboot_now(paths)
+const STOCK_MAIN: &str = "/media/fat/MiSTer";
+const SESSION_MAIN_ENV: &str = "MISTER_MAGIK_SESSION_MAIN";
+const LIVE_HANDOFF_COMMAND: &str = "live-handoff";
+const LIVE_HANDOFF_LOG: &str = "/tmp/mister-magik-start.log";
+const LIVE_HANDOFF_LOCK: &str = "/tmp/mister-magik-start.lock";
+// Lets the Scripts session release tty2 before MagiK starts its launcher there.
+const LIVE_HANDOFF_DELAY: Duration = Duration::from_secs(2);
+const STOCK_MAIN_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_MAIN_START_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn start_layout(value: Option<&str>) -> Result<ManifestLayout> {
+    let value = value.ok_or("start requires a layout: dev or public")?;
+    ManifestLayout::parse(value)
+        .map_err(|_| format!("unknown start layout {value}; expected dev or public").into())
 }
 
-fn restore(paths: &Paths) -> Result<()> {
-    restore_stock(paths)?;
-    println!("MiSTer MagiK: stock MiSTer boot restored. MiSTer MagiK files were preserved.");
-    offer_reboot(paths)
+fn layout_main_name(layout: ManifestLayout) -> &'static str {
+    layout
+        .paths()
+        .main
+        .rsplit('/')
+        .next()
+        .expect("layout Main has a file name")
 }
 
-fn uninstall(paths: &Paths) -> Result<()> {
-    safety_confirmation(
-        paths,
-        "This permanently removes MiSTer MagiK, its settings, catalog, downloaded media, installer scripts, update_all entry, and saved backup. Stock MiSTer boot will be restored first.",
-        "uninstall",
-    )?;
-
-    if !paths.ini.is_file() {
-        return Err("MiSTer.ini is missing; uninstall refused and no files were removed".into());
-    }
-    let downloader = downloader_preflight(paths)?;
-    let recovery = env::var_os("MISTER_MAGIK_RECOVERY_MANAGER")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/mister-magik-manager-recovery"));
-    if downloader.is_some() {
-        stage_recovery_manager(&recovery)?;
-    }
-    restore_stock(paths)?;
-    stop_children(paths)?;
-    if let Some(tool) = downloader
-        && let Err(error) = downloader_uninstall(&tool, paths)
-    {
-        return Err(format!(
-            "uninstall incomplete: {error}. Retry with {} uninstall after resolving the Downloader error",
-            recovery.display()
-        ).into());
-    }
-    remove_owned(paths)?;
-    let _ = fs::remove_file(recovery);
-    println!("MiSTer MagiK: fully uninstalled.");
-    offer_reboot(paths)
+fn fat_path(paths: &Paths, installed: &str) -> PathBuf {
+    paths.fat.join(installed.trim_start_matches("/media/fat/"))
 }
 
-fn restore_stock(paths: &Paths) -> Result<()> {
-    snapshot(paths)?;
-    let backup = if paths.backup.is_file() {
-        Some(Document::parse(&fs::read(&paths.backup)?)?)
-    } else {
+fn layout_app(paths: &Paths, layout: ManifestLayout) -> PathBuf {
+    match layout {
+        ManifestLayout::Public => paths.app.clone(),
+        ManifestLayout::Development => fat_path(paths, layout.paths().root),
+    }
+}
+
+fn layout_manifest(paths: &Paths, layout: ManifestLayout) -> PathBuf {
+    match layout {
+        ManifestLayout::Public => paths.manifest.clone(),
+        ManifestLayout::Development => {
+            layout_app(paths, layout).join(mister_magik_platform_manifest_contract::FILE_NAME)
+        }
+    }
+}
+
+/// Starts the layout's Main for this boot only. MiSTer.ini is never changed:
+/// the fork keeps itself selected while `MISTER_MAGIK_SESSION_MAIN` names its
+/// own executable, and Main's exec restarts for core launches and returns
+/// inherit that environment. A reboot returns to the configured Main.
+fn start(paths: &Paths, layout: ManifestLayout) -> Result<()> {
+    let main = layout_main_name(layout);
+    let running = if paths.test_mode() {
         None
+    } else {
+        running_magik_main()?
     };
-    let ini = prepare_ini(&paths.ini, |document| {
-        apply_restore(document, backup.as_ref())
-    })?;
-    let files = vec![PreparedFile::new(paths.ini.clone(), ini)?];
-    replace_transaction(paths, &files, &mut NoWriteFaults, || validate_stock(paths))
+    match running {
+        Some(running) if running == main => {
+            println!("MiSTer MagiK: {main} is already running.");
+            return Ok(());
+        }
+        Some(running) => {
+            return Err(format!(
+                "{running} is running; only stock Main can hand off to {main} without rebooting"
+            )
+            .into());
+        }
+        None => {}
+    }
+    if !paths.test_mode() && try_lock(Path::new(LIVE_HANDOFF_LOCK))?.is_none() {
+        return Err("a MagiK start is already in progress".into());
+    }
+    safety_confirmation(
+        paths,
+        &format!(
+            "{main} will start now without rebooting. MiSTer.ini is not changed; rebooting returns to the configured Main."
+        ),
+        "start",
+    )?;
+    verify_layout(paths, layout)?;
+    if !paths.test_mode() && !process_running("MiSTer")? {
+        return Err("stock Main is not running; nothing was changed".into());
+    }
+    ensure_executable(fat_path(paths, layout.paths().main))?;
+    ensure_executable(fat_path(paths, layout.paths().gui))?;
+    sync_storage(paths)?;
+    spawn_live_handoff(paths, layout)?;
+    println!(
+        "MiSTer MagiK: starting {main} in {} seconds. The screen goes black briefly.",
+        LIVE_HANDOFF_DELAY.as_secs()
+    );
+    Ok(())
+}
+
+fn process_running(name: &str) -> Result<bool> {
+    let output = Command::new("pidof").arg(name).output()?;
+    Ok(output.stdout.iter().any(|byte| !byte.is_ascii_whitespace()))
+}
+
+fn running_magik_main() -> Result<Option<&'static str>> {
+    for layout in [ManifestLayout::Development, ManifestLayout::Public] {
+        let main = layout_main_name(layout);
+        if process_running(main)? {
+            return Ok(Some(main));
+        }
+    }
+    Ok(None)
+}
+
+fn detached(command: &mut Command) -> &mut Command {
+    // SAFETY: setsid is async-signal-safe and runs in the forked child only.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })
+    }
+}
+
+fn spawn_live_handoff(paths: &Paths, layout: ManifestLayout) -> Result<()> {
+    if paths.test_mode() {
+        println!("MiSTer MagiK: TEST: live handoff requested.");
+        return Ok(());
+    }
+    let log = File::create(LIVE_HANDOFF_LOG)?;
+    let layout_arg = match layout {
+        ManifestLayout::Public => "public",
+        ManifestLayout::Development => "dev",
+    };
+    // The helper must outlive this Scripts session and stock Main.
+    detached(
+        Command::new(env::current_exe()?)
+            .args([LIVE_HANDOFF_COMMAND, layout_arg])
+            .stdin(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log),
+    )
+    .spawn()?;
+    Ok(())
+}
+
+fn wait_until(timeout: Duration, mut done: impl FnMut() -> Result<bool>) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if done()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn start_main(path: &str, session: bool) -> Result<()> {
+    let mut command = Command::new(path);
+    command
+        .current_dir("/")
+        .env_remove("MISTER_MAGIK_FAT")
+        .env_remove("MISTER_MAGIK_TEST_MODE")
+        .env_remove("MISTER_MAGIK_TEST_OUTPUT_MODE")
+        .env_remove("MISTER_MAGIK_TEST_KEYS")
+        .env_remove("MISTER_MAGIK_TEST_KERNEL_RELEASE")
+        .env_remove(SESSION_MAIN_ENV)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if session {
+        command.env(SESSION_MAIN_ENV, path);
+    }
+    detached(&mut command).spawn()?;
+    Ok(())
+}
+
+/// Exclusive handoff lock. The kernel drops it when the holder exits, so a
+/// crashed helper cannot leave a stale lock behind.
+fn try_lock(path: &Path) -> Result<Option<File>> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    // SAFETY: flock only uses the descriptor number of the open file.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(file));
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(None)
+    } else {
+        Err(error.into())
+    }
+}
+
+/// Process operations behind the handoff, so its failure paths are testable.
+trait Processes {
+    fn running(&mut self, name: &str) -> Result<bool>;
+    fn stop_stock(&mut self) -> Result<()>;
+    fn start(&mut self, path: &str, session: bool) -> Result<()>;
+    fn settle(&mut self);
+}
+
+struct SystemProcesses;
+
+impl Processes for SystemProcesses {
+    fn running(&mut self, name: &str) -> Result<bool> {
+        process_running(name)
+    }
+
+    fn stop_stock(&mut self) -> Result<()> {
+        let _ = Command::new("killall").args(["-TERM", "MiSTer"]).status();
+        if !wait_until(STOCK_MAIN_STOP_TIMEOUT, || Ok(!process_running("MiSTer")?))? {
+            let _ = Command::new("killall").args(["-KILL", "MiSTer"]).status();
+            if !wait_until(Duration::from_secs(1), || Ok(!process_running("MiSTer")?))? {
+                return Err("stock Main did not stop".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn start(&mut self, path: &str, session: bool) -> Result<()> {
+        start_main(path, session)
+    }
+
+    fn settle(&mut self) {
+        // Main replaces its own process while it loads the latch RBF, so callers
+        // check by name after this bounded wait.
+        std::thread::sleep(SESSION_MAIN_START_TIMEOUT);
+    }
+}
+
+fn replace_stock_main(system: &mut dyn Processes, main_path: &str, main: &str) -> Result<()> {
+    system.stop_stock()?;
+    println!("MiSTer MagiK: stock Main stopped; starting {main_path}.");
+    system.start(main_path, true)?;
+    system.settle();
+    if system.running(main)? {
+        println!("MiSTer MagiK: {main} is running for this boot.");
+        Ok(())
+    } else {
+        Err(format!("{main} did not stay running").into())
+    }
+}
+
+/// Never starts a second Main: stock Main is restarted only when the process
+/// table positively shows that no Main is running.
+fn restore_stock_main(system: &mut dyn Processes, main: &str) -> Result<&'static str> {
+    if system.running("MiSTer")? || system.running(main)? {
+        return Ok("a Main is already running");
+    }
+    system.start(STOCK_MAIN, false)?;
+    Ok("stock Main was restarted")
+}
+
+/// Replaces stock Main with the session Main. Every failure after stock Main
+/// may have stopped goes through recovery, and both errors are reported.
+fn run_handoff(system: &mut dyn Processes, main_path: &str, main: &str) -> Result<()> {
+    for layout in [ManifestLayout::Development, ManifestLayout::Public] {
+        let running = layout_main_name(layout);
+        if system.running(running)? {
+            return Err(format!("{running} is already running; nothing was changed").into());
+        }
+    }
+    if !system.running("MiSTer")? {
+        return Err("stock Main is not running; nothing was changed".into());
+    }
+    let Err(primary) = replace_stock_main(system, main_path, main) else {
+        return Ok(());
+    };
+    println!("MiSTer MagiK: {primary}; recovering stock Main.");
+    match restore_stock_main(system, main) {
+        Ok(outcome) => Err(format!("{primary}; recovery: {outcome}").into()),
+        Err(recovery) => Err(format!("{primary}; recovery failed: {recovery}").into()),
+    }
+}
+
+/// Detached helper. Holds the handoff lock so concurrent starts cannot both
+/// replace stock Main; a second helper does nothing.
+fn live_handoff(layout: ManifestLayout) -> Result<()> {
+    let Some(_lock) = try_lock(Path::new(LIVE_HANDOFF_LOCK))? else {
+        return Err("another MagiK start is in progress; nothing was changed".into());
+    };
+    std::thread::sleep(LIVE_HANDOFF_DELAY);
+    run_handoff(
+        &mut SystemProcesses,
+        layout.paths().main,
+        layout_main_name(layout),
+    )
 }
 
 fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<()> {
@@ -355,36 +532,6 @@ fn safety_confirmation(paths: &Paths, message: &str, operation: &str) -> Result<
         Some(InputEvent::Down) => Ok(()),
         Some(_) => Err(format!("{operation} cancelled; no changes made").into()),
         None => Err(format!("interactive input is unavailable; {operation} refused").into()),
-    }
-}
-
-fn choose_installed_action(paths: &Paths) -> Result<Option<Action>> {
-    let mut action = Action::Restore;
-    loop {
-        println!(
-            "MiSTer MagiK is installed and selected as Main.\nUse Up/Down to choose, A/Enter to continue, or B/Escape to cancel."
-        );
-        println!(
-            "{} Restore stock MiSTer\n{} Fully uninstall MiSTer MagiK",
-            if action == Action::Restore { '>' } else { ' ' },
-            if action == Action::Uninstall {
-                '>'
-            } else {
-                ' '
-            }
-        );
-        match read_event(paths)? {
-            Some(InputEvent::Up | InputEvent::Down) => {
-                action = if action == Action::Restore {
-                    Action::Uninstall
-                } else {
-                    Action::Restore
-                }
-            }
-            Some(InputEvent::Confirm) => return Ok(Some(action)),
-            Some(InputEvent::Cancel | InputEvent::Other) => return Ok(None),
-            None => return Ok(None),
-        }
     }
 }
 
@@ -497,154 +644,20 @@ fn effective(path: &Path, section: &str, key: &str) -> Result<Option<String>> {
     Ok(Document::parse(&fs::read(path)?)?.effective_value(section, key))
 }
 
-fn selects_magik(path: &Path) -> Result<bool> {
-    Ok(effective(path, "MiSTer", "main")?.as_deref() == Some("MiSTer_MagiK"))
-}
-
-fn prepare_ini(path: &Path, mutation: impl FnOnce(&mut Document)) -> Result<Vec<u8>> {
-    let input = if path.is_file() {
-        fs::read(path)?
-    } else {
-        Vec::new()
-    };
-    let mut document = Document::parse(&input)?;
-    mutation(&mut document);
-    let output = document.render();
-    Document::parse(&output)?;
-    Ok(output)
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    atomic_write_with_faults(path, bytes, &mut NoWriteFaults)
-}
-
-fn atomic_write_with_faults(path: &Path, bytes: &[u8], faults: &mut dyn WriteFaults) -> Result<()> {
-    let parent = path.parent().ok_or("target has no parent")?;
-    fs::create_dir_all(parent)?;
-    let pending = parent.join(format!(
-        ".{}.new.{}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .ok_or("invalid filename")?,
-        process::id()
-    ));
-    let result = (|| -> Result<()> {
-        faults.check(path, WriteStep::BeforeCreate)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&pending)?;
-        file.write_all(bytes)?;
-        faults.check(path, WriteStep::AfterWrite)?;
-        file.sync_all()?;
-        faults.check(path, WriteStep::AfterFlush)?;
-        drop(file);
-        if fs::read(&pending)? != bytes {
-            return Err("pending file read-back mismatch".into());
-        }
-        faults.check(path, WriteStep::AfterPendingReadback)?;
-        fs::rename(&pending, path)?;
-        faults.check(path, WriteStep::AfterRename)?;
-        if fs::read(path)? != bytes {
-            return Err("replaced file read-back mismatch".into());
-        }
-        faults.check(path, WriteStep::AfterFinalReadback)?;
-        File::open(parent)?.sync_all()?;
-        faults.check(path, WriteStep::AfterDirectorySync)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&pending);
-    }
-    result
-}
-
-fn replace_transaction(
-    paths: &Paths,
-    files: &[PreparedFile],
-    faults: &mut dyn WriteFaults,
-    validate: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    for (index, file) in files.iter().enumerate() {
-        let write_result = atomic_write_with_faults(&file.path, &file.replacement, faults);
-        if let Err(error) = write_result {
-            rollback_files(&files[..=index])?;
-            return Err(format!(
-                "cannot replace {}: {error}; rollback=complete",
-                file.path.display()
-            )
-            .into());
-        }
-    }
-    let finish = sync_storage(paths).and_then(|()| validate());
-    if let Err(error) = finish {
-        rollback_files(files)?;
-        sync_storage(paths)?;
-        return Err(
-            format!("boot configuration validation failed: {error}; rollback=complete").into(),
-        );
-    }
-    Ok(())
-}
-
-fn rollback_files(files: &[PreparedFile]) -> Result<()> {
-    for file in files.iter().rev() {
-        match &file.original {
-            Some(bytes) => atomic_write(&file.path, bytes)?,
-            None if file.path.exists() => fs::remove_file(&file.path)?,
-            None => {}
-        }
-    }
-    Ok(())
-}
-
-fn backup_ini(paths: &Paths) -> Result<()> {
-    if !paths.ini.is_file() || paths.backup.exists() {
-        return Ok(());
-    }
-    if selects_magik(&paths.ini)? {
-        println!(
-            "MiSTer MagiK: WARNING: backup missing; not creating it from a MagiK-active MiSTer.ini."
-        );
-        return Ok(());
-    }
-    atomic_write(&paths.backup, &fs::read(&paths.ini)?)
-}
-
-fn validate_install(paths: &Paths) -> Result<()> {
-    let document = Document::parse(&fs::read(&paths.ini)?)?;
-    if document.active_count("MiSTer", "main") != 1
-        || document.effective_value("MiSTer", "main").as_deref() != Some("MiSTer_MagiK")
-    {
-        return Err("MiSTer.main did not validate".into());
-    }
-    Ok(())
-}
-
-fn validate_stock(paths: &Paths) -> Result<()> {
-    let document = Document::parse(&fs::read(&paths.ini)?)?;
-    if document.effective_value("MiSTer", "main").as_deref() == Some("MiSTer_MagiK") {
-        return Err("MiSTer.ini still selects MiSTer MagiK".into());
-    }
-    if document.active_count("MiSTer", "main") > 1 {
-        return Err("MiSTer.main remains duplicated".into());
-    }
-    Ok(())
-}
-
-fn verify_platform(paths: &Paths) -> Result<()> {
-    let manifest = parse_manifest(&paths.manifest)?;
+fn verify_layout(paths: &Paths, layout: ManifestLayout) -> Result<()> {
+    let manifest = parse_layout_manifest(&layout_manifest(paths, layout), layout)?;
     let fields = manifest.values();
-    for (name, expected) in ManifestLayout::Public.paths().components() {
-        let local = paths.fat.join(expected.trim_start_matches("/media/fat/"));
+    for (name, expected) in layout.paths().components() {
+        let local = fat_path(paths, expected);
         if digest(&local)? != fields[&format!("{name}_sha256")] {
             return Err(format!("hash mismatch for {}", local.display()).into());
         }
     }
+    let app = layout_app(paths, layout);
     let module_metadata =
-        parse_component_metadata(&paths.app.join("mister_magik_scanout_slots.metadata.txt"))?;
+        parse_component_metadata(&app.join("mister_magik_scanout_slots.metadata.txt"))?;
     let latch_metadata =
-        parse_component_metadata(&paths.app.join("fpga/menu-magik-vblank-latch.metadata.txt"))?;
+        parse_component_metadata(&app.join("fpga/menu-magik-vblank-latch.metadata.txt"))?;
     if module_metadata.get("module_sha256") != Some(&fields["scanout_module_sha256"]) {
         return Err("scanout metadata module hash mismatch".into());
     }
@@ -664,11 +677,41 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     {
         return Err("latch metadata protocol identity mismatch".into());
     }
-    if !module_metadata
-        .get("vermagic")
-        .is_some_and(|value| value.starts_with("5.15.1-MiSTer "))
+    let kernel = paths.kernel_release()?;
+    if !module_matches_kernel(module_metadata.get("vermagic"), &kernel) {
+        return Err(
+            format!("scanout module vermagic does not match running kernel {kernel}").into(),
+        );
+    }
+    // The frontend refuses platforms this rule rejects, so refuse them before
+    // stock Main is stopped: 6.18 is Development-only.
+    let metadata_release = module_metadata
+        .get("kernel_release")
+        .map_or(kernel.as_str(), String::as_str);
+    let profile = (metadata_release == kernel)
+        .then(|| {
+            resolve_profile(
+                &kernel,
+                module_metadata.get("platform_profile").map(String::as_str),
+                module_metadata.get("provider_identity").map(String::as_str),
+                layout == ManifestLayout::Development,
+            )
+        })
+        .flatten()
+        .ok_or_else(|| format!("unsupported kernel/layout: {kernel} {layout:?}"))?;
+    if profile == DEVELOPMENT_PROFILE
+        && module_metadata.get("kernel_revision").map(String::as_str)
+            != Some(DEVELOPMENT_KERNEL_REVISION)
     {
-        return Err("scanout module vermagic is incompatible".into());
+        return Err("scanout metadata kernel revision mismatch".into());
+    }
+    let main_path = fat_path(paths, layout.paths().main);
+    if !main_supports_session(&main_path)? {
+        return Err(format!(
+            "{} predates no-reboot sessions ({SESSION_MAIN_ENV}); publish a platform with the session Main",
+            main_path.display()
+        )
+        .into());
     }
     println!(
         "MiSTer MagiK: verified platform {}",
@@ -677,14 +720,40 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+/// Main keeps a session across core restarts only if it carries the guard that
+/// reads the session variable. The binary is hash-bound by the manifest.
+fn main_supports_session(main: &Path) -> Result<bool> {
+    let marker = SESSION_MAIN_ENV.as_bytes();
+    Ok(fs::read(main)?
+        .windows(marker.len())
+        .any(|window| window == marker))
+}
+
+fn module_matches_kernel(vermagic: Option<&String>, kernel: &str) -> bool {
+    vermagic.is_some_and(|value| value.starts_with(&format!("{kernel} ")))
+}
+
+/// The module can only load into the kernel that is running now.
+fn running_kernel_release() -> Result<String> {
+    let mut name = MaybeUninit::<libc::utsname>::uninit();
+    // SAFETY: uname fully initializes the buffer when it returns zero.
+    if unsafe { libc::uname(name.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    // SAFETY: uname succeeded, and release is NUL-terminated.
+    let release = unsafe { std::ffi::CStr::from_ptr(name.assume_init_ref().release.as_ptr()) };
+    Ok(release.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
 fn parse_manifest(path: &Path) -> Result<ParsedManifest> {
+    parse_layout_manifest(path, ManifestLayout::Public)
+}
+
+fn parse_layout_manifest(path: &Path, layout: ManifestLayout) -> Result<ParsedManifest> {
     let text = fs::read_to_string(path)?;
-    mister_magik_platform_manifest_contract::parse(
-        &text,
-        ManifestLayout::Public,
-        ValidationProfile::ManagerLegacy,
-    )
-    .map_err(|error| manager_manifest_error(&error).into())
+    mister_magik_platform_manifest_contract::parse(&text, layout, ValidationProfile::ManagerLegacy)
+        .map_err(|error| manager_manifest_error(&error).into())
 }
 
 fn manager_manifest_error(
@@ -758,277 +827,11 @@ fn digest(path: &Path) -> Result<String> {
         .to_string())
 }
 
-fn snapshot(paths: &Paths) -> Result<()> {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let directory = paths.app.join("snapshots").join(format!("{stamp}-manager"));
-    fs::create_dir_all(&directory)?;
-    for (source, name) in [(&paths.ini, "MiSTer.ini")] {
-        if source.is_file() {
-            fs::copy(source, directory.join(name))?;
-        }
-    }
-    if let Ok(output) = Command::new("ps").output()
-        && output.status.success()
-    {
-        fs::write(directory.join("ps.txt"), output.stdout)?;
-    }
-    for (source, name) in [
-        (
-            Path::new("/sys/module/MiSTer_fb/parameters/mode"),
-            "fb-mode.txt",
-        ),
-        (
-            Path::new("/tmp/mister-magik-main.log"),
-            "mister-magik-main.log",
-        ),
-        (Path::new("/tmp/mister-magik/status.json"), "status.json"),
-    ] {
-        if source.is_file() {
-            let _ = fs::copy(source, directory.join(name));
-        }
-    }
-    println!("MiSTer MagiK: snapshot: {}", directory.display());
-    Ok(())
-}
-
 fn ensure_executable(path: PathBuf) -> Result<()> {
     let mut permissions = fs::metadata(&path)?.permissions();
     permissions.set_mode(permissions.mode() | 0o755);
     fs::set_permissions(path, permissions)?;
     Ok(())
-}
-
-fn stop_children(paths: &Paths) -> Result<()> {
-    if paths.test_mode() {
-        return Ok(());
-    }
-    let output = Command::new("pidof").arg("mister-magik-fb").output()?;
-    for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-        let _ = Command::new("kill").args(["-TERM", pid]).status();
-    }
-    std::thread::sleep(Duration::from_secs(1));
-    let output = Command::new("pidof").arg("mister-magik-fb").output()?;
-    for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-        let _ = Command::new("kill").args(["-KILL", pid]).status();
-    }
-    let remaining = Command::new("pidof").arg("mister-magik-fb").output()?;
-    if remaining
-        .stdout
-        .iter()
-        .any(|byte| !byte.is_ascii_whitespace())
-    {
-        Err("mister-magik-fb did not stop within the bounded timeout".into())
-    } else {
-        Ok(())
-    }
-}
-
-const DOWNLOADER_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
-
-fn invoke_downloader(tool: &Path, paths: &Paths, args: &[&str]) -> Result<Output> {
-    let mut command = if fs::metadata(tool)?.permissions().mode() & 0o111 != 0 {
-        let mut command = Command::new(tool);
-        command.args(args);
-        command
-    } else {
-        let mut command = Command::new("python3");
-        command.arg(tool).args(args);
-        command
-    };
-    command
-        .current_dir(&paths.fat)
-        .env("DOWNLOADER_INI_PATH", paths.fat.join("downloader.ini"))
-        .env("FORCED_BASE_PATH", &paths.fat)
-        .env("ALLOW_REBOOT", "0")
-        .env("UPDATE_LINUX", "false")
-        .env("DOWNLOADER_OUTPUT", "dlp1-ltsv")
-        .env("PYTHONUNBUFFERED", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("cannot start cached Downloader {}: {error}", tool.display()))?;
-    let started = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return child
-                .wait_with_output()
-                .map_err(|error| format!("cannot collect Downloader output: {error}").into());
-        }
-        if started.elapsed() >= DOWNLOADER_COMMAND_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!(
-                "Downloader command timed out after {} seconds",
-                DOWNLOADER_COMMAND_TIMEOUT.as_secs()
-            )
-            .into());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn downloader_output(output: &Output) -> String {
-    format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
-fn output_has_event(output: &str, event: &str, db_id: &str) -> bool {
-    output.lines().any(|line| {
-        line.split('\t')
-            .any(|field| field == format!("event:{event}"))
-            && line.split('\t').any(|field| field == format!("db:{db_id}"))
-    })
-}
-
-fn downloader_preflight(paths: &Paths) -> Result<Option<PathBuf>> {
-    if Path::new("/tmp/downloader_run_signal").exists() {
-        return Err("Downloader is already running; retry uninstall after it finishes".into());
-    }
-    let cache = paths.fat.join("Scripts/.config/downloader");
-    let tools = [
-        cache.join("downloader_bin"),
-        cache.join("downloader_latest.zip"),
-    ];
-    if !tools.iter().any(|tool| tool.is_file()) {
-        let state_exists = [
-            "downloader.json",
-            "downloader.json.zip",
-            "downloader_fingerprints.json",
-            "downloader_sigs.json",
-            "previous_free_space.json",
-        ]
-        .iter()
-        .any(|name| cache.join(name).exists());
-        if state_exists {
-            return Err("Downloader state exists but its cached tool is missing; run update_all before uninstalling".into());
-        }
-        return Ok(None);
-    }
-    for tool in tools.iter().filter(|tool| tool.is_file()) {
-        let Ok(version) = invoke_downloader(tool, paths, &["--version"]) else {
-            continue;
-        };
-        if version.status.success()
-            && downloader_output(&version)
-                .lines()
-                .any(|line| line.trim().starts_with("2.4"))
-        {
-            return Ok(downloader_registered(tool, paths)?.then(|| tool.clone()));
-        }
-    }
-    Err("cached Downloader is unsupported; run update_all before uninstalling".into())
-}
-
-fn downloader_registered(tool: &Path, paths: &Paths) -> Result<bool> {
-    // A failed config write can leave the INI entry after installed state was
-    // cleared. Both must be absent before we report a complete uninstall.
-    let output = invoke_downloader(tool, paths, &["--list-dbs", "all"])?;
-    let text = downloader_output(&output);
-    if !output.status.success() || text.to_ascii_lowercase().contains("warning") {
-        return Err("Downloader registration state is unreadable; uninstall refused".into());
-    }
-    Ok(output_has_event(&text, "installed_db", "mister_magik")
-        || output_has_event(&text, "configured_db", "mister_magik"))
-}
-
-fn stage_recovery_manager(staging: &Path) -> Result<()> {
-    // Copy the running executable: the package copy may already have been
-    // removed by a partial uninstall. Never overwrite a running recovery copy.
-    let running = env::current_exe()?;
-    if fs::canonicalize(staging).ok().as_deref() != Some(running.as_path()) {
-        let temporary = staging.with_extension("new");
-        fs::copy(running, &temporary)?;
-        fs::rename(temporary, staging)?;
-    }
-    Ok(())
-}
-
-fn downloader_uninstall(tool: &Path, paths: &Paths) -> Result<()> {
-    let output = invoke_downloader(tool, paths, &["--uninstall", "mister_magik"])?;
-    if !output.status.success() {
-        return Err(format!(
-            "Downloader refused MagiK removal: {}",
-            downloader_output(&output)
-        )
-        .into());
-    }
-    if downloader_registered(tool, paths)? {
-        return Err("MagiK remains installed or configured in Downloader".into());
-    }
-    Ok(())
-}
-
-fn remove_owned(paths: &Paths) -> Result<()> {
-    let files = vec![
-        paths.fat.join("MiSTer_MagiK"),
-        paths.fat.join("Scripts/mister-magik.sh"),
-        paths.fat.join("Scripts/mister-magik-channel.sh"),
-        paths.fat.join("downloader_mister_magik.ini"),
-        paths.backup.clone(),
-        paths.fat.join("THIRD-PARTY-NOTICES.txt"),
-        paths.fat.join("SOURCE-OFFER.txt"),
-        paths.fat.join("licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"),
-        paths.fat.join("licenses/RUST-LIBRARIES.txt"),
-        paths.fat.join("licenses/FFMPEG-LGPL-2.1-or-later.txt"),
-        paths.fat.join("licenses/PRESS-START-2P-OFL-1.1.txt"),
-        paths.fat.join("licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"),
-    ];
-    for path in &files {
-        if path.is_file() {
-            fs::remove_file(path)?;
-        }
-    }
-    let mut stale = Vec::new();
-    for entry in fs::read_dir(&paths.fat)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("downloader_mister_magik.ini.tmp.")
-            || name.starts_with(".downloader_mister_magik.ini")
-            || name.starts_with(".MiSTer.ini.bak.before-magik.new.")
-            || name.starts_with(".MiSTer.ini.magik.new")
-        {
-            stale.push(entry.path());
-        }
-    }
-    for path in &stale {
-        if path.is_file() {
-            fs::remove_file(path)?;
-        }
-    }
-    let _ = fs::remove_dir(paths.fat.join("licenses"));
-    if paths.app.is_dir() {
-        fs::remove_dir_all(&paths.app)?;
-    }
-    if paths.script.is_file() {
-        fs::remove_file(&paths.script)?;
-    }
-    if paths.script_constants.is_file() {
-        fs::remove_file(&paths.script_constants)?;
-    }
-    let residue: Vec<_> = files
-        .iter()
-        .chain(stale.iter())
-        .chain([&paths.app, &paths.script, &paths.script_constants])
-        .filter(|path| path.exists())
-        .collect();
-    if residue.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "uninstall residue: {}",
-            residue
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-        .into())
-    }
 }
 
 fn sync_storage(paths: &Paths) -> Result<()> {
@@ -1041,64 +844,31 @@ fn sync_storage(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-fn offer_reboot(paths: &Paths) -> Result<()> {
-    println!("\nReboot now? Press A/Enter to reboot. Any other key exits without rebooting.");
-    if read_event(paths)? != Some(InputEvent::Confirm) {
-        println!("MiSTer MagiK: reboot skipped.");
-        return Ok(());
-    }
-    reboot_now(paths)
-}
-
-fn reboot_now(paths: &Paths) -> Result<()> {
-    if paths.test_mode() {
-        println!("MiSTer MagiK: TEST: normal reboot requested.");
-        return Ok(());
-    }
-    if !Command::new("sync").status()?.success() {
-        return Err("sync failed".into());
-    }
-    let status = Command::new("reboot").status()?;
-    if !status.success() {
-        return Err("reboot command failed".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
-    struct FailAt {
-        step: WriteStep,
-        suffix: &'static str,
-    }
-
-    impl WriteFaults for FailAt {
-        fn check(&mut self, path: &Path, step: WriteStep) -> io::Result<()> {
-            if step == self.step && path.ends_with(self.suffix) {
-                Err(io::Error::other("injected write failure"))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
     fn fixture_paths(root: &Path) -> Paths {
         Paths {
             fat: root.to_path_buf(),
             ini: root.join("MiSTer.ini"),
-            backup: root.join("backup"),
             app: root.join("mister-magik"),
             manifest: root.join("manifest"),
-            script: root.join("script"),
-            script_constants: root.join("script.constants"),
             test_mode: true,
+            kernel_release: Some("5.15.1-MiSTer".into()),
             test_keys: RefCell::default(),
+        }
+    }
+
+    fn development_paths(root: &Path) -> Paths {
+        Paths {
+            kernel_release: Some("6.18.38-MiSTer".into()),
+            ..fixture_paths(root)
         }
     }
 
@@ -1115,11 +885,33 @@ mod tests {
     }
 
     fn write_valid_platform(paths: &Paths) {
-        let app = &paths.app;
+        write_layout_platform(paths, ManifestLayout::Public);
+    }
+
+    fn write_layout_platform(paths: &Paths, layout: ManifestLayout) {
+        write_platform(paths, layout, layout == ManifestLayout::Development, true);
+    }
+
+    /// `development_kernel` selects 6.18 development-only module metadata;
+    /// `session_main` selects a Main carrying the session guard marker.
+    fn write_platform(
+        paths: &Paths,
+        layout: ManifestLayout,
+        development_kernel: bool,
+        session_main: bool,
+    ) {
+        let app = &layout_app(paths, layout);
         let fpga = app.join("fpga");
         fs::create_dir_all(&fpga).unwrap();
         let files = [
-            (paths.fat.join("MiSTer_MagiK"), b"main".as_slice()),
+            (
+                fat_path(paths, layout.paths().main),
+                if session_main {
+                    b"main MISTER_MAGIK_SESSION_MAIN".as_slice()
+                } else {
+                    b"main".as_slice()
+                },
+            ),
             (app.join("mister-magik-fb"), b"gui".as_slice()),
             (app.join("mister-magik-manager"), b"manager".as_slice()),
             (
@@ -1135,11 +927,18 @@ mod tests {
         let module_sha = digest(&app.join("mister_magik_scanout_slots.ko")).unwrap();
         let rbf_sha = digest(&fpga.join("menu-magik-vblank-latch.rbf")).unwrap();
         let contract = "1".repeat(64);
+        let module_metadata = if development_kernel {
+            format!(
+                "kernel_release=6.18.38-MiSTer\nkernel_revision={DEVELOPMENT_KERNEL_REVISION}\nplatform_profile=stock-6.18-latch-reuse-v3\nprovider_identity=stock-6.18-latch-reuse-v3\ndevelopment_only=1\nmodule_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 \n"
+            )
+        } else {
+            format!(
+                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=5.15.1-MiSTer SMP mod_unload ARMv7 p2v8 \n"
+            )
+        };
         fs::write(
             app.join("mister_magik_scanout_slots.metadata.txt"),
-            format!(
-                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=5.15.1-MiSTer SMP\n"
-            ),
+            module_metadata,
         )
         .unwrap();
         fs::write(
@@ -1156,7 +955,7 @@ mod tests {
             "3".repeat(64),
             "4".repeat(64)
         );
-        for (name, installed_path) in ManifestLayout::Public.paths().components() {
+        for (name, installed_path) in layout.paths().components() {
             let local_path = paths
                 .fat
                 .join(installed_path.trim_start_matches("/media/fat/"));
@@ -1183,7 +982,7 @@ mod tests {
                 mister_magik_platform_manifest_contract::qualification_candidate_id(&values)
             ),
         );
-        fs::write(&paths.manifest, manifest).unwrap();
+        fs::write(layout_manifest(paths, layout), manifest).unwrap();
     }
 
     fn pseudo_terminal() -> (OwnedFd, OwnedFd) {
@@ -1345,22 +1144,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_file_collision_cannot_damage_the_original() {
-        let root = env::temp_dir().join(format!("mister-manager-collision-{}", process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let target = root.join("MiSTer.ini");
-        fs::write(&target, b"original\n").unwrap();
-        let pending = root.join(format!(".MiSTer.ini.new.{}", process::id()));
-        fs::write(&pending, b"hostile pending\n").unwrap();
-
-        assert!(atomic_write(&target, b"replacement\n").is_err());
-        assert_eq!(fs::read(&target).unwrap(), b"original\n");
-        assert!(!pending.exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn manifest_parser_rejects_duplicate_fields() {
         let root = env::temp_dir().join(format!("mister-manager-manifest-{}", process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -1437,161 +1220,279 @@ mod tests {
     }
 
     #[test]
-    fn every_write_boundary_rolls_back_all_replaced_files() {
-        for (index, step) in [
-            WriteStep::BeforeCreate,
-            WriteStep::AfterWrite,
-            WriteStep::AfterFlush,
-            WriteStep::AfterPendingReadback,
-            WriteStep::AfterRename,
-            WriteStep::AfterFinalReadback,
-            WriteStep::AfterDirectorySync,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let root =
-                env::temp_dir().join(format!("mister-manager-rollback-{}-{index}", process::id()));
-            let _ = fs::remove_dir_all(&root);
-            fs::create_dir_all(&root).unwrap();
-            let first = root.join("first");
-            let second = root.join("second");
-            fs::write(&first, b"first original").unwrap();
-            fs::write(&second, b"second original").unwrap();
-            let files = vec![
-                PreparedFile::new(first.clone(), b"first replacement".to_vec()).unwrap(),
-                PreparedFile::new(second.clone(), b"second replacement".to_vec()).unwrap(),
-            ];
-            let paths = fixture_paths(&root);
-            let error = replace_transaction(
-                &paths,
-                &files,
-                &mut FailAt {
-                    step,
-                    suffix: "second",
-                },
-                || Ok(()),
-            )
-            .unwrap_err();
-            assert!(error.to_string().contains("rollback=complete"));
-            assert_eq!(fs::read(&first).unwrap(), b"first original");
-            assert_eq!(fs::read(&second).unwrap(), b"second original");
+    fn start_dev_leaves_boot_configuration_and_public_state_unchanged() {
+        let root = fixture_root("start-dev");
+        let paths = development_paths(&root);
+        let ini = b"[MiSTer]\nmain=MiSTer\nvideo_mode=8\n";
+        fs::write(&paths.ini, ini).unwrap();
+        write_layout_platform(&paths, ManifestLayout::Development);
+        queue(&paths, [InputEvent::Down]);
+
+        start(&paths, ManifestLayout::Development).unwrap();
+        assert_eq!(fs::read(&paths.ini).unwrap(), ini);
+        assert!(!paths.app.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn start_refuses_without_confirmation_or_valid_platform() {
+        let root = fixture_root("start-refused");
+        let paths = development_paths(&root);
+        write_layout_platform(&paths, ManifestLayout::Development);
+        queue(&paths, [InputEvent::Confirm]);
+        let error = start(&paths, ManifestLayout::Development).unwrap_err();
+        assert!(error.to_string().contains("start cancelled"));
+
+        // A Public-only install does not satisfy a Development start.
+        let public_root = fixture_root("start-public-only");
+        let public_paths = development_paths(&public_root);
+        write_valid_platform(&public_paths);
+        queue(&public_paths, [InputEvent::Down]);
+        assert!(start(&public_paths, ManifestLayout::Development).is_err());
+
+        fs::write(
+            layout_manifest(&paths, ManifestLayout::Development),
+            b"format=unsupported\n",
+        )
+        .unwrap();
+        queue(&paths, [InputEvent::Down]);
+        assert!(start(&paths, ManifestLayout::Development).is_err());
+
+        // A module built for another kernel cannot load into the running one.
+        let module = |value: &str| Some(value.to_owned());
+        assert!(module_matches_kernel(
+            module("6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ").as_ref(),
+            "6.18.38-MiSTer"
+        ));
+        assert!(!module_matches_kernel(
+            module("5.15.1-MiSTer SMP").as_ref(),
+            "6.18.38-MiSTer"
+        ));
+        assert!(!module_matches_kernel(
+            module("6.18.38-MiSTer2 SMP").as_ref(),
+            "6.18.38-MiSTer"
+        ));
+        assert!(!module_matches_kernel(None, "6.18.38-MiSTer"));
+
+        assert!(start_layout(None).is_err());
+        assert!(start_layout(Some("stock")).is_err());
+        assert_eq!(
+            layout_main_name(ManifestLayout::Development),
+            "MiSTer_MagiKDev"
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(public_root).unwrap();
+    }
+
+    #[test]
+    fn public_start_accepts_legacy_and_refuses_development_only_kernels() {
+        let root = fixture_root("public-kernels");
+        let paths = fixture_paths(&root);
+        write_valid_platform(&paths);
+        verify_layout(&paths, ManifestLayout::Public).unwrap();
+
+        // 6.18 platforms are Development-only, so a public start must refuse
+        // before stock Main is stopped.
+        let root618 = fixture_root("public-618");
+        let mut paths618 = development_paths(&root618);
+        write_platform(&paths618, ManifestLayout::Public, true, true);
+        let error = verify_layout(&paths618, ManifestLayout::Public).unwrap_err();
+        assert!(error.to_string().contains("unsupported kernel/layout"));
+        queue(&paths618, [InputEvent::Down]);
+        assert!(
+            start(&paths618, ManifestLayout::Public)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported kernel/layout")
+        );
+
+        // The same module is accepted for the Development layout.
+        let dev_root = fixture_root("dev-618");
+        let dev = development_paths(&dev_root);
+        write_layout_platform(&dev, ManifestLayout::Development);
+        verify_layout(&dev, ManifestLayout::Development).unwrap();
+
+        // A module built for another kernel than the running one is refused.
+        paths618.kernel_release = Some("5.15.1-MiSTer".into());
+        write_platform(&paths618, ManifestLayout::Development, true, true);
+        assert!(verify_layout(&paths618, ManifestLayout::Development).is_err());
+
+        // Wrong development profile revision is refused.
+        let metadata = layout_app(&dev, ManifestLayout::Development)
+            .join("mister_magik_scanout_slots.metadata.txt");
+        let text = fs::read_to_string(&metadata).unwrap();
+        fs::write(
+            &metadata,
+            text.replace(DEVELOPMENT_KERNEL_REVISION, &"0".repeat(40)),
+        )
+        .unwrap();
+        assert!(verify_layout(&dev, ManifestLayout::Development).is_err());
+
+        for root in [root, root618, dev_root] {
             fs::remove_dir_all(root).unwrap();
         }
     }
 
     #[test]
-    fn validation_failure_restores_files_and_removes_new_targets() {
-        let root = env::temp_dir().join(format!("mister-manager-validation-{}", process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let existing = root.join("existing");
-        let created = root.join("created");
-        fs::write(&existing, b"original").unwrap();
-        let files = vec![
-            PreparedFile::new(existing.clone(), b"replacement".to_vec()).unwrap(),
-            PreparedFile::new(created.clone(), b"new".to_vec()).unwrap(),
-        ];
+    fn main_without_the_session_guard_is_refused_before_anything_stops() {
+        let root = fixture_root("no-session-main");
         let paths = fixture_paths(&root);
-        assert!(
-            replace_transaction(&paths, &files, &mut NoWriteFaults, || Err(
-                "invalid result".into()
-            ))
-            .is_err()
-        );
-        assert_eq!(fs::read(existing).unwrap(), b"original");
-        assert!(!created.exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn confirmation_and_installed_action_routes_are_fail_closed() {
-        let root = fixture_root("routing");
-        let paths = fixture_paths(&root);
-
-        queue(&paths, [InputEvent::Cancel]);
-        let error = safety_confirmation(&paths, "warning", "installation").unwrap_err();
-        assert_eq!(error.to_string(), "installation cancelled; no changes made");
-
+        write_platform(&paths, ManifestLayout::Public, false, false);
+        let error = verify_layout(&paths, ManifestLayout::Public).unwrap_err();
+        assert!(error.to_string().contains("predates no-reboot sessions"));
         queue(&paths, [InputEvent::Down]);
-        safety_confirmation(&paths, "warning", "installation").unwrap();
+        assert!(start(&paths, ManifestLayout::Public).is_err());
 
-        queue(&paths, [InputEvent::Down, InputEvent::Confirm]);
-        assert_eq!(
-            choose_installed_action(&paths).unwrap(),
-            Some(Action::Uninstall)
-        );
-        queue(&paths, [InputEvent::Up, InputEvent::Confirm]);
-        assert_eq!(
-            choose_installed_action(&paths).unwrap(),
-            Some(Action::Uninstall)
-        );
-        queue(&paths, [InputEvent::Other]);
-        assert_eq!(choose_installed_action(&paths).unwrap(), None);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn invalid_platform_preflight_preserves_boot_configuration() {
-        let root = fixture_root("invalid-platform");
-        let paths = fixture_paths(&root);
-        fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer\n").unwrap();
-        fs::write(&paths.manifest, b"format=unsupported\n").unwrap();
-        queue(&paths, [InputEvent::Down]);
-
-        let error = install(&paths).unwrap_err();
-        assert!(error.to_string().contains("platform verification failed"));
-        assert_eq!(fs::read(&paths.ini).unwrap(), b"[MiSTer]\nmain=MiSTer\n");
-        assert!(!paths.backup.exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn test_mode_install_restore_and_uninstall_preserve_unowned_files() {
-        let root = fixture_root("workflows");
-        let paths = fixture_paths(&root);
-        let original_ini = b"[MiSTer]\nmain=MiSTer\nvideo_mode=8\n";
-        fs::write(&paths.ini, original_ini).unwrap();
         write_valid_platform(&paths);
-        queue(&paths, [InputEvent::Down]);
-
-        install(&paths).unwrap();
-        assert!(selects_magik(&paths.ini).unwrap());
-        assert_eq!(fs::read(&paths.backup).unwrap(), original_ini);
-        validate_install(&paths).unwrap();
-
-        restore(&paths).unwrap();
-        assert_eq!(
-            effective(&paths.ini, "MiSTer", "main").unwrap().as_deref(),
-            Some("MiSTer")
-        );
-        validate_stock(&paths).unwrap();
-
-        fs::write(root.join("unowned.txt"), b"keep").unwrap();
-        fs::create_dir_all(root.join("Scripts")).unwrap();
-        fs::write(&paths.script, b"owned").unwrap();
-        fs::write(&paths.script_constants, b"owned").unwrap();
-        queue(&paths, [InputEvent::Down]);
-        uninstall(&paths).unwrap();
-        assert!(!paths.app.exists());
-        assert!(!paths.backup.exists());
-        assert!(!paths.script.exists());
-        assert!(!paths.script_constants.exists());
-        assert_eq!(fs::read(root.join("unowned.txt")).unwrap(), b"keep");
-        validate_stock(&paths).unwrap();
+        verify_layout(&paths, ManifestLayout::Public).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn restore_without_backup_removes_magik_selection() {
-        let root = fixture_root("restore-no-backup");
-        let paths = fixture_paths(&root);
-        fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer_MagiK\n").unwrap();
-
-        restore_stock(&paths).unwrap();
-        assert!(!selects_magik(&paths.ini).unwrap());
-        validate_stock(&paths).unwrap();
+    fn handoff_lock_admits_one_holder_at_a_time() {
+        let root = fixture_root("lock");
+        let path = root.join("start.lock");
+        let first = try_lock(&path).unwrap();
+        assert!(first.is_some());
+        assert!(try_lock(&path).unwrap().is_none());
+        drop(first);
+        assert!(try_lock(&path).unwrap().is_some());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    struct FakeProcesses {
+        running: Vec<&'static str>,
+        stop_error: bool,
+        start_error: Option<&'static str>,
+        check_error_after_start: bool,
+        session_survives: bool,
+        log: Vec<String>,
+        started: bool,
+    }
+
+    impl FakeProcesses {
+        fn stock_only() -> Self {
+            Self {
+                running: vec!["MiSTer"],
+                stop_error: false,
+                start_error: None,
+                check_error_after_start: false,
+                session_survives: true,
+                log: Vec::new(),
+                started: false,
+            }
+        }
+    }
+
+    impl Processes for FakeProcesses {
+        fn running(&mut self, name: &str) -> Result<bool> {
+            if self.check_error_after_start && self.started {
+                return Err("pidof failed".into());
+            }
+            Ok(self.running.contains(&name))
+        }
+
+        fn stop_stock(&mut self) -> Result<()> {
+            self.log.push("stop".into());
+            if self.stop_error {
+                return Err("stock Main did not stop".into());
+            }
+            self.running.retain(|name| *name != "MiSTer");
+            Ok(())
+        }
+
+        fn start(&mut self, path: &str, session: bool) -> Result<()> {
+            self.log.push(format!("start {path} session={session}"));
+            if let Some(error) = self.start_error.filter(|_| session) {
+                return Err(error.into());
+            }
+            self.started = true;
+            if session {
+                if self.session_survives {
+                    self.running.push("MiSTer_MagiKDev");
+                }
+            } else {
+                self.running.push("MiSTer");
+            }
+            Ok(())
+        }
+
+        fn settle(&mut self) {
+            self.log.push("settle".into());
+        }
+    }
+
+    const DEV_MAIN: &str = "/media/fat/MiSTer_MagiKDev";
+
+    #[test]
+    fn handoff_replaces_stock_main_without_recovery() {
+        let mut system = FakeProcesses::stock_only();
+        run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap();
+        assert_eq!(
+            system.log,
+            [
+                "stop",
+                "start /media/fat/MiSTer_MagiKDev session=true",
+                "settle"
+            ]
+        );
+    }
+
+    #[test]
+    fn handoff_recovers_stock_main_after_every_post_stop_failure() {
+        // The session Main cannot be spawned.
+        let mut system = FakeProcesses::stock_only();
+        system.start_error = Some("spawn failed");
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("spawn failed") && text.contains("stock Main was restarted"));
+        assert!(system.running.contains(&"MiSTer"));
+
+        // The session Main dies during the settle window.
+        let mut system = FakeProcesses::stock_only();
+        system.session_survives = false;
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        assert!(error.to_string().contains("did not stay running"));
+        assert!(system.running.contains(&"MiSTer"));
+
+        // The post-start process check itself fails: no recovery target can be
+        // proven, so nothing more is started and both errors are reported.
+        let mut system = FakeProcesses::stock_only();
+        system.check_error_after_start = true;
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("pidof failed") && text.contains("recovery failed"));
+        assert_eq!(
+            system
+                .log
+                .iter()
+                .filter(|line| line.contains("start"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn handoff_never_starts_a_second_main() {
+        // Stock Main would not stop: it is still running, so recovery is a no-op.
+        let mut system = FakeProcesses::stock_only();
+        system.stop_error = true;
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        assert!(error.to_string().contains("a Main is already running"));
+        assert_eq!(system.log, ["stop"]);
+
+        // A concurrent start already brought MagiK up: nothing is changed.
+        let mut system = FakeProcesses::stock_only();
+        system.running.push("MiSTer_MagiKDev");
+        let error = run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").unwrap_err();
+        assert!(error.to_string().contains("already running"));
+        assert!(system.log.is_empty());
+
+        // Stock Main is gone before the helper runs: nothing is changed.
+        let mut system = FakeProcesses::stock_only();
+        system.running.clear();
+        assert!(run_handoff(&mut system, DEV_MAIN, "MiSTer_MagiKDev").is_err());
+        assert!(system.log.is_empty());
     }
 
     #[test]
