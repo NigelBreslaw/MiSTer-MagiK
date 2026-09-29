@@ -2775,11 +2775,16 @@ impl LauncherNav {
             }
             return None;
         }
-        // Games, Recent and Favourites sit in one row.
-        if pressed.dpad_right && self.system_hub_selected < 2 {
+        // Games, Recent and Favourites sit in a row; HDMI portrait stacks them.
+        let (next, previous) = if self.portrait_layout && !self.crt_layout {
+            (pressed.dpad_down, pressed.dpad_up)
+        } else {
+            (pressed.dpad_right, pressed.dpad_left)
+        };
+        if next && self.system_hub_selected < 2 {
             self.system_hub_selected += 1;
         }
-        if pressed.dpad_left && self.system_hub_selected > 0 {
+        if previous && self.system_hub_selected > 0 {
             self.system_hub_selected -= 1;
         }
         if pressed.btn_a {
@@ -2852,7 +2857,9 @@ impl LauncherNav {
 
         // A while the cards are still turning waits for them to settle, then
         // opens the card that finished selected. Any new direction cancels it.
-        if self.pending_home_activation && (held.dpad_left || held.dpad_right) {
+        if self.pending_home_activation
+            && (held.dpad_left || held.dpad_right || held.dpad_up || held.dpad_down)
+        {
             self.pending_home_activation = false;
         }
         let card_turning = !self.home_card_scroll.is_visually_at_rest(item_count);
@@ -10900,6 +10907,42 @@ mod tests {
     }
 
     #[test]
+    fn portrait_system_page_moves_between_tiles_vertically() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("F-Zero")
+                    .system_id("snes")
+                    .path("/media/fat/games/SNES/F-Zero.sfc")
+                    .build(),
+            ],
+            vec![arcade_system("snes", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.set_portrait_layout(true);
+        assert!(nav.open_system(&catalog, "snes"));
+        let now = Instant::now();
+        let mut step = 0;
+        let mut press = |nav: &mut LauncherNav, set: fn(&mut PadState)| {
+            step += 2;
+            nav.handle_input(&pad_with(set), now + Duration::from_millis(step), &catalog);
+            nav.handle_input(
+                &PadState::default(),
+                now + Duration::from_millis(step + 1),
+                &catalog,
+            );
+        };
+        press(&mut nav, |pad| pad.dpad_right = true);
+        assert_eq!(nav.system_hub_selected, 0, "sideways does nothing");
+        press(&mut nav, |pad| pad.dpad_down = true);
+        press(&mut nav, |pad| pad.dpad_down = true);
+        assert_eq!(nav.system_hub_selected, 2);
+        press(&mut nav, |pad| pad.dpad_down = true);
+        assert_eq!(nav.system_hub_selected, 2);
+        press(&mut nav, |pad| pad.dpad_up = true);
+        assert_eq!(nav.system_hub_selected, 1);
+    }
+
+    #[test]
     fn snes_hub_opens_recent_and_favourite_lists() {
         let catalog = arcade_catalog(
             vec![
@@ -11013,5 +11056,26 @@ mod tests {
             }
         }
         assert_eq!(nav.current_menu_id(), "menu:consoles");
+    }
+
+    #[test]
+    fn vertical_input_cancels_an_activation_waiting_for_the_cards() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let t0 = Instant::now();
+        let at = |frame: u64| t0 + Duration::from_millis(frame * 16);
+        let _ = nav.handle_input(&pad_with(|pad| pad.dpad_right = true), at(0), &catalog);
+        let _ = nav.handle_input(&PadState::default(), at(1), &catalog);
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), at(2), &catalog);
+        let _ = nav.handle_input(&pad_with(|pad| pad.dpad_down = true), at(3), &catalog);
+        for frame in 4..240 {
+            let _ = nav.handle_input(&PadState::default(), at(frame), &catalog);
+        }
+        assert_eq!(
+            nav.current_menu_id(),
+            ROOT_MENU_ID,
+            "the queued A was dropped"
+        );
     }
 }

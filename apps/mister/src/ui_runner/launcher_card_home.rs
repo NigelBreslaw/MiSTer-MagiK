@@ -505,6 +505,12 @@ impl LauncherCardHomeSession {
         true
     }
 
+    /// A level change is playing. The carousel shows neither level's real
+    /// selection, so the launcher must not act on input until it lands.
+    pub(super) fn is_level_trick_active(&self) -> bool {
+        self.active && self.trick.is_some()
+    }
+
     pub(super) fn is_animating(&self) -> bool {
         self.active && (self.trick.is_some() || self.frame.phase != BrowsePhase::Settled)
     }
@@ -1131,8 +1137,10 @@ mod tests {
         let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
         session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
         session.render();
+        assert!(!session.is_level_trick_active());
         session.update(scene, &consoles(), 0, 0.0, "21:37", 16, true);
         assert!(session.is_animating());
+        assert!(session.is_level_trick_active(), "input is held during it");
         assert!(session.try_take_render_ahead(0, u64::MAX).is_none());
         assert_eq!(session.compositor_copy_damage(true), None);
         // Gather, then hold edge-on until the worker has prepared the level.
@@ -1155,6 +1163,7 @@ mod tests {
         session.update(scene, &consoles(), 0, 0.0, "21:37", now, true);
         session.render();
         assert!(session.trick.is_none());
+        assert!(!session.is_level_trick_active());
         let mut expected = prepare(
             scene,
             &consoles(),

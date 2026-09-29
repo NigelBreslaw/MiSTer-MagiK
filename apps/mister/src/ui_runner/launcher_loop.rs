@@ -5953,6 +5953,7 @@ pub(super) fn run_launcher_loop(
     }
     nav.set_arcade_exit_locked(return_capsule_active);
     apply_home_selected(&mut nav, &catalog, benchmark_config.home_selected(), start);
+    crate::device_art::warm_in_background();
     // One snapshot of the visible card level, rebuilt only when it no longer
     // matches navigation so the render loop does not allocate labels per frame.
     let mut card_level = crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
@@ -7637,6 +7638,9 @@ pub(super) fn run_launcher_loop(
                     let card_home_animating = launcher_card_home.as_ref().is_some_and(
                         super::launcher_card_home::LauncherCardHomeSession::is_animating,
                     );
+                    let level_trick_active = launcher_card_home.as_ref().is_some_and(
+                        super::launcher_card_home::LauncherCardHomeSession::is_level_trick_active,
+                    );
                     let deferred_settings_event =
                         deferred_settings_activation.take_when_settled(card_home_animating);
                     let focus = launcher_input_focus(
@@ -7649,7 +7653,8 @@ pub(super) fn run_launcher_loop(
                         navigation_transition.is_active()
                             || orientation_transition.is_active()
                             || full_screen_transition.state() != FullScreenTransitionState::Live
-                            || deferred_settings_activation.is_pending(),
+                            || deferred_settings_activation.is_pending()
+                            || level_trick_active,
                         &nav,
                     );
                     input_router.set_focus(focus);

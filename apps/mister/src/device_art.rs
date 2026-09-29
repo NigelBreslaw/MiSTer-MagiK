@@ -37,6 +37,18 @@ impl DeviceKind {
     }
 }
 
+/// Draw every device on a worker so the first system page or game list that
+/// needs one finds it ready instead of drawing it on the UI thread.
+pub fn warm_in_background() {
+    let _ = std::thread::Builder::new()
+        .name("device-art".into())
+        .spawn(|| {
+            for kind in [DeviceKind::Tv, DeviceKind::Monitor, DeviceKind::Handheld] {
+                device_rgb565(kind);
+            }
+        });
+}
+
 /// The device's little-endian RGB565 pixels, ready for a Slint image.
 pub fn device_rgb565(kind: DeviceKind) -> &'static [u16] {
     static IMAGES: [OnceLock<Vec<u16>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
