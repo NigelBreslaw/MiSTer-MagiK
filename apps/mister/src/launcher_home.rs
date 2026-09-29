@@ -35,8 +35,10 @@ pub struct LauncherHomeSnapshot {
 
 impl LauncherHomeSnapshot {
     pub fn from_runtime(nav: &LauncherNav, catalog: &ArcadeCatalog) -> Self {
+        // The root's counts, whichever level is showing: the parent of a
+        // nested level is prepared from here too.
         let menu_count = |id: &str| {
-            nav.current_menu_items()
+            nav.menu_items_of(ROOT_MENU_ID)
                 .iter()
                 .find(|item| item.id == id)
                 .map_or(0, |item| saturating_u32(item.count))

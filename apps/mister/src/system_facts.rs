@@ -44,8 +44,17 @@ pub fn system_facts(system_id: &str) -> Option<SystemFacts> {
         "supergrafx" => facts("NEC", 1989, "8-BIT"),
         "neogeo" | "neo-geo" | "snk-neo-geo" => facts("SNK", 1990, "16-BIT"),
         "neogeo-cd" => facts("SNK", 1994, "16-BIT"),
+        "channelf" => facts("FAIRCHILD", 1976, "8-BIT"),
+        "astrocade" => facts("BALLY", 1977, "8-BIT"),
+        "odyssey2" => facts("MAGNAVOX", 1978, "8-BIT"),
+        "intellivision" => facts("MATTEL", 1979, "16-BIT"),
+        "colecovision" | "coleco" => facts("COLECO", 1982, "8-BIT"),
+        "vectrex" => facts("GCE", 1982, "8-BIT"),
+        "arcadia" => facts("EMERSON", 1982, "8-BIT"),
+        "creativision" => facts("VTECH", 1981, "8-BIT"),
+        "casio-pv-1000" => facts("CASIO", 1983, "8-BIT"),
         // Handhelds.
-        "gb" | "gameboy" | "gameboy2p" => facts("NINTENDO", 1989, "8-BIT"),
+        "gb" | "gameboy" | "gameboy2p" | "gameboy-sinden" => facts("NINTENDO", 1989, "8-BIT"),
         "gbc" => facts("NINTENDO", 1998, "8-BIT"),
         "gba" | "gba2p" => facts("NINTENDO", 2001, "32-BIT"),
         "sgb" | "sgb2" => facts("NINTENDO", 1994, "16-BIT"),
@@ -56,6 +65,8 @@ pub fn system_facts(system_id: &str) -> Option<SystemFacts> {
         "ngpc" => facts("SNK", 1999, "16-BIT"),
         "wonderswan" => facts("BANDAI", 1999, "16-BIT"),
         "wonderswancolor" => facts("BANDAI", 2000, "16-BIT"),
+        "supervision" => facts("WATARA", 1992, "8-BIT"),
+        "megaduck" => facts("CREATRONIC", 1993, "8-BIT"),
         // Computers.
         "acornatom" => facts("ACORN", 1979, "8-BIT"),
         "acornelectron" => facts("ACORN", 1983, "8-BIT"),
@@ -74,12 +85,12 @@ pub fn system_facts(system_id: &str) -> Option<SystemFacts> {
         "atari800" => facts("ATARI", 1979, "8-BIT"),
         "atarist" => facts("ATARI", 1985, "16-BIT"),
         "zx81" => facts("SINCLAIR", 1981, "8-BIT"),
-        "zx-spectrum" => facts("SINCLAIR", 1982, "8-BIT"),
+        "zx-spectrum" | "spectrum" => facts("SINCLAIR", 1982, "8-BIT"),
         "ql" => facts("SINCLAIR", 1984, "16-BIT"),
         "trs-80" => facts("TANDY", 1977, "8-BIT"),
         "coco2" => facts("TANDY", 1980, "8-BIT"),
         "coco3" => facts("TANDY", 1986, "8-BIT"),
-        "msx" => facts("MSX", 1983, "8-BIT"),
+        "msx" | "msx1" => facts("MSX", 1983, "8-BIT"),
         "msx2" => facts("MSX", 1985, "8-BIT"),
         "pc88" => facts("NEC", 1981, "8-BIT"),
         "pc98" => facts("NEC", 1982, "16-BIT"),
@@ -87,6 +98,16 @@ pub fn system_facts(system_id: &str) -> Option<SystemFacts> {
         "x1" | "sharp-x1" => facts("SHARP", 1982, "8-BIT"),
         "fm7" => facts("FUJITSU", 1982, "8-BIT"),
         "fmtowns" => facts("FUJITSU", 1989, "32-BIT"),
+        "altair8800" => facts("MITS", 1975, "8-BIT"),
+        "ti-99-4a" => facts("TI", 1981, "16-BIT"),
+        "dos" => facts("MICROSOFT", 1981, "16-BIT"),
+        "eg2000" => facts("EACA", 1982, "8-BIT"),
+        "oric" => facts("TANGERINE", 1983, "8-BIT"),
+        "aquarius" => facts("MATTEL", 1983, "8-BIT"),
+        "casio-pv-2000" => facts("CASIO", 1983, "8-BIT"),
+        "amstrad" => facts("AMSTRAD", 1984, "8-BIT"),
+        "samcoupe" => facts("MGT", 1989, "8-BIT"),
+        "ao486" => facts("PC", 1989, "32-BIT"),
         _ => None,
     }
 }
@@ -135,78 +156,27 @@ mod tests {
     }
 
     #[test]
-    fn every_taxonomy_system_has_facts() {
-        // The curated taxonomy lists these IDs (see docs/architecture.md).
-        for id in [
-            "atari2600",
-            "atari5200",
-            "atari7800",
-            "jaguar",
-            "sg1000",
-            "sms",
-            "megadrive",
-            "megacd",
-            "s32x",
-            "saturn",
-            "psx",
-            "nes",
-            "fds",
-            "snes",
-            "satellaview",
-            "n64",
-            "tgfx16",
-            "tgfx16-cd",
-            "supergrafx",
-            "neogeo",
-            "neogeo-cd",
-            "gb",
-            "gameboy",
-            "gameboy2p",
-            "gbc",
-            "gba",
-            "gba2p",
-            "sgb",
-            "sgb2",
-            "pokemonmini",
-            "gamegear",
-            "atarilynx",
-            "neogeopocket",
-            "ngpc",
-            "wonderswan",
-            "wonderswancolor",
-            "acornatom",
-            "acornelectron",
-            "bbcmicro",
-            "archie",
-            "apple-ii",
-            "macplus",
-            "maclc",
-            "amiga",
-            "amigacd32",
-            "c64",
-            "c128",
-            "c16",
-            "vic20",
-            "pet2001",
-            "atari800",
-            "atarist",
-            "zx81",
-            "zx-spectrum",
-            "ql",
-            "trs-80",
-            "coco2",
-            "coco3",
-            "msx",
-            "msx2",
-            "pc88",
-            "pc98",
-            "x68000",
-            "x1",
-            "sharp-x1",
-            "fm7",
-            "fmtowns",
-        ] {
-            assert!(system_facts(id).is_some(), "{id}");
+    fn every_taxonomy_system_with_a_page_has_facts() {
+        use mister_magik_catalog::catalog_classify::{LauncherSection, system_definitions};
+        // Arcade boards use the cabinet and have no identity line.
+        let has_page = |section: LauncherSection| {
+            matches!(
+                section,
+                LauncherSection::Consoles
+                    | LauncherSection::Handhelds
+                    | LauncherSection::Computers
+                    | LauncherSection::SnkNeogeo
+            )
+        };
+        let definitions = system_definitions().expect("valid taxonomy");
+        let mut missing = Vec::new();
+        for definition in definitions.iter().filter(|d| has_page(d.section)) {
+            for id in std::iter::once(&definition.id).chain(&definition.aliases) {
+                if system_facts(id).is_none() {
+                    missing.push(id.as_str());
+                }
+            }
         }
+        assert!(missing.is_empty(), "systems without facts: {missing:?}");
     }
 }

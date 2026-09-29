@@ -1258,6 +1258,71 @@ mod tests {
     }
 
     #[test]
+    fn parent_prefetch_from_a_nested_level_keeps_the_prepared_root() {
+        use crate::launcher::LauncherNav;
+        use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Super Mario Bros").system_id("nes").build(),
+                arcade_game("Super Mario 64").system_id("n64").build(),
+                arcade_game("Sonic").system_id("gamegear").build(),
+            ],
+            vec![
+                arcade_system("nes", 1),
+                arcade_system("n64", 1),
+                arcade_system("gamegear", 1),
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let root = CardLevelSnapshot::from_runtime(&nav, &catalog);
+        assert!(nav.open_menu("menu:consoles"));
+        let consoles = CardLevelSnapshot::from_runtime(&nav, &catalog);
+
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, root.clone(), 1, "21:37").unwrap();
+        session.update(scene, &root, 1, 1.0, "21:37", 0, true);
+        session.update(scene, &consoles, 0, 0.0, "21:37", 16, true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut now = 16;
+        while session.trick.is_some() {
+            assert!(Instant::now() < deadline, "level change timed out");
+            now += 16;
+            session.update(scene, &consoles, 0, 0.0, "21:37", now, true);
+            session.render();
+            std::thread::yield_now();
+        }
+        // The loop's idle prefetch from the nested level: the parent.
+        let parent = nav.parent_menu_id().map(str::to_owned).unwrap();
+        let parent = CardLevelSnapshot::for_menu(&nav, &catalog, &parent);
+        assert_eq!(parent, root, "the parent snapshot matches the real root");
+        session.prefetch(vec![parent]);
+        assert!(
+            session.aside.iter().any(|aside| {
+                aside.level == root && matches!(aside.prepared, Prepared::Built(_))
+            }),
+            "the prepared root was kept, not replaced by a rebuild"
+        );
+        // Back to the root: the deal starts at the edge without holding.
+        session.update(scene, &root, 1, 1.0, "21:38", now + 100, true);
+        session.update(
+            scene,
+            &root,
+            1,
+            1.0,
+            "21:38",
+            now + 100 + u64::from(LEVEL_TRICK_EDGE_MILLIS),
+            true,
+        );
+        session.render();
+        assert_eq!(
+            session.trick.as_ref().unwrap().deal_delay_ms,
+            Some(0),
+            "no time spent holding edge-on"
+        );
+    }
+
+    #[test]
     fn returning_to_a_left_level_reuses_it_without_holding() {
         let scene = LauncherScene::new(960, 540);
         let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
