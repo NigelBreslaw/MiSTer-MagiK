@@ -449,7 +449,7 @@ fn launcher_input_focus(
             1,
             DirectionalPolicy::MenuRepeat,
         )
-    } else if modal {
+    } else if modal && !nav.refresh_hold_owns_input() {
         (
             InputContextKind::LauncherModal,
             1,
@@ -16307,6 +16307,52 @@ mod tests {
             );
         }
         assert_eq!(nav.selected, 1);
+    }
+
+    #[test]
+    fn refresh_hold_keeps_initial_press_capture_through_confirmation() {
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 6;
+        let initial_focus = launcher_screen_input_focus(&nav);
+        let mut router = InputRouter::new(initial_focus);
+        let now = Instant::now();
+        let mut press = normalized_test_press(LogicalAction::Activate);
+        press.source.kind = InputSourceKind::MainProxy;
+        let InputOutcome::Dispatch { event, .. } = router.route_event(press, initial_focus, now)
+        else {
+            panic!("refresh press should dispatch");
+        };
+        assert!(
+            nav.handle_action_with_navigation_intents(&event, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(
+            nav.confirm_action,
+            Some(launcher::ConfirmAction::RefreshDatabase)
+        );
+        assert_eq!(nav.confirm_selected, 0);
+
+        let focus = launcher_input_focus(true, false, false, false, true, false, &nav);
+        router.set_focus(focus);
+        assert_eq!(focus, initial_focus);
+        let mut held = PadState::default();
+        held.btn_a = router.action_held(LogicalAction::Activate);
+        assert!(held.btn_a);
+        assert!(
+            nav.handle_held_tick_with_navigation_intents(
+                &held,
+                now + Duration::from_millis(6999),
+                &catalog
+            )
+            .is_none()
+        );
+        let reset = nav
+            .handle_held_tick_with_navigation_intents(&held, now + Duration::from_secs(7), &catalog)
+            .expect("continuous initial press should reset");
+        assert_eq!(reset.action, LauncherAction::PurgeLibraryData);
+        assert_eq!(nav.confirm_action, None);
     }
 
     #[test]

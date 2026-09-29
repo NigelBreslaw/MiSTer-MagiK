@@ -2738,6 +2738,8 @@ impl LauncherNav {
         } = input;
         self.sync_launcher_taxonomy(catalog);
         if self.handle_refresh_hold(input) {
+            self.confirm_action = None;
+            self.confirm_selected = 0;
             return Some(LauncherEvent {
                 action: LauncherAction::PurgeLibraryData,
                 path: None,
@@ -3285,12 +3287,19 @@ impl LauncherNav {
         None
     }
 
-    // A tap opens the usual refresh confirmation on release. Only an
-    // uninterrupted hold on this row authorizes the destructive reset.
+    #[cfg(any(feature = "ui", test))]
+    pub(crate) fn refresh_hold_owns_input(&self) -> bool {
+        self.refresh_hold.is_some() && self.confirm_action == Some(ConfirmAction::RefreshDatabase)
+    }
+
+    // Keep the usual confirmation on press. Continuing that same press through
+    // the confirmation for seven seconds authorizes the hidden reset.
     fn handle_refresh_hold(&mut self, input: NavigationInput<'_>) -> bool {
         let eligible = self.screen == Screen::Settings
             && self.settings_selected == SETTINGS_REFRESH_SELECTED
-            && self.confirm_action.is_none()
+            && (self.confirm_action.is_none()
+                || (self.refresh_hold.is_some()
+                    && self.confirm_action == Some(ConfirmAction::RefreshDatabase)))
             && !self.display_combo_open
             && !self.orientation_combo_open;
         if !eligible
@@ -3312,13 +3321,8 @@ impl LauncherNav {
         };
         if input.released.btn_a {
             self.refresh_hold = None;
-            if !fired {
-                if input.frame_now.saturating_duration_since(started) >= Duration::from_secs(7) {
-                    return true;
-                }
-                self.confirm_action = Some(ConfirmAction::RefreshDatabase);
-                self.confirm_selected = 0;
-            }
+            return !fired
+                && input.frame_now.saturating_duration_since(started) >= Duration::from_secs(7);
         } else if input.tick_continuous {
             if !input.held.btn_a {
                 // Lost input ownership or disconnected controller cancels the hold.
@@ -3450,7 +3454,7 @@ impl LauncherNav {
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
                 SETTINGS_EXIT_SELECTED => ConfirmAction::ExitToMister,
-                SETTINGS_REFRESH_SELECTED => return None,
+                SETTINGS_REFRESH_SELECTED => ConfirmAction::RefreshDatabase,
                 _ => return None,
             });
         }
@@ -9278,15 +9282,6 @@ mod tests {
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
-        assert_eq!(nav.confirm_action, None);
-        assert!(
-            nav.handle_input(
-                &PadState::default(),
-                t0 + Duration::from_millis(1),
-                &catalog
-            )
-            .is_none()
-        );
         assert_eq!(nav.confirm_action, Some(ConfirmAction::RefreshDatabase));
         assert_eq!(nav.confirm_selected, 0);
         assert!(
@@ -9335,7 +9330,7 @@ mod tests {
             nav.handle_input(&held, now + Duration::from_millis(6999), &catalog)
                 .is_none()
         );
-        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::RefreshDatabase));
         let event = nav
             .handle_input(&held, now + Duration::from_secs(7), &catalog)
             .unwrap();
@@ -9395,7 +9390,7 @@ mod tests {
             nav.handle_input(&held, now + Duration::from_secs(8), &catalog)
                 .is_none()
         );
-        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::RefreshDatabase));
     }
 
     #[test]

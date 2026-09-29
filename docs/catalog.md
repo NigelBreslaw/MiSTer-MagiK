@@ -185,7 +185,9 @@ active catalog (including NavPacks, search databases, refresh snapshots, and
 staging), retired database files and sidecars, catalog build temporaries and
 diagnostics, and all screenshot packs, indexes, partial downloads, and media
 state. It then flushes storage and requests one supervised reboot through Main.
-A shorter press opens the normal incremental-refresh confirmation on release.
+The reset gesture is hidden: Settings keeps its normal refresh text, and a short
+press opens the usual incremental-refresh confirmation immediately. Continuing
+the same press through that confirmation for seven seconds resets the data.
 Moving away, losing controller input, or cancelling interrupts the hold. A reset
 is refused while catalog or screenshot work is active; cleanup or reboot failure
 is shown in a dialog. Games, source metadata, settings, favourites, and recent

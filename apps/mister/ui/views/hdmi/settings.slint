@@ -220,8 +220,8 @@ component SettingsList inherits Rectangle {
         y: 312px; width: root.width;
         label: "REFRESH DATABASE";
         accessible-name: "Refresh Database";
-        detail: "Hold A 7s: delete catalog + packs, reboot";
-        value: "HOLD A 7S: RESET";
+        detail: "Refresh changed library systems";
+        value: "CHANGED SYSTEMS";
         focused: SettingsView.section == SettingsSection.refresh;
         acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
         dimmed: root.overlay-active;
