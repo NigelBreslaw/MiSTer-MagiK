@@ -17,7 +17,7 @@ use super::launcher_pacing::{
     LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::{ScreensaverRenderTrace, ScreensaverStartupTimeline};
-use super::launcher_settings_pipeline::{SettingsCogRenderAhead, SettingsFrameRequest};
+use super::launcher_settings_pipeline::{SettingsCogSession, SettingsFrameRequest};
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -5370,7 +5370,7 @@ pub(super) fn run_launcher_loop(
         layout.logical_h(),
         navigation_motion_enabled,
     );
-    let mut settings_cog_render_ahead: Option<SettingsCogRenderAhead> = None;
+    let mut settings_cog_render_ahead = SettingsCogSession::new();
     let mut full_screen_transition = FullScreenTransitionStateChart::default();
     let mut navigation_transition_generation = None;
     nav.screen = start_screen;
@@ -10816,7 +10816,7 @@ pub(super) fn run_launcher_loop(
         }
         let navigation_transition_composition_active = navigation_transition.is_active();
         if !navigation_transition_composition_active {
-            settings_cog_render_ahead = None;
+            settings_cog_render_ahead.clear();
         }
         let navigation_settings_physical_space = navigation_transition.settings_physical_space();
         let navigation_transition_frame_active = navigation_transition_composition_active
@@ -11002,24 +11002,9 @@ pub(super) fn run_launcher_loop(
                     gui_profiling.phase_span(gui_custom_selection.navigation_transition_raster);
                 let mut rendered_direct = false;
                 if navigation_transition.settings_physical_space() {
-                    if (layout.logical_w(), layout.logical_h())
-                        == (
-                            mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_WIDTH,
-                            mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_HEIGHT,
-                        )
-                        && settings_cog_render_ahead.is_none()
+                    if (layout.logical_w(), layout.logical_h()) == (960, 540)
                         && let Some(input) = navigation_transition.settings_cog_render_input()
                     {
-                        settings_cog_render_ahead = SettingsCogRenderAhead::start(
-                            input.launcher.to_vec(),
-                            input.settings.to_vec(),
-                            input.cog,
-                        );
-                    }
-                    if let (Some(pipeline), Some(input)) = (
-                        settings_cog_render_ahead.as_mut(),
-                        navigation_transition.settings_cog_render_input(),
-                    ) {
                         const SETTINGS_RENDER_LEAD_VBLANKS: u64 = 2;
                         let lead_ms = pacer
                             .period_us()
@@ -11036,17 +11021,20 @@ pub(super) fn run_launcher_loop(
                                 input.t_ms.saturating_sub(lead_ms)
                             }
                         };
-                        pipeline.submit(SettingsFrameRequest {
-                            target_vblank: pacer
-                                .hits()
-                                .saturating_add(SETTINGS_RENDER_LEAD_VBLANKS),
-                            t_ms,
-                        });
+                        settings_cog_render_ahead.submit(
+                            input.launcher,
+                            input.settings,
+                            input.cog,
+                            SettingsFrameRequest {
+                                target_vblank: pacer
+                                    .hits()
+                                    .saturating_add(SETTINGS_RENDER_LEAD_VBLANKS),
+                                t_ms,
+                            },
+                        );
                     }
                     let expected_vblank = pacer.hits().saturating_add(1);
-                    let mut prepared = settings_cog_render_ahead
-                        .as_mut()
-                        .and_then(|pipeline| pipeline.take_for_vblank(expected_vblank));
+                    let mut prepared = settings_cog_render_ahead.take_for_vblank(expected_vblank);
                     let mut direct_render_timing = None;
                     match launcher_presenter.try_render_direct_hidden_frame(
                         f,
@@ -11095,10 +11083,8 @@ pub(super) fn run_launcher_loop(
                         Ok(None) => {}
                         Err(failure) => launcher_presenter.fail_latch_completion(failure),
                     }
-                    if let (Some(pipeline), Some(frame)) =
-                        (settings_cog_render_ahead.as_mut(), prepared.take())
-                    {
-                        pipeline.recycle(frame);
+                    if let Some(frame) = prepared.take() {
+                        settings_cog_render_ahead.recycle(frame);
                     }
                     if !rendered_direct {
                         let _ = navigation_transition

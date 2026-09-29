@@ -21,9 +21,9 @@ use mister_magik_framebuffer_scenes::navigation::{
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
-pub struct SettingsCogRenderInput<'a> {
-    pub launcher: &'a [SharedRgb565Pixel],
-    pub settings: &'a [SharedRgb565Pixel],
+pub struct SettingsCogRenderInput {
+    pub launcher: std::sync::Arc<Vec<SharedRgb565Pixel>>,
+    pub settings: std::sync::Arc<Vec<SharedRgb565Pixel>>,
     pub cog: &'static [SharedRgb565Pixel],
     pub t_ms: u32,
     pub direction: NavigationTransitionDirection,
@@ -997,13 +997,13 @@ impl NavigationTransitionRuntime {
         self.settings_physical_space
     }
 
-    pub fn settings_cog_render_input(&self) -> Option<SettingsCogRenderInput<'_>> {
+    pub fn settings_cog_render_input(&self) -> Option<SettingsCogRenderInput> {
         let request = self.request()?;
         if request.renderer_label() != "settings-cog" {
             return None;
         }
-        let source = self.buffers.source()?;
-        let destination = self.buffers.destination()?;
+        let source = self.buffers.source_handle()?;
+        let destination = self.buffers.destination_handle()?;
         let cog = self.buffers.settings_cog_asset()?;
         let duration = mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_DURATION_MS;
         let elapsed = (u64::from(self.frame().progress_q16) * u64::from(duration)

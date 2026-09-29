@@ -10,6 +10,11 @@
 
 extern crate self as mister_magik_fb;
 
+#[cfg(all(test, feature = "ui"))]
+#[global_allocator]
+static TEST_ALLOCATOR: allocation_metrics::TrackingAllocator =
+    allocation_metrics::TrackingAllocator;
+
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod allocation_metrics;
