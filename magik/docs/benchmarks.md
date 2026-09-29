@@ -78,3 +78,10 @@ of its two timing samples. It uses the production portable card renderer at
 and an exact cold-render pixel comparison run outside timing. Preparation,
 resting raster generation and disposal run inside timing. It does not measure
 physical input or UI-thread latency; validate those with the real app journey.
+
+`retained-home-tiles` publishes the same pair of immutable Home tiles eight
+times, alternating qualified hidden slots. Each timing sample excludes chrome
+seeding, records tile bytes and copy time, and includes a complete physical-slot
+pixel oracle and eight protocol-v5 posts/confirmed flips. Wall time includes
+readback and latch waits; copy time is recorded separately. Repeated-vblank
+deltas remain separate from copied bytes. Main resumes after the invocation.

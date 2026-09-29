@@ -666,7 +666,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         chrome: CachedFrameView<'_>,
         tiles: [CachedFrameView<'_>; 2],
         damage: [DirtyRect; 2],
-        content_generation: u64,
+        content_generation: mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity,
     ) -> Result<Option<DirectHiddenFrameCopy>, LatchFailure> {
         match &mut self.state {
             LauncherPresenterState::Latch(latch) => latch.try_copy_direct_hidden_tiles(

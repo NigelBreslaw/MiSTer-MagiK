@@ -9985,7 +9985,10 @@ pub(super) fn run_launcher_loop(
                     chrome,
                     tiles,
                     CARD_DIRECT_TILE_DAMAGE,
-                    session.content_generation(),
+                    mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
+                        session.content_generation(),
+                        request.render.generation,
+                    ),
                 ) {
                     Ok(Some(copy)) => {
                         frame_production_trace.class = FrameProductionClass::Prepared;
@@ -10032,7 +10035,10 @@ pub(super) fn run_launcher_loop(
                     chrome,
                     tiles,
                     CARD_DIRECT_TILE_DAMAGE,
-                    session.content_generation(),
+                    mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
+                        session.content_generation(),
+                        request.render.generation,
+                    ),
                 ) {
                     Ok(Some(copy)) => {
                         frame_production_trace.class = FrameProductionClass::Prepared;

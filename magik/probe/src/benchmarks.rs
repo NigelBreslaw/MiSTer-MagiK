@@ -86,6 +86,13 @@ fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[2] != "--mode" {
         return Err("expected --bench WORKLOAD --mode MODE".into());
     }
+    if args[1] == "retained-home-tiles" {
+        if args[3] != "timing" {
+            return Err("retained-home-tiles supports timing mode".into());
+        }
+        println!("{}", crate::retained_tiles::run()?);
+        return Ok(());
+    }
     if args[0] != "--bench" || args[1] != "home-count-refresh" {
         return Err("unknown Mini workload".into());
     }

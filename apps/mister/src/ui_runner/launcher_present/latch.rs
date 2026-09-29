@@ -28,6 +28,7 @@ use mister_magik_fb::framebuffer::vertical_scale::VerticalSampling;
 use mister_magik_fb::latch_readiness::{
     LatchFailure, LatchFailureReason, LatchFailureStage, LatchWireDecision,
 };
+use mister_magik_framebuffer_scenes::retained_tiles::{RetainedTileSlots, TileImageIdentity};
 use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -258,6 +259,8 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     direct_generation: u64,
     outstanding_direct_grant: Option<HiddenSlotRenderGrant>,
     direct_slot_content_generation: [Option<u64>; 2],
+    direct_slot_tile_damage: [Option<[DirtyRect; 2]>; 2],
+    direct_retained_tiles: RetainedTileSlots,
 }
 
 #[derive(Default)]
@@ -355,8 +358,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         chrome: CachedFrameView<'_>,
         tiles: [CachedFrameView<'_>; 2],
         damage: [DirtyRect; 2],
-        content_generation: u64,
+        content_generation: impl Into<TileImageIdentity>,
     ) -> Result<Option<DirectHiddenFrameCopy>, LatchFailure> {
+        let identity = content_generation.into();
+        let content_generation = identity.content_generation;
         if chrome.width() != self.render_width
             || chrome.height() != self.render_height
             || tiles
@@ -373,8 +378,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let slot = physical_slot_mirror_index(grant.slot_index);
         let seed = self.direct_slot_content_generation[slot] != Some(content_generation);
         let full = self.full_rect();
+        if seed || self.direct_slot_tile_damage[slot] != Some(damage) {
+            self.direct_retained_tiles.invalidate_slot(grant.slot_index);
+        }
         // A partial/failed write cannot leave a slot marked coherent.
         self.direct_slot_content_generation[slot] = None;
+        self.direct_slot_tile_damage[slot] = None;
         let buffer = self.buffers.buffer_mut(grant.slot_index);
         let started = Instant::now();
         let result = (|| {
@@ -382,9 +391,17 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             if seed {
                 bytes += B::copy_rect(buffer, chrome, full, self.vertical_sampling)?.bytes;
             }
-            for (source, rect) in tiles.into_iter().zip(damage) {
-                bytes += B::copy_rect(buffer, source, rect, self.vertical_sampling)?.bytes;
-            }
+            bytes += self
+                .direct_retained_tiles
+                .write_if_changed(grant.slot_index, identity, || {
+                    let mut tile_bytes = 0;
+                    for (source, rect) in tiles.into_iter().zip(damage) {
+                        tile_bytes +=
+                            B::copy_rect(buffer, source, rect, self.vertical_sampling)?.bytes;
+                    }
+                    Ok::<_, String>(tile_bytes)
+                })?
+                .unwrap_or(0);
             Ok::<_, String>(LatchCopyResult {
                 bytes,
                 path: LatchCopyPath::ExternalDirect,
@@ -403,6 +420,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         };
         B::publish_writes(buffer);
         self.direct_slot_content_generation[slot] = Some(content_generation);
+        self.direct_slot_tile_damage[slot] = Some(damage);
         Ok(Some(DirectHiddenFrameCopy {
             completed: CompletedHiddenFrame {
                 grant,
@@ -445,6 +463,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         else {
             return Ok(None);
         };
+        self.invalidate_direct_slot(grant.slot_index);
         let buffer = self.buffers.buffer_mut(grant.slot_index);
         if !render(grant, B::pixels_mut(buffer)) {
             self.outstanding_direct_grant = None;
@@ -491,6 +510,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             direct_generation: 0,
             outstanding_direct_grant: None,
             direct_slot_content_generation: [None; 2],
+            direct_slot_tile_damage: [None; 2],
+            direct_retained_tiles: RetainedTileSlots::default(),
         }
     }
 
@@ -515,7 +536,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         hardware: &mut H,
         display_session: &mut LauncherDisplaySession,
     ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
-        self.try_issue_external_hidden_slot_render_grant(hardware, display_session, true)
+        let grant =
+            self.try_issue_external_hidden_slot_render_grant(hardware, display_session, true)?;
+        if let Some(grant) = grant {
+            self.invalidate_direct_slot(grant.slot_index);
+        }
+        Ok(grant)
     }
 
     fn try_issue_external_hidden_slot_render_grant<H: LatchHardware>(
@@ -552,6 +578,25 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     }
 
     pub(in crate::ui_runner) fn present_completed_hidden_frame<H: LatchHardware>(
+        &mut self,
+        completed: CompletedHiddenFrame,
+        hardware: &mut H,
+        _display_session: &mut LauncherDisplaySession,
+        profile_latch_phases: bool,
+    ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
+        let result = self.present_completed_hidden_frame_inner(
+            completed,
+            hardware,
+            _display_session,
+            profile_latch_phases,
+        );
+        if result.is_err() {
+            self.invalidate_direct_slot_coherency();
+        }
+        result
+    }
+
+    fn present_completed_hidden_frame_inner<H: LatchHardware>(
         &mut self,
         completed: CompletedHiddenFrame,
         hardware: &mut H,
@@ -649,6 +694,15 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
 
     fn invalidate_direct_slot_coherency(&mut self) {
         self.direct_slot_content_generation = [None; 2];
+        self.direct_slot_tile_damage = [None; 2];
+        self.direct_retained_tiles.invalidate_all();
+    }
+
+    fn invalidate_direct_slot(&mut self, slot_index: u8) {
+        let slot = physical_slot_mirror_index(slot_index);
+        self.direct_slot_content_generation[slot] = None;
+        self.direct_slot_tile_damage[slot] = None;
+        self.direct_retained_tiles.invalidate_slot(slot_index);
     }
 
     fn invalidate_layer_coherency(&mut self) {
@@ -1100,6 +1154,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 expected_stride,
             }) => {
                 self.invalidate_layer_coherency();
+                self.invalidate_direct_slot_coherency();
                 self.hidden_active_verified = false;
                 return Err(LatchFailure::runtime(
                     LatchFailureStage::PostVerification,
@@ -1120,6 +1175,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
 
     fn apply_latch_status_sync(&mut self, sync: LatchStatusSync) {
         if sync.recovered_non_hidden_active {
+            self.invalidate_direct_slot_coherency();
             self.invalidate_layer_coherency();
             self.hidden_active_verified = false;
         }
@@ -1498,8 +1554,8 @@ mod tests {
                 return Err("controlled tile copy failure".into());
             }
             for y in rect.y0..rect.y1 {
-                let start = y * WIDTH + rect.x0;
-                let end = y * WIDTH + rect.x1;
+                let start = y * cached.width() + rect.x0;
+                let end = y * cached.width() + rect.x1;
                 buffer.pixels[start..end].copy_from_slice(&cached.pixels()[start..end]);
             }
             Ok(LatchCopyResult {
@@ -1888,6 +1944,376 @@ mod tests {
         assert_eq!(presenter.direct_slot_content_generation[1], None);
         assert!(presenter.outstanding_direct_grant.is_none());
         assert!(!events.borrow().contains(&TestEvent::Publish));
+    }
+
+    #[test]
+    fn retained_same_image_keeps_eight_posts_and_copies_each_slot_once() {
+        use mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity;
+        const W: usize = 960;
+        const H: usize = 540;
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        presenter.width = W;
+        presenter.height = H;
+        presenter.render_width = W;
+        presenter.render_height = H;
+        presenter.latch_geometry = crate::fpga::LatchedFbufGeometry::new(
+            W as u16,
+            crate::framebuffer::route::FramebufferRouteMode::framebuffer_sized(W as u16, H as u16),
+            1,
+        );
+        for slot in [1, 2] {
+            presenter.buffers.buffer_mut(slot).pixels = vec![Rgb565Pixel(7); W * H];
+        }
+        presenter.direct_slot_content_generation = [Some(7); 2];
+        let chrome = vec![Rgb565Pixel(7); W * H];
+        let left = vec![Rgb565Pixel(11); W * H];
+        let right = vec![Rgb565Pixel(13); W * H];
+        let damage = [
+            DirtyRect {
+                x0: 296,
+                y0: 120,
+                x1: 629,
+                y1: 495,
+            },
+            DirtyRect {
+                x0: 629,
+                y0: 120,
+                x1: 934,
+                y1: 495,
+            },
+        ];
+        let mut expected = chrome.clone();
+        for (source, rect) in [&left, &right].into_iter().zip(damage) {
+            for y in rect.y0..rect.y1 {
+                let range = y * W + rect.x0..y * W + rect.x1;
+                expected[range.clone()].copy_from_slice(&source[range]);
+            }
+        }
+        let mut statuses = Vec::new();
+        for index in 0..8 {
+            let (front, next) = if index % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            for base in [front, front, front, next] {
+                let mut sample = status(base, 0x0001);
+                sample.active_width = W as u16;
+                sample.active_height = H as u16;
+                sample.active_stride = (W * 2) as u16;
+                statuses.push(Ok(sample));
+            }
+        }
+        let mut hardware = FakeHardware {
+            statuses,
+            events: Some(events.clone()),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let mut bytes = 0;
+        for _ in 0..8 {
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    CachedFrameView::new(&chrome, W, H),
+                    [
+                        CachedFrameView::new(&left, W, H),
+                        CachedFrameView::new(&right, W, H),
+                    ],
+                    damage,
+                    TileImageIdentity::new(7, 19),
+                )
+                .unwrap()
+                .unwrap();
+            bytes += copy.copy.bytes;
+            assert_eq!(
+                presenter
+                    .buffers
+                    .buffer_mut(copy.completed.grant.slot_index)
+                    .pixels,
+                expected
+            );
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
+                .unwrap();
+        }
+        let publishes = events
+            .borrow()
+            .iter()
+            .filter(|event| **event == TestEvent::Publish)
+            .count();
+        println!(
+            "retained_tile_bytes={bytes} posts={} publishes={publishes}",
+            hardware.post_bases.len()
+        );
+        assert_eq!(hardware.post_bases.len(), 8);
+        assert_eq!(publishes, 8);
+        assert_eq!(bytes, 957_000);
+    }
+
+    fn copy_tiny_tiles(
+        presenter: &mut FpgaVblankLatchHiddenPresenter<FakeBuffers>,
+        hardware: &mut FakeHardware,
+        display: &mut LauncherDisplaySession,
+    ) -> DirectHiddenFrameCopy {
+        let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+        let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+        let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+        presenter
+            .try_copy_direct_hidden_tiles(
+                hardware,
+                display,
+                CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                [
+                    CachedFrameView::new(&left, WIDTH, HEIGHT),
+                    CachedFrameView::new(&right, WIDTH, HEIGHT),
+                ],
+                [
+                    DirtyRect {
+                        x0: 0,
+                        y0: 1,
+                        x1: 2,
+                        y1: 2,
+                    },
+                    DirtyRect {
+                        x0: 2,
+                        y0: 1,
+                        x1: 4,
+                        y1: 2,
+                    },
+                ],
+                TileImageIdentity::new(7, 19),
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn retained_tiles_are_rewritten_after_another_direct_writer() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        presenter.direct_slot_content_generation = [Some(7); 2];
+        let mut statuses = Vec::new();
+        for index in 0..5 {
+            let (front, next) = if index % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            for base in [front, front, front, next] {
+                statuses.push(Ok(status(base, 0x0001)));
+            }
+        }
+        let mut hardware = FakeHardware {
+            statuses,
+            events: Some(events),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        for _ in 0..2 {
+            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+            assert_eq!(copy.copy.bytes, 8);
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
+                .unwrap();
+        }
+        let other = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
+                pixels.fill(Rgb565Pixel(42));
+                true
+            })
+            .unwrap()
+            .unwrap();
+        presenter
+            .present_completed_hidden_frame(other, &mut hardware, &mut display, false)
+            .unwrap();
+        // The untouched slot can still reuse its image; the overwritten slot
+        // must restore chrome and both tiles before its next post.
+        let untouched = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert_eq!(untouched.copy.bytes, 0);
+        presenter
+            .present_completed_hidden_frame(untouched.completed, &mut hardware, &mut display, false)
+            .unwrap();
+        let overwritten = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert_eq!(overwritten.copy.bytes, WIDTH * HEIGHT * 2 + 8);
+        assert_eq!(
+            presenter
+                .buffers
+                .buffer_mut(overwritten.completed.grant.slot_index)
+                .pixels[0],
+            Rgb565Pixel(7)
+        );
+        presenter
+            .present_completed_hidden_frame(
+                overwritten.completed,
+                &mut hardware,
+                &mut display,
+                false,
+            )
+            .unwrap();
+        assert_eq!(hardware.post_bases.len(), 5);
+    }
+
+    #[test]
+    fn retained_tiles_are_invalidated_after_failed_post() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+            ],
+            posts: vec![Err(io::Error::other("controlled post failure"))],
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert!(
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
+                .is_err()
+        );
+        assert_eq!(presenter.direct_slot_content_generation, [None; 2]);
+        assert_eq!(presenter.direct_slot_tile_damage, [None; 2]);
+        for slot in [1, 2] {
+            assert_eq!(
+                presenter.direct_retained_tiles.write_if_changed(
+                    slot,
+                    TileImageIdentity::new(7, 19),
+                    || Ok::<_, ()>(true)
+                ),
+                Ok(Some(true)),
+                "failed post retained a tile key"
+            );
+        }
+    }
+
+    #[test]
+    fn retained_cache_is_invalidated_by_partial_tile_write() {
+        let mut presenter = presenter();
+        let mut statuses = Vec::new();
+        for index in 0..2 {
+            let (front, next) = if index % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            for base in [front, front, front, next] {
+                statuses.push(Ok(status(base, 0x0001)));
+            }
+        }
+        statuses.push(Ok(status(BASE1, 0x0001)));
+        let mut hardware = FakeHardware {
+            statuses,
+            ..Default::default()
+        };
+        let mut display = display_session();
+        for _ in 0..2 {
+            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
+                .unwrap();
+        }
+        let buffer = presenter.buffers.buffer_mut(2);
+        buffer.fail_on_copy = Some(buffer.copy_count + 2);
+        let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+        let left = vec![Rgb565Pixel(21); WIDTH * HEIGHT];
+        let right = vec![Rgb565Pixel(23); WIDTH * HEIGHT];
+        let result = presenter.try_copy_direct_hidden_tiles(
+            &mut hardware,
+            &mut display,
+            CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+            [
+                CachedFrameView::new(&left, WIDTH, HEIGHT),
+                CachedFrameView::new(&right, WIDTH, HEIGHT),
+            ],
+            [
+                DirtyRect {
+                    x0: 0,
+                    y0: 1,
+                    x1: 2,
+                    y1: 2,
+                },
+                DirtyRect {
+                    x0: 2,
+                    y0: 1,
+                    x1: 4,
+                    y1: 2,
+                },
+            ],
+            TileImageIdentity::new(7, 20),
+        );
+        assert!(result.is_err());
+        assert_eq!(presenter.direct_slot_content_generation[1], None);
+        assert!(presenter.outstanding_direct_grant.is_none());
+        assert_eq!(
+            presenter.direct_retained_tiles.write_if_changed(
+                2,
+                TileImageIdentity::new(7, 19),
+                || Ok::<_, ()>(true)
+            ),
+            Ok(Some(true)),
+            "partial write retained the previous complete image"
+        );
+    }
+
+    #[test]
+    fn retained_cache_is_invalidated_by_grants_and_bad_geometry() {
+        for bad_geometry in [false, true] {
+            let mut presenter = presenter();
+            presenter.hidden_active_verified = true;
+            presenter.direct_slot_content_generation = [Some(7); 2];
+            for slot in [1, 2] {
+                presenter
+                    .direct_retained_tiles
+                    .write_if_changed(slot, TileImageIdentity::new(7, 19), || Ok::<_, ()>(()))
+                    .unwrap();
+            }
+            let mut sample = status(BASE1, 0x0001);
+            if bad_geometry {
+                sample.active_width += 1;
+            }
+            let mut hardware = FakeHardware {
+                statuses: if bad_geometry {
+                    vec![Ok(sample), Ok(sample)]
+                } else {
+                    vec![Ok(sample)]
+                },
+                ..Default::default()
+            };
+            let mut display = display_session();
+            if bad_geometry {
+                assert!(presenter.read_geometry_safe_status(&mut hardware).is_err());
+            } else {
+                assert!(
+                    presenter
+                        .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            assert_eq!(
+                presenter.direct_retained_tiles.write_if_changed(
+                    2,
+                    TileImageIdentity::new(7, 19),
+                    || Ok::<_, ()>(true)
+                ),
+                Ok(Some(true))
+            );
+            presenter.invalidate_external_mode();
+            for slot in [1, 2] {
+                assert_eq!(
+                    presenter.direct_retained_tiles.write_if_changed(
+                        slot,
+                        TileImageIdentity::new(7, 19),
+                        || Ok::<_, ()>(true)
+                    ),
+                    Ok(Some(true))
+                );
+            }
+        }
     }
 
     #[test]

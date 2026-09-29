@@ -22,6 +22,7 @@ mod launcher_texture;
 pub mod navigation;
 pub mod orientation;
 pub mod packed_copy;
+pub mod retained_tiles;
 pub mod settings_cog;
 pub mod spring_animation;
 
