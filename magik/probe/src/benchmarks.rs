@@ -86,6 +86,13 @@ fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[2] != "--mode" {
         return Err("expected --bench WORKLOAD --mode MODE".into());
     }
+    if args[1] == "catalog-sort" {
+        if args[3] != "timing" {
+            return Err("catalog-sort supports timing mode".into());
+        }
+        println!("{}", crate::catalog_sort::run()?);
+        return Ok(());
+    }
     if args[1] == "retained-home-tiles" {
         if args[3] != "timing" {
             return Err("retained-home-tiles supports timing mode".into());

@@ -2393,12 +2393,9 @@ fn capture_tree_at_depth(
     let metadata = fs::metadata(root)
         .map_err(|error| format!("stat watch directory {}: {error}", root.display()))?;
     let mut entries = read_watch_directory_entries(root)?;
-    entries.sort_by(|left, right| {
-        let left = left.file_name().to_string_lossy().into_owned();
-        let right = right.file_name().to_string_lossy().into_owned();
-        left.to_ascii_lowercase()
-            .cmp(&right.to_ascii_lowercase())
-            .then_with(|| left.cmp(&right))
+    entries.sort_by_cached_key(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        (name.to_ascii_lowercase(), name)
     });
     let mut digest = Sha256::new();
     for entry in entries {
@@ -2519,12 +2516,7 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
             Some((entry.file_name().to_string_lossy().into_owned(), kind))
         })
         .collect::<Vec<_>>();
-    entries.sort_by(|left, right| {
-        left.0
-            .to_ascii_lowercase()
-            .cmp(&right.0.to_ascii_lowercase())
-            .then_with(|| left.0.cmp(&right.0))
-    });
+    crate::catalog_sort::sort_ascii_titles(&mut entries, |row| &row.0, |row| &row.0);
     let mut digest = Sha256::new();
     for (name, kind) in entries {
         digest.update([kind]);

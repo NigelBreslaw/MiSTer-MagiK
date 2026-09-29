@@ -85,3 +85,13 @@ seeding, records tile bytes and copy time, and includes a complete physical-slot
 pixel oracle and eight protocol-v5 posts/confirmed flips. Wall time includes
 readback and latch waits; copy time is recorded separately. Repeated-vblank
 deltas remain separate from copied bytes. Main resumes after the invocation.
+
+`catalog-sort` calls the shared production ASCII title sorter on fixed-seed
+1,000, 10,000 and 50,000-row fixtures. It checks stable ties and non-ASCII
+semantics against the original comparator and compares complete rows outside
+timing. Separate observation passes report normalization calls, allocation
+counts, allocated bytes and peak temporary bytes. Input construction, clones,
+and exact-output comparisons are outside the two timed sorting samples.
+The same Mini System allocator adapter runs on both revisions; accounting is
+disabled during timing. Cached keys trade bounded temporary storage for fewer
+allocations; this workload does not measure complete catalog rebuild time.

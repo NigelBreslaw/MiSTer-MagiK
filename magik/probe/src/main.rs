@@ -153,6 +153,7 @@ extern "C" fn stop_after_frame(_signal: libc::c_int) {
 }
 
 mod benchmarks;
+mod catalog_sort;
 mod retained_tiles;
 
 fn main() -> Result<(), String> {

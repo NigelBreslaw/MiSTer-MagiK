@@ -546,15 +546,31 @@ pub fn launcher_catalog_for_fast_system(
 fn merge_system_rows(target: &mut FastFiveSystem, mut additional: FastFiveSystem) {
     target.games.append(&mut additional.games);
     target.variants.append(&mut additional.variants);
-    target.games.sort_by(|left, right| {
-        left.title
-            .to_ascii_lowercase()
-            .cmp(&right.title.to_ascii_lowercase())
-            .then_with(|| left.stable_key.cmp(&right.stable_key))
-    });
+    crate::catalog_sort::sort_ascii_titles(
+        &mut target.games,
+        |game| &game.title,
+        |game| &game.stable_key,
+    );
     target
         .games
         .dedup_by(|left, right| left.launch_ref == right.launch_ref);
+}
+
+fn sort_game_variants(variants: &mut [FastFiveGameVariant]) {
+    // Preserve the old primary family ordering. A singleton family requires no
+    // title normalization; equal-family groups normalize each title once.
+    variants.sort_by(|left, right| left.family_stable_key.cmp(&right.family_stable_key));
+    for family in
+        variants.chunk_by_mut(|left, right| left.family_stable_key == right.family_stable_key)
+    {
+        if family.len() > 1 {
+            crate::catalog_sort::sort_ascii_titles(
+                family,
+                |row| &row.game.title,
+                |row| &row.game.launch_ref,
+            );
+        }
+    }
 }
 
 fn merge_source_report(target: &mut FastSourceSystemReport, additional: &FastSourceSystemReport) {
@@ -634,24 +650,9 @@ fn build_prepared_system(
         }
         _ => return Err(format!("unsupported prepared fast system {system_id}")),
     };
-    games.sort_by(|left, right| {
-        left.title
-            .to_ascii_lowercase()
-            .cmp(&right.title.to_ascii_lowercase())
-            .then_with(|| left.stable_key.cmp(&right.stable_key))
-    });
+    crate::catalog_sort::sort_ascii_titles(&mut games, |game| &game.title, |game| &game.stable_key);
     games.dedup_by(|left, right| left.launch_ref == right.launch_ref);
-    variants.sort_by(|left, right| {
-        left.family_stable_key
-            .cmp(&right.family_stable_key)
-            .then_with(|| {
-                left.game
-                    .title
-                    .to_ascii_lowercase()
-                    .cmp(&right.game.title.to_ascii_lowercase())
-            })
-            .then_with(|| left.game.launch_ref.cmp(&right.game.launch_ref))
-    });
+    sort_game_variants(&mut variants);
     Ok((
         FastFiveSystem {
             system_id: system_id.to_string(),
@@ -1048,7 +1049,7 @@ fn collect_arcade_mras_at_depth(
     let Some(mut entries) = read_dir_entries_checked(root)? else {
         return Ok(());
     };
-    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    entries.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
         crate::catalog_progress::report_inner_progress_at(*visited);
@@ -1420,7 +1421,7 @@ fn collect_matching_files_at_depth(
     let Some(mut entries) = read_dir_entries_checked(root)? else {
         return Ok(());
     };
-    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    entries.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
         crate::catalog_progress::report_inner_progress_at(*visited);
@@ -2117,6 +2118,65 @@ fn elapsed_us(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_title_and_family_sorts_preserve_transport_bytes() {
+        let mut variants: Vec<_> = (0..3_000)
+            .map(|i| FastFiveGameVariant {
+                family_stable_key: format!("family-{}", i % 19),
+                relation: crate::fast_five_catalog::FastFiveVariantRelation::LanguageEdition,
+                game: direct_row(
+                    "snes",
+                    "Console",
+                    Path::new(&format!("games/SNES/{i}.sfc")),
+                    format!(
+                        "{} {}",
+                        ["TITLE", "title", "Éclair", "éclair"][i % 4],
+                        i % 23
+                    ),
+                ),
+            })
+            .collect();
+        variants.reverse();
+        let mut expected = variants.clone();
+        expected.sort_by(|a, b| {
+            a.family_stable_key
+                .cmp(&b.family_stable_key)
+                .then_with(|| {
+                    a.game
+                        .title
+                        .to_ascii_lowercase()
+                        .cmp(&b.game.title.to_ascii_lowercase())
+                })
+                .then_with(|| a.game.launch_ref.cmp(&b.game.launch_ref))
+        });
+        sort_game_variants(&mut variants);
+        assert_eq!(variants, expected);
+        let mut games: Vec<_> = variants.iter().map(|v| v.game.clone()).collect();
+        let mut expected_games = games.clone();
+        expected_games.sort_by(|a, b| {
+            a.title
+                .to_ascii_lowercase()
+                .cmp(&b.title.to_ascii_lowercase())
+                .then_with(|| a.stable_key.cmp(&b.stable_key))
+        });
+        crate::catalog_sort::sort_ascii_titles(&mut games, |r| &r.title, |r| &r.stable_key);
+        let actual = FastFiveSystem {
+            system_id: "snes".into(),
+            display_title: "SNES".into(),
+            games,
+            variants,
+        };
+        let expected = FastFiveSystem {
+            games: expected_games,
+            variants: expected,
+            ..actual.clone()
+        };
+        assert_eq!(
+            crate::fast_five_catalog::encode_fast_system_transport(&actual).unwrap(),
+            crate::fast_five_catalog::encode_fast_system_transport(&expected).unwrap()
+        );
+    }
 
     fn write_compact_arcade_metadata(
         root: &Path,

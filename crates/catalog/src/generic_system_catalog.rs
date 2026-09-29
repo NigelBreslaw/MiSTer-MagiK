@@ -1078,13 +1078,11 @@ fn rebuild_generic_system_from_profiles(
     if stats.roots == 0 {
         return Ok(None);
     }
-    scanned.sort_by(|left, right| {
-        left.game
-            .title
-            .to_ascii_lowercase()
-            .cmp(&right.game.title.to_ascii_lowercase())
-            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
-    });
+    crate::catalog_sort::sort_ascii_titles(
+        &mut scanned,
+        |row| &row.game.title,
+        |row| &row.game.stable_key,
+    );
     scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
     stats.games = scanned.len();
     stats.elapsed_us = started.elapsed().as_micros() as u64;

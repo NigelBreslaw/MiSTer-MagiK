@@ -16,6 +16,7 @@ pub mod catalog_format;
 pub mod catalog_lease;
 pub mod catalog_progress;
 mod catalog_scan;
+pub mod catalog_sort;
 pub use catalog_scan::catalog_corpus_inventory_tsv;
 mod cooperative_work;
 pub mod device_layout;
