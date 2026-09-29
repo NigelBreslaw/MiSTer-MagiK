@@ -79,7 +79,6 @@ pub const fn system_hub_section(index: usize) -> view::SystemHubSection {
         0 => view::SystemHubSection::Games,
         1 => view::SystemHubSection::Recent,
         2 => view::SystemHubSection::Favourites,
-        3 => view::SystemHubSection::Information,
         _ => panic!("system hub selection is outside its finite domain"),
     }
 }
@@ -228,7 +227,6 @@ mod tests {
             launcher_screen(Screen::SystemHub),
             view::LauncherScreen::SystemHub
         );
-        assert_eq!(system_hub_section(3), view::SystemHubSection::Information);
         assert_eq!(menu_hierarchy(true), view::MenuHierarchy::Root);
         assert_eq!(menu_hierarchy(false), view::MenuHierarchy::Nested);
         assert_eq!(

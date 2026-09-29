@@ -20,7 +20,6 @@ class DistributionTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.fixture = CandidateFixture(self.root)
-        self.stack.enter_context(patch.dict(dist.ARTWORK, self.fixture.artwork()))
         self.contract = self.stack.enter_context(
             patch.object(
                 manifest,
@@ -77,13 +76,7 @@ class DistributionTests(unittest.TestCase):
     def test_layout_inventory_does_not_rehash_every_payload(self):
         with patch.object(dist, "sha256_file", wraps=dist.sha256_file) as digest:
             dist.verify_root(self.fixture.stage)
-        self.assertEqual(
-            [
-                call.args[0].relative_to(self.fixture.stage).as_posix()
-                for call in digest.call_args_list
-            ],
-            list(dist.ARTWORK),
-        )
+        self.assertEqual(digest.call_args_list, [])
         self.contract.assert_called_once()
         self.manager.assert_called_once()
 

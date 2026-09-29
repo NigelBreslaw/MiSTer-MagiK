@@ -597,23 +597,6 @@ mod macos {
             launcher_nav.display_highlighted = display_profile
                 .settings_display_resolution_index()
                 .unwrap_or(0);
-            if let Ok(artwork) = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
-                &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/snes/snes-small-v1.rgb565a"),
-                mister_magik_fb::snes_artwork::SNES_ARTWORK_WIDTH,
-                mister_magik_fb::snes_artwork::SNES_ARTWORK_HEIGHT,
-            ) {
-                let pixels = artwork.rgba8_bytes();
-                let image = slint::Image::from_rgba8(
-                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                        &pixels,
-                        artwork.width as u32,
-                        artwork.height as u32,
-                    ),
-                );
-                let navigation = launcher.global::<NavigationView>();
-                navigation.set_system_artwork(image);
-                navigation.set_system_artwork_available(true);
-            }
             let view_orientation = match orientation {
                 ScreenOrientation::Normal => ViewScreenOrientation::Normal,
                 ScreenOrientation::MonitorClockwise => ViewScreenOrientation::MonitorClockwise,
@@ -972,8 +955,7 @@ mod macos {
                     0 => SystemHubSection::Games,
                     1 => SystemHubSection::Recent,
                     2 => SystemHubSection::Favourites,
-                    3 => SystemHubSection::Information,
-                    _ => unreachable!("system hub selection is bounded to four cards"),
+                    _ => unreachable!("system hub selection is bounded to three tiles"),
                 });
             }
             let settings = self.launcher.global::<SettingsView>();
@@ -3717,10 +3699,6 @@ mod macos {
                     include_bytes!("../ui_preview_fixtures.rs"),
                 )]),
                 asset_bundle_sha256: bundle_sha256(&[
-                    (
-                        "snes-small-v1.rgb565a",
-                        include_bytes!("../../assets/snes/snes-small-v1.rgb565a"),
-                    ),
                     (
                         "jersey15-27px.mmbf",
                         include_bytes!("../../assets/fonts/jersey15-27px.mmbf"),

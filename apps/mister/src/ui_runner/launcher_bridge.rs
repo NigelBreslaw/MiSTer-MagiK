@@ -16,50 +16,6 @@ macro_rules! set_bridge_string_if_changed {
     }};
 }
 
-fn load_snes_artwork_image() -> Option<slint::Image> {
-    let active = mister_magik_fb::snes_artwork::active_asset_path();
-    let artwork = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
-        &active,
-        mister_magik_fb::snes_artwork::SNES_ARTWORK_WIDTH,
-        mister_magik_fb::snes_artwork::SNES_ARTWORK_HEIGHT,
-    )
-    .map_err(|active_error| {
-        #[cfg(feature = "ui-preview")]
-        {
-            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("assets/snes/snes-small-v1.rgb565a");
-            return mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
-                &repository,
-                mister_magik_fb::snes_artwork::SNES_ARTWORK_WIDTH,
-                mister_magik_fb::snes_artwork::SNES_ARTWORK_HEIGHT,
-            )
-            .map_err(|repository_error| {
-                crate::ui_errln!(
-                    "SNES artwork unavailable: active={active_error}; repository={repository_error}"
-                );
-                repository_error
-            });
-        }
-        #[cfg(not(feature = "ui-preview"))]
-        {
-            crate::ui_errln!("SNES artwork unavailable: {active_error}");
-            active_error
-        }
-    })
-    .ok()?;
-    Some(slint_image_from_rgb565a(&artwork))
-}
-
-fn slint_image_from_rgb565a(artwork: &mister_magik_fb::snes_artwork::Rgb565aImage) -> slint::Image {
-    let pixels = artwork.rgba8_bytes();
-    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-        &pixels,
-        artwork.width as u32,
-        artwork.height as u32,
-    );
-    slint::Image::from_rgba8(buffer)
-}
-
 pub(super) fn open_pads() -> PadPool {
     PadPool::open_all().unwrap_or_else(|e| {
         crate::ui_errln!("failed to initialize gamepad input: {e}");
@@ -71,12 +27,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let information = app.global::<slint_ui::launcher::InformationView>();
     navigation.set_screen(slint_ui::launcher::LauncherScreen::Home);
-    if let Some(image) = load_snes_artwork_image() {
-        navigation.set_system_artwork(image);
-        navigation.set_system_artwork_available(true);
-    } else {
-        navigation.set_system_artwork_available(false);
-    }
     let build_label = SharedString::from(build_label());
     navigation.set_build_label(build_label.clone());
     information.set_build_label(build_label);

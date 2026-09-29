@@ -33,8 +33,6 @@ GAME_DATABASES_RELEASE_DIR=""
 INSTALLER="$DEFAULT_INSTALLER"
 MANAGER="$DEFAULT_MANAGER"
 ASSET_PACK=""
-SNES_ARTWORK="$ROOT/apps/mister/assets/snes/snes-small-v1.rgb565a"
-SNES_ARTWORK_SHA256="7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766"
 MAIN_BIN=""
 MAIN_SOURCE_REVISION=""
 SCANOUT_MODULE=""
@@ -334,14 +332,6 @@ cp "$MANAGER" "$STAGE/$PUBLIC_MANAGER_RELATIVE"
 chmod 755 "$STAGE/$PUBLIC_MANAGER_RELATIVE"
 cp "$RUNTIME_METADATA" "$STAGE/$PUBLIC_ROOT_RELATIVE/magik-metadata-v1.bin"
 cp "$ARCADE_UPDATER_INDEX" "$STAGE/$PUBLIC_ROOT_RELATIVE/arcade-updater-index-v1.lz4b"
-
-ACTUAL_SNES_ARTWORK_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SNES_ARTWORK")"
-if [[ "$ACTUAL_SNES_ARTWORK_SHA256" != "$SNES_ARTWORK_SHA256" ]]; then
-  echo "ERROR: SNES artwork checksum mismatch." >&2
-  exit 1
-fi
-mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/snes"
-cp "$SNES_ARTWORK" "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/snes/snes-small-v1.rgb565a"
 
 if [[ -n "$ASSET_PACK" ]]; then
   mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets"

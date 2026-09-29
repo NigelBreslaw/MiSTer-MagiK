@@ -29,12 +29,8 @@ PUBLIC = manifest.LAYOUTS["public"]
 APP = PUBLIC["root"].removeprefix("/media/fat/")
 LAUNCHER = "Scripts/MiSTer-MagiK.sh"
 LEGACY_HELPER = "Scripts/MiSTer-MagiK.platform-v3.constants.sh"
-ARTWORK = {
-    f"{APP}/assets/snes/snes-small-v1.rgb565a": "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766",
-}
 REQUIRED = {
     LAUNCHER,
-    *ARTWORK,
     *(
         value.removeprefix("/media/fat/")
         for name, value in PUBLIC.items()
@@ -160,7 +156,7 @@ def extract_package(archive_path: Path, destination: Path) -> dict[str, int]:
 
 def verify_root(root: Path) -> dict[str, str]:
     # Receipt comparison in verify() hashes every payload. This pass needs only
-    # names; keep the independent artwork/manifest/manager checks below.
+    # names; keep the independent manifest/manager checks below.
     names = {
         path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
     }
@@ -187,9 +183,6 @@ def verify_root(root: Path) -> dict[str, str]:
             or name.endswith(("/mame.sqlite3", "/hbmame.sqlite3"))
         ):
             raise ValueError(f"forbidden public payload: {name}")
-    for name, expected in ARTWORK.items():
-        if sha256_file(root / name) != expected:
-            raise ValueError(f"artwork hash mismatch: {name}")
     fields = manifest.verify(root / APP / "platform-v3.manifest", root, layout="public")
     manager = Path(
         os.environ.get(

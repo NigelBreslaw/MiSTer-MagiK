@@ -10,7 +10,7 @@ import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 // percentages, and indices into dynamic models.
 export enum LauncherScreen { home, system-hub, controller, arcade, settings, about, licenses, license-text }
 export enum MenuHierarchy { root, nested }
-export enum SystemHubSection { games, recent, favourites, information }
+export enum SystemHubSection { games, recent, favourites }
 // The generic device drawn behind a collection: only Arcade has the cabinet.
 export enum DeviceKind { cabinet, tv, monitor, handheld }
 export enum HomeScrollPhase { idle, held, repeating }
@@ -79,8 +79,6 @@ export global NavigationView {
     in property <DeviceKind> system-device;
     // The device scaled to the CRT raster; empty on HDMI and portrait CRT.
     in property <image> system-hero;
-    in property <image> system-artwork;
-    in property <bool> system-artwork-available;
     in property <int> home-selected-index;
     in property <HomeScrollPhase> home-scroll-phase;
     in property <int> home-scroll-x;

@@ -163,7 +163,6 @@ pub fn apply_navigation_action(
                 slint_ui::launcher::SystemHubSection::Games => 0,
                 slint_ui::launcher::SystemHubSection::Recent => 1,
                 slint_ui::launcher::SystemHubSection::Favourites => 2,
-                slint_ui::launcher::SystemHubSection::Information => 3,
             };
             None
         }

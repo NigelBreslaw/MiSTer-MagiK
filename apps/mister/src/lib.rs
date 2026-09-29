@@ -178,7 +178,6 @@ pub use mister_magik_mister_runtime::runtime_status;
 pub use mister_magik_mister_runtime::settings;
 pub mod device_art;
 pub mod setup_nav;
-pub mod snes_artwork;
 pub mod spring_animation;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod startup_particles;

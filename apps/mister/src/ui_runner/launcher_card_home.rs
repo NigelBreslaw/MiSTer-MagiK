@@ -335,16 +335,6 @@ impl LauncherCardHomeSession {
         }
     }
 
-    /// Refresh a freshly built level's clock, which may be a minute old.
-    fn refresh_prepared_clock(&mut self) {
-        let typography = self.fonts.typography();
-        let prepared = &mut self.prepared;
-        self.level
-            .with_data(self.frame.selected, &self.clock, |data| {
-                prepared.refresh_chrome(data, Some(typography));
-            });
-    }
-
     /// Keep a level we are leaving prepared, so coming back costs nothing.
     fn park(&mut self, level: CardLevelSnapshot, prepared: PreparedLauncher) {
         self.parked
