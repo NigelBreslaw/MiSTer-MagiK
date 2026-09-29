@@ -61,12 +61,6 @@ export component SystemHubScreen inherits Rectangle {
     property <int> games: NavigationView.system-hub-games-count;
     property <int> recent: NavigationView.system-hub-recent-count;
     property <int> favourites: NavigationView.system-hub-favourites-count;
-    property <string> caption: root.section == SystemHubSection.games
-        ? "BROWSE ALL " + root.games + " GAMES"
-        : root.section == SystemHubSection.recent
-            ? (root.recent == 0 ? "NOTHING PLAYED YET" : "PICK UP WHERE YOU LEFT OFF")
-            : (root.favourites == 0 ? "NO FAVOURITES YET"
-                : root.favourites + (root.favourites == 1 ? " SAVED FAVOURITE" : " SAVED FAVOURITES"));
     background: PageTheme.background;
 
     if !MisterUi.portrait-layout : Rectangle {
@@ -141,7 +135,7 @@ export component SystemHubScreen inherits Rectangle {
         }
         Xerxes10 {
             x: 28px; y: 466px; width: 450px;
-            text: root.caption;
+            text: NavigationView.system-hub-caption;
             color: #c9c3b3;
             overflow: elide;
         }
@@ -185,7 +179,7 @@ export component SystemHubScreen inherits Rectangle {
         }
         Xerxes10 {
             x: 34px; y: 600px; width: parent.width - 68px;
-            text: root.caption;
+            text: NavigationView.system-hub-caption;
             color: #c9c3b3;
             overflow: elide;
         }

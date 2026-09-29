@@ -1426,11 +1426,6 @@ impl LauncherNav {
         self.orientation_highlighted = self.orientation_selected;
     }
 
-    /// Every Home level is a card carousel; only the root wraps.
-    fn card_home_active(&self) -> bool {
-        self.screen == Screen::Home
-    }
-
     pub fn home_horizontal_held(&self) -> bool {
         self.screen == Screen::Home
             && !self.portrait_layout
@@ -2860,8 +2855,7 @@ impl LauncherNav {
         if self.pending_home_activation && (held.dpad_left || held.dpad_right) {
             self.pending_home_activation = false;
         }
-        let card_turning =
-            self.card_home_active() && !self.home_card_scroll.is_visually_at_rest(item_count);
+        let card_turning = !self.home_card_scroll.is_visually_at_rest(item_count);
         if pressed.btn_a && card_turning {
             self.pending_home_activation = true;
         }

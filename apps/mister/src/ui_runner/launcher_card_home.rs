@@ -92,35 +92,38 @@ impl LauncherFonts {
     }
 }
 
+/// A level prepared aside: already built, or being built on a worker.
+enum Prepared {
+    Built(Box<PreparedLauncher>),
+    Building(JoinHandle<PreparedLauncher>),
+}
+
+/// A prepared level and the content it was prepared for. Levels are set aside
+/// two ways: the ones the selected card opens and the parent are prepared
+/// ahead while idle, and a level we leave is kept so coming back is instant.
+struct Aside {
+    level: CardLevelSnapshot,
+    prepared: Prepared,
+}
+
+/// The hierarchy is a few levels deep: the current level's neighbours plus the
+/// levels already left behind.
+const ASIDE_LEVELS: usize = 5;
+
 /// A level change in progress. The level being left renders the gather while
-/// the next level is prepared off the UI thread; the swap happens at the
-/// all-edge-on moment, holding there if preparation has not finished.
+/// the destination is made ready; the swap happens at the all-edge-on moment,
+/// holding there if it is not ready yet.
 struct LevelTrick {
     change: LevelChange,
     source_level: CardLevelSnapshot,
     source_selected: usize,
     destination_selected: usize,
     started_ms: u64,
-    /// The destination when it was already available, parked or prefetched.
-    ready: Option<PreparedLauncher>,
-    pending: Option<JoinHandle<PreparedLauncher>>,
+    destination: Option<Prepared>,
     /// Set when the destination became the prepared level. A late swap
     /// delays the deal by the time spent holding edge-on.
     deal_delay_ms: Option<u64>,
 }
-
-/// A neighbouring level prepared ahead of time on a worker, so pressing A or B
-/// starts the trick with the destination already built.
-struct PreparedLevel {
-    level: CardLevelSnapshot,
-    handle: JoinHandle<PreparedLauncher>,
-}
-
-/// Levels kept ready: the one the selected card opens, and the parent.
-const PREFETCHED_LEVELS: usize = 2;
-/// Levels already left behind, kept prepared so going back is instant. The
-/// hierarchy is at most a few levels deep.
-const PARKED_LEVELS: usize = 3;
 
 pub(super) struct LauncherCardHomeSession {
     scene: LauncherScene,
@@ -130,8 +133,7 @@ pub(super) struct LauncherCardHomeSession {
     fonts: Arc<LauncherFonts>,
     prepared: PreparedLauncher,
     trick: Option<LevelTrick>,
-    prefetched: Vec<PreparedLevel>,
-    parked: Vec<(CardLevelSnapshot, PreparedLauncher)>,
+    aside: Vec<Aside>,
     now_ms: u64,
     render_ahead: Option<LauncherCardRenderAhead>,
     presented_frame: Option<RenderedCardFrame>,
@@ -174,8 +176,7 @@ impl LauncherCardHomeSession {
             fonts,
             prepared,
             trick: None,
-            prefetched: Vec::new(),
-            parked: Vec::new(),
+            aside: Vec::new(),
             now_ms: 0,
             render_ahead,
             presented_frame: None,
@@ -257,8 +258,7 @@ impl LauncherCardHomeSession {
 
         let faces_changed = self.scene != scene || self.level.cards != level.cards;
         if self.scene != scene {
-            self.prefetched.clear();
-            self.parked.clear();
+            self.aside.clear();
         }
         if faces_changed || self.level != *level || self.clock != clock {
             let preparation_started = self.measure_preparation.then(std::time::Instant::now);
@@ -307,55 +307,74 @@ impl LauncherCardHomeSession {
         }
     }
 
+    /// Build `level` on a worker, or `None` if no thread can be spawned.
+    fn spawn_prepare(&self, level: &CardLevelSnapshot, selected: usize) -> Option<Prepared> {
+        let (scene, clock) = (self.scene, self.clock.clone());
+        let (artwork, fonts) = (Arc::clone(&self.artwork), Arc::clone(&self.fonts));
+        let level = level.clone();
+        std::thread::Builder::new()
+            .name("card-level-prepare".into())
+            .spawn(move || prepare(scene, &level, selected, &clock, &artwork, &fonts))
+            .ok()
+            .map(Prepared::Building)
+    }
+
+    /// `level` prepared on this thread, for when a worker failed or vanished.
+    fn prepare_here(&self, level: &CardLevelSnapshot, selected: usize) -> PreparedLauncher {
+        prepare(
+            self.scene,
+            level,
+            selected,
+            &self.clock,
+            &self.artwork,
+            &self.fonts,
+        )
+    }
+
+    /// Whether a level with these cards is already set aside. Its header and
+    /// summary are refreshed on install, so changed counts do not force a rebuild.
+    fn is_aside(aside: &Aside, level: &CardLevelSnapshot) -> bool {
+        aside.level.menu_id == level.menu_id && aside.level.cards == level.cards
+    }
+
+    fn set_aside(&mut self, level: CardLevelSnapshot, prepared: Prepared) {
+        self.aside
+            .retain(|aside| aside.level.menu_id != level.menu_id);
+        if self.aside.len() >= ASIDE_LEVELS {
+            self.aside.remove(0);
+        }
+        self.aside.push(Aside { level, prepared });
+    }
+
+    fn take_aside(&mut self, level: &CardLevelSnapshot) -> Option<Prepared> {
+        let index = self
+            .aside
+            .iter()
+            .position(|aside| Self::is_aside(aside, level))?;
+        Some(self.aside.remove(index).prepared)
+    }
+
     /// Prepare neighbouring levels on workers while the launcher is idle.
-    /// Cheap to call every frame: levels already prepared or in flight are
-    /// skipped, and nothing is spawned during a level change.
+    /// Cheap to call every frame: levels already set aside are skipped, and
+    /// nothing is spawned during a level change.
     pub(super) fn prefetch(&mut self, levels: Vec<CardLevelSnapshot>) {
         if !self.active || self.trick.is_some() || self.is_animating() {
             return;
         }
         for level in levels {
             if level.menu_id == self.level.menu_id
-                || self.prefetched.iter().any(|ready| ready.level == level)
+                || self.aside.iter().any(|aside| Self::is_aside(aside, &level))
             {
                 continue;
             }
-            if self.prefetched.len() >= PREFETCHED_LEVELS {
-                self.prefetched.remove(0);
-            }
-            let (scene, clock) = (self.scene, self.clock.clone());
-            let (artwork, fonts) = (Arc::clone(&self.artwork), Arc::clone(&self.fonts));
-            let destination = level.clone();
-            if let Ok(handle) = std::thread::Builder::new()
-                .name("card-level-prefetch".into())
-                .spawn(move || prepare(scene, &destination, 0, &clock, &artwork, &fonts))
-            {
-                self.prefetched.push(PreparedLevel { level, handle });
+            if let Some(building) = self.spawn_prepare(&level, 0) {
+                self.set_aside(level, building);
             }
         }
     }
 
-    /// Keep a level we are leaving prepared, so coming back costs nothing.
-    fn park(&mut self, level: CardLevelSnapshot, prepared: PreparedLauncher) {
-        self.parked
-            .retain(|(parked, _)| parked.menu_id != level.menu_id);
-        if self.parked.len() >= PARKED_LEVELS {
-            self.parked.remove(0);
-        }
-        self.parked.push((level, prepared));
-    }
-
-    /// A parked level whose cards are unchanged. Its header and summary are
-    /// refreshed on install, so changed counts do not force a rebuild.
-    fn take_parked(&mut self, level: &CardLevelSnapshot) -> Option<PreparedLauncher> {
-        let index = self.parked.iter().position(|(parked, _)| {
-            parked.menu_id == level.menu_id && parked.cards == level.cards
-        })?;
-        Some(self.parked.remove(index).1)
-    }
-
-    /// Start the level-change trick toward `level`. The destination comes from
-    /// the parked levels, else the prefetched ones, else a worker.
+    /// Start the level-change trick toward `level`. The destination is the one
+    /// set aside for it if there is one, else it is built on a worker.
     fn begin_trick(&mut self, level: CardLevelSnapshot, selected: usize) {
         self.finish_trick();
         let change = if level.depth > self.level.depth {
@@ -368,44 +387,17 @@ impl LauncherCardHomeSession {
             self.retired_pipeline_counters.add_assign(old.counters());
         }
         self.release_presented_frame();
-        let (scene, clock) = (self.scene, self.clock.clone());
-        let (artwork, fonts) = (Arc::clone(&self.artwork), Arc::clone(&self.fonts));
-        let mut ready = self.take_parked(&level);
-        let mut pending = None;
-        if ready.is_none() {
-            pending = self
-                .prefetched
-                .iter()
-                .position(|prefetched| prefetched.level == level)
-                .map(|index| self.prefetched.remove(index).handle);
-        }
-        self.prefetched.clear();
-        if ready.is_none() && pending.is_none() {
-            let destination = level.clone();
-            pending = std::thread::Builder::new()
-                .name("card-level-prepare".into())
-                .spawn(move || prepare(scene, &destination, selected, &clock, &artwork, &fonts))
-                .ok();
-            if pending.is_none() {
-                // No worker thread: prepare here rather than lose the level.
-                ready = Some(prepare(
-                    scene,
-                    &level,
-                    selected,
-                    &self.clock,
-                    &self.artwork,
-                    &self.fonts,
-                ));
-            }
-        }
+        let destination = self
+            .take_aside(&level)
+            .or_else(|| self.spawn_prepare(&level, selected))
+            .unwrap_or_else(|| Prepared::Built(Box::new(self.prepare_here(&level, selected))));
         self.trick = Some(LevelTrick {
             change,
             source_level: std::mem::replace(&mut self.level, level),
             source_selected: self.frame.selected,
             destination_selected: selected,
             started_ms: self.now_ms,
-            ready,
-            pending,
+            destination: Some(destination),
             deal_delay_ms: None,
         });
         self.frame = settled_frame(selected);
@@ -415,18 +407,39 @@ impl LauncherCardHomeSession {
         self.content_dirty = true;
     }
 
-    /// Make `prepared` the visible level, parking the one it replaces.
+    /// The trick's destination if it is built; a worker still running is left
+    /// alone. A worker that panicked is rebuilt here so the trick cannot be
+    /// stranded edge-on.
+    fn take_built_destination(&mut self, wait: bool) -> Option<PreparedLauncher> {
+        let trick = self.trick.as_mut()?;
+        match trick.destination.take()? {
+            Prepared::Built(prepared) => Some(*prepared),
+            Prepared::Building(handle) if wait || handle.is_finished() => {
+                let selected = trick.destination_selected;
+                Some(
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| self.prepare_here(&self.level, selected)),
+                )
+            }
+            Prepared::Building(handle) => {
+                trick.destination = Some(Prepared::Building(handle));
+                None
+            }
+        }
+    }
+
+    /// Make `prepared` the visible level, setting aside the one it replaces.
     fn install_destination(&mut self, prepared: PreparedLauncher) {
-        let source = self.trick.as_ref().map(|trick| trick.source_level.clone());
+        let (source, selected) = self.trick.as_ref().map_or_else(
+            || (None, self.frame.selected),
+            |trick| (Some(trick.source_level.clone()), trick.destination_selected),
+        );
         let old = std::mem::replace(&mut self.prepared, prepared);
         if let Some(source) = source {
-            self.park(source, old);
+            self.set_aside(source, Prepared::Built(Box::new(old)));
         }
-        // A parked or prefetched level may be minutes old.
-        let selected = self
-            .trick
-            .as_ref()
-            .map_or(self.frame.selected, |trick| trick.destination_selected);
+        // A level set aside may be minutes old.
         let typography = self.fonts.typography();
         let prepared = &mut self.prepared;
         self.level.with_data(selected, &self.clock, |data| {
@@ -440,26 +453,9 @@ impl LauncherCardHomeSession {
             return;
         };
         if trick.deal_delay_ms.is_none() {
-            let ready = self
-                .trick
-                .as_mut()
-                .and_then(|trick| trick.ready.take())
-                .or_else(|| {
-                    let pending = self.trick.as_mut()?.pending.take()?;
-                    pending.join().ok()
-                });
-            match ready {
+            match self.take_built_destination(true) {
                 Some(prepared) => self.install_destination(prepared),
-                None => {
-                    self.prepared = prepare(
-                        self.scene,
-                        &self.level,
-                        self.frame.selected,
-                        &self.clock,
-                        &self.artwork,
-                        &self.fonts,
-                    );
-                }
+                None => self.prepared = self.prepare_here(&self.level, self.frame.selected),
             }
         }
         self.trick = None;
@@ -477,41 +473,21 @@ impl LauncherCardHomeSession {
             return false;
         };
         let elapsed = self.now_ms.saturating_sub(trick.started_ms);
-        if trick.deal_delay_ms.is_none() && elapsed >= u64::from(LEVEL_TRICK_EDGE_MILLIS) {
-            let ready = self
-                .trick
-                .as_mut()
-                .and_then(|trick| trick.ready.take())
-                .or_else(|| {
-                    let trick = self.trick.as_mut()?;
-                    if trick.pending.as_ref().is_some_and(JoinHandle::is_finished) {
-                        let prepared = trick.pending.take()?.join().ok();
-                        // A panicked worker must not strand the trick edge-on.
-                        return prepared.or_else(|| {
-                            Some(prepare(
-                                self.scene,
-                                &self.level,
-                                trick.destination_selected,
-                                &self.clock,
-                                &self.artwork,
-                                &self.fonts,
-                            ))
-                        });
-                    }
-                    None
-                });
-            if let Some(prepared) = ready {
-                self.install_destination(prepared);
-                if let Some(trick) = self.trick.as_mut() {
-                    trick.deal_delay_ms = Some(elapsed - u64::from(LEVEL_TRICK_EDGE_MILLIS));
-                }
+        let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
+        if trick.deal_delay_ms.is_none()
+            && elapsed >= edge
+            && let Some(prepared) = self.take_built_destination(false)
+        {
+            self.install_destination(prepared);
+            if let Some(trick) = self.trick.as_mut() {
+                trick.deal_delay_ms = Some(elapsed - edge);
             }
         }
         let Some(trick) = self.trick.as_ref() else {
             return false;
         };
         let Some(delay) = trick.deal_delay_ms else {
-            let t = elapsed.min(u64::from(LEVEL_TRICK_EDGE_MILLIS)) as u32;
+            let t = elapsed.min(edge) as u32;
             self.prepared
                 .render_level_gather(trick.source_selected, trick.change, t);
             return true;
@@ -1245,17 +1221,15 @@ mod tests {
         let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
         session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
         session.prefetch(vec![consoles()]);
-        assert_eq!(session.prefetched.len(), 1);
+        assert_eq!(session.aside.len(), 1);
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !session.prefetched[0].handle.is_finished() {
+        while !matches!(&session.aside[0].prepared, Prepared::Building(handle) if handle.is_finished())
+        {
             assert!(Instant::now() < deadline, "prefetch timed out");
             std::thread::yield_now();
         }
         session.update(scene, &consoles(), 0, 0.0, "21:37", 100, true);
-        assert!(
-            session.prefetched.is_empty(),
-            "the prefetched level was used"
-        );
+        assert!(session.aside.is_empty(), "the prefetched level was used");
         session.update(
             scene,
             &consoles(),
@@ -1289,10 +1263,22 @@ mod tests {
             session.render();
             std::thread::yield_now();
         }
-        assert_eq!(session.parked.len(), 1, "the root was parked when left");
+        assert!(
+            session.aside.iter().any(|aside| {
+                aside.level.menu_id == crate::launcher_taxonomy::ROOT_MENU_ID
+                    && matches!(aside.prepared, Prepared::Built(_))
+            }),
+            "the root was set aside when left"
+        );
         // Back to the root: nothing to prepare, so the deal starts at the edge.
         session.update(scene, &snapshot(), 1, 1.0, "21:38", now + 100, true);
-        assert!(session.parked.is_empty(), "the parked root was used");
+        assert!(
+            session
+                .aside
+                .iter()
+                .all(|aside| aside.level.menu_id != crate::launcher_taxonomy::ROOT_MENU_ID),
+            "the root set aside was used"
+        );
         session.update(
             scene,
             &snapshot(),

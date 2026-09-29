@@ -58,8 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .join(format!("assets/ui/launcher-cards/{name}.rgb565"));
         std::fs::read(path).map(|bytes| {
             bytes
-                .chunks_exact(2)
-                .map(|p| Rgb565Pixel(u16::from_le_bytes([p[0], p[1]])))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|p| Rgb565Pixel(u16::from_le_bytes(*p)))
                 .collect::<Vec<_>>()
         })
     });

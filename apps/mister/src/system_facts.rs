@@ -98,9 +98,34 @@ pub fn system_subtitle(system_id: &str) -> String {
     })
 }
 
+/// What the focused tile of a system's page opens; `section` is 0 Games,
+/// 1 Recent, 2 Favourites.
+pub fn hub_caption(section: usize, games: usize, recent: usize, favourites: usize) -> String {
+    match section {
+        0 => format!("BROWSE ALL {games} GAMES"),
+        1 if recent == 0 => "NOTHING PLAYED YET".into(),
+        1 => "PICK UP WHERE YOU LEFT OFF".into(),
+        _ if favourites == 0 => "NO FAVOURITES YET".into(),
+        _ => format!(
+            "{favourites} SAVED FAVOURITE{}",
+            if favourites == 1 { "" } else { "S" }
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captions_describe_what_the_tile_opens() {
+        assert_eq!(hub_caption(0, 1729, 0, 0), "BROWSE ALL 1729 GAMES");
+        assert_eq!(hub_caption(1, 9, 0, 0), "NOTHING PLAYED YET");
+        assert_eq!(hub_caption(1, 9, 4, 0), "PICK UP WHERE YOU LEFT OFF");
+        assert_eq!(hub_caption(2, 9, 0, 0), "NO FAVOURITES YET");
+        assert_eq!(hub_caption(2, 9, 0, 1), "1 SAVED FAVOURITE");
+        assert_eq!(hub_caption(2, 9, 0, 3), "3 SAVED FAVOURITES");
+    }
 
     #[test]
     fn known_systems_have_a_subtitle_and_unknown_ones_stay_empty() {

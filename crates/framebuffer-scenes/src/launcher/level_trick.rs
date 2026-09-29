@@ -237,9 +237,8 @@ fn neighbour(faces: &[CardFaces], cyclic: bool, selected: usize, relative: isize
     }
     let position = selected as isize + relative;
     if cyclic {
-        // A short cyclic ring must not show the same card twice.
-        (count > relative.unsigned_abs() as isize * 2 || relative.abs() == 1 && count > 1)
-            .then(|| position.rem_euclid(count) as usize)
+        // A cycling level always has enough cards to fill the carousel.
+        Some(position.rem_euclid(count) as usize)
     } else {
         (0..count).contains(&position).then_some(position as usize)
     }

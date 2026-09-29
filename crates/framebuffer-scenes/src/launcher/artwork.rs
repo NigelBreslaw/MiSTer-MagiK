@@ -142,6 +142,50 @@ fn back_surface(card: &PreparedCard<'_>) -> Vec<Rgb565Pixel> {
     pixels
 }
 
+/// The card's title, and its game count on the focused face, in the
+/// production fonts. `stride` x `rows` is the pixel buffer being drawn into and
+/// `width` x `height` the card inside it. A title too wide for the card drops
+/// to the smaller metadata font rather than being clipped.
+#[allow(clippy::too_many_arguments)]
+fn draw_card_labels(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    rows: usize,
+    card: &PreparedCard<'_>,
+    width: usize,
+    height: usize,
+    detail: bool,
+    fonts: LauncherTypography<'_>,
+) {
+    let heading = fonts.font_for(TextRole::Heading, card.name);
+    let title = if heading.measure(card.name) + 12 <= width {
+        heading
+    } else {
+        fonts.font_for(TextRole::Metadata, card.name)
+    };
+    title.draw_centered(
+        pixels,
+        stride,
+        rows,
+        (width / 2) as i32,
+        (height * 73 / 100) as i32,
+        card.name,
+        CREAM,
+    );
+    if detail && let Some(game_count) = card.games {
+        let games = format_games(game_count);
+        fonts.font_for(TextRole::Metadata, &games).draw_centered(
+            pixels,
+            stride,
+            rows,
+            (width / 2) as i32,
+            (height * 86 / 100) as i32,
+            &games,
+            CREAM,
+        );
+    }
+}
+
 /// `face`, reusing the label-free body when the card has no artwork and the
 /// production fonts draw the labels.
 pub(super) fn face_cached(
@@ -156,33 +200,16 @@ pub(super) fn face_cached(
     };
     let height = card_height(width);
     let mut pixels = cache.surface(card, detail).to_vec();
-    let heading = fonts.font_for(TextRole::Heading, card.name);
-    let title = if heading.measure(card.name) + 12 <= width {
-        heading
-    } else {
-        fonts.font_for(TextRole::Metadata, card.name)
-    };
-    title.draw_centered(
+    draw_card_labels(
         &mut pixels,
         width,
         height,
-        (width / 2) as i32,
-        (height * 73 / 100) as i32,
-        card.name,
-        CREAM,
+        card,
+        width,
+        height,
+        detail,
+        fonts,
     );
-    if detail && let Some(game_count) = card.games {
-        let games = format_games(game_count);
-        fonts.font_for(TextRole::Metadata, &games).draw_centered(
-            &mut pixels,
-            width,
-            height,
-            (width / 2) as i32,
-            (height * 86 / 100) as i32,
-            &games,
-            CREAM,
-        );
-    }
     crate::launcher_flip::Face::new(pixels, width, height)
 }
 
@@ -302,33 +329,16 @@ pub(super) fn surface(
     if !labels {
         // Responsive faces add native-size bitmap labels after artwork resampling.
     } else if let Some(fonts) = typography {
-        let heading = fonts.font_for(TextRole::Heading, card.name);
-        let title = if heading.measure(card.name) + 12 <= width {
-            heading
-        } else {
-            fonts.font_for(TextRole::Metadata, card.name)
-        };
-        title.draw_centered(
+        draw_card_labels(
             &mut canvas,
             LOGICAL_WIDTH,
             LOGICAL_HEIGHT,
-            (width / 2) as i32,
-            (height * 73 / 100) as i32,
-            card.name,
-            ink,
+            card,
+            width,
+            height,
+            detail,
+            fonts,
         );
-        if detail && let Some(game_count) = card.games {
-            let games = format_games(game_count);
-            fonts.font_for(TextRole::Metadata, &games).draw_centered(
-                &mut canvas,
-                LOGICAL_WIDTH,
-                LOGICAL_HEIGHT,
-                (width / 2) as i32,
-                (height * 86 / 100) as i32,
-                &games,
-                ink,
-            );
-        }
     } else {
         let title_scale = ((width - 24) / (card.name_mask.len().max(1) * 6)).clamp(1, 3) * 256;
         draw_mask_scaled_centered(

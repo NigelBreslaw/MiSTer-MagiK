@@ -769,6 +769,17 @@ impl LauncherViewPresenters {
                 self.navigation.hero_key = hero;
             }
             let (recent, favourites) = self.navigation.hub_counts;
+            set_view_string_if_changed!(
+                navigation,
+                get_system_hub_caption,
+                set_system_hub_caption,
+                crate::system_facts::hub_caption(
+                    nav.system_hub_selected,
+                    collection.map_or(0, |collection| collection.count),
+                    recent,
+                    favourites,
+                )
+            );
             set_if_changed!(
                 navigation,
                 get_system_hub_recent_count,

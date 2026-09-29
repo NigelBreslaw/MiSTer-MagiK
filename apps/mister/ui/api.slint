@@ -76,6 +76,8 @@ export global NavigationView {
     // The system page's title block: `NINTENDO / 1990 / 16-BIT` and the device.
     in property <string> system-title;
     in property <string> system-subtitle;
+    // What the focused tile opens, e.g. `BROWSE ALL 1729 GAMES`.
+    in property <string> system-hub-caption;
     in property <DeviceKind> system-device;
     // The device scaled to the CRT raster; empty on HDMI and portrait CRT.
     in property <image> system-hero;

@@ -61,12 +61,6 @@ export component SystemHubScreen inherits Rectangle {
     property <length> tile-width: (root.column-width - 2 * root.tile-gap) / 3;
     property <length> tile-height: CrtPageMetrics.len-y(50);
     property <length> tiles-y: CrtPageMetrics.px-y(root.top) + CrtPageMetrics.len-y(58);
-    property <string> caption: root.section == SystemHubSection.games
-        ? "BROWSE ALL " + root.games + " GAMES"
-        : root.section == SystemHubSection.recent
-            ? (root.recent == 0 ? "NOTHING PLAYED YET" : "PICK UP WHERE YOU LEFT OFF")
-            : (root.favourites == 0 ? "NO FAVOURITES YET"
-                : root.favourites + (root.favourites == 1 ? " SAVED FAVOURITE" : " SAVED FAVOURITES"));
 
     accessible-role: main;
     accessible-label: NavigationView.system-title;
@@ -142,7 +136,7 @@ export component SystemHubScreen inherits Rectangle {
         x: CrtPageMetrics.px-x(root.left);
         y: root.tiles-y + root.tile-height + CrtPageMetrics.len-y(8);
         width: root.column-width;
-        text: root.caption;
+        text: NavigationView.system-hub-caption;
         color: #c9c3b3;
         overflow: elide;
         size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
