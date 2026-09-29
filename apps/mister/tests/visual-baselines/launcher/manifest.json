@@ -16,7 +16,7 @@
     "slint_version": "1.18.0 (master 72cf7430)",
     "png_encoder": "png-rgb8-filter-none-zlib-best-v1",
     "fixture_sha256": "9998b71830e02db4348dfa4c53684251bc9a25a39b2a094d46e851c70783c37a",
-    "asset_bundle_sha256": "afb1f22403fa67e922dcfd6b6c4604a2994f3d0d775b757036c01ffa5da13417",
+    "asset_bundle_sha256": "21f08254db310b387041d396df2e5ff304c0902cafc7f8de072f8f8f8e554840",
     "font_bundle_sha256": "672448be6f763d1415cc4d7028e68508ef8dd3789617f9df3b44925e7b779957"
   },
   "scenes": [

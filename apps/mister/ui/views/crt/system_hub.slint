@@ -1,116 +1,144 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
+// A system's own page on CRT, shared by every console, computer and handheld:
+// identity and three tiles on the left, the generic device on the right. The
+// device image is scaled by Rust to this raster (rows are half height on 240p).
+
+import { DeviceKind, FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
+import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import { PageTheme } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
-import { CrtTheme, CrtFooter } from "../../components/crt_ui.slint";
 
-component HubCard inherits Rectangle {
-    in property <string> glyph;
+global CrtHubTheme {
+    out property <color> accent: NavigationView.system-device == DeviceKind.monitor ? #e6c23a
+        : NavigationView.system-device == DeviceKind.handheld ? #35c48f : #5a71e7;
+}
+
+component CrtHubTile inherits Rectangle {
     in property <string> label;
-    in property <string> detail;
+    in property <int> count;
     in property <bool> focused;
     in property <bool> acknowledged;
-    in property <bool> enabled: true;
-    property <bool> compact: root.height < 88px || root.width < 160px;
-    property <Spleen6x12Size> label-size: root.width < 160px
-        ? MisterUi.crt-body-font : MisterUi.crt-card-title-font;
+
     accessible-role: list-item;
     accessible-label: root.label;
-    accessible-description: root.detail;
-    accessible-enabled: root.enabled;
+    accessible-description: root.count + "";
     accessible-item-selectable: true;
     accessible-item-selected: root.focused;
-    background: focused ? CrtTheme.panel-alt : CrtTheme.panel;
-    border-width: focused ? MisterUi.border * 2 : MisterUi.border;
-    border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
 
-    VerticalLayout {
-        padding-left: MisterUi.grid-x;
-        padding-right: MisterUi.grid-x;
-        padding-top: MisterUi.grid-y;
-        padding-bottom: MisterUi.grid-y;
-        spacing: root.compact ? 0px : MisterUi.grid-y;
+    border-width: root.focused ? 2px : 1px;
+    border-color: root.focused ? CrtHubTheme.accent
+        : root.acknowledged ? CrtHubTheme.accent.mix(#000000, 0.7) : CrtHubTheme.accent.mix(#000000, 0.42);
+    background: root.focused ? CrtHubTheme.accent.mix(#0a0e18, 0.24) : CrtHubTheme.accent.mix(#0a0e18, 0.12);
 
-        Spleen6x12 {
-            text: root.glyph + "  " + root.label;
-            color: root.enabled
-                ? (root.focused ? CrtTheme.accent : CrtTheme.text)
-                : CrtTheme.muted;
-            size: root.label-size;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
-            vertical-stretch: 1;
-        }
-
-        Rectangle {
-            height: MisterUi.border-y;
-            background: root.focused ? CrtTheme.accent : CrtTheme.border;
-        }
-
-        Spleen6x12 {
-            text: root.detail;
-            color: CrtTheme.muted;
-            size: root.compact ? MisterUi.crt-body-font : MisterUi.crt-card-detail-font;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
-            vertical-stretch: 1;
-        }
+    CrtLauncherText {
+        x: 8px; y: CrtPageMetrics.len-y(6);
+        text: root.count;
+        text-color: PageTheme.cream;
+    }
+    Spleen6x12 {
+        x: 8px; y: parent.height - CrtPageMetrics.len-y(18);
+        text: root.label;
+        color: root.focused ? PageTheme.cream : PageTheme.muted;
+        size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
     }
 }
 
 export component SystemHubScreen inherits Rectangle {
-    background: CrtTheme.background;
-    property <bool> low-height: root.height <= 288px;
-    property <bool> narrow: root.width < 400px;
-    property <length> outer-x: MisterUi.grid-x * (root.narrow ? 1 : 2);
-    property <length> card-gap: MisterUi.grid-x;
-    property <length> header-height: root.low-height ? 82px : root.narrow ? 136px : 104px;
-    property <length> art-width: root.low-height || root.narrow ? 130px : 185px;
-    property <length> art-height: root.art-width * 82 / 185;
-    property <length> cards-bottom: root.height - MisterUi.footer-height - MisterUi.grid-y * 2;
-    property <length> card-width: (root.width - root.outer-x * 2 - root.card-gap) / 2;
-    property <length> card-height: (root.cards-bottom - root.header-height - MisterUi.grid-y) / 2;
+    property <SystemHubSection> section: NavigationView.system-hub-section;
+    property <int> games: NavigationView.system-hub-games-count;
+    property <int> recent: NavigationView.system-hub-recent-count;
+    property <int> favourites: NavigationView.system-hub-favourites-count;
+    property <bool> has-hero: NavigationView.system-hero.width > 0;
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> top: CrtPageMetrics.header-bottom + 8 * CrtPageMetrics.sy;
+    property <length> hero-width: root.has-hero ? NavigationView.system-hero.width * 1px : 0px;
+    property <length> hero-height: NavigationView.system-hero.height * 1px;
+    property <length> column-width: (MisterUi.window-width - 2 * root.left) * 1px - root.hero-width - (root.has-hero ? 12px : 0px);
+    property <length> tile-gap: 6px;
+    property <length> tile-width: (root.column-width - 2 * root.tile-gap) / 3;
+    property <length> tile-height: CrtPageMetrics.len-y(50);
+    property <length> tiles-y: CrtPageMetrics.px-y(root.top) + CrtPageMetrics.len-y(58);
 
-    Spleen6x12 {
-        x: root.outer-x;
-        y: MisterUi.grid-y;
-        width: root.narrow ? root.width - root.outer-x * 2
-            : root.width - root.art-width - root.outer-x * 3;
-        height: MisterUi.heading-font;
-        text: "SUPER NINTENDO";
-        size: MisterUi.crt-heading-font;
-        color: CrtTheme.text;
-        overflow: elide;
-    }
-    Spleen6x12 {
-        x: root.outer-x;
-        y: MisterUi.grid-y * 2 + MisterUi.heading-font;
-        width: root.narrow ? root.width - root.outer-x * 2
-            : root.width - root.art-width - root.outer-x * 3;
-        height: MisterUi.body-font;
-        text: "1990 / 16-BIT CONSOLE";
-        size: MisterUi.crt-body-font;
-        color: CrtTheme.warning;
-        overflow: elide;
-    }
-    Image {
-        x: root.narrow ? (root.width - root.art-width) / 2
-            : root.width - root.art-width - root.outer-x;
-        y: root.narrow ? MisterUi.grid-y * 3 + MisterUi.heading-font + MisterUi.body-font
-            : MisterUi.grid-y;
-        visible: NavigationView.system-artwork-available;
-        source: NavigationView.system-artwork;
-        width: root.art-width;
-        height: root.art-height;
+    accessible-role: main;
+    accessible-label: NavigationView.system-title;
+    background: transparent;
+
+    CrtPageChrome {
+        section: "";
+        hint-a: "A OPEN";
+        hint-b: "B BACK";
     }
 
-    HubCard { x: root.outer-x; y: root.header-height; width: root.card-width; height: root.card-height; glyph: "+"; label: "GAMES"; detail: NavigationView.system-hub-games-count + " TITLES"; focused: NavigationView.system-hub-section == SystemHubSection.games; acknowledged: FeedbackView.acknowledged("system-hub", "games", FeedbackView.revision); }
-    HubCard { x: root.outer-x + root.card-width + root.card-gap; y: root.header-height; width: root.card-width; height: root.card-height; glyph: "@"; label: "RECENT"; detail: NavigationView.system-hub-recent-count + " PLAYED"; focused: NavigationView.system-hub-section == SystemHubSection.recent; acknowledged: FeedbackView.acknowledged("system-hub", "recent", FeedbackView.revision); }
-    HubCard { x: root.outer-x; y: root.header-height + root.card-height + MisterUi.grid-y; width: root.card-width; height: root.card-height; glyph: "*"; label: "FAVORITES"; detail: NavigationView.system-hub-favourites-count + " SAVED"; focused: NavigationView.system-hub-section == SystemHubSection.favourites; acknowledged: FeedbackView.acknowledged("system-hub", "favorites", FeedbackView.revision); }
-    HubCard { x: root.outer-x + root.card-width + root.card-gap; y: root.header-height + root.card-height + MisterUi.grid-y; width: root.card-width; height: root.card-height; glyph: "i"; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: NavigationView.system-hub-section == SystemHubSection.information; acknowledged: FeedbackView.acknowledged("system-hub", "info", FeedbackView.revision); }
-    CrtFooter { x: root.outer-x; y: parent.height - MisterUi.footer-height - MisterUi.grid-y; width: parent.width - root.outer-x * 2; left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
+    // Hero: the device with a dim lit glass over its opening.
+    if root.has-hero : Rectangle {
+        x: CrtPageMetrics.px-x(MisterUi.window-width - root.left) - root.hero-width;
+        y: CrtPageMetrics.px-y(root.top);
+        width: root.hero-width;
+        height: root.hero-height;
+        clip: true;
+        Image {
+            width: parent.width; height: parent.height;
+            source: NavigationView.system-hero;
+            image-fit: fill;
+            image-rendering: pixelated;
+            accessible-role: none;
+        }
+        Rectangle {
+            x: parent.width * 82 / 483; y: parent.height * 19 / 423;
+            width: parent.width * 320 / 483; height: parent.height * 320 / 423;
+            background: CrtHubTheme.accent.mix(#03050a, 0.08);
+        }
+    }
+
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(root.top);
+        text: NavigationView.system-subtitle;
+        text-color: CrtHubTheme.accent;
+    }
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(root.top) + CrtPageMetrics.len-y(16);
+        text: NavigationView.system-title;
+    }
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(root.top) + CrtPageMetrics.len-y(34);
+        text: root.games + " GAMES";
+        text-color: PageTheme.muted;
+    }
+
+    CrtHubTile {
+        x: CrtPageMetrics.px-x(root.left);
+        y: root.section == SystemHubSection.games ? root.tiles-y - 2px : root.tiles-y;
+        width: root.tile-width; height: root.tile-height;
+        label: "GAMES"; count: root.games;
+        focused: root.section == SystemHubSection.games;
+        acknowledged: FeedbackView.acknowledged("system-hub", "games", FeedbackView.revision);
+    }
+    CrtHubTile {
+        x: CrtPageMetrics.px-x(root.left) + root.tile-width + root.tile-gap;
+        y: root.section == SystemHubSection.recent ? root.tiles-y - 2px : root.tiles-y;
+        width: root.tile-width; height: root.tile-height;
+        label: "RECENT"; count: root.recent;
+        focused: root.section == SystemHubSection.recent;
+        acknowledged: FeedbackView.acknowledged("system-hub", "recent", FeedbackView.revision);
+    }
+    CrtHubTile {
+        x: CrtPageMetrics.px-x(root.left) + 2 * (root.tile-width + root.tile-gap);
+        y: root.section == SystemHubSection.favourites ? root.tiles-y - 2px : root.tiles-y;
+        width: root.tile-width; height: root.tile-height;
+        label: "FAVOURITES"; count: root.favourites;
+        focused: root.section == SystemHubSection.favourites;
+        acknowledged: FeedbackView.acknowledged("system-hub", "favorites", FeedbackView.revision);
+    }
+    Spleen6x12 {
+        x: CrtPageMetrics.px-x(root.left);
+        y: root.tiles-y + root.tile-height + CrtPageMetrics.len-y(8);
+        width: root.column-width;
+        text: NavigationView.system-hub-caption;
+        color: #c9c3b3;
+        overflow: elide;
+        size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
+    }
 }

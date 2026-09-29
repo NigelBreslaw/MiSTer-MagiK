@@ -281,6 +281,7 @@ fn data(selected: usize) -> LauncherData<'static> {
         collections: 18,
         favourites: 126,
         clock: "21:37",
+        level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
     }
 }
 fn moving(selected: usize, direction: BrowseDirection, progress: u32) -> BrowseFrame {

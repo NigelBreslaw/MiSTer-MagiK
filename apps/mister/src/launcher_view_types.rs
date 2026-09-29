@@ -64,12 +64,21 @@ pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
     }
 }
 
+pub const fn device_kind(kind: Option<crate::device_art::DeviceKind>) -> view::DeviceKind {
+    use crate::device_art::DeviceKind;
+    match kind {
+        None => view::DeviceKind::Cabinet,
+        Some(DeviceKind::Tv) => view::DeviceKind::Tv,
+        Some(DeviceKind::Monitor) => view::DeviceKind::Monitor,
+        Some(DeviceKind::Handheld) => view::DeviceKind::Handheld,
+    }
+}
+
 pub const fn system_hub_section(index: usize) -> view::SystemHubSection {
     match index {
         0 => view::SystemHubSection::Games,
         1 => view::SystemHubSection::Recent,
         2 => view::SystemHubSection::Favourites,
-        3 => view::SystemHubSection::Information,
         _ => panic!("system hub selection is outside its finite domain"),
     }
 }
@@ -218,7 +227,6 @@ mod tests {
             launcher_screen(Screen::SystemHub),
             view::LauncherScreen::SystemHub
         );
-        assert_eq!(system_hub_section(3), view::SystemHubSection::Information);
         assert_eq!(menu_hierarchy(true), view::MenuHierarchy::Root);
         assert_eq!(menu_hierarchy(false), view::MenuHierarchy::Nested);
         assert_eq!(

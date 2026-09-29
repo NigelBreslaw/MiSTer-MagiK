@@ -11,6 +11,208 @@ struct Raster {
     reflection: Vec<Rgb565Pixel>,
     opaque: Vec<(u16, u16)>,
 }
+type NativeEntry = (
+    (LauncherCardId, u16, usize, usize, bool),
+    (Vec<Rgb565Pixel>, Vec<u8>),
+);
+
+/// Card bodies that do not depend on the label, shared by every generic card
+/// of a level. Drawing a body costs a 16-sample antialiased pass over every
+/// pixel; on the device that is most of a level change, so it runs once per
+/// distinct body rather than once per card and face.
+#[derive(Default)]
+pub(super) struct BodyCache {
+    surfaces: Vec<((LauncherCardId, u16, bool), Vec<Rgb565Pixel>)>,
+    backs: Vec<((LauncherCardId, u16), Vec<Rgb565Pixel>)>,
+    native: Vec<NativeEntry>,
+}
+
+/// Generic cards have a reverse side: the MagiK back, in the card's colour.
+/// Cards with approved artwork are not generic and have none.
+pub(super) fn has_back(card: &PreparedCard<'_>) -> bool {
+    category_icon(card.id).is_some() && card.artwork.is_none() && card.rgb888.is_none()
+}
+
+impl BodyCache {
+    /// The 180x252 MagiK back for a generic card's colour.
+    fn back(&mut self, card: &PreparedCard<'_>) -> &[Rgb565Pixel] {
+        let key = (card.id, card.colour);
+        let index = match self.backs.iter().position(|(k, _)| *k == key) {
+            Some(index) => index,
+            None => {
+                self.backs.push((key, back_surface(card)));
+                self.backs.len() - 1
+            }
+        };
+        &self.backs[index].1
+    }
+
+    fn surface(&mut self, card: &PreparedCard<'_>, detail: bool) -> &[Rgb565Pixel] {
+        let key = (card.id, card.colour, detail);
+        let index = match self.surfaces.iter().position(|(k, _)| *k == key) {
+            Some(index) => index,
+            None => {
+                self.surfaces
+                    .push((key, surface(card, 180, detail, None, false)));
+                self.surfaces.len() - 1
+            }
+        };
+        &self.surfaces[index].1
+    }
+
+    /// A native-size face: the front, or with `back` the MagiK reverse.
+    pub(super) fn native(
+        &mut self,
+        card: &PreparedCard<'_>,
+        width: usize,
+        height: usize,
+        back: bool,
+    ) -> (Vec<Rgb565Pixel>, Vec<u8>) {
+        if card.artwork.is_some() || card.rgb888.is_some() {
+            return native_surface(card, width, height, None);
+        }
+        let key = (card.id, card.colour, width, height, back);
+        if let Some((_, cached)) = self.native.iter().find(|(k, _)| *k == key) {
+            return cached.clone();
+        }
+        let made = if back {
+            let source = self.back(card).to_vec();
+            native_surface(card, width, height, Some(&source))
+        } else {
+            native_surface(card, width, height, None)
+        };
+        self.native.push((key, made.clone()));
+        made
+    }
+
+    /// The HDMI landscape back face, when the card has one.
+    pub(super) fn back_face(
+        &mut self,
+        card: &PreparedCard<'_>,
+    ) -> Option<crate::launcher_flip::Face> {
+        has_back(card).then(|| {
+            crate::launcher_flip::Face::new(self.back(card).to_vec(), 180, card_height(180))
+        })
+    }
+}
+
+/// The MagiK back: the card's frame around a dark crosshatch, with the M
+/// emblem in a diamond. Drawn over a generic card's own surface so the frame,
+/// corners and silhouette match its front exactly.
+fn back_surface(card: &PreparedCard<'_>) -> Vec<Rgb565Pixel> {
+    const W: usize = 180;
+    let height = card_height(W);
+    let mut pixels = surface(card, W, false, None, false);
+    let base = mix_colour(rgb(5, 8, 13), card.colour, 34);
+    let line = mix_colour(base, card.colour, 70);
+    let (cx, cy) = (W as i64 / 2, height as i64 / 2);
+    let m = glyph('M');
+    for y in 0..height {
+        for x in 0..W {
+            if !rounded_contains(x, y, W, height)
+                || !inside_inset(x * 8 + 4, y * 8 + 4, W, height, 8)
+            {
+                continue;
+            }
+            let (dx, dy) = ((x as i64 - cx).abs(), (y as i64 - cy).abs());
+            let mut colour = if (x + y).is_multiple_of(14) || (x + 2 * W - y).is_multiple_of(14) {
+                line
+            } else {
+                base
+            };
+            let diamond = dx + dy;
+            if diamond <= 46 {
+                colour = if diamond >= 42 {
+                    card.colour
+                } else {
+                    rgb(4, 6, 10)
+                };
+            }
+            // The M: a 5x7 glyph at 7x, centred in the diamond.
+            let (gx, gy) = (x as i64 - (cx - 17), y as i64 - (cy - 24));
+            if diamond < 42 && (0..35).contains(&gx) && (0..49).contains(&gy) {
+                let (col, row) = ((gx / 7) as usize, (gy / 7) as usize);
+                if m[row] & (1 << (4 - col)) != 0 {
+                    colour = CREAM;
+                }
+            }
+            pixels[y * W + x] = Rgb565Pixel(colour);
+        }
+    }
+    pixels
+}
+
+/// The card's title, and its game count on the focused face, in the
+/// production fonts. `stride` x `rows` is the pixel buffer being drawn into and
+/// `width` x `height` the card inside it. A title too wide for the card drops
+/// to the smaller metadata font rather than being clipped.
+#[allow(clippy::too_many_arguments)]
+fn draw_card_labels(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    rows: usize,
+    card: &PreparedCard<'_>,
+    width: usize,
+    height: usize,
+    detail: bool,
+    fonts: LauncherTypography<'_>,
+) {
+    let heading = fonts.font_for(TextRole::Heading, card.name);
+    let title = if heading.measure(card.name) + 12 <= width {
+        heading
+    } else {
+        fonts.font_for(TextRole::Metadata, card.name)
+    };
+    title.draw_centered(
+        pixels,
+        stride,
+        rows,
+        (width / 2) as i32,
+        (height * 73 / 100) as i32,
+        card.name,
+        CREAM,
+    );
+    if detail && let Some(game_count) = card.games {
+        let games = format_games(game_count);
+        fonts.font_for(TextRole::Metadata, &games).draw_centered(
+            pixels,
+            stride,
+            rows,
+            (width / 2) as i32,
+            (height * 86 / 100) as i32,
+            &games,
+            CREAM,
+        );
+    }
+}
+
+/// `face`, reusing the label-free body when the card has no artwork and the
+/// production fonts draw the labels.
+pub(super) fn face_cached(
+    card: &PreparedCard<'_>,
+    width: usize,
+    detail: bool,
+    typography: Option<LauncherTypography<'_>>,
+    cache: &mut BodyCache,
+) -> crate::launcher_flip::Face {
+    let (Some(fonts), 180, None) = (typography, width, card.artwork) else {
+        return face(card, width, detail, typography);
+    };
+    let height = card_height(width);
+    let mut pixels = cache.surface(card, detail).to_vec();
+    draw_card_labels(
+        &mut pixels,
+        width,
+        height,
+        card,
+        width,
+        height,
+        detail,
+        fonts,
+    );
+    crate::launcher_flip::Face::new(pixels, width, height)
+}
+
 pub(super) fn face(
     card: &PreparedCard<'_>,
     width: usize,
@@ -33,7 +235,10 @@ pub(super) fn surface(
 ) -> Vec<Rgb565Pixel> {
     let height = card_height(width);
     let mut canvas = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
-    let base = if detail {
+    let icon = category_icon(card.id);
+    // Generic collection cards keep one dark tint of the collection colour on
+    // both faces; the count label, not a colour flood, marks the focused card.
+    let base = if detail && icon.is_none() {
         if card.id == LauncherCardId::Arcade {
             rgb(222, 35, 52)
         } else {
@@ -49,7 +254,13 @@ pub(super) fn surface(
             if !rounded_contains(x, y, width, height) {
                 continue;
             }
-            let colour = framed_surface(card, base, trim, width, height, x, y);
+            let mut colour = framed_surface(card, base, trim, width, height, x, y);
+            if icon.is_some()
+                && card.artwork.is_none()
+                && inside_inset(x * 8 + 4, y * 8 + 4, width, height, 8)
+            {
+                colour = lit_body(card.colour, width, height, x, y);
+            }
             canvas[y * LOGICAL_WIDTH + x] = Rgb565Pixel(colour);
         }
     }
@@ -78,6 +289,28 @@ pub(super) fn surface(
                     }
                 }
             }
+        } else if let Some(bits) = icon {
+            // The collection's pixel symbol with a shadow in its own colour.
+            let scale = 5;
+            let left = (width - 16 * scale) / 2;
+            let top = height * 22 / 100;
+            let shadow = mix_colour(card.colour, BACKGROUND, 150);
+            for (offset, colour) in [(3, shadow), (0, ink)] {
+                for (y, row) in bits.iter().enumerate() {
+                    for x in 0..16 {
+                        if row & (1 << (15 - x)) != 0 {
+                            draw_rect(
+                                &mut canvas,
+                                left + x * scale + offset,
+                                top + y * scale + offset,
+                                scale,
+                                scale,
+                                colour,
+                            );
+                        }
+                    }
+                }
+            }
         } else {
             // A restrained collection monogram for artwork-free consumers.
             let initial = text_mask(&card.name.chars().next().unwrap_or('?').to_string());
@@ -96,27 +329,16 @@ pub(super) fn surface(
     if !labels {
         // Responsive faces add native-size bitmap labels after artwork resampling.
     } else if let Some(fonts) = typography {
-        fonts.font_for(TextRole::Heading, card.name).draw_centered(
+        draw_card_labels(
             &mut canvas,
             LOGICAL_WIDTH,
             LOGICAL_HEIGHT,
-            (width / 2) as i32,
-            (height * 73 / 100) as i32,
-            card.name,
-            ink,
+            card,
+            width,
+            height,
+            detail,
+            fonts,
         );
-        if detail && let Some(game_count) = card.games {
-            let games = format_games(game_count);
-            fonts.font_for(TextRole::Metadata, &games).draw_centered(
-                &mut canvas,
-                LOGICAL_WIDTH,
-                LOGICAL_HEIGHT,
-                (width / 2) as i32,
-                (height * 86 / 100) as i32,
-                &games,
-                ink,
-            );
-        }
     } else {
         let title_scale = ((width - 24) / (card.name_mask.len().max(1) * 6)).clamp(1, 3) * 256;
         draw_mask_scaled_centered(
@@ -147,6 +369,86 @@ pub(super) fn surface(
                 .copied()
         })
         .collect()
+}
+
+/// The interior of a generic card: the collection colour lit from above and
+/// fading to near black, with a soft diagonal sheen. Ordered dithering keeps
+/// the dark gradient from banding in RGB565.
+fn lit_body(colour: u16, width: usize, height: usize, x: usize, y: usize) -> u16 {
+    const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let top = mix_colour(rgb(12, 22, 30), colour, 88);
+    let bottom = mix_colour(rgb(5, 8, 12), colour, 22);
+    let t = (y * 256 / height.max(1)) as u32;
+    let threshold = BAYER[y % 4][x % 4] * 16 + 8;
+    let channel = |shift: u32, bits: u32| {
+        let mask = (1_u16 << bits) - 1;
+        let a = u32::from((top >> shift) & mask);
+        let b = u32::from((bottom >> shift) & mask);
+        (((a * (256 - t) + b * t) * 256 / 256 + threshold) / 256).min(u32::from(mask)) as u16
+    };
+    let lit = (channel(11, 5) << 11) | (channel(5, 6) << 5) | channel(0, 5);
+    // Sheen: a diagonal band, as on the flat cards.
+    if x * 2 + y > width * 2 && x * 2 + y < width * 5 / 2 {
+        mix_colour(lit, CREAM, 22)
+    } else {
+        lit
+    }
+}
+
+/// 16-pixel-wide symbols for generic cards below the Consoles, Computers and
+/// Handhelds root cards. Every group and system in a collection shares one.
+fn category_icon(id: LauncherCardId) -> Option<&'static [u16]> {
+    const GAMEPAD: [u16; 10] = [
+        0b0011111111111100,
+        0b0111111111111110,
+        0b1110111111111011,
+        0b1100011111110101,
+        0b1110111111111011,
+        0b1111111111111111,
+        0b1111110000111111,
+        0b1111100000011111,
+        0b0111000000001110,
+        0b0010000000000100,
+    ];
+    const COMPUTER: [u16; 14] = [
+        0b0111111111111110,
+        0b0100000000000010,
+        0b0101111111111010,
+        0b0101000000001010,
+        0b0101000000001010,
+        0b0101111111111010,
+        0b0100000000000010,
+        0b0111111111111110,
+        0b0000001111000000,
+        0b0000111111110000,
+        0b0000000000000000,
+        0b1111111111111111,
+        0b1010101010101011,
+        0b1111111111111111,
+    ];
+    const HANDHELD: [u16; 15] = [
+        0b0001111111111000,
+        0b0001000000001000,
+        0b0001011111101000,
+        0b0001010000101000,
+        0b0001010000101000,
+        0b0001010000101000,
+        0b0001011111101000,
+        0b0001000000001000,
+        0b0001001000001000,
+        0b0001011100011000,
+        0b0001001000011000,
+        0b0001000000001000,
+        0b0001000011001000,
+        0b0001000000001000,
+        0b0001111111111000,
+    ];
+    match id {
+        LauncherCardId::Consoles => Some(&GAMEPAD),
+        LauncherCardId::Computers => Some(&COMPUTER),
+        LauncherCardId::Handhelds => Some(&HANDHELD),
+        _ => None,
+    }
 }
 
 // Eighth-pixel coordinates for preparation-only 4x4 coverage sampling.
@@ -346,12 +648,15 @@ pub(super) fn native_surface(
     card: &PreparedCard<'_>,
     width: usize,
     height: usize,
+    source_override: Option<&[Rgb565Pixel]>,
 ) -> (Vec<Rgb565Pixel>, Vec<u8>) {
     let fallback;
     let (source_w, source_h, rgb888, rgb565) = if let Some(rgb) = card.rgb888 {
         (360, 504, Some(rgb), None)
     } else {
-        let pixels = if let Some(rgb) = card.artwork {
+        let pixels = if let Some(rgb) = source_override {
+            rgb
+        } else if let Some(rgb) = card.artwork {
             rgb
         } else {
             fallback = surface(card, 180, true, None, false);
@@ -516,7 +821,7 @@ mod tests {
         let source = vec![128; 360 * 504 * 3];
         card.rgb888 = Some(&source);
         for (w, h) in [(160, 112), (72, 200), (160, 134)] {
-            let (pixels, alpha) = native_surface(&card, w, h);
+            let (pixels, alpha) = native_surface(&card, w, h, None);
             assert_eq!(alpha[0], 0);
             assert_eq!(alpha[w / 2], 255);
             assert_eq!(pixels[w / 2].0, mix_colour(card.colour, CREAM, 48));
@@ -589,7 +894,7 @@ mod tests {
         let card = test_card(0x2c92);
         for detail in [false, true] {
             let face = face(&card, 180, detail, None);
-            let base = if detail {
+            let base = if detail && category_icon(card.id).is_none() {
                 card.colour
             } else {
                 mix_colour(rgb(12, 22, 30), card.colour, 44)
@@ -598,10 +903,14 @@ mod tests {
             for (xs, ys) in [(12..30, 14..22), (70..112, 230..235), (80..100, 0..8)] {
                 for y in ys {
                     for x in xs.clone() {
-                        assert_eq!(
-                            face.pixels[y * 180 + x].0,
+                        let expected = if category_icon(card.id).is_some()
+                            && inside_inset(x * 8 + 4, y * 8 + 4, 180, 252, 8)
+                        {
+                            lit_body(card.colour, 180, 252, x, y)
+                        } else {
                             framed_surface(&card, base, trim, 180, 252, x, y)
-                        );
+                        };
+                        assert_eq!(face.pixels[y * 180 + x].0, expected);
                     }
                 }
             }

@@ -11,8 +11,10 @@ use crate::Rgb565Pixel;
 use crate::bitmap_text::BitmapFont;
 use std::sync::Arc;
 mod artwork;
+mod level_trick;
 mod responsive;
 use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
+pub use level_trick::{LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LevelChange};
 
 pub const LOGICAL_WIDTH: usize = 960;
 pub const LOGICAL_HEIGHT: usize = 540;
@@ -43,6 +45,53 @@ pub struct LauncherData<'a> {
     pub collections: u32,
     pub favourites: u32,
     pub clock: &'a str,
+    pub level: LauncherLevel<'a>,
+}
+
+/// The hierarchy level shown by the carousel. The root cycles its six cards
+/// and describes the whole library; nested levels browse linearly, show their
+/// path in the header, and describe the group the viewer is in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LauncherLevel<'a> {
+    Root,
+    Nested(NestedLevel<'a>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NestedLevel<'a> {
+    /// Group names from the first level below the root to this group,
+    /// for example `["CONSOLES", "NINTENDO"]`.
+    pub path: &'a [&'a str],
+    pub games: u32,
+    pub children: u32,
+    /// Plural noun for the cards on this level, for example `MAKERS`.
+    pub children_label: &'a str,
+    /// A second figure for the group, for example `(17, "SYSTEMS")`.
+    pub detail: Option<(u32, &'a str)>,
+    /// The collection colour carried by every card below its root card.
+    pub accent: u16,
+}
+
+/// A nested level cycles like the root once it has enough cards to fill the
+/// carousel without showing any card twice; smaller levels stop at their ends.
+pub const CYCLIC_LEVEL_MIN_CARDS: usize = 5;
+
+impl LauncherLevel<'_> {
+    /// The root always cycles; a nested level cycles when it is large enough.
+    #[must_use]
+    pub const fn cyclic(&self) -> bool {
+        match self {
+            Self::Root => true,
+            Self::Nested(level) => level.children as usize >= CYCLIC_LEVEL_MIN_CARDS,
+        }
+    }
+
+    /// Nested levels slide their cards; only the end cards flip. The root
+    /// keeps its flipping selection.
+    #[must_use]
+    pub const fn slides(&self) -> bool {
+        matches!(self, Self::Nested(_))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -236,6 +285,10 @@ pub struct PreparedLauncher {
     scene: LauncherScene,
     responsive: Option<responsive::Layout>,
     logical: Vec<Rgb565Pixel>,
+    /// Pristine static chrome. Level transitions fade between two levels'
+    /// chrome without re-rendering text in motion.
+    chrome: Vec<Rgb565Pixel>,
+    cyclic: bool,
     fitted: Vec<Rgb565Pixel>,
     faces: Arc<Vec<CardFaces>>,
     flip_columns: Vec<crate::launcher_flip::Scratch>,
@@ -244,6 +297,11 @@ pub struct PreparedLauncher {
 struct CardFaces {
     compact: crate::launcher_flip::Face,
     detail: crate::launcher_flip::Face,
+    /// The MagiK reverse of a generic card; `None` for cards with artwork.
+    back: Option<crate::launcher_flip::Face>,
+    /// The level's browse style, shared by all of its faces: cards slide
+    /// between slots and only the end cards flip.
+    slides: bool,
 }
 
 /// Exact state represented by a prepared buffer. Consumers own the clock and
@@ -289,6 +347,7 @@ impl PreparedLauncherFrame {
 #[derive(Clone)]
 pub struct LauncherFramePreparer {
     faces: Arc<Vec<CardFaces>>,
+    cyclic: bool,
 }
 
 impl LauncherFramePreparer {
@@ -376,7 +435,7 @@ impl LauncherFramePreparer {
         const TOP: usize = 120;
         const BOTTOM: usize = 495;
         if !self.faces.is_empty() {
-            let plan = build_carousel_plan(&self.faces, request.frame);
+            let plan = build_carousel_plan(&self.faces, request.frame, self.cyclic);
             let width = crate::launcher_flip::STRIP_WIDTH;
             for left in (clip.0..clip.1).step_by(width) {
                 let right = (left + width).min(clip.1);
@@ -418,7 +477,7 @@ impl LauncherFramePreparer {
             pixels[y * 960 + clip.0..y * 960 + clip.1].fill(Rgb565Pixel(0));
         }
         if !self.faces.is_empty() {
-            let plan = build_carousel_plan(&self.faces, request.frame);
+            let plan = build_carousel_plan(&self.faces, request.frame, self.cyclic);
             // Each screen strip is independent: finish every reflection before
             // its bodies, then reuse the same cache-local scratch for the next.
             let width = crate::launcher_flip::STRIP_WIDTH;
@@ -453,8 +512,9 @@ fn bake_face(
     width: usize,
     selected: bool,
     typography: Option<LauncherTypography<'_>>,
+    cache: &mut artwork::BodyCache,
 ) -> crate::launcher_flip::Face {
-    artwork::face(card, width, selected, typography)
+    artwork::face_cached(card, width, selected, typography, cache)
 }
 
 struct PreparedCard<'a> {
@@ -481,6 +541,7 @@ impl PreparedLauncher {
         } else {
             render_logical(&mut self.logical, data, typography);
         }
+        self.chrome.copy_from_slice(&self.logical);
         self.fit_output();
     }
 
@@ -502,6 +563,7 @@ impl PreparedLauncher {
     pub fn frame_preparer(&self) -> LauncherFramePreparer {
         LauncherFramePreparer {
             faces: self.faces.clone(),
+            cyclic: self.cyclic,
         }
     }
     /// Owned raster-buffer capacity, excluding strings and small metadata.
@@ -567,14 +629,17 @@ impl PreparedLauncher {
         } else {
             render_logical(&mut chrome, data, typography);
         }
+        let mut bodies = artwork::BodyCache::default();
         let faces: Vec<_> = cards
             .map(|card| {
                 if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
-                    layout.faces(&card, fonts)
+                    layout.faces(&card, fonts, &mut bodies, data.level.slides())
                 } else {
                     CardFaces {
-                        compact: bake_face(&card, 180, false, typography),
-                        detail: bake_face(&card, 180, true, typography),
+                        compact: bake_face(&card, 180, false, typography, &mut bodies),
+                        detail: bake_face(&card, 180, true, typography, &mut bodies),
+                        back: bodies.back_face(&card),
+                        slides: data.level.slides(),
                     }
                 }
             })
@@ -582,6 +647,8 @@ impl PreparedLauncher {
         Self {
             scene,
             responsive,
+            chrome: chrome.clone(),
+            cyclic: data.level.cyclic(),
             logical: chrome,
             fitted: if responsive.is_some()
                 || (scene.width == LOGICAL_WIDTH && scene.height == LOGICAL_HEIGHT)
@@ -620,6 +687,7 @@ impl PreparedLauncher {
                 &mut self.logical,
                 &self.faces,
                 frame,
+                self.cyclic,
                 &mut self.flip_columns,
             );
             return;
@@ -642,7 +710,7 @@ impl PreparedLauncher {
             self.fit_output();
             return;
         }
-        let plan = build_carousel_plan(&self.faces, frame);
+        let plan = build_carousel_plan(&self.faces, frame, self.cyclic);
         for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
             draw_carousel_plan(
                 &mut self.logical,
@@ -740,16 +808,20 @@ fn render_logical(
     typography: Option<LauncherTypography<'_>>,
 ) {
     draw_rect(pixels, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT, BACKGROUND);
-    draw_role_text(
-        pixels,
-        typography,
-        TextRole::Heading,
-        26,
-        20,
-        "MISTER MAGIK",
-        CREAM,
-        3,
-    );
+    if let LauncherLevel::Nested(level) = data.level {
+        draw_breadcrumb(pixels, typography, level.path);
+    } else {
+        draw_role_text(
+            pixels,
+            typography,
+            TextRole::Heading,
+            26,
+            20,
+            "MISTER MAGIK",
+            CREAM,
+            3,
+        );
+    }
     draw_role_text(
         pixels,
         typography,
@@ -763,6 +835,64 @@ fn render_logical(
     draw_line(pixels, 26, 76, 934, 76, RULE);
 
     draw_line(pixels, 265, 95, 265, 478, RULE);
+    let section = match data.level {
+        LauncherLevel::Root => {
+            draw_library_sidebar(pixels, data, typography);
+            "COLLECTIONS"
+        }
+        LauncherLevel::Nested(level) => {
+            draw_group_sidebar(pixels, level, typography);
+            level.children_label
+        }
+    };
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        296,
+        101,
+        section,
+        MUTED,
+        1,
+    );
+    draw_line(pixels, 26, 500, 934, 500, RULE);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        30,
+        516,
+        "A  OPEN",
+        CREAM,
+        1,
+    );
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        130,
+        516,
+        "B  BACK",
+        CREAM,
+        1,
+    );
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        586,
+        516,
+        "←  →   BROWSE CARDS",
+        CREAM,
+        1,
+    );
+}
+
+fn draw_library_sidebar(
+    pixels: &mut [Rgb565Pixel],
+    data: LauncherData<'_>,
+    typography: Option<LauncherTypography<'_>>,
+) {
     draw_role_text(
         pixels,
         typography,
@@ -819,48 +949,115 @@ fn render_logical(
     {
         draw_rect(pixels, 29 + index * 54, 436, 48, 7, *colour);
     }
+}
 
+/// Nested levels describe the group the viewer is in, in the same places the
+/// root describes the whole library.
+fn draw_group_sidebar(
+    pixels: &mut [Rgb565Pixel],
+    level: NestedLevel<'_>,
+    typography: Option<LauncherTypography<'_>>,
+) {
+    let name = level.path.last().copied().unwrap_or("");
     draw_role_text(
         pixels,
         typography,
         TextRole::Metadata,
-        296,
+        29,
         101,
-        "COLLECTIONS",
+        name,
         MUTED,
         1,
     );
-    draw_line(pixels, 26, 500, 934, 500, RULE);
+    draw_role_number(pixels, typography, 28, 142, level.games, CREAM, 5);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        29,
+        205,
+        "GAMES READY TO PLAY",
+        MUTED,
+        1,
+    );
+    draw_line(pixels, 28, 239, 240, 239, RULE);
+    draw_role_number(pixels, typography, 30, 265, level.children, CREAM, 3);
+    if let Some((value, _)) = level.detail {
+        draw_role_number(pixels, typography, 150, 265, value, CREAM, 3);
+    }
     draw_role_text(
         pixels,
         typography,
         TextRole::Metadata,
         30,
-        516,
-        "A  OPEN",
-        CREAM,
+        310,
+        level.children_label,
+        MUTED,
         1,
     );
-    draw_role_text(
-        pixels,
-        typography,
-        TextRole::Metadata,
-        130,
-        516,
-        "B  BACK",
-        CREAM,
-        1,
-    );
-    draw_role_text(
-        pixels,
-        typography,
-        TextRole::Metadata,
-        586,
-        516,
-        "←  →   BROWSE CARDS",
-        CREAM,
-        1,
-    );
+    if let Some((_, label)) = level.detail {
+        draw_role_text(
+            pixels,
+            typography,
+            TextRole::Metadata,
+            150,
+            310,
+            label,
+            MUTED,
+            1,
+        );
+    }
+    draw_line(pixels, 28, 340, 240, 340, RULE);
+    draw_rect(pixels, 29, 436, 210, 7, level.accent);
+}
+
+/// `CONSOLES / NINTENDO`: ancestors muted, the current group in cream.
+fn draw_breadcrumb(
+    pixels: &mut [Rgb565Pixel],
+    typography: Option<LauncherTypography<'_>>,
+    path: &[&str],
+) {
+    let mut x = 26;
+    for (index, name) in path.iter().enumerate() {
+        let last = index + 1 == path.len();
+        let colour = if last { CREAM } else { MUTED };
+        draw_role_text(
+            pixels,
+            typography,
+            TextRole::Heading,
+            x,
+            20,
+            name,
+            colour,
+            3,
+        );
+        x += role_text_width(typography, TextRole::Heading, name, 3);
+        if !last {
+            let separator = " / ";
+            draw_role_text(
+                pixels,
+                typography,
+                TextRole::Heading,
+                x,
+                20,
+                separator,
+                MUTED,
+                3,
+            );
+            x += role_text_width(typography, TextRole::Heading, separator, 3);
+        }
+    }
+}
+
+fn role_text_width(
+    typography: Option<LauncherTypography<'_>>,
+    role: TextRole,
+    text: &str,
+    legacy_scale: usize,
+) -> usize {
+    typography.map_or(text.chars().count() * 6 * legacy_scale, |fonts| {
+        fonts.font_for(role, text).measure(text)
+    })
 }
 
 const GEOMETRY_ONE: i64 = 65536;
@@ -913,6 +1110,10 @@ fn ease_in_out_sine(progress: i64) -> i64 {
     (GEOMETRY_ONE - cosine) / 2
 }
 
+/// How far an end card turns as it leaves or enters a sliding level: 150
+/// degrees, so a generic card shows its MagiK back before it is gone.
+const SLIDE_FLIP: i64 = GEOMETRY_ONE * 5 / 6;
+
 fn flip_spin(right: bool) -> i64 {
     if right { -1 } else { 1 }
 }
@@ -928,7 +1129,11 @@ struct CarouselPlan<'a> {
     items: [Option<CarouselItem<'a>>; 6],
 }
 
-fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> CarouselPlan<'a> {
+fn build_carousel_plan<'a>(
+    faces: &'a [CardFaces],
+    mut motion: BrowseFrame,
+    cyclic: bool,
+) -> CarouselPlan<'a> {
     let settled = motion.phase == crate::launcher_navigation::BrowsePhase::Settled;
     if !settled && (motion.progress_millis == 0 || motion.progress_millis >= motion.duration_millis)
     {
@@ -947,6 +1152,7 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
         smooth_progress(motion.progress_millis, motion.duration_millis)
     };
     let right = motion.direction == Some(BrowseDirection::Right);
+    let slide = faces.first().is_some_and(|face| face.slides);
     let relatives: &[isize] = if settled {
         &[2, -2, 1, -1, 0]
     } else if progress * 2 > GEOMETRY_ONE {
@@ -962,7 +1168,11 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
     };
     let mut items = [None; 6];
     for (slot, relative) in relatives.iter().enumerate() {
-        let index = (selected as isize + *relative).rem_euclid(faces.len() as isize) as usize;
+        let position = selected as isize + *relative;
+        if !cyclic && (position < 0 || position >= faces.len() as isize) {
+            continue;
+        }
+        let index = position.rem_euclid(faces.len() as isize) as usize;
         let destination = if settled {
             *relative
         } else if right {
@@ -992,11 +1202,31 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
             0
         };
         let incoming = destination == 0 && *relative != 0;
-        let flipping_card = (incoming || *relative == 0)
+        // Sliding levels never flip the selection. The card leaving through
+        // one end turns away, and the card entering at the other end turns
+        // in, showing its MagiK back part of the way.
+        let in_motion = !settled && progress > 0 && progress < GEOMETRY_ONE;
+        let leaving = slide && in_motion && relative.abs() == 2 && destination.abs() == 3;
+        let entering = slide && in_motion && relative.abs() == 3 && destination.abs() == 2;
+        let flipping_card = !slide
+            && (incoming || *relative == 0)
             && progress > 0
             && progress < GEOMETRY_ONE
             && motion.phase == crate::launcher_navigation::BrowsePhase::Flipping;
-        let (face, blend) = if flipping_card {
+        let (face, blend) = if leaving || entering {
+            let turn = if leaving {
+                progress
+            } else {
+                progress - GEOMETRY_ONE
+            };
+            let extra = flip_spin(right) * SLIDE_FLIP * turn / GEOMETRY_ONE;
+            pose.angle += extra;
+            let face = match &faces[index].back {
+                Some(back) if extra.abs() > GEOMETRY_ONE / 2 => back,
+                _ => &faces[index].compact,
+            };
+            (face, None)
+        } else if flipping_card {
             let outgoing = *relative == 0;
             let angle = pose.angle + flip_spin(right) * ease_in_out_sine(progress);
             let (_, cos) = crate::launcher_flip::sin_cos(angle);
@@ -1423,6 +1653,7 @@ mod tests {
             collections: 18,
             favourites: 126,
             clock: "21:37",
+            level: LauncherLevel::Root,
         }
     }
 
@@ -1794,7 +2025,7 @@ mod tests {
                     progress_millis: step,
                     duration_millis: units,
                 };
-                let plan = build_carousel_plan(&prepared.faces, motion);
+                let plan = build_carousel_plan(&prepared.faces, motion, true);
                 let (outgoing_slot, incoming_slot) = if step > units / 2 { (4, 5) } else { (5, 4) };
                 let outgoing = plan.items[outgoing_slot].expect("outgoing card");
                 let incoming = plan.items[incoming_slot].expect("incoming card");
@@ -1822,6 +2053,7 @@ mod tests {
                     progress_millis: units,
                     duration_millis: units,
                 },
+                true,
             );
             assert_eq!(settled.items[4].expect("settled top card").pose.angle, 0);
         }
@@ -1843,6 +2075,7 @@ mod tests {
                         progress_millis: progress,
                         duration_millis: units,
                     },
+                    true,
                 );
                 let mut reflections = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
                 let mut reflection_scratch: Vec<_> = (0..6)

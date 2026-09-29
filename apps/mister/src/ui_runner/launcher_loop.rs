@@ -1009,9 +1009,19 @@ fn configure_arcade_list_renderer_geometry(
 fn navigation_transition_for_intent(
     nav: &LauncherNav,
     event: &launcher::LauncherEvent,
+    card_levels: bool,
 ) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
     use crate::launcher_taxonomy::ROOT_MENU_ID;
 
+    // The card launcher plays its own level trick between Home levels.
+    let home_level_change = nav.screen == Screen::Home
+        && matches!(
+            event.action,
+            LauncherAction::OpenMenu | LauncherAction::NavigateBack | LauncherAction::NavigateHome
+        );
+    if card_levels && home_level_change {
+        return None;
+    }
     match event.action {
         LauncherAction::OpenMenu => Some((
             NavigationTransitionEdge::HomeToConsoles,
@@ -1287,9 +1297,8 @@ fn commit_pending_collection_entry(
     if !nav.activate_collection(catalog, &entry.collection_id) {
         return false;
     }
-    if entry.open_game_list_directly && nav.screen == Screen::SystemHub {
-        nav.set_arcade_user_list_mode(catalog, launcher::ArcadeUserListMode::Games);
-        nav.screen = Screen::Arcade;
+    if entry.open_game_list_directly {
+        nav.skip_system_page(catalog);
     }
     print_startup_event(
         start,
@@ -5944,11 +5953,15 @@ pub(super) fn run_launcher_loop(
     }
     nav.set_arcade_exit_locked(return_capsule_active);
     apply_home_selected(&mut nav, &catalog, benchmark_config.home_selected(), start);
-    let initial_home_snapshot =
-        crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog);
+    crate::device_art::warm_in_background();
+    // One snapshot of the visible card level, rebuilt only when it no longer
+    // matches navigation so the render loop does not allocate labels per frame.
+    let mut card_level = crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
+    // The level and card the neighbours were last prepared for.
+    let mut card_prefetch_key: (String, usize) = (String::new(), usize::MAX);
     let mut launcher_card_home = match super::launcher_card_home::LauncherCardHomeSession::new(
         super::launcher_card_home::scene_for_display(ui, layout),
-        initial_home_snapshot,
+        card_level.clone(),
         nav.selected,
         &last_clock_text,
     ) {
@@ -7625,6 +7638,9 @@ pub(super) fn run_launcher_loop(
                     let card_home_animating = launcher_card_home.as_ref().is_some_and(
                         super::launcher_card_home::LauncherCardHomeSession::is_animating,
                     );
+                    let level_trick_active = launcher_card_home.as_ref().is_some_and(
+                        super::launcher_card_home::LauncherCardHomeSession::is_level_trick_active,
+                    );
                     let deferred_settings_event =
                         deferred_settings_activation.take_when_settled(card_home_animating);
                     let focus = launcher_input_focus(
@@ -7637,7 +7653,8 @@ pub(super) fn run_launcher_loop(
                         navigation_transition.is_active()
                             || orientation_transition.is_active()
                             || full_screen_transition.state() != FullScreenTransitionState::Live
-                            || deferred_settings_activation.is_pending(),
+                            || deferred_settings_activation.is_pending()
+                            || level_trick_active,
                         &nav,
                     );
                     input_router.set_focus(focus);
@@ -8125,8 +8142,11 @@ pub(super) fn run_launcher_loop(
                                             }
                                         }
 
-                                        let transition_spec =
-                                            navigation_transition_for_intent(&nav, &event);
+                                        let transition_spec = navigation_transition_for_intent(
+                                            &nav,
+                                            &event,
+                                            launcher_card_home.is_some(),
+                                        );
                                         if transition_spec.is_some()
                                             && nav.screen == Screen::Arcade
                                             && !crt_layout
@@ -9474,9 +9494,8 @@ pub(super) fn run_launcher_loop(
         } else {
             AutomationFrameStamp::default()
         };
-        let custom_home_active = launcher_card_home.is_some()
-            && nav.screen == Screen::Home
-            && nav.current_menu_id() == crate::launcher_taxonomy::ROOT_MENU_ID;
+        // Every Home level is the Rust card launcher, not only the root.
+        let custom_home_active = launcher_card_home.is_some() && nav.screen == Screen::Home;
         app.global::<slint_ui::launcher::MisterUi>()
             .set_custom_home_base(custom_home_active);
         if custom_home_active {
@@ -9488,14 +9507,35 @@ pub(super) fn run_launcher_loop(
                 let (predicted_selected, predicted_visual_index) =
                     nav.home_card_visual_prediction(prediction_time);
                 session.set_target_vblank(pacer.hits().saturating_add(2));
+                if !card_level.matches_runtime(&nav, &catalog) {
+                    card_level =
+                        crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
+                }
                 session.update(
                     super::launcher_card_home::scene_for_display(ui, layout),
-                    crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog),
+                    &card_level,
                     predicted_selected,
                     predicted_visual_index,
                     &last_clock_text,
                     loop_start.duration_since(run_start).as_millis() as u64,
+                    !nav.settings.reduce_motion,
                 );
+                // Idle on a card: prepare the level it opens and the parent, so
+                // the level trick never waits on preparation.
+                if !session.is_animating()
+                    && (card_prefetch_key.0 != nav.current_menu_id()
+                        || card_prefetch_key.1 != nav.selected)
+                {
+                    card_prefetch_key = (nav.current_menu_id().to_owned(), nav.selected);
+                    let levels = [nav.selected_child_menu_id(), nav.parent_menu_id()]
+                        .into_iter()
+                        .flatten()
+                        .map(|id| {
+                            crate::launcher_home::CardLevelSnapshot::for_menu(&nav, &catalog, id)
+                        })
+                        .collect();
+                    session.prefetch(levels);
+                }
             }
         } else if let Some(session) = launcher_card_home.as_mut() {
             session.set_inactive();
@@ -14612,7 +14652,7 @@ fn apply_start_system_from_env(
     system_id: &str,
     forced_arcade_selected: Option<usize>,
 ) -> bool {
-    if !nav.open_system(catalog, system_id) {
+    if !nav.open_system_game_list(catalog, system_id) {
         return false;
     }
     nav.arcade_filter.drawer_open = false;
@@ -16296,7 +16336,7 @@ mod tests {
             .handle_action_with_navigation_intents(&event, now, &catalog)
             .expect("Arcade Back should produce a navigation intent");
         assert_eq!(navigation.action, LauncherAction::NavigateBack);
-        assert!(navigation_transition_for_intent(&nav, &navigation).is_some());
+        assert!(navigation_transition_for_intent(&nav, &navigation, false).is_some());
         assert!(nav.commit_navigation_intent(&navigation, &catalog));
         let destination_screen = nav.screen;
         assert_ne!(destination_screen, Screen::Arcade);
@@ -16828,7 +16868,7 @@ mod tests {
     fn pending_launch_return_deduplicates_a_second_registry_shard_request() {
         let full_catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&full_catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&full_catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &full_catalog,
@@ -16926,7 +16966,7 @@ mod tests {
             vec![arcade_system("c64", 3)],
         );
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&catalog, "c64"));
         launched_nav
             .arcade
             .restore_position(2, 2 * launched_nav.arcade.row_height(), 3);
@@ -17082,7 +17122,7 @@ mod tests {
     fn return_session_timeout_explicitly_falls_back_to_root_home() {
         let catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &catalog,
@@ -17108,7 +17148,7 @@ mod tests {
     fn return_preview_timeout_falls_back_even_when_exact_context_was_restored() {
         let catalog = catalog_for_media_systems(&["c64"]);
         let mut nav = LauncherNav::new();
-        assert!(nav.open_system(&catalog, "c64"));
+        assert!(nav.open_system_game_list(&catalog, "c64"));
         let state =
             launcher::capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/c64.mra")
                 .expect("return state");
@@ -17130,7 +17170,7 @@ mod tests {
     fn rejected_capsule_restores_from_the_urgent_system_shard() {
         let full_catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&full_catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&full_catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &full_catalog,
@@ -17153,7 +17193,7 @@ mod tests {
     fn rejected_capsule_restores_immediately_from_validated_registry_rows() {
         let catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&catalog, "c64"));
+        assert!(launched_nav.open_system_game_list(&catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &catalog,
@@ -17448,11 +17488,15 @@ mod tests {
             &hydrated,
             Instant::now()
         ));
-        assert_eq!(nav.screen, Screen::Arcade);
+        // Every console, computer and handheld opens its own page first.
+        assert_eq!(nav.screen, Screen::SystemHub);
         assert!(pending.is_none());
         assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
         assert!(!empty_collection_invariant_violated(&hydrated, &nav));
-        assert_eq!(LauncherProjectionKey::from_nav(&nav).screen, Screen::Arcade);
+        assert_eq!(
+            LauncherProjectionKey::from_nav(&nav).screen,
+            Screen::SystemHub
+        );
     }
 
     #[test]
@@ -17561,7 +17605,7 @@ mod tests {
             vec![crate::test_support::arcade_system("c64", 18_851)],
         );
         let mut nav = LauncherNav::new();
-        assert!(nav.open_system(&catalog, "c64"));
+        assert!(nav.open_system_game_list(&catalog, "c64"));
 
         assert!(empty_collection_invariant_violated(&catalog, &nav));
         nav.recover_empty_collection_to_home();

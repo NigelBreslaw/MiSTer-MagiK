@@ -100,9 +100,3 @@ class CandidateFixture:
         self.candidate.rmdir()
         prepare.prepare(self.root / "assets", self.candidate)
         return self.candidate
-
-    def artwork(self):
-        return {
-            name: hashlib.sha256((self.stage / name).read_bytes()).hexdigest()
-            for name in dist.ARTWORK
-        }

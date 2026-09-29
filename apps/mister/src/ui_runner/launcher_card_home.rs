@@ -1,25 +1,29 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Production owner for the custom RGB565 root launcher.
+//! Production owner for the custom RGB565 card launcher: the root cards and
+//! every nested hierarchy level, including the level-change card trick.
 
 use super::DirtyRect;
 use crate::bitmap_font_resource::{
     jersey_25_console_bitmap_font, launcher_bitmap_font, nocive_15_console_bitmap_font,
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
 };
-use crate::launcher_home::{CARD_COUNT, LauncherHomeSnapshot};
+use crate::launcher_home::{CARD_COUNT, CardLevelSnapshot};
 use crate::ui_runner::launcher_card_pipeline::{
     CardFrameRequest, CardPipelineCounters, LauncherCardRenderAhead, RenderedCardFrame,
 };
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
 use mister_magik_framebuffer_scenes::launcher::{
-    LauncherData, LauncherFrameRequest, LauncherScene, LauncherTypography, PreparedLauncher,
+    LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherFrameRequest, LauncherScene,
+    LauncherTypography, LevelChange, PreparedLauncher,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
     BrowseDirection, BrowseFrame, BrowsePhase, SPRING_POSITION_UNITS,
 };
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
 const CARD_WIDTH: usize = 180;
 const CARD_HEIGHT: usize = 252;
@@ -88,13 +92,49 @@ impl LauncherFonts {
     }
 }
 
+/// A level prepared aside: already built, or being built on a worker.
+enum Prepared {
+    Built(Box<PreparedLauncher>),
+    Building(JoinHandle<PreparedLauncher>),
+}
+
+/// A prepared level and the content it was prepared for. Levels are set aside
+/// two ways: the ones the selected card opens and the parent are prepared
+/// ahead while idle, and a level we leave is kept so coming back is instant.
+struct Aside {
+    level: CardLevelSnapshot,
+    prepared: Prepared,
+}
+
+/// The hierarchy is a few levels deep: the current level's neighbours plus the
+/// levels already left behind.
+const ASIDE_LEVELS: usize = 5;
+
+/// A level change in progress. The level being left renders the gather while
+/// the destination is made ready; the swap happens at the all-edge-on moment,
+/// holding there if it is not ready yet.
+struct LevelTrick {
+    change: LevelChange,
+    source_level: CardLevelSnapshot,
+    source_selected: usize,
+    destination_selected: usize,
+    started_ms: u64,
+    destination: Option<Prepared>,
+    /// Set when the destination became the prepared level. A late swap
+    /// delays the deal by the time spent holding edge-on.
+    deal_delay_ms: Option<u64>,
+}
+
 pub(super) struct LauncherCardHomeSession {
     scene: LauncherScene,
-    snapshot: LauncherHomeSnapshot,
+    level: CardLevelSnapshot,
     clock: String,
-    artwork: [Vec<Rgb565Pixel>; CARD_COUNT],
-    fonts: LauncherFonts,
+    artwork: Arc<[Vec<Rgb565Pixel>; CARD_COUNT]>,
+    fonts: Arc<LauncherFonts>,
     prepared: PreparedLauncher,
+    trick: Option<LevelTrick>,
+    aside: Vec<Aside>,
+    now_ms: u64,
     render_ahead: Option<LauncherCardRenderAhead>,
     presented_frame: Option<RenderedCardFrame>,
     navigation_generation: u64,
@@ -118,22 +158,26 @@ pub(super) struct LauncherCardHomeSession {
 impl LauncherCardHomeSession {
     pub(super) fn new(
         scene: LauncherScene,
-        snapshot: LauncherHomeSnapshot,
+        level: CardLevelSnapshot,
         selected: usize,
         clock: &str,
     ) -> Result<Self, String> {
-        let artwork = CARD_ASSETS.map(decode_card_asset);
-        let fonts = LauncherFonts::load()?;
-        let prepared = prepare(scene, &snapshot, selected, clock, &artwork, &fonts);
+        let artwork = Arc::new(CARD_ASSETS.map(decode_card_asset));
+        let fonts = Arc::new(LauncherFonts::load()?);
+        let selected = selected.min(level.cards.len().saturating_sub(1));
+        let prepared = prepare(scene, &level, selected, clock, &artwork, &fonts);
         let render_ahead = native_render_ahead(scene, &prepared);
         let frame = settled_frame(selected);
         Ok(Self {
             scene,
-            snapshot,
+            level,
             clock: clock.to_owned(),
             artwork,
             fonts,
             prepared,
+            trick: None,
+            aside: Vec::new(),
+            now_ms: 0,
             render_ahead,
             presented_frame: None,
             navigation_generation: 1,
@@ -156,6 +200,7 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn set_inactive(&mut self) {
+        self.finish_trick();
         self.invalidate_compositor();
         self.active = false;
         self.release_presented_frame();
@@ -165,15 +210,30 @@ impl LauncherCardHomeSession {
     pub(super) fn update(
         &mut self,
         scene: LauncherScene,
-        snapshot: LauncherHomeSnapshot,
+        level: &CardLevelSnapshot,
         selected: usize,
         visual_index: f32,
         clock: &str,
         now_ms: u64,
+        motion: bool,
     ) {
-        let selected = selected.min(CARD_COUNT - 1);
+        let count = level.cards.len().max(1);
+        let selected = selected.min(count - 1);
+        self.now_ms = now_ms;
+        let level_changed = self.level.menu_id != level.menu_id;
+        if level_changed && self.active && self.scene == scene && motion {
+            self.begin_trick(level.clone(), selected);
+            return;
+        }
+        if self.trick.is_some() {
+            if !level_changed && self.scene == scene {
+                // The trick owns the carousel until the deal completes.
+                return;
+            }
+            self.finish_trick();
+        }
         let mut previous_frame = self.frame;
-        if !self.active {
+        if !self.active || level_changed {
             self.last_visual_index = selected as f32;
             previous_frame = settled_frame(selected);
             self.active = true;
@@ -186,6 +246,8 @@ impl LauncherCardHomeSession {
             visual_index,
             self.last_visual_index,
             previous_frame,
+            count,
+            level.cycles(),
         );
         self.last_visual_index = visual_index;
         self.frame_timestamp_us = now_ms.saturating_mul(1_000);
@@ -194,12 +256,15 @@ impl LauncherCardHomeSession {
             self.content_dirty = true;
         }
 
-        let faces_changed = self.scene != scene || self.snapshot.cards != snapshot.cards;
-        if faces_changed || self.snapshot != snapshot || self.clock != clock {
+        let faces_changed = self.scene != scene || self.level.cards != level.cards;
+        if self.scene != scene {
+            self.aside.clear();
+        }
+        if faces_changed || self.level != *level || self.clock != clock {
             let preparation_started = self.measure_preparation.then(std::time::Instant::now);
             self.release_presented_frame();
             self.scene = scene;
-            self.snapshot = snapshot;
+            self.level = level.clone();
             self.clock.clear();
             self.clock.push_str(clock);
             self.content_generation = self.content_generation.wrapping_add(1).max(1);
@@ -210,7 +275,7 @@ impl LauncherCardHomeSession {
                 }
                 self.prepared = prepare(
                     scene,
-                    &self.snapshot,
+                    &self.level,
                     self.frame.selected,
                     &self.clock,
                     &self.artwork,
@@ -218,17 +283,12 @@ impl LauncherCardHomeSession {
                 );
                 self.render_ahead = native_render_ahead(scene, &self.prepared);
             } else {
-                self.prepared.refresh_chrome(
-                    LauncherData {
-                        cards: &self.snapshot.cards,
-                        selected: self.frame.selected,
-                        library_games: self.snapshot.library_games,
-                        collections: self.snapshot.collections,
-                        favourites: self.snapshot.favourites,
-                        clock: &self.clock,
-                    },
-                    Some(self.fonts.typography()),
-                );
+                let typography = self.fonts.typography();
+                let prepared = &mut self.prepared;
+                self.level
+                    .with_data(self.frame.selected, &self.clock, |data| {
+                        prepared.refresh_chrome(data, Some(typography));
+                    });
             }
             if let Some(pipeline) = self.render_ahead.as_ref() {
                 pipeline.invalidate_content_generation(self.content_generation);
@@ -247,13 +307,218 @@ impl LauncherCardHomeSession {
         }
     }
 
+    /// Build `level` on a worker, or `None` if no thread can be spawned.
+    fn spawn_prepare(&self, level: &CardLevelSnapshot, selected: usize) -> Option<Prepared> {
+        let (scene, clock) = (self.scene, self.clock.clone());
+        let (artwork, fonts) = (Arc::clone(&self.artwork), Arc::clone(&self.fonts));
+        let level = level.clone();
+        std::thread::Builder::new()
+            .name("card-level-prepare".into())
+            .spawn(move || prepare(scene, &level, selected, &clock, &artwork, &fonts))
+            .ok()
+            .map(Prepared::Building)
+    }
+
+    /// `level` prepared on this thread, for when a worker failed or vanished.
+    fn prepare_here(&self, level: &CardLevelSnapshot, selected: usize) -> PreparedLauncher {
+        prepare(
+            self.scene,
+            level,
+            selected,
+            &self.clock,
+            &self.artwork,
+            &self.fonts,
+        )
+    }
+
+    /// Whether a level with these cards is already set aside. Its header and
+    /// summary are refreshed on install, so changed counts do not force a rebuild.
+    fn is_aside(aside: &Aside, level: &CardLevelSnapshot) -> bool {
+        aside.level.menu_id == level.menu_id && aside.level.cards == level.cards
+    }
+
+    fn set_aside(&mut self, level: CardLevelSnapshot, prepared: Prepared) {
+        self.aside
+            .retain(|aside| aside.level.menu_id != level.menu_id);
+        if self.aside.len() >= ASIDE_LEVELS {
+            self.aside.remove(0);
+        }
+        self.aside.push(Aside { level, prepared });
+    }
+
+    fn take_aside(&mut self, level: &CardLevelSnapshot) -> Option<Prepared> {
+        let index = self
+            .aside
+            .iter()
+            .position(|aside| Self::is_aside(aside, level))?;
+        Some(self.aside.remove(index).prepared)
+    }
+
+    /// Prepare neighbouring levels on workers while the launcher is idle.
+    /// Cheap to call every frame: levels already set aside are skipped, and
+    /// nothing is spawned during a level change.
+    pub(super) fn prefetch(&mut self, levels: Vec<CardLevelSnapshot>) {
+        if !self.active || self.trick.is_some() || self.is_animating() {
+            return;
+        }
+        for level in levels {
+            if level.menu_id == self.level.menu_id
+                || self.aside.iter().any(|aside| Self::is_aside(aside, &level))
+            {
+                continue;
+            }
+            if let Some(building) = self.spawn_prepare(&level, 0) {
+                self.set_aside(level, building);
+            }
+        }
+    }
+
+    /// Start the level-change trick toward `level`. The destination is the one
+    /// set aside for it if there is one, else it is built on a worker.
+    fn begin_trick(&mut self, level: CardLevelSnapshot, selected: usize) {
+        self.finish_trick();
+        let change = if level.depth > self.level.depth {
+            LevelChange::Descend
+        } else {
+            LevelChange::Ascend
+        };
+        if let Some(mut old) = self.render_ahead.take() {
+            old.stop();
+            self.retired_pipeline_counters.add_assign(old.counters());
+        }
+        self.release_presented_frame();
+        let destination = self
+            .take_aside(&level)
+            .or_else(|| self.spawn_prepare(&level, selected))
+            .unwrap_or_else(|| Prepared::Built(Box::new(self.prepare_here(&level, selected))));
+        self.trick = Some(LevelTrick {
+            change,
+            source_level: std::mem::replace(&mut self.level, level),
+            source_selected: self.frame.selected,
+            destination_selected: selected,
+            started_ms: self.now_ms,
+            destination: Some(destination),
+            deal_delay_ms: None,
+        });
+        self.frame = settled_frame(selected);
+        self.last_visual_index = selected as f32;
+        self.content_generation = self.content_generation.wrapping_add(1).max(1);
+        self.bump_navigation_generation();
+        self.content_dirty = true;
+    }
+
+    /// The trick's destination if it is built; a worker still running is left
+    /// alone. A worker that panicked is rebuilt here so the trick cannot be
+    /// stranded edge-on.
+    fn take_built_destination(&mut self, wait: bool) -> Option<PreparedLauncher> {
+        let trick = self.trick.as_mut()?;
+        match trick.destination.take()? {
+            Prepared::Built(prepared) => Some(*prepared),
+            Prepared::Building(handle) if wait || handle.is_finished() => {
+                let selected = trick.destination_selected;
+                Some(
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| self.prepare_here(&self.level, selected)),
+                )
+            }
+            Prepared::Building(handle) => {
+                trick.destination = Some(Prepared::Building(handle));
+                None
+            }
+        }
+    }
+
+    /// Make `prepared` the visible level, setting aside the one it replaces.
+    fn install_destination(&mut self, prepared: PreparedLauncher) {
+        let (source, selected) = self.trick.as_ref().map_or_else(
+            || (None, self.frame.selected),
+            |trick| (Some(trick.source_level.clone()), trick.destination_selected),
+        );
+        let old = std::mem::replace(&mut self.prepared, prepared);
+        if let Some(source) = source {
+            self.set_aside(source, Prepared::Built(Box::new(old)));
+        }
+        // A level set aside may be minutes old.
+        let typography = self.fonts.typography();
+        let prepared = &mut self.prepared;
+        self.level.with_data(selected, &self.clock, |data| {
+            prepared.refresh_chrome(data, Some(typography));
+        });
+    }
+
+    /// Complete any trick immediately, leaving the destination settled.
+    fn finish_trick(&mut self) {
+        let Some(trick) = self.trick.as_ref() else {
+            return;
+        };
+        if trick.deal_delay_ms.is_none() {
+            match self.take_built_destination(true) {
+                Some(prepared) => self.install_destination(prepared),
+                None => self.prepared = self.prepare_here(&self.level, self.frame.selected),
+            }
+        }
+        self.trick = None;
+        self.prepared.restore_chrome();
+        if self.render_ahead.is_none() {
+            self.render_ahead = native_render_ahead(self.scene, &self.prepared);
+        }
+        self.content_generation = self.content_generation.wrapping_add(1).max(1);
+        self.content_dirty = true;
+    }
+
+    /// Render the current trick frame. Returns false once the trick is over.
+    fn render_trick(&mut self) -> bool {
+        let Some(trick) = self.trick.as_ref() else {
+            return false;
+        };
+        let elapsed = self.now_ms.saturating_sub(trick.started_ms);
+        let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
+        if trick.deal_delay_ms.is_none()
+            && elapsed >= edge
+            && let Some(prepared) = self.take_built_destination(false)
+        {
+            self.install_destination(prepared);
+            if let Some(trick) = self.trick.as_mut() {
+                trick.deal_delay_ms = Some(elapsed - edge);
+            }
+        }
+        let Some(trick) = self.trick.as_ref() else {
+            return false;
+        };
+        let Some(delay) = trick.deal_delay_ms else {
+            let t = elapsed.min(edge) as u32;
+            self.prepared
+                .render_level_gather(trick.source_selected, trick.change, t);
+            return true;
+        };
+        let t = elapsed
+            .saturating_sub(delay)
+            .min(u64::from(LEVEL_TRICK_MILLIS)) as u32;
+        self.prepared
+            .render_level_deal(trick.destination_selected, trick.change, t);
+        if t >= LEVEL_TRICK_MILLIS {
+            self.trick = None;
+            self.render_ahead = native_render_ahead(self.scene, &self.prepared);
+            self.content_generation = self.content_generation.wrapping_add(1).max(1);
+        }
+        true
+    }
+
+    /// A level change is playing. The carousel shows neither level's real
+    /// selection, so the launcher must not act on input until it lands.
+    pub(super) fn is_level_trick_active(&self) -> bool {
+        self.active && self.trick.is_some()
+    }
+
     pub(super) fn is_animating(&self) -> bool {
-        self.active && self.frame.phase != BrowsePhase::Settled
+        self.active && (self.trick.is_some() || self.frame.phase != BrowsePhase::Settled)
     }
 
     pub(super) fn needs_render(&self) -> bool {
         self.active
             && (self.content_dirty
+                || self.trick.is_some()
                 || self.is_animating()
                 || self
                     .render_ahead
@@ -263,6 +528,11 @@ impl LauncherCardHomeSession {
 
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
         self.release_presented_frame();
+        if self.render_trick() {
+            self.content_dirty = true;
+            self.compositor_stale = false;
+            return self.prepared.pixels();
+        }
         self.prepared.render_frame(self.frame);
         self.content_dirty = false;
         self.compositor_stale = false;
@@ -290,7 +560,9 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn compositor_copy_damage(&self, motion_only: bool) -> Option<DirtyRect> {
+        // The trick fades the header and summary: always copy the whole frame.
         (motion_only
+            && self.trick.is_none()
             && self.scene == LauncherScene::new(960, 540)
             && self.compositor_content_generation == Some(self.content_generation))
         .then_some(DirtyRect {
@@ -324,6 +596,9 @@ impl LauncherCardHomeSession {
         now_us: u64,
         maximum_age_us: u64,
     ) -> Option<RenderedCardFrame> {
+        if self.trick.is_some() {
+            return None;
+        }
         self.render_ahead.as_ref()?.try_take(
             self.content_generation,
             self.navigation_generation,
@@ -426,13 +701,22 @@ fn browse_frame_from_position(
     visual_index: f32,
     previous: f32,
     previous_frame: BrowseFrame,
+    count: usize,
+    cyclic: bool,
 ) -> BrowseFrame {
     let position = if visual_index.is_finite() {
         visual_index
     } else {
         selected as f32
     };
-    let card_at = |index: i64| index.rem_euclid(CARD_COUNT as i64) as usize;
+    let count = count.max(1) as i64;
+    let card_at = |index: i64| {
+        if cyclic {
+            index.rem_euclid(count) as usize
+        } else {
+            index.clamp(0, count - 1) as usize
+        }
+    };
     if position == position.round() {
         return settled_frame(card_at(position as i64));
     }
@@ -475,35 +759,36 @@ fn browse_frame_from_position(
 
 fn prepare(
     scene: LauncherScene,
-    snapshot: &LauncherHomeSnapshot,
+    level: &CardLevelSnapshot,
     selected: usize,
     clock: &str,
     artwork: &[Vec<Rgb565Pixel>; CARD_COUNT],
     fonts: &LauncherFonts,
 ) -> PreparedLauncher {
+    // Only the root cards have approved artwork; nested levels are generic.
+    let root = level.is_root();
     let artwork: [&[Rgb565Pixel]; CARD_COUNT] =
         std::array::from_fn(|index| artwork[index].as_slice());
-    let data = LauncherData {
-        cards: &snapshot.cards,
-        selected,
-        library_games: snapshot.library_games,
-        collections: snapshot.collections,
-        favourites: snapshot.favourites,
-        clock,
-    };
-    if scene.uses_responsive_layout() {
-        scene
-            .prepare_initial_with_rgb888_artwork_and_typography(
-                data,
-                &CARD_RGB888,
-                fonts.typography(),
-            )
-            .finish()
+    let (artwork, rgb888): (&[&[Rgb565Pixel]], &[&[u8]]) = if root {
+        (&artwork, &CARD_RGB888)
     } else {
-        scene
-            .prepare_initial_with_artwork_and_typography(data, &artwork, fonts.typography())
-            .finish()
-    }
+        (&[], &[])
+    };
+    level.with_data(selected, clock, |data| {
+        if scene.uses_responsive_layout() {
+            scene
+                .prepare_initial_with_rgb888_artwork_and_typography(
+                    data,
+                    rgb888,
+                    fonts.typography(),
+                )
+                .finish()
+        } else {
+            scene
+                .prepare_initial_with_artwork_and_typography(data, artwork, fonts.typography())
+                .finish()
+        }
+    })
 }
 
 fn decode_card_asset(bytes: &[u8]) -> Vec<Rgb565Pixel> {
@@ -519,18 +804,41 @@ fn decode_card_asset(bytes: &[u8]) -> Vec<Rgb565Pixel> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launcher_home::LauncherHomeCounts;
+    use crate::launcher_home::{LauncherHomeCounts, LauncherHomeSnapshot, LevelCard, LevelSummary};
     use std::time::{Duration, Instant};
 
-    fn snapshot() -> LauncherHomeSnapshot {
-        LauncherHomeSnapshot::from_counts(LauncherHomeCounts {
+    fn snapshot() -> CardLevelSnapshot {
+        CardLevelSnapshot::root(&LauncherHomeSnapshot::from_counts(LauncherHomeCounts {
             arcade: 1,
             consoles: 2,
             computers: 3,
             handhelds: 4,
             favourites: 5,
             collections: 4,
-        })
+        }))
+    }
+
+    fn consoles() -> CardLevelSnapshot {
+        CardLevelSnapshot {
+            menu_id: "menu:consoles".into(),
+            depth: 1,
+            cards: ["ATARI", "SEGA", "NINTENDO"]
+                .into_iter()
+                .map(|name| LevelCard {
+                    id: mister_magik_framebuffer_scenes::launcher::LauncherCardId::Consoles,
+                    name: name.into(),
+                    games: Some(10),
+                    colour: 0x2a7f,
+                })
+                .collect(),
+            summary: LevelSummary::Nested {
+                path: vec!["CONSOLES".into()],
+                games: 30,
+                children_label: "MAKERS",
+                systems: Some(9),
+                accent: 0x2a7f,
+            },
+        }
     }
 
     #[test]
@@ -545,7 +853,7 @@ mod tests {
             LauncherScene::crt(240, 640),
             LauncherScene::new(960, 540),
         ] {
-            session.update(scene, snapshot(), 0, 0.0, "07:28", 16);
+            session.update(scene, &snapshot(), 0, 0.0, "07:28", 16, true);
             assert!(session.content_generation() > generation);
             generation = session.content_generation();
             assert_eq!(session.render().len(), scene.width * scene.height);
@@ -558,7 +866,7 @@ mod tests {
                 session.render_ahead.is_some(),
                 scene == LauncherScene::new(960, 540)
             );
-            session.update(scene, snapshot(), 0, 0.0, "07:29", 32);
+            session.update(scene, &snapshot(), 0, 0.0, "07:29", 32, true);
             let expected = prepare(
                 scene,
                 &snapshot(),
@@ -575,38 +883,38 @@ mod tests {
     fn card_frames_follow_unbounded_position_through_both_wraps() {
         let settled = settled_frame(0);
         assert_eq!(
-            browse_frame_from_position(0, 0.0, 0.0, settled).phase,
+            browse_frame_from_position(0, 0.0, 0.0, settled, CARD_COUNT, true).phase,
             BrowsePhase::Settled
         );
-        let right = browse_frame_from_position(0, 5.25, 5.1, settled_frame(5));
+        let right = browse_frame_from_position(0, 5.25, 5.1, settled_frame(5), CARD_COUNT, true);
         assert_eq!((right.selected, right.target), (5, 0));
         assert_eq!(right.direction, Some(BrowseDirection::Right));
         assert_eq!(right.progress_millis, SPRING_POSITION_UNITS / 4);
-        let next = browse_frame_from_position(1, 6.25, 6.1, settled);
+        let next = browse_frame_from_position(1, 6.25, 6.1, settled, CARD_COUNT, true);
         assert_eq!((next.selected, next.target), (0, 1));
-        let left = browse_frame_from_position(5, -0.25, -0.1, settled);
+        let left = browse_frame_from_position(5, -0.25, -0.1, settled, CARD_COUNT, true);
         assert_eq!((left.selected, left.target), (0, 5));
         assert_eq!(left.direction, Some(BrowseDirection::Left));
         assert_eq!(left.progress_millis, SPRING_POSITION_UNITS / 4);
         assert_eq!(
-            browse_frame_from_position(5, -1.0, -0.9, left).phase,
+            browse_frame_from_position(5, -1.0, -0.9, left, CARD_COUNT, true).phase,
             BrowsePhase::Settled
         );
     }
 
     #[test]
     fn reversal_unwinds_the_same_two_card_rotations() {
-        let forward = browse_frame_from_position(2, 1.30, 1.20, settled_frame(1));
-        let reverse = browse_frame_from_position(1, 1.25, 1.30, forward);
+        let forward = browse_frame_from_position(2, 1.30, 1.20, settled_frame(1), CARD_COUNT, true);
+        let reverse = browse_frame_from_position(1, 1.25, 1.30, forward, CARD_COUNT, true);
         assert_eq!((forward.selected, forward.target), (1, 2));
         assert_eq!((reverse.selected, reverse.target), (1, 2));
         assert_eq!(reverse.direction, Some(BrowseDirection::Right));
         assert!(reverse.progress_millis < forward.progress_millis);
 
-        let moving = browse_frame_from_position(1, 1.000_001, 1.01, reverse);
+        let moving = browse_frame_from_position(1, 1.000_001, 1.01, reverse, CARD_COUNT, true);
         assert_eq!(moving.progress_millis, 1);
         assert_eq!(
-            browse_frame_from_position(1, 1.0, 1.000_001, moving).phase,
+            browse_frame_from_position(1, 1.0, 1.000_001, moving, CARD_COUNT, true).phase,
             BrowsePhase::Settled
         );
     }
@@ -616,14 +924,23 @@ mod tests {
         let mut session =
             LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "21:37")
                 .unwrap();
-        session.update(LauncherScene::new(960, 540), snapshot(), 0, 0.0, "21:37", 0);
         session.update(
             LauncherScene::new(960, 540),
-            snapshot(),
+            &snapshot(),
+            0,
+            0.0,
+            "21:37",
+            0,
+            true,
+        );
+        session.update(
+            LauncherScene::new(960, 540),
+            &snapshot(),
             1,
             0.2,
             "21:37",
             10,
+            true,
         );
         assert!(session.is_animating());
         assert_eq!(session.frame.selected, 0);
@@ -636,7 +953,15 @@ mod tests {
         let mut session =
             LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "21:37")
                 .unwrap();
-        session.update(LauncherScene::new(960, 540), snapshot(), 0, 0.0, "21:37", 0);
+        session.update(
+            LauncherScene::new(960, 540),
+            &snapshot(),
+            0,
+            0.0,
+            "21:37",
+            0,
+            true,
+        );
         session.render();
         session.note_compositor_copied(true);
         assert!(session.compositor_copy_damage(true).is_some());
@@ -661,7 +986,15 @@ mod tests {
         let mut session =
             LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "12:34")
                 .unwrap();
-        session.update(LauncherScene::new(960, 540), snapshot(), 0, 0.0, "12:34", 0);
+        session.update(
+            LauncherScene::new(960, 540),
+            &snapshot(),
+            0,
+            0.0,
+            "12:34",
+            0,
+            true,
+        );
         assert_eq!(session.compositor_copy_damage(true), None);
         session.render();
         session.note_compositor_copied(true);
@@ -669,20 +1002,22 @@ mod tests {
         assert_eq!((rect.x1 - rect.x0) * (rect.y1 - rect.y0), 239250);
         session.update(
             LauncherScene::new(960, 540),
-            snapshot(),
+            &snapshot(),
             1,
             1.0,
             "12:34",
             16,
+            true,
         );
         assert_eq!(session.compositor_copy_damage(true), Some(rect));
         session.update(
             LauncherScene::new(960, 540),
-            snapshot(),
+            &snapshot(),
             1,
             1.0,
             "12:35",
             32,
+            true,
         );
         assert_eq!(session.compositor_copy_damage(true), None);
         session.note_compositor_copied(true);
@@ -702,23 +1037,32 @@ mod tests {
                 .unwrap();
         session.update(
             LauncherScene::new(960, 540),
-            data.clone(),
+            &data.clone(),
             0,
             0.0,
             "21:37",
             0,
+            true,
         );
         let worker = session.render_ahead.as_ref().unwrap().worker_identity();
         for clock in ["21:38", "22:00"] {
-            data.collections += 1;
-            data.library_games += 123;
+            if let LevelSummary::Root {
+                collections,
+                library_games,
+                ..
+            } = &mut data.summary
+            {
+                *collections += 1;
+                *library_games += 123;
+            }
             session.update(
                 LauncherScene::new(960, 540),
-                data.clone(),
+                &data.clone(),
                 0,
                 0.0,
                 clock,
                 16,
+                true,
             );
             assert_eq!(
                 session.render_ahead.as_ref().unwrap().worker_identity(),
@@ -737,7 +1081,15 @@ mod tests {
             assert_eq!(session.render(), reference.pixels());
         }
         data.cards[0].games = Some(999);
-        session.update(LauncherScene::new(960, 540), data, 0, 0.0, "22:00", 32);
+        session.update(
+            LauncherScene::new(960, 540),
+            &data,
+            0,
+            0.0,
+            "22:00",
+            32,
+            true,
+        );
         assert_ne!(
             session.render_ahead.as_ref().unwrap().worker_identity(),
             worker
@@ -756,17 +1108,261 @@ mod tests {
         .unwrap();
         session.update(
             LauncherScene::new(960, 540),
-            snapshot.clone(),
+            &snapshot.clone(),
             0,
             0.0,
             "21:37",
             0,
+            true,
         );
         session.render();
         let submitted_sequence = session.request_sequence;
 
-        session.update(LauncherScene::new(960, 540), snapshot, 0, 0.0, "21:37", 16);
+        session.update(
+            LauncherScene::new(960, 540),
+            &snapshot,
+            0,
+            0.0,
+            "21:37",
+            16,
+            true,
+        );
 
         assert_eq!(session.request_sequence, submitted_sequence);
+    }
+
+    #[test]
+    fn level_change_plays_the_trick_then_settles_on_the_destination() {
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
+        session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
+        session.render();
+        assert!(!session.is_level_trick_active());
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 16, true);
+        assert!(session.is_animating());
+        assert!(session.is_level_trick_active(), "input is held during it");
+        assert!(session.try_take_render_ahead(0, u64::MAX).is_none());
+        assert_eq!(session.compositor_copy_damage(true), None);
+        // Gather, then hold edge-on until the worker has prepared the level.
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 200, true);
+        session.render();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut now = 400;
+        while session
+            .trick
+            .as_ref()
+            .is_some_and(|trick| trick.deal_delay_ms.is_none())
+        {
+            assert!(Instant::now() < deadline, "level preparation timed out");
+            now += 16;
+            session.update(scene, &consoles(), 0, 0.0, "21:37", now, true);
+            session.render();
+            std::thread::yield_now();
+        }
+        now += u64::from(LEVEL_TRICK_MILLIS);
+        session.update(scene, &consoles(), 0, 0.0, "21:37", now, true);
+        session.render();
+        assert!(session.trick.is_none());
+        assert!(!session.is_level_trick_active());
+        let mut expected = prepare(
+            scene,
+            &consoles(),
+            0,
+            "21:37",
+            &session.artwork,
+            &session.fonts,
+        );
+        expected.render_frame(settled_frame(0));
+        assert_eq!(session.render(), expected.pixels());
+    }
+
+    #[test]
+    fn reduced_motion_changes_level_without_the_trick() {
+        let scene = LauncherScene::crt(640, 240);
+        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
+        session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 16, false);
+        assert!(session.trick.is_none());
+        let mut expected = prepare(
+            scene,
+            &consoles(),
+            0,
+            "21:37",
+            &session.artwork,
+            &session.fonts,
+        );
+        expected.render_frame(settled_frame(0));
+        assert_eq!(session.render(), expected.pixels());
+    }
+
+    #[test]
+    fn leaving_home_mid_trick_settles_the_destination() {
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
+        session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 16, true);
+        session.set_inactive();
+        assert!(session.trick.is_none());
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 32, true);
+        let mut expected = prepare(
+            scene,
+            &consoles(),
+            0,
+            "21:37",
+            &session.artwork,
+            &session.fonts,
+        );
+        expected.render_frame(settled_frame(0));
+        assert_eq!(session.render(), expected.pixels());
+    }
+
+    #[test]
+    fn nested_browse_frames_stop_at_the_ends() {
+        let left = browse_frame_from_position(0, -0.25, -0.1, settled_frame(0), 3, false);
+        assert_eq!((left.selected, left.target), (0, 0));
+        let right = browse_frame_from_position(2, 1.5, 1.4, settled_frame(1), 3, false);
+        assert_eq!((right.selected, right.target), (1, 2));
+    }
+
+    #[test]
+    fn prefetched_level_swaps_at_the_edge_without_holding() {
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
+        session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
+        session.prefetch(vec![consoles()]);
+        assert_eq!(session.aside.len(), 1);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !matches!(&session.aside[0].prepared, Prepared::Building(handle) if handle.is_finished())
+        {
+            assert!(Instant::now() < deadline, "prefetch timed out");
+            std::thread::yield_now();
+        }
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 100, true);
+        assert!(session.aside.is_empty(), "the prefetched level was used");
+        session.update(
+            scene,
+            &consoles(),
+            0,
+            0.0,
+            "21:37",
+            100 + u64::from(LEVEL_TRICK_EDGE_MILLIS),
+            true,
+        );
+        session.render();
+        let trick = session.trick.as_ref().unwrap();
+        assert_eq!(
+            trick.deal_delay_ms,
+            Some(0),
+            "no time spent holding edge-on"
+        );
+    }
+
+    #[test]
+    fn parent_prefetch_from_a_nested_level_keeps_the_prepared_root() {
+        use crate::launcher::LauncherNav;
+        use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Super Mario Bros").system_id("nes").build(),
+                arcade_game("Super Mario 64").system_id("n64").build(),
+                arcade_game("Sonic").system_id("gamegear").build(),
+            ],
+            vec![
+                arcade_system("nes", 1),
+                arcade_system("n64", 1),
+                arcade_system("gamegear", 1),
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let root = CardLevelSnapshot::from_runtime(&nav, &catalog);
+        assert!(nav.open_menu("menu:consoles"));
+        let consoles = CardLevelSnapshot::from_runtime(&nav, &catalog);
+
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, root.clone(), 1, "21:37").unwrap();
+        session.update(scene, &root, 1, 1.0, "21:37", 0, true);
+        session.update(scene, &consoles, 0, 0.0, "21:37", 16, true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut now = 16;
+        while session.trick.is_some() {
+            assert!(Instant::now() < deadline, "level change timed out");
+            now += 16;
+            session.update(scene, &consoles, 0, 0.0, "21:37", now, true);
+            session.render();
+            std::thread::yield_now();
+        }
+        // The loop's idle prefetch from the nested level: the parent.
+        let parent = nav.parent_menu_id().map(str::to_owned).unwrap();
+        let parent = CardLevelSnapshot::for_menu(&nav, &catalog, &parent);
+        assert_eq!(parent, root, "the parent snapshot matches the real root");
+        session.prefetch(vec![parent]);
+        assert!(
+            session.aside.iter().any(|aside| {
+                aside.level == root && matches!(aside.prepared, Prepared::Built(_))
+            }),
+            "the prepared root was kept, not replaced by a rebuild"
+        );
+        // Back to the root: the deal starts at the edge without holding.
+        session.update(scene, &root, 1, 1.0, "21:38", now + 100, true);
+        session.update(
+            scene,
+            &root,
+            1,
+            1.0,
+            "21:38",
+            now + 100 + u64::from(LEVEL_TRICK_EDGE_MILLIS),
+            true,
+        );
+        session.render();
+        assert_eq!(
+            session.trick.as_ref().unwrap().deal_delay_ms,
+            Some(0),
+            "no time spent holding edge-on"
+        );
+    }
+
+    #[test]
+    fn returning_to_a_left_level_reuses_it_without_holding() {
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
+        session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 16, true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut now = 16;
+        while session.trick.is_some() {
+            assert!(Instant::now() < deadline, "level change timed out");
+            now += 16;
+            session.update(scene, &consoles(), 0, 0.0, "21:37", now, true);
+            session.render();
+            std::thread::yield_now();
+        }
+        assert!(
+            session.aside.iter().any(|aside| {
+                aside.level.menu_id == crate::launcher_taxonomy::ROOT_MENU_ID
+                    && matches!(aside.prepared, Prepared::Built(_))
+            }),
+            "the root was set aside when left"
+        );
+        // Back to the root: nothing to prepare, so the deal starts at the edge.
+        session.update(scene, &snapshot(), 1, 1.0, "21:38", now + 100, true);
+        assert!(
+            session
+                .aside
+                .iter()
+                .all(|aside| aside.level.menu_id != crate::launcher_taxonomy::ROOT_MENU_ID),
+            "the root set aside was used"
+        );
+        session.update(
+            scene,
+            &snapshot(),
+            1,
+            1.0,
+            "21:38",
+            now + 100 + u64::from(LEVEL_TRICK_EDGE_MILLIS),
+            true,
+        );
+        session.render();
+        assert_eq!(session.trick.as_ref().unwrap().deal_delay_ms, Some(0));
     }
 }

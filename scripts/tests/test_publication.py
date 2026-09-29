@@ -73,7 +73,6 @@ class PublicationTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         fixture = CandidateFixture(root)
-        self.stack.enter_context(patch.dict(dist.ARTWORK, fixture.artwork()))
         self.stack.enter_context(
             patch.object(
                 manifest,

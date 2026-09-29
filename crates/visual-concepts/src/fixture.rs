@@ -128,6 +128,7 @@ fn prepare(width: usize, height: usize) -> PreparedLauncher {
                 collections: 77,
                 favourites: 42,
                 clock: "12:35",
+                level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
             },
             &refs,
             LauncherTypography {
