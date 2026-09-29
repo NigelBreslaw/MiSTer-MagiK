@@ -3287,7 +3287,7 @@ impl LauncherNav {
         None
     }
 
-    #[cfg(any(feature = "ui", test))]
+    #[cfg(feature = "ui")]
     pub(crate) fn refresh_hold_owns_input(&self) -> bool {
         self.refresh_hold.is_some() && self.confirm_action == Some(ConfirmAction::RefreshDatabase)
     }
