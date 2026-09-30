@@ -4,7 +4,10 @@
 pub use crate::framebuffer::damage::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 use crate::framebuffer::format::production_label;
 use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut};
-use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
+use slint::platform::software_renderer::{
+    LineBufferProvider, PhysicalRegion, PremultipliedRgbaColor, Rgb565Pixel, SoftwareRenderer,
+    TargetPixel,
+};
 use std::sync::OnceLock;
 
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
@@ -592,10 +595,45 @@ fn compose_rect_565_strided_to_cached(
 pub struct UiFrameTarget {
     cached: Vec<Rgb565Pixel>,
     cached_stride: usize,
+    overlay_line: Vec<PremultipliedRgbaColor>,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
     physical_preview: PhysicalPreviewLayerOwner,
     oriented_preview_cache: Option<OrientedPreviewCacheKey>,
+}
+
+/// Slint's normal RGB565 render clears even transparent window backgrounds to
+/// black. Render transparent items into a reusable RGBA line, then blend them
+/// over the current native background. Restoring the base for every dirty pixel
+/// also erases removed overlays and prevents repeated alpha accumulation.
+struct BackgroundOverlayLines<'a> {
+    cached: &'a mut [Rgb565Pixel],
+    line: &'a mut [PremultipliedRgbaColor],
+    background: &'a [mister_magik_framebuffer_scenes::Rgb565Pixel],
+    layout: Rgb565OutputLayout,
+}
+
+impl LineBufferProvider for BackgroundOverlayLines<'_> {
+    type TargetPixel = PremultipliedRgbaColor;
+
+    fn process_line(
+        &mut self,
+        y: usize,
+        range: std::ops::Range<usize>,
+        render: impl FnOnce(&mut [PremultipliedRgbaColor]),
+    ) {
+        let line = &mut self.line[range.clone()];
+        render(line);
+        for (x, overlay) in range.zip(line.iter().copied()) {
+            let (logical_x, logical_y) = self.layout.physical_to_logical(x, y);
+            let base = self.background[logical_y * self.layout.logical_width() + logical_x];
+            let pixel = &mut self.cached[y * self.layout.physical_stride() + x];
+            pixel.0 = base.0;
+            if overlay.alpha != 0 {
+                pixel.blend(overlay);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -770,6 +808,7 @@ impl UiFrameTarget {
         Self {
             cached: vec![Rgb565Pixel(0); geometry.render_w() * geometry.render_h()],
             cached_stride: geometry.render_w(),
+            overlay_line: vec![PremultipliedRgbaColor::default(); geometry.render_w()],
             direct_preview: Vec::new(),
             direct_preview_rect: None,
             physical_preview: PhysicalPreviewLayerOwner::default(),
@@ -787,6 +826,22 @@ impl UiFrameTarget {
 
     pub fn render(&mut self, renderer: &SoftwareRenderer) -> PhysicalRegion {
         renderer.render(&mut self.cached, self.cached_stride)
+    }
+
+    /// Paint Slint overlays over a native logical RGB565 background without
+    /// clearing that background. The layout must match this target's geometry.
+    pub fn render_over_background(
+        &mut self,
+        renderer: &SoftwareRenderer,
+        background: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
+        layout: Rgb565OutputLayout,
+    ) -> PhysicalRegion {
+        renderer.render_by_line(BackgroundOverlayLines {
+            cached: &mut self.cached,
+            line: &mut self.overlay_line,
+            background,
+            layout,
+        })
     }
 
     pub const fn cached_stride(&self) -> usize {

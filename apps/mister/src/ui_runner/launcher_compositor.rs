@@ -160,16 +160,58 @@ impl<'a> LayerTarget<'a> {
         full_slint_raster: bool,
         copy_damage: Option<DirtyRect>,
     ) -> (Option<DirtyRect>, DirtyRectList, bool, Option<DirtyRect>) {
-        let copy_damage = if full_slint_raster { None } else { copy_damage };
-        let Some(base_dirty) = self.replace_logical_frame_damage(pixels, copy_damage) else {
+        let layout = self.layout;
+        if pixels.len() != layout.logical_w().saturating_mul(layout.logical_h()) {
             return (None, DirtyRectList::new(), false, None);
-        };
-        let (slint_dirty, mut damage, rendered) = if full_slint_raster {
-            self.render_slint_full(window)
-        } else {
-            let (dirty, damage) = self.render_slint_base(window);
-            (dirty, damage, dirty.is_some())
-        };
+        }
+        // Retained motion is safe only in a seeded native landscape cache.
+        let base_dirty = copy_damage
+            .filter(|rect| {
+                !full_slint_raster
+                    && !layout.is_portrait()
+                    && layout.logical_w() == 960
+                    && layout.logical_h() == 540
+                    && rect.x0 < rect.x1
+                    && rect.y0 < rect.y1
+                    && rect.x1 <= 960
+                    && rect.y1 <= 540
+            })
+            .unwrap_or(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: layout.composition_w(),
+                y1: layout.composition_h(),
+            });
+        // A native base update requires recomposing overlays even if Slint's
+        // properties did not change or a previous raster consumed the redraw.
+        window.request_redraw();
+        let mut slint_dirty = None;
+        let mut damage = DirtyRectList::new();
+        let rendered = window.draw_if_needed(|renderer| {
+            use i_slint_core::renderer::RendererSealed;
+
+            // Include native damage in Slint's raster so unchanged overlays
+            // are composed with the updated background in the same pass.
+            let logical_damage = layout.composition_rect_to_logical_rect(base_dirty);
+            renderer.mark_dirty_region(
+                i_slint_core::lengths::LogicalRect::new(
+                    i_slint_core::lengths::LogicalPoint::new(
+                        logical_damage.x0 as f32,
+                        logical_damage.y0 as f32,
+                    ),
+                    i_slint_core::lengths::LogicalSize::new(
+                        logical_damage.width() as f32,
+                        logical_damage.rows() as f32,
+                    ),
+                )
+                .into(),
+            );
+            let region =
+                self.target
+                    .render_over_background(renderer, pixels, layout.output_layout());
+            slint_dirty = dirty_rect(&region, layout.composition_w(), layout.composition_h());
+            damage = dirty_rects(&region, layout.composition_w(), layout.composition_h());
+        });
         damage.push(base_dirty);
         (
             Some(slint_dirty.map_or(base_dirty, |dirty| dirty.union(base_dirty))),
@@ -177,37 +219,6 @@ impl<'a> LayerTarget<'a> {
             rendered,
             Some(base_dirty),
         )
-    }
-
-    /// Retained motion is safe only in the native landscape cache. All other
-    /// geometry, full-raster requests and unseeded caches use the full copy.
-    fn replace_logical_frame_damage(
-        &mut self,
-        pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
-        damage: Option<DirtyRect>,
-    ) -> Option<DirtyRect> {
-        let Some(rect) = damage.filter(|rect| {
-            !self.layout.is_portrait()
-                && self.layout.logical_w() == 960
-                && self.layout.logical_h() == 540
-                && rect.x0 < rect.x1
-                && rect.y0 < rect.y1
-                && rect.x1 <= 960
-                && rect.y1 <= 540
-        }) else {
-            return self.replace_logical_frame(pixels);
-        };
-        if pixels.len() != 960 * 540 {
-            return None;
-        }
-        let cached = self.target.cached_565_mut();
-        for y in rect.y0..rect.y1 {
-            let range = y * 960 + rect.x0..y * 960 + rect.x1;
-            for (destination, source) in cached[range.clone()].iter_mut().zip(&pixels[range]) {
-                destination.0 = source.0;
-            }
-        }
-        Some(rect)
     }
 
     pub(super) fn render_black(&mut self) -> DirtyRect {
@@ -218,41 +229,6 @@ impl<'a> LayerTarget<'a> {
             x1: self.layout.logical_w(),
             y1: self.layout.logical_h(),
         }
-    }
-
-    pub(super) fn replace_logical_frame(
-        &mut self,
-        pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
-    ) -> Option<DirtyRect> {
-        if pixels.len()
-            != self
-                .layout
-                .logical_w()
-                .saturating_mul(self.layout.logical_h())
-        {
-            return None;
-        }
-        let composition_width = self.layout.composition_w();
-        let cached = self.target.cached_565_mut();
-        if !self.layout.is_portrait() {
-            for (destination, source) in cached.iter_mut().zip(pixels) {
-                destination.0 = source.0;
-            }
-        } else {
-            for y in 0..self.layout.logical_h() {
-                for x in 0..self.layout.logical_w() {
-                    let (physical_x, physical_y) = self.layout.logical_pixel_to_composition(x, y);
-                    cached[physical_y * composition_width + physical_x].0 =
-                        pixels[y * self.layout.logical_w() + x].0;
-                }
-            }
-        }
-        Some(DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: self.layout.composition_w(),
-            y1: self.layout.composition_h(),
-        })
     }
 
     pub(super) fn clear_cached_preview(&mut self) -> DirtyRect {
@@ -958,82 +934,288 @@ pub(super) struct LauncherPresentResult {
 mod tests {
     use super::*;
 
-    #[test]
-    fn retained_carousel_copy_matches_full_reference_and_reports_exact_damage() {
-        let ui = UiDisplay::for_framebuffer(960, 540);
-        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
-        let mut pixels = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0x1234); 960 * 540];
-        let rect = DirtyRect {
-            x0: 296,
-            y0: 120,
-            x1: 934,
-            y1: 495,
-        };
-        assert_eq!(
-            LayerTarget::new(&mut target, &ui).replace_logical_frame_damage(&pixels, None),
-            Some(DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: 960,
-                y1: 540
-            })
-        );
-        for step in 0..4u16 {
-            for y in rect.y0..rect.y1 {
-                for x in rect.x0..rect.x1 {
-                    pixels[y * 960 + x].0 = (x as u16).wrapping_mul(y as u16).wrapping_add(step);
-                }
+    slint::slint! {
+        export component NativeHomeOverlayProbe inherits Window {
+            width: 960px;
+            height: 540px;
+            background: transparent;
+            in property <bool> overlay-visible: false;
+            in property <length> overlay-x: 20px;
+            in property <length> overlay-y: 20px;
+            if root.overlay-visible : Rectangle {
+                x: root.overlay-x;
+                y: root.overlay-y;
+                width: 80px;
+                height: 60px;
+                background: #00000080;
             }
-            assert_eq!(
-                LayerTarget::new(&mut target, &ui)
-                    .replace_logical_frame_damage(&pixels, Some(rect)),
-                Some(rect)
-            );
-            assert!(
-                target
-                    .cached_565()
-                    .iter()
-                    .zip(&pixels)
-                    .all(|(a, b)| a.0 == b.0)
-            );
         }
-        let before = target.cached_565().to_vec();
-        assert_eq!(
-            LayerTarget::new(&mut target, &ui)
-                .replace_logical_frame_damage(&pixels[..100], Some(rect)),
-            None
-        );
-        assert_eq!(target.cached_565(), before);
+    }
+
+    struct NativeHomeTestPlatform(Rc<MisterSoftwareWindow>);
+
+    impl slint::platform::Platform for NativeHomeTestPlatform {
+        fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+            Ok(self.0.clone())
+        }
     }
 
     #[test]
-    fn portrait_damage_request_uses_full_rotated_copy() {
-        let ui = UiDisplay::for_framebuffer(960, 540);
-        for orientation in [
-            ScreenOrientation::MonitorClockwise,
-            ScreenOrientation::MonitorCounterclockwise,
-        ] {
-            let layout = UiLayoutGeometry::for_display(&ui, orientation);
-            let pixels: Vec<_> = (0..960 * 540)
-                .map(|i| mister_magik_framebuffer_scenes::Rgb565Pixel(i as u16))
-                .collect();
-            let mut actual = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
-            let mut reference = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
-            let copied = LayerTarget::new_oriented(&mut actual, layout)
-                .replace_logical_frame_damage(
-                    &pixels,
-                    Some(DirtyRect {
-                        x0: 296,
-                        y0: 120,
-                        x1: 934,
-                        y1: 495,
-                    }),
+    fn custom_home_redraw_preserves_native_cards_without_input() {
+        std::thread::spawn(|| {
+            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            slint::platform::set_platform(Box::new(NativeHomeTestPlatform(window.clone())))
+                .expect("isolated compositor platform");
+            let overlay = NativeHomeOverlayProbe::new().expect("overlay probe");
+            window.set_size(PhysicalSize::new(960, 540));
+            overlay.show().expect("show overlay probe");
+            let ui = UiDisplay::for_framebuffer(960, 540);
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let cards = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0xffff); 960 * 540];
+            let mut layer = LayerTarget::new(&mut target, &ui);
+            layer.render_custom_home(&window, &cards, false, None);
+            assert!(
+                layer
+                    .presentation_frame_view()
+                    .pixels()
+                    .iter()
+                    .all(|pixel| pixel.0 == 0xffff),
+                "transparent Slint redraw erased the native card frame"
+            );
+
+            overlay.set_overlay_visible(true);
+            layer.render_custom_home(&window, &cards, false, None);
+            assert_ne!(
+                layer.presentation_frame_view().pixels()[30 * 960 + 30].0,
+                0xffff
+            );
+            assert_eq!(layer.presentation_frame_view().pixels()[0].0, 0xffff);
+            let overlay_pixel = layer.presentation_frame_view().pixels()[30 * 960 + 30].0;
+            for full in [false, true, false] {
+                window.request_redraw();
+                layer.render_custom_home(&window, &cards, full, None);
+                assert_eq!(
+                    layer.presentation_frame_view().pixels()[30 * 960 + 30].0,
+                    overlay_pixel,
+                    "unchanged overlay vanished or accumulated alpha after background restoration"
                 );
-            let full =
-                LayerTarget::new_oriented(&mut reference, layout).replace_logical_frame(&pixels);
-            assert_eq!(copied, full);
-            assert_eq!(actual.cached_565(), reference.cached_565());
-        }
+            }
+            overlay.set_overlay_visible(false);
+            layer.render_custom_home(&window, &cards, false, None);
+            assert!(
+                layer
+                    .presentation_frame_view()
+                    .pixels()
+                    .iter()
+                    .all(|pixel| pixel.0 == 0xffff),
+                "removed overlay failed to reveal the native frame"
+            );
+
+            overlay.set_overlay_x(320.0);
+            overlay.set_overlay_y(160.0);
+            overlay.set_overlay_visible(true);
+            layer.render_custom_home(&window, &cards, false, None);
+            let tile_damage = DirtyRect {
+                x0: 296,
+                y0: 120,
+                x1: 934,
+                y1: 495,
+            };
+            let mut changed_cards = cards;
+            for y in tile_damage.y0..tile_damage.y1 {
+                changed_cards[y * 960 + tile_damage.x0..y * 960 + tile_damage.x1]
+                    .fill(mister_magik_framebuffer_scenes::Rgb565Pixel(0x001f));
+            }
+            layer.render_custom_home(&window, &changed_cards, false, Some(tile_damage));
+            let mut expected_overlay = Rgb565Pixel(0x001f);
+            expected_overlay.blend(slint::platform::software_renderer::PremultipliedRgbaColor {
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 128,
+            });
+            assert_eq!(
+                layer.presentation_frame_view().pixels()[170 * 960 + 330],
+                expected_overlay
+            );
+            assert_eq!(
+                layer.presentation_frame_view().pixels()[150 * 960 + 300].0,
+                0x001f
+            );
+            assert_eq!(layer.presentation_frame_view().pixels()[0].0, 0xffff);
+            let before = layer.presentation_frame_view().pixels().to_vec();
+            let (dirty, damage, rendered, copied) =
+                layer.render_custom_home(&window, &changed_cards[..100], false, Some(tile_damage));
+            assert!(dirty.is_none() && damage.is_empty() && !rendered && copied.is_none());
+            assert!(
+                layer.presentation_frame_view().pixels() == before,
+                "rejected native geometry must preserve the displayed frame"
+            );
+        })
+        .join()
+        .expect("compositor test thread");
+    }
+
+    #[test]
+    fn custom_home_redraw_restores_native_pixels_in_all_orientations() {
+        std::thread::spawn(|| {
+            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            slint::platform::set_platform(Box::new(NativeHomeTestPlatform(window.clone())))
+                .expect("isolated compositor platform");
+            let overlay = NativeHomeOverlayProbe::new().expect("overlay probe");
+            overlay.show().expect("show overlay probe");
+            for (width, height) in [
+                (960, 540),
+                (540, 960),
+                (640, 240),
+                (768, 288),
+                (640, 480),
+                (768, 576),
+            ] {
+                let ui = UiDisplay::for_framebuffer(width, height);
+                for orientation in [
+                    ScreenOrientation::Normal,
+                    ScreenOrientation::MonitorClockwise,
+                    ScreenOrientation::MonitorCounterclockwise,
+                ] {
+                    let layout = UiLayoutGeometry::for_display(&ui, orientation);
+                    configure_window_layout(&layout, &window);
+                    let mut target =
+                        UiFrameTarget::cached(FramebufferTargetGeometry::new(width, height));
+                    let cards = (0..layout.logical_w() * layout.logical_h())
+                        .map(|i| {
+                            mister_magik_framebuffer_scenes::Rgb565Pixel(
+                                (i as u16).wrapping_mul(17) | 1,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let mut layer = LayerTarget::new_oriented(&mut target, layout);
+                    overlay.set_overlay_visible(false);
+                    layer.render_custom_home(&window, &cards, true, None);
+                    let expected = layer.presentation_frame_view().pixels().to_vec();
+                    for y in 0..layout.logical_h() {
+                        for x in 0..layout.logical_w() {
+                            let (px, py) = layout.logical_pixel_to_composition(x, y);
+                            assert_eq!(
+                                expected[py * width + px].0,
+                                cards[y * layout.logical_w() + x].0
+                            );
+                        }
+                    }
+                    overlay.set_overlay_visible(true);
+                    layer.render_custom_home(&window, &cards, false, None);
+                    let (px, py) = layout.logical_pixel_to_composition(30, 30);
+                    assert_ne!(
+                        layer.presentation_frame_view().pixels()[py * width + px],
+                        expected[py * width + px]
+                    );
+                    overlay.set_overlay_visible(false);
+                    layer.render_custom_home(
+                        &window,
+                        &cards,
+                        false,
+                        Some(DirtyRect {
+                            x0: 20,
+                            y0: 20,
+                            x1: 100,
+                            y1: 80,
+                        }),
+                    );
+                    assert_eq!(
+                        layer.presentation_frame_view().pixels(),
+                        expected,
+                        "removed overlay damaged {width}x{height} {orientation:?}"
+                    );
+                }
+            }
+        })
+        .join()
+        .expect("compositor geometry test thread");
+    }
+
+    #[test]
+    fn cold_intro_snapshot_and_idle_handoff_keep_the_real_launcher_cards() {
+        std::thread::spawn(|| {
+            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            slint::platform::set_platform(Box::new(NativeHomeTestPlatform(window.clone())))
+                .expect("isolated compositor platform");
+            let app = slint_ui::launcher::Launcher::new().expect("production launcher");
+            app.global::<slint_ui::launcher::MisterUi>()
+                .set_custom_home_base(true);
+            let ui = UiDisplay::for_framebuffer(960, 540);
+            window.set_size(PhysicalSize::new(960, 540));
+            app.show().expect("show production launcher");
+            let nav = LauncherNav::new();
+            let catalog = empty_arcade_catalog("/media/fat");
+            let level = crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
+            let mut home = super::super::launcher_card_home::LauncherCardHomeSession::new(
+                super::super::launcher_card_home::scene_for_display(
+                    &ui,
+                    UiLayoutGeometry::for_display(&ui, ScreenOrientation::Normal),
+                ),
+                level,
+                0,
+                "12:34",
+            )
+            .expect("production native cards");
+            let cards = home.render().to_vec();
+            assert!(
+                cards.iter().any(|pixel| pixel.0 != 0),
+                "native launcher must not be black"
+            );
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let mut layer = LayerTarget::new(&mut target, &ui);
+            layer.render_custom_home(&window, &cards, false, None);
+            let expected = cards
+                .iter()
+                .map(|pixel| Rgb565Pixel(pixel.0))
+                .collect::<Vec<_>>();
+            assert!(
+                layer.presentation_frame_view().pixels() == expected,
+                "cold-start morph source must contain the native launcher"
+            );
+            let mut intro = crate::launcher_runtime::startup_intro::StartupIntroPlayback::new(&ui)
+                .expect("production intro");
+            intro
+                .begin_launcher_snapshot_preparation(layer.presentation_frame_view().pixels())
+                .expect("capture live launcher target");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !intro
+                .poll_launcher_snapshot_preparation()
+                .expect("prepare morph target")
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "morph target preparation timed out"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            // Advance to the last 60 Hz crossfade frame before handoff.
+            for _ in 0..1199 {
+                assert!(!intro.note_presented(16_667));
+            }
+            for slot in 0..2 {
+                let mut hidden_pixels = vec![Rgb565Pixel(0); expected.len()];
+                intro
+                    .render_into(&mut hidden_pixels, slot, 960)
+                    .expect("render morph endpoint");
+                assert!(
+                    hidden_pixels == expected,
+                    "particle endpoint must be the live card frame in both hidden slots"
+                );
+            }
+            layer.render_black();
+            assert!(intro.restore_handoff_snapshot(layer.target.cached_565_mut()));
+            assert_eq!(layer.presentation_frame_view().pixels(), expected);
+            window.request_redraw();
+            layer.render_custom_home(&window, &cards, false, None);
+            assert!(
+                layer.presentation_frame_view().pixels() == expected,
+                "idle handoff redraw must not blank the launcher"
+            );
+        })
+        .join()
+        .expect("cold intro compositor test thread");
     }
 
     #[test]
