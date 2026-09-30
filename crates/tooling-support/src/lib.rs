@@ -54,6 +54,8 @@ impl Session {
     pub fn begin(&mut self) {
         self.metrics.dropped_frame_records.clear();
         self.metrics.dropped_frame_records.reserve(64);
+        self.metrics.work_timings.clear();
+        self.metrics.work_timings.reserve(3601);
         self.metrics.frame_timings_us.clear();
         self.metrics.frame_timings_us.reserve(3601);
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);

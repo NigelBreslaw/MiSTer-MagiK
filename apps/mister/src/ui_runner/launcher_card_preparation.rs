@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! One bounded owner of card preparation, producer construction and retirement.
-use super::{ASIDE_LEVELS, CardLevelSnapshot, LauncherFonts, native_render_ahead, prepare_cached};
-use crate::ui_runner::launcher_card_pipeline::{CardPipelineCounters, LauncherCardRenderAhead};
+use super::{ASIDE_LEVELS, CardLevelSnapshot, LauncherFonts, native_renderer, prepare_cached};
 use mister_magik_framebuffer_scenes::launcher::{
     LauncherFaceCache, LauncherScene, PreparedLauncher,
 };
+use mister_magik_framebuffer_scenes::launcher_parallel::ParallelLauncherRenderer;
 use std::{
     collections::VecDeque,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
@@ -19,8 +19,7 @@ const RETIRED: usize = ASIDE_LEVELS + 2;
 
 pub(super) struct PreparedContent {
     pub(super) prepared: Box<PreparedLauncher>,
-    pub(super) pipeline: Option<LauncherCardRenderAhead>,
-    pub(super) retirement_baseline: CardPipelineCounters,
+    pub(super) renderer: Option<Box<ParallelLauncherRenderer>>,
 }
 struct Request {
     id: u64,
@@ -35,7 +34,6 @@ struct State {
     pending: VecDeque<Request>,
     ready: Vec<(u64, PreparedContent)>,
     retired: Vec<PreparedContent>,
-    counters: CardPipelineCounters,
     stopped: bool,
     failure: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -69,7 +67,6 @@ impl HomePreparation {
                 pending: VecDeque::with_capacity(JOBS),
                 ready: Vec::with_capacity(JOBS + 1),
                 retired: Vec::with_capacity(RETIRED + JOBS),
-                counters: CardPipelineCounters::default(),
                 stopped: false,
                 failure: None,
             }),
@@ -129,22 +126,12 @@ impl HomePreparation {
                             };
                             (request, state.stopped)
                         };
-                        let mut counters = CardPipelineCounters::default();
                         for mut content in retired.drain(..) {
-                            if let Some(pipeline) = content.pipeline.as_mut() {
-                                pipeline.stop();
-                                counters.add_assign(
-                                    pipeline.counters().delta(content.retirement_baseline),
-                                );
+                            if let Some(renderer) = content.renderer.as_mut() {
+                                renderer.stop();
                             }
                             drop(content);
                         }
-                        worker_shared
-                            .state
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .counters
-                            .add_assign(counters);
                         if stopped {
                             break;
                         }
@@ -199,11 +186,10 @@ impl HomePreparation {
                             }
                         };
                         caches.push(cache);
-                        let pipeline = native_render_ahead(request.scene, &prepared);
+                        let renderer = native_renderer(request.scene, &prepared);
                         let mut content = Some(PreparedContent {
                             prepared: Box::new(prepared),
-                            pipeline,
-                            retirement_baseline: CardPipelineCounters::default(),
+                            renderer,
                         });
                         {
                             let mut state = worker_shared
@@ -300,10 +286,7 @@ impl HomePreparation {
         state.retired.push(content);
         self.shared.wake.notify_one();
     }
-    #[cfg(feature = "tooling")]
-    pub(super) fn take_retired_counters(&self) -> CardPipelineCounters {
-        std::mem::take(&mut self.lock_state().counters)
-    }
+
     pub(super) fn shutdown(&self, contents: impl IntoIterator<Item = PreparedContent>) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         state.stopped = true;

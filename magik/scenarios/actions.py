@@ -398,15 +398,6 @@ def launcher_motion(
             raise AssertionError(
                 "instrumented card motion recorded no hidden-slot copy work"
             )
-        for name in (
-            "card_target_pacer_tick_misses",
-            "card_target_pacer_tick_repeats",
-            "card_target_pacer_tick_skips",
-            "last_card_target_pacer_tick",
-            "last_card_actual_pacer_tick",
-        ):
-            if type(window.get(name)) is not int or window[name] < 0:
-                raise AssertionError(f"instrumented card motion has no {name} evidence")
     if (
         held_direction
         and window.get("card_continuous_presentations") != window["presentations"]

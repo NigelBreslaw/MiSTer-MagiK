@@ -866,6 +866,17 @@ impl PreparedLauncher {
         }
     }
 
+    pub fn render_parallel_frame(
+        &mut self,
+        renderer: &mut crate::launcher_parallel::ParallelLauncherRenderer,
+        request: LauncherFrameRequest,
+    ) -> Result<crate::launcher_parallel::ParallelFrameTiming, String> {
+        if self.scene != LauncherScene::new(960, 540) {
+            return Err("parallel cards require native geometry".into());
+        }
+        renderer.render(request, &mut self.logical)
+    }
+
     pub fn render_into(&mut self, frame: BrowseFrame, output: &mut [Rgb565Pixel]) {
         self.render_frame(frame);
         output.copy_from_slice(self.pixels());

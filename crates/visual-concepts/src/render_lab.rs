@@ -4,10 +4,9 @@
 use super::{Effect, Pixel, Preset, Rect, full};
 use mister_magik_framebuffer_scenes::{
     arcade_card::{ArcadeCardRenderer, CabinetTexture},
-    launcher::{
-        LauncherFramePreparer, LauncherFrameRequest, PreparedLauncher, PreparedLauncherFrame,
-    },
+    launcher::{LauncherFrameRequest, PreparedLauncher},
     launcher_navigation::{BrowseDirection, BrowseFrame, BrowsePhase},
+    launcher_parallel::ParallelLauncherRenderer,
     settings_cog::{CogTexture, render_settings_cog_transition_into},
 };
 use std::{
@@ -22,9 +21,11 @@ pub(super) struct Lab {
     held_navigation: bool,
     launcher: Option<PreparedLauncher>,
     home: Vec<Pixel>,
-    tiles: Option<ParallelTiles>,
+    tiles: Option<ParallelLauncherRenderer>,
     reveal: Option<ArcadeCardRenderer>,
     cog: Option<(CogTexture, Vec<Pixel>)>,
+    card_last_us: [u64; 3],
+    card_max_us: [u64; 3],
     cog_last_us: u64,
     cog_max_us: u64,
     preparation: Vec<(&'static str, u64)>,
@@ -106,7 +107,9 @@ impl Lab {
         let stage = Instant::now();
         let tiles = launcher
             .as_ref()
-            .map(|launcher| ParallelTiles::new(launcher.frame_preparer(), worker_setup))
+            .map(|launcher| {
+                ParallelLauncherRenderer::new(launcher.frame_preparer(), worker_setup, None)
+            })
             .transpose()?;
         if tiles.is_some() {
             preparation.push(("worker_setup", stage.elapsed().as_millis() as u64));
@@ -119,6 +122,8 @@ impl Lab {
             tiles,
             reveal,
             cog,
+            card_last_us: [0; 3],
+            card_max_us: [0; 3],
             cog_last_us: 0,
             cog_max_us: 0,
             preparation,
@@ -257,7 +262,7 @@ impl Effect for Lab {
                 pixels.copy_from_slice(&self.home);
                 self.first_frame = false;
             }
-            self.tiles.as_mut().unwrap().render(
+            let timing = self.tiles.as_mut().unwrap().render(
                 LauncherFrameRequest {
                     frame: if self.held_navigation {
                         browse_held(ms)
@@ -269,6 +274,10 @@ impl Effect for Lab {
                 },
                 pixels,
             )?;
+            self.card_last_us = [timing.primary_us, timing.secondary_us, timing.wait_us];
+            for (max, last) in self.card_max_us.iter_mut().zip(self.card_last_us) {
+                *max = (*max).max(last);
+            }
             Ok(Rect {
                 x0: 296,
                 y0: 120,
@@ -281,19 +290,17 @@ impl Effect for Lab {
         if self.cog.is_some() {
             return [self.cog_last_us, 0, 0];
         }
-        self.reveal.as_ref().map_or_else(
-            || self.tiles.as_ref().map_or([0; 3], |t| t.last_us),
-            ArcadeCardRenderer::last_us,
-        )
+        self.reveal
+            .as_ref()
+            .map_or_else(|| self.card_last_us, ArcadeCardRenderer::last_us)
     }
     fn render_stage_max_us(&self) -> [u64; 3] {
         if self.cog.is_some() {
             return [self.cog_max_us, 0, 0];
         }
-        self.reveal.as_ref().map_or_else(
-            || self.tiles.as_ref().map_or([0; 3], |t| t.max_us),
-            ArcadeCardRenderer::max_us,
-        )
+        self.reveal
+            .as_ref()
+            .map_or_else(|| self.card_max_us, ArcadeCardRenderer::max_us)
     }
     fn preparation_stages(&self) -> &[(&'static str, u64)] {
         &self.preparation
@@ -305,104 +312,12 @@ impl Effect for Lab {
             .reveal
             .as_ref()
             .map_or(0, ArcadeCardRenderer::storage_bytes)
-            + self.tiles.as_ref().map_or(0, |t| t.storage_bytes)
+            + self.tiles.as_ref().map_or(0, |t| t.storage_bytes())
             + self
                 .launcher
                 .as_ref()
                 .map_or(0, PreparedLauncher::cached_raster_bytes)
             + self.home.capacity() * 2
-    }
-}
-struct ParallelTiles {
-    preparer: LauncherFramePreparer,
-    left: PreparedLauncherFrame,
-    right: Option<PreparedLauncherFrame>,
-    request: Option<std::sync::mpsc::SyncSender<(LauncherFrameRequest, PreparedLauncherFrame)>>,
-    completed: std::sync::mpsc::Receiver<(PreparedLauncherFrame, u64)>,
-    max_us: [u64; 3],
-    last_us: [u64; 3],
-    worker: Option<std::thread::JoinHandle<()>>,
-    storage_bytes: usize,
-}
-impl ParallelTiles {
-    fn new(preparer: LauncherFramePreparer, worker_setup: Option<fn()>) -> Result<Self, String> {
-        let left = preparer.new_tile_buffer();
-        let right = preparer.new_tile_buffer();
-        let storage_bytes = left.storage_bytes() + right.storage_bytes();
-        let (request, receive) =
-            std::sync::mpsc::sync_channel::<(LauncherFrameRequest, PreparedLauncherFrame)>(1);
-        let (send, completed) = std::sync::mpsc::sync_channel(1);
-        let helper = preparer.clone();
-        let worker = std::thread::Builder::new()
-            .name("mini-card-tile".into())
-            .spawn(move || {
-                if let Some(setup) = worker_setup {
-                    setup();
-                }
-                while let Ok((request, mut tile)) = receive.recv() {
-                    let started = Instant::now();
-                    helper.render_tile(request, &mut tile, (629, 934));
-                    if send
-                        .send((tile, started.elapsed().as_micros() as u64))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(Self {
-            preparer,
-            max_us: [0; 3],
-            last_us: [0; 3],
-            left,
-            right: Some(right),
-            request: Some(request),
-            completed,
-            worker: Some(worker),
-            storage_bytes,
-        })
-    }
-    fn render(
-        &mut self,
-        request: LauncherFrameRequest,
-        pixels: &mut [Pixel],
-    ) -> Result<(), String> {
-        self.request
-            .as_ref()
-            .ok_or("tile worker stopped")?
-            .send((request, self.right.take().ok_or("missing tile buffer")?))
-            .map_err(|e| e.to_string())?;
-        let started = Instant::now();
-        self.preparer
-            .render_tile_into(request, &mut self.left, pixels, (296, 629), false);
-        let primary_us = started.elapsed().as_micros() as u64;
-        self.max_us[0] = self.max_us[0].max(primary_us);
-        let waiting = Instant::now();
-        let (right, secondary_us) = self.completed.recv().map_err(|e| e.to_string())?;
-        self.max_us[1] = self.max_us[1].max(secondary_us);
-        let wait_us = waiting.elapsed().as_micros() as u64;
-        self.last_us = [primary_us, secondary_us, wait_us];
-        self.max_us[2] = self.max_us[2].max(wait_us);
-        if right.request() != Some(request) {
-            return Err("stale card tile completion".into());
-        }
-        // The primary tile already owns this cached-memory destination. Merge
-        // only the helper band, then the presenter transfers the completed frame.
-        for y in 120..495 {
-            pixels[y * W + 629..y * W + 934]
-                .copy_from_slice(&right.pixels()[y * W + 629..y * W + 934]);
-        }
-        self.right = Some(right);
-        Ok(())
-    }
-}
-impl Drop for ParallelTiles {
-    fn drop(&mut self) {
-        self.request.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
     }
 }
 #[cfg(test)]

@@ -96,16 +96,15 @@ const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
-const CARD_DIRECT_MAXIMUM_FRAME_AGE_US: u64 = 50_000;
 const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
     DirtyRect {
         x0: 296,
         y0: 120,
-        x1: super::launcher_card_pipeline::CAROUSEL_SPLIT,
+        x1: mister_magik_framebuffer_scenes::launcher_parallel::CAROUSEL_SPLIT,
         y1: 495,
     },
     DirtyRect {
-        x0: super::launcher_card_pipeline::CAROUSEL_SPLIT,
+        x0: mister_magik_framebuffer_scenes::launcher_parallel::CAROUSEL_SPLIT,
         y0: 120,
         x1: 934,
         y1: 495,
@@ -9677,13 +9676,8 @@ pub(super) fn run_launcher_loop(
             .set_custom_home_base(custom_home_active);
         if custom_home_active {
             if let Some(session) = launcher_card_home.as_mut() {
-                let prediction_lead = Duration::from_micros(pacer.period_us().saturating_mul(2));
-                let prediction_time = loop_start
-                    .checked_add(prediction_lead)
-                    .unwrap_or(loop_start);
                 let (predicted_selected, predicted_visual_index) =
-                    nav.home_card_visual_prediction(prediction_time);
-                session.set_target_vblank(pacer.hits().saturating_add(2));
+                    (nav.selected, nav.home_card_visual_index());
                 if !card_level.matches_runtime(&nav, &catalog) {
                     card_level =
                         crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
@@ -10106,6 +10100,8 @@ pub(super) fn run_launcher_loop(
         let mut card_direct_frame_rendered = false;
         #[cfg(feature = "tooling")]
         let mut card_direct_measurement = None;
+        #[cfg(feature = "tooling")]
+        let mut card_work_timing = None;
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
         let mut navigation_capture_source_carrier_rendered = false;
@@ -10137,110 +10133,97 @@ pub(super) fn run_launcher_loop(
         if !card_motion_only && let Some(session) = launcher_card_home.as_mut() {
             session.invalidate_compositor();
         }
-        let card_direct_path_eligible =
-            !force_card_fallback && card_motion_only && custom_home_scene_ready;
-        if let Some(session) = launcher_card_home.as_mut() {
-            session.set_render_ahead_enabled(card_direct_path_eligible);
-        }
-        if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
-            let now_us = loop_start.duration_since(run_start).as_micros() as u64;
-            if let Some(frame) =
-                session.try_take_render_ahead(now_us, CARD_DIRECT_MAXIMUM_FRAME_AGE_US)
-            {
-                let request = frame.request();
-                let chrome = card_cached_frame_view(
-                    session.chrome_pixels(),
-                    layout.logical_w(),
-                    layout.logical_h(),
-                );
-                let tiles = frame.tiles().map(|pixels| {
-                    card_cached_frame_view(pixels, layout.logical_w(), layout.logical_h())
-                });
-                match launcher_presenter.try_copy_direct_hidden_tiles(
-                    f,
-                    display_session,
-                    chrome,
-                    tiles,
-                    CARD_DIRECT_TILE_DAMAGE,
-                    mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
-                        session.content_generation(),
-                        request.render.generation,
-                    ),
-                ) {
-                    Ok(Some(copy)) => {
-                        frame_production_trace.class = FrameProductionClass::Prepared;
-                        frame_production_trace.sequence = request.render.generation;
-                        frame_production_trace.render_wall_us = frame.producer_total_us();
-                        frame_production_completed_at = Some(Instant::now());
-                        #[cfg(feature = "tooling")]
-                        if card_presentation_measurement_enabled {
-                            card_direct_measurement = Some((
-                                copy.copy_us,
-                                request.render.timestamp_us,
-                                request.render.generation,
-                                request.target_vblank,
-                                now_us.saturating_sub(request.render.timestamp_us),
-                            ));
+        let card_direct_path_eligible = !force_card_fallback
+            && card_motion_only
+            && custom_home_scene_ready
+            && launcher_card_home
+                .as_ref()
+                .is_some_and(|session| session.can_render_native());
+        if card_direct_path_eligible
+            && let Some(session) = launcher_card_home.as_mut()
+            && session.can_render_native()
+        {
+            // Pacing can wait after model maintenance. Sample the current pose
+            // here so that waiting never freezes animation at an older phase.
+            let pose_at = Instant::now();
+            let (selected, visual_index) = nav.home_card_visual_prediction(pose_at);
+            let now_us = pose_at.duration_since(run_start).as_micros() as u64;
+            session.update(
+                super::launcher_card_home::scene_for_display(ui, layout),
+                &card_level,
+                selected,
+                visual_index,
+                &last_clock_text,
+                now_us / 1_000,
+                !nav.settings.reduce_motion,
+            );
+            session.render();
+            let request = session.current_request();
+            let timing = session.last_timing();
+            let cached = card_cached_frame_view(
+                session.current_pixels(),
+                layout.logical_w(),
+                layout.logical_h(),
+            );
+            match launcher_presenter.try_copy_direct_hidden_tiles(
+                f,
+                display_session,
+                cached,
+                [cached, cached],
+                CARD_DIRECT_TILE_DAMAGE,
+                mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
+                    session.content_generation(),
+                    request.generation,
+                ),
+            ) {
+                Ok(Some(copy)) => {
+                    frame_production_trace.class = FrameProductionClass::SynchronousAnimation;
+                    frame_production_trace.sequence = request.generation;
+                    frame_production_trace.render_wall_us = timing.map_or(0, |t| t.total_us);
+                    frame_production_completed_at = Some(Instant::now());
+                    #[cfg(feature = "tooling")]
+                    if card_presentation_measurement_enabled {
+                        card_direct_measurement = Some((
+                            copy.copy_us,
+                            request.timestamp_us,
+                            request.generation,
+                            Instant::now().duration_since(run_start).as_micros() as u64
+                                - request.timestamp_us,
+                        ));
+                        if let (Some(tooling), Some(timing)) = (tooling.as_mut(), timing) {
+                            tooling.metrics.counters.card_producer_total_us += timing.total_us;
+                            tooling.metrics.counters.card_primary_tile_us += timing.primary_us;
+                            tooling.metrics.counters.card_secondary_tile_us += timing.secondary_us;
+                            tooling.metrics.counters.card_secondary_wait_us += timing.wait_us;
+                            tooling.metrics.counters.card_rendered_frames += 1;
+                            let work = mister_magik_tooling_support::measurement::FrameWorkTiming {
+                                producer_us: timing.total_us,
+                                primary_us: timing.primary_us,
+                                secondary_us: timing.secondary_us,
+                                wait_us: timing.wait_us,
+                                helper_start_delay_us: timing.helper_start_delay_us,
+                                completion_delivery_us: timing.completion_wake_us,
+                                merge_us: timing.merge_us,
+                                primary_cpu_us: timing.primary_cpu_us,
+                                secondary_cpu_us: timing.secondary_cpu_us,
+                            };
+                            card_work_timing = Some(work);
+                            if tooling.metrics.window_start.is_some()
+                                && tooling.metrics.window.is_none()
+                            {
+                                tooling.metrics.work_timings.push(work);
+                            }
                         }
-                        completed_hidden_frame_for_present = Some(copy.completed);
-                        card_direct_frame_rendered = true;
-                        session.note_direct_presented(frame);
                     }
-                    Ok(None) => session.return_render_ahead(frame),
-                    Err(failure) => {
-                        session.recycle_render_ahead(frame);
-                        launcher_presenter.fail_latch_completion(failure);
-                    }
+                    completed_hidden_frame_for_present = Some(copy.completed);
+                    card_direct_frame_rendered = true;
+                    session.note_direct_presented();
                 }
-            }
-            if !card_direct_frame_rendered
-                && session.compositor_stale()
-                && let Some(frame) = session.presented_render_ahead()
-            {
-                let request = frame.request();
-                let chrome = card_cached_frame_view(
-                    session.chrome_pixels(),
-                    layout.logical_w(),
-                    layout.logical_h(),
-                );
-                let tiles = frame.tiles().map(|pixels| {
-                    card_cached_frame_view(pixels, layout.logical_w(), layout.logical_h())
-                });
-                match launcher_presenter.try_copy_direct_hidden_tiles(
-                    f,
-                    display_session,
-                    chrome,
-                    tiles,
-                    CARD_DIRECT_TILE_DAMAGE,
-                    mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
-                        session.content_generation(),
-                        request.render.generation,
-                    ),
-                ) {
-                    Ok(Some(copy)) => {
-                        frame_production_trace.class = FrameProductionClass::Prepared;
-                        frame_production_trace.sequence = request.render.generation;
-                        frame_production_trace.render_wall_us = 0;
-                        frame_production_completed_at = Some(Instant::now());
-                        #[cfg(feature = "tooling")]
-                        if card_presentation_measurement_enabled {
-                            card_direct_measurement = Some((
-                                copy.copy_us,
-                                request.render.timestamp_us,
-                                request.render.generation,
-                                request.target_vblank,
-                                now_us.saturating_sub(request.render.timestamp_us),
-                            ));
-                        }
-                        completed_hidden_frame_for_present = Some(copy.completed);
-                        card_direct_frame_rendered = true;
-                    }
-                    Ok(None) => {}
-                    Err(failure) => launcher_presenter.fail_latch_completion(failure),
-                }
+                Ok(None) => {}
+                Err(failure) => launcher_presenter.fail_latch_completion(failure),
             }
         }
-        let card_direct_waiting_on_prepared_frame = card_direct_path_eligible
+        let card_direct_waiting_on_slot = card_direct_path_eligible
             && !card_direct_frame_rendered
             && launcher_card_home
                 .as_ref()
@@ -10554,8 +10537,8 @@ pub(super) fn run_launcher_loop(
                 }
             }};
         }
-        let this_rect = if card_direct_frame_rendered || card_direct_waiting_on_prepared_frame {
-            if card_direct_waiting_on_prepared_frame {
+        let this_rect = if card_direct_frame_rendered || card_direct_waiting_on_slot {
+            if card_direct_waiting_on_slot {
                 request_launcher_redraw!();
             }
             None
@@ -11901,7 +11884,7 @@ pub(super) fn run_launcher_loop(
             || navigation_transition_composition_active;
         let direct_hidden_present_mode = startup_intro.is_some()
             || completed_hidden_frame_for_present.is_some()
-            || card_direct_waiting_on_prepared_frame;
+            || card_direct_waiting_on_slot;
         drop(frame_plan_pmu);
         let hidden_present_pmu = launcher_response_trace.input_pmu_span(
             latency_critical_input_pending,
@@ -12611,13 +12594,8 @@ pub(super) fn run_launcher_loop(
                         .saturating_duration_since(frame_t1)
                         .as_micros()
                         as u64;
-                    if let Some((
-                        copy_us,
-                        source_timestamp_us,
-                        source_generation,
-                        target_vblank,
-                        age_us,
-                    )) = card_direct_measurement.take()
+                    if let Some((copy_us, source_timestamp_us, source_generation, age_us)) =
+                        card_direct_measurement.take()
                     {
                         metrics.counters.card_hidden_copy_us =
                             metrics.counters.card_hidden_copy_us.saturating_add(copy_us);
@@ -12633,41 +12611,13 @@ pub(super) fn run_launcher_loop(
                                 metrics.counters.card_delivered_frames.saturating_add(1);
                         } else {
                             metrics.counters.card_dropped_frames += 1;
-                            let pipeline = launcher_card_home
-                                .as_ref()
-                                .and_then(|session| session.dropped_frame_evidence());
                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
-                                reason: "correct animation pose unavailable at presentation; see pipeline decision; worker/wake root cause unknown",
-                                dropped_frames: 1,
-                                source_generation, source_age_us: age_us,
-                                software_target_tick: target_vblank, software_present_tick: pacer.hits(),
-                                pipeline,
+                                reason:"current pose not updated at presentation; renderer timeline unavailable",
+                                dropped_frames:1,source_generation,source_age_us:age_us,
                                 ..Default::default()
                             });
                         }
                         metrics.last_card_source_generation = source_generation;
-                        metrics.note_card_target_tick(target_vblank, pacer.hits());
-                        if let Some(card_session) = launcher_card_home.as_mut() {
-                            let delta = card_session.pipeline_counter_delta();
-                            metrics.counters.card_producer_total_us += delta.producer_total_us;
-                            metrics.counters.card_primary_tile_us += delta.primary_tile_us;
-                            metrics.counters.card_secondary_tile_us += delta.secondary_tile_us;
-                            metrics.counters.card_secondary_wait_us += delta.secondary_wait_us;
-                            metrics.counters.card_submitted = metrics
-                                .counters
-                                .card_submitted
-                                .saturating_add(delta.submitted);
-                            metrics.counters.card_completed = metrics
-                                .counters
-                                .card_completed
-                                .saturating_add(delta.completed);
-                            metrics.counters.card_superseded = metrics
-                                .counters
-                                .card_superseded
-                                .saturating_add(delta.superseded);
-                            metrics.counters.card_stale =
-                                metrics.counters.card_stale.saturating_add(delta.stale);
-                        }
                     } else if card_presentation_measurement_enabled {
                         metrics.counters.card_synchronous_presentations += 1;
                     }
@@ -12691,7 +12641,10 @@ pub(super) fn run_launcher_loop(
                                         metrics.counters.drops += dropped;
                                         if dropped != 0 {
                                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
-                                                reason: "cause unknown: no timely display activation; worker/wake timeline unavailable",
+                                                reason: if card_work_timing.is_some_and(|work|work.producer_us+presented_frame.main_present_hidden_copy_us as u64>pacer.period_us()) {
+                                                    "current card rendering and copy exceeded the refresh budget"
+                                                } else { "cause unknown: display deadline missed; inspect frame phase, worker execution and completion timeline" },
+                                                work:card_work_timing,
                                                 dropped_frames: dropped,
                                                 owned_refresh_observed: Some(telemetry.owned_vblank_count),
                                                 active_sequence: Some(telemetry.active_sequence), ui_render_us: render_us,
