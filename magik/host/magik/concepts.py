@@ -229,12 +229,14 @@ BOOKMARKS = {
 
 def review(application, agent, run, effect, preset, *, quick=False):
     if not quick:
-        # Exercise switching and the other preset outside measured windows.
+        # Exercise switching and controls outside measured windows.
         select(application, "diagnostic", "reduced")
         select(
             application,
             effect,
-            "reduced" if effect not in RENDER_LABS and preset == "default" else "default",
+            "reduced"
+            if effect not in RENDER_LABS and preset == "default"
+            else "default",
         )
         action(application, "restart")
         action(application, "pause")
