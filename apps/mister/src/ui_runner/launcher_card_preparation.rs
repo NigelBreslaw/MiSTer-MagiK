@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! One bounded owner of card preparation, producer construction and retirement.
+//! One bounded owner of card preparation and background retirement.
 use super::{ASIDE_LEVELS, CardLevelSnapshot, LauncherFonts, prepare_cached};
 use mister_magik_framebuffer_scenes::launcher::{
     LauncherFaceCache, LauncherScene, PreparedLauncher,
@@ -17,11 +17,7 @@ use std::{
 const JOBS: usize = ASIDE_LEVELS + 2;
 const RETIRED: usize = ASIDE_LEVELS + 2;
 
-pub(super) struct PreparedContent {
-    pub(super) prepared: Box<PreparedLauncher>,
-    // Populated only when the session moves its single engine to background retirement.
-    pub(super) renderer: Option<Box<ParallelLauncherRenderer>>,
-}
+pub(super) type PreparedContent = Box<PreparedLauncher>;
 struct Request {
     id: u64,
     scene: LauncherScene,
@@ -35,6 +31,7 @@ struct State {
     pending: VecDeque<Request>,
     ready: Vec<(u64, PreparedContent)>,
     retired: Vec<PreparedContent>,
+    retiring_renderer: Option<Box<ParallelLauncherRenderer>>,
     stopped: bool,
     failure: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -68,6 +65,7 @@ impl HomePreparation {
                 pending: VecDeque::with_capacity(JOBS),
                 ready: Vec::with_capacity(JOBS + 1),
                 retired: Vec::with_capacity(RETIRED + JOBS),
+                retiring_renderer: None,
                 stopped: false,
                 failure: None,
             }),
@@ -87,7 +85,7 @@ impl HomePreparation {
                     loop {
                         // Move cancellation and retirement onto this thread before
                         // picking another job. The UI never drops a ready raster.
-                        let (request, stopped) = {
+                        let (request, stopped, renderer) = {
                             let mut state = worker_shared
                                 .state
                                 .lock()
@@ -125,14 +123,10 @@ impl HomePreparation {
                             } else {
                                 state.pending.pop_front()
                             };
-                            (request, state.stopped)
+                            (request, state.stopped, state.retiring_renderer.take())
                         };
-                        for mut content in retired.drain(..) {
-                            if let Some(renderer) = content.renderer.as_mut() {
-                                renderer.stop();
-                            }
-                            drop(content);
-                        }
+                        retired.clear();
+                        drop(renderer);
                         if stopped {
                             break;
                         }
@@ -187,10 +181,7 @@ impl HomePreparation {
                             }
                         };
                         caches.push(cache);
-                        let mut content = Some(PreparedContent {
-                            prepared: Box::new(prepared),
-                            renderer: None,
-                        });
+                        let mut content = Some(Box::new(prepared));
                         {
                             let mut state = worker_shared
                                 .state
@@ -200,7 +191,7 @@ impl HomePreparation {
                                 state.ready.push((request.id, content.take().unwrap()));
                             }
                         }
-                        // A cancelled completion is destroyed here, including joins.
+                        // A cancelled completion is destroyed on this worker.
                         drop(content);
                     }
                 }));
@@ -287,7 +278,11 @@ impl HomePreparation {
         self.shared.wake.notify_one();
     }
 
-    pub(super) fn shutdown(&self, contents: impl IntoIterator<Item = PreparedContent>) {
+    pub(super) fn shutdown(
+        &self,
+        contents: impl IntoIterator<Item = PreparedContent>,
+        renderer: Option<Box<ParallelLauncherRenderer>>,
+    ) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         state.stopped = true;
         state.pending.clear();
@@ -295,6 +290,10 @@ impl HomePreparation {
         // Shutdown moves at most the current level, five aside levels and
         // a trick destination. Its extra slots were reserved at construction.
         state.retired.extend(contents);
+        if renderer.is_some() {
+            assert!(state.retiring_renderer.is_none());
+            state.retiring_renderer = renderer;
+        }
         assert!(state.retired.len() <= RETIRED + JOBS);
         self.shared.wake.notify_one();
     }
@@ -323,8 +322,8 @@ impl HomePreparation {
 }
 impl Drop for HomePreparation {
     fn drop(&mut self) {
-        self.shutdown(std::iter::empty());
-        // The worker owns all remaining pixels, faces and producer joins.
+        self.shutdown(std::iter::empty(), None);
+        // The worker owns all remaining pixels, faces and the renderer join.
         // Dropping its handle does not wait on the launcher thread.
         drop(self.worker.take());
     }

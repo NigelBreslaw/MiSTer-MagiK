@@ -19,7 +19,7 @@ pub struct ParallelFrameTiming {
     pub secondary_us: u64,
     pub wait_us: u64,
     pub helper_start_delay_us: u64,
-    pub completion_wake_us: u64,
+    pub completion_delivery_us: u64,
     pub merge_us: u64,
     pub primary_cpu_us: Option<u64>,
     pub secondary_cpu_us: Option<u64>,
@@ -58,7 +58,7 @@ impl ParallelLauncherRenderer {
         worker_setup: Option<fn()>,
         cpu_clock: Option<fn() -> Option<u64>>,
     ) -> Result<Self, String> {
-        let primary = preparer.new_tile_buffer();
+        let primary = preparer.new_direct_tile_buffer();
         let helper = preparer.new_tile_buffer();
         let storage_bytes = primary.storage_bytes() + helper.storage_bytes();
         let (requests, received) = sync_channel::<Job>(1);
@@ -128,7 +128,6 @@ impl ParallelLauncherRenderer {
             &mut self.primary,
             destination,
             (296, CAROUSEL_SPLIT),
-            false,
         );
         let primary_cpu_us = cpu_delta(cpu_start, self.cpu_clock.and_then(|clock| clock()));
         let primary_us = micros(primary_started);
@@ -153,7 +152,7 @@ impl ParallelLauncherRenderer {
             secondary_us: completed.wall_us,
             wait_us,
             helper_start_delay_us: completed.start_delay_us,
-            completion_wake_us: received_at
+            completion_delivery_us: received_at
                 .saturating_duration_since(completed.finished_at)
                 .as_micros() as u64,
             merge_us,

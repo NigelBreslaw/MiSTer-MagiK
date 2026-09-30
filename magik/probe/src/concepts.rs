@@ -259,21 +259,21 @@ impl Concepts {
 mod tests {
     use super::*;
     #[test]
-    fn rendering_variant_switch_preserves_paused_frame() {
+    fn rendering_reselection_preserves_paused_frame() {
         let mut c = Concepts::new(960, 540);
         c.select("launcher-cards", Preset::Default);
         c.action("pause");
         c.action("step");
         let before = c.scene.as_ref().unwrap().elapsed();
         let generation = c.generation;
-        c.select("launcher-cards", Preset::Rgb888);
+        c.select("launcher-cards", Preset::Default);
         assert!(c.paused);
         assert_eq!(c.scene.as_ref().unwrap().elapsed(), before);
         assert_ne!(c.generation, generation);
         c.action("restart");
         assert!(c.paused);
         assert_eq!(c.scene.as_ref().unwrap().elapsed(), Duration::ZERO);
-        c.select("arcade-transition", Preset::Rgb888);
+        c.select("arcade-transition", Preset::Default);
         assert!(!c.paused);
         assert_eq!(c.scene.as_ref().unwrap().elapsed(), Duration::ZERO);
     }

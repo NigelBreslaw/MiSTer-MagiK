@@ -27,8 +27,6 @@ EFFECTS = (
 PRESETS = (
     "default",
     "reduced",
-    "rgb888",
-    "scanline",
 )
 RENDER_LABS = (
     "launcher-cards",
@@ -39,10 +37,8 @@ RENDER_LABS = (
 
 
 def supported(effect, preset):
-    if effect == "arcade-transition" and preset in ("scanline",):
-        return True
     return effect in EFFECTS and preset in (
-        ("default", "rgb888") if effect in RENDER_LABS else ("default", "reduced")
+        ("default",) if effect in RENDER_LABS else ("default", "reduced")
     )
 
 
@@ -238,9 +234,7 @@ def review(application, agent, run, effect, preset, *, quick=False):
         select(
             application,
             effect,
-            ("rgb888" if effect in RENDER_LABS else "reduced")
-            if preset == "default"
-            else "default",
+            "reduced" if effect not in RENDER_LABS and preset == "default" else "default",
         )
         action(application, "restart")
         action(application, "pause")
@@ -286,7 +280,7 @@ def review(application, agent, run, effect, preset, *, quick=False):
 def interactive(application, agent, run, effect, preset):
     select(application, effect, preset)
     print(
-        "Commands: select EFFECT, preset default|reduced|rgb888|scanline, pause, resume, step, restart, capture, quit",
+        "Commands: select EFFECT, preset default|reduced, pause, resume, step, restart, capture, quit",
         flush=True,
     )
     capture_number = 0

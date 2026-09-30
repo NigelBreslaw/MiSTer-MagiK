@@ -124,24 +124,14 @@ def main() -> int:
     )
     check_command.add_argument(
         "--preset",
-        choices=(
-            "default",
-            "reduced",
-            "rgb888",
-            "scanline",
-        ),
+        choices=("default", "reduced"),
         default="default",
     )
     concept = subcommands.add_parser("concept", help="interactive Mini RGB565 concept")
     concept.add_argument("effect")
     concept.add_argument(
         "--preset",
-        choices=(
-            "default",
-            "reduced",
-            "rgb888",
-            "scanline",
-        ),
+        choices=("default", "reduced"),
         default="default",
     )
     check_command.add_argument(

@@ -68,8 +68,6 @@ pub struct Counters {
     pub card_secondary_wait_us: u64,
     pub card_hidden_copy_us: u64,
     pub card_source_age_us: u64,
-    pub card_face_rebuilds: u64,
-    pub card_worker_restarts: u64,
     pub card_chrome_refreshes: u64,
     pub card_prepare_us: u64,
     pub card_fallback_copies: u64,
@@ -114,14 +112,10 @@ impl PresentationMetrics {
             .process_cpu_us
             .zip(self.window_cpu_start_us)
             .map(|(end, start)| end.saturating_sub(start));
-        // Schema compatibility: direct tiles have no intermediate composition.
-        // These constants describe the path; they are not measured counters.
         self.window = Some(
             json!({"start_ms":start_ms,"end_ms":end_ms,"elapsed_ms":end_ms-start_ms,
             "width":width,"height":height,"instrumented":instrumented,
             "forced_clock_changes":self.forced_clock_changes,
-            "card_face_rebuilds":c.card_face_rebuilds-baseline.card_face_rebuilds,
-            "card_worker_restarts":c.card_worker_restarts-baseline.card_worker_restarts,
             "card_chrome_refreshes":c.card_chrome_refreshes-baseline.card_chrome_refreshes,
             "card_prepare_us":c.card_prepare_us-baseline.card_prepare_us,
             "card_prepare_max_us":self.card_prepare_max_us,
@@ -141,9 +135,6 @@ impl PresentationMetrics {
             "card_primary_tile_us":c.card_primary_tile_us-baseline.card_primary_tile_us,
             "card_secondary_tile_us":c.card_secondary_tile_us-baseline.card_secondary_tile_us,
             "card_secondary_wait_us":c.card_secondary_wait_us-baseline.card_secondary_wait_us,
-            "card_composition_us":0,
-            "card_composition_calls":0,
-            "card_composition_bytes":0,
             "card_hidden_copy_us":c.card_hidden_copy_us-baseline.card_hidden_copy_us,
             "card_source_age_us":c.card_source_age_us-baseline.card_source_age_us,
             "last_card_source_timestamp_us":self.last_card_source_timestamp_us,
@@ -249,7 +240,6 @@ impl PresentationMetrics {
             "card_primary_tile_us":self.counters.card_primary_tile_us,
             "card_secondary_tile_us":self.counters.card_secondary_tile_us,
             "card_secondary_wait_us":self.counters.card_secondary_wait_us,
-            "card_composition_us":0,
             "card_hidden_copy_us":self.counters.card_hidden_copy_us,
             "card_source_age_us":self.counters.card_source_age_us,
             "last_card_source_timestamp_us":self.last_card_source_timestamp_us,
@@ -327,13 +317,6 @@ mod tests {
         assert_eq!(window["card_producer_total_us"], 24_000);
         assert_eq!(window["card_hidden_copy_us"], 2_700);
         assert_eq!(window["last_card_source_generation"], 42);
-        for key in [
-            "card_composition_us",
-            "card_composition_calls",
-            "card_composition_bytes",
-        ] {
-            assert_eq!(window[key], 0);
-        }
     }
 
     #[test]

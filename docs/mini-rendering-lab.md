@@ -13,14 +13,17 @@ bands split at y=311. Each owns bounded scratch; immutable mip data is shared.
 The application owns thread policy. The resting cabinet uses the same RGB888
 source and final quantisation. Artwork is prewarmed off the UI thread alongside
 initial card preparation, and reveal workers retire after navigation completion.
-Production retains its existing card render-ahead and hidden-slot publication
-contract. No new affinity/priority policy, baked animation or angle atlas is used.
+Production and Mini use one synchronous two-tile carousel engine. Each frame
+samples the current pose, renders its two matching bands and publishes the
+complete result through the existing hidden-slot contract. One persistent helper
+survives menu and geometry changes. No new affinity/priority policy, baked
+animation or angle atlas is used.
 
 The old source RGB565 copies, nearest-sampled HDMI cabinet path, quality switches
-and rejected complete-frame cache variants have been removed. Mini's `default`,
-`rgb888` and Arcade `scanline` names select the same accepted renderer; the latter
-two names remain as aliases for existing experiment commands. Other concept
-workloads retain their normal `default`/`reduced` choices.
+and rejected complete-frame cache variants have been removed, along with the
+predicted carousel render-ahead pipeline and obsolete Mini renderer aliases.
+Fidelity workloads use `default`; other concept workloads retain their normal
+`default`/`reduced` choices.
 
 ## Interactive and startup checks
 
@@ -177,3 +180,49 @@ screen change. The live capture was refused because scanout changed during the
 animation; the settled screen and diagnostics were retained, and cleanup passed.
 Its 1509.3 ms activation-to-ready observation includes host RPC, capture and
 polling; it is not the cog texture preparation time or animation duration.
+
+
+## Production carousel optimisation
+
+The removed producer queue could reject completed images at ordinary card
+boundaries or publish an older image when a single readiness poll found no
+completion. Production now renders the current pose with the same bounded engine
+as Mini. Menu preparation owns immutable content and retires it off the UI thread;
+the carousel helper belongs to the session. The obsolete tile-composition API,
+unused blocked-rendering path and its buffers are removed. The primary tile
+writes into the owned output and needs no intermediate full-frame pixel buffer.
+Texture rows hidden behind proven
+opaque front-card spans are skipped before filtering. Reflection rows and alpha
+proof samples remain prepared; exact-output tests cover flips, wrapping and
+reversal with scratch retained between poses.
+
+Each implementation received one `scripts/magik check motion` run: three
+five-second tap/reversal windows and one eight-second continuous right hold.
+These are individual runs, not averages or repeated qualification attempts.
+
+| Change | Tap/reversal dropped frames | Hold dropped frames / 480 | Hold producer mean |
+| --- | --- | ---: | ---: |
+| Original queue, with unified diagnostics | 64 / 47 / 63 | 88 | — |
+| Shared current-pose engine | 17 / 12 / 17 | 6 | 12.319 ms |
+| Persistent helper across menus | 8 / 7 / 9 | 6 | 12.324 ms |
+| Skip filtering hidden source rows | 9 / 9 / 12 | 2 | 12.202 ms |
+
+The exact-rounding fused filter/blend/light experiment regressed full-frame
+cost and was removed. The restored implementation was not benchmarked again.
+The final hold producer p99 was 14.041 ms and maximum 18.149 ms. Zero dropped
+frames has not been achieved. Occasional execution delays and frame-phase
+headroom remain unresolved; the final rebase and cleanup have focused correctness
+validation, without another physical benchmark.
+
+`dropped_frames` is the primary metric. During animation it includes confirmed
+missing display activations and frames that publish the same carousel generation.
+Idle reuse is excluded. Bounded records retain worker wall/CPU costs, helper start,
+completion delivery and merge time. A budget overrun is identified where measured;
+otherwise the record explicitly leaves the cause unknown. Completion delivery can
+include primary-thread work before receiving the helper result, so it does not
+prove scheduler wake latency. Software target observations are not added to
+hardware drop counts.
+
+Final evidence: `20260930T213858Z-4b88e2104b92` in ignored
+`build/magik-results/`. Earlier steps are retained in `20260930T202443Z-3a432d89ba48`,
+`20260930T205034Z-04ced6a1967f` and `20260930T210636Z-6f56ec911ddf`.

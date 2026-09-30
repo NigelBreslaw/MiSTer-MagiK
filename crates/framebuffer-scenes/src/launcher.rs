@@ -429,23 +429,17 @@ pub struct PreparedLauncherFrame {
     request: Option<LauncherFrameRequest>,
     scratch: Vec<crate::launcher_flip::Scratch>,
     pixels: Vec<Rgb565Pixel>,
-    blocked: Vec<Rgb565Pixel>,
-    clip: (usize, usize),
 }
 
 impl PreparedLauncherFrame {
     pub fn pixels(&self) -> &[Rgb565Pixel] {
         &self.pixels
     }
-    pub fn clip(&self) -> (usize, usize) {
-        self.clip
-    }
     pub fn request(&self) -> Option<LauncherFrameRequest> {
         self.request
     }
     pub fn storage_bytes(&self) -> usize {
         self.pixels.capacity() * 2
-            + self.blocked.capacity() * 2
             + self
                 .scratch
                 .iter()
@@ -471,11 +465,9 @@ impl LauncherFramePreparer {
             request: rendered_request,
             scratch,
             pixels,
-            clip: rendered_clip,
             ..
         } = buffer;
         *rendered_request = Some(request);
-        *rendered_clip = clip;
         self.render_tile_pixels(request, scratch, pixels, clip);
     }
 
@@ -487,92 +479,10 @@ impl LauncherFramePreparer {
         buffer: &mut PreparedLauncherFrame,
         destination: &mut [Rgb565Pixel],
         clip: (usize, usize),
-        retain_pixels: bool,
     ) {
         assert!(destination.len() >= 960 * 540);
         buffer.request = Some(request);
-        buffer.clip = clip;
         self.render_tile_pixels(request, &mut buffer.scratch, destination, clip);
-        if retain_pixels {
-            for y in 120..495 {
-                buffer.pixels[y * 960 + clip.0..y * 960 + clip.1]
-                    .copy_from_slice(&destination[y * 960 + clip.0..y * 960 + clip.1]);
-            }
-        }
-    }
-
-    /// Compose each screen strip in cached memory, then publish it to the
-    /// write-combined scanout mapping with contiguous row stores.
-    pub fn render_tile_blocked_into(
-        &self,
-        request: LauncherFrameRequest,
-        buffer: &mut PreparedLauncherFrame,
-        destination: &mut [Rgb565Pixel],
-        clip: (usize, usize),
-        retain_pixels: bool,
-    ) {
-        const TOP: usize = 120;
-        const BOTTOM: usize = 495;
-        assert!(destination.len() >= LOGICAL_WIDTH * LOGICAL_HEIGHT);
-        assert!(clip.0 >= 296 && clip.0 <= clip.1 && clip.1 <= 934);
-        buffer.request = Some(request);
-        buffer.clip = clip;
-        self.render_tile_blocked_pixels(
-            request,
-            &mut buffer.scratch,
-            &mut buffer.blocked,
-            destination,
-            clip,
-        );
-        if retain_pixels {
-            for y in TOP..BOTTOM {
-                buffer.pixels[y * LOGICAL_WIDTH + clip.0..y * LOGICAL_WIDTH + clip.1]
-                    .copy_from_slice(
-                        &destination[y * LOGICAL_WIDTH + clip.0..y * LOGICAL_WIDTH + clip.1],
-                    );
-            }
-        }
-    }
-
-    fn render_tile_blocked_pixels(
-        &self,
-        request: LauncherFrameRequest,
-        scratch: &mut [crate::launcher_flip::Scratch],
-        blocked: &mut [Rgb565Pixel],
-        destination: &mut [Rgb565Pixel],
-        clip: (usize, usize),
-    ) {
-        const TOP: usize = 120;
-        const BOTTOM: usize = 495;
-        if !self.faces.is_empty() {
-            let plan = build_carousel_plan(&self.faces, request.frame, self.cyclic);
-            let width = crate::launcher_flip::STRIP_WIDTH;
-            for left in (clip.0..clip.1).step_by(width) {
-                let right = (left + width).min(clip.1);
-                let block_width = right - left;
-                let block_len = block_width * (BOTTOM - TOP);
-                let block = &mut blocked[..block_len];
-                block.fill(Rgb565Pixel(BACKGROUND));
-                draw_carousel_plan(
-                    block,
-                    block_width,
-                    (left, TOP),
-                    &plan,
-                    scratch,
-                    (left, right),
-                );
-                for y in TOP..BOTTOM {
-                    let source = (y - TOP) * block_width;
-                    destination[y * LOGICAL_WIDTH + left..y * LOGICAL_WIDTH + right]
-                        .copy_from_slice(&block[source..source + block_width]);
-                }
-            }
-        } else {
-            for y in TOP..BOTTOM {
-                destination[y * LOGICAL_WIDTH + clip.0..y * LOGICAL_WIDTH + clip.1]
-                    .fill(Rgb565Pixel(BACKGROUND));
-            }
-        }
     }
 
     fn render_tile_pixels(
@@ -605,14 +515,18 @@ impl LauncherFramePreparer {
     }
     /// Compact scratch for `render_tile` only, not whole-card preparation.
     pub fn new_tile_buffer(&self) -> PreparedLauncherFrame {
+        let mut buffer = self.new_direct_tile_buffer();
+        buffer.pixels = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        buffer
+    }
+
+    pub(crate) fn new_direct_tile_buffer(&self) -> PreparedLauncherFrame {
         PreparedLauncherFrame {
             request: None,
             scratch: (0..6)
                 .map(|_| crate::launcher_flip::Scratch::strip())
                 .collect(),
-            pixels: vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT],
-            blocked: vec![Rgb565Pixel(BACKGROUND); crate::launcher_flip::STRIP_WIDTH * (495 - 120)],
-            clip: (296, 934),
+            pixels: Vec::new(),
         }
     }
 }
@@ -655,21 +569,6 @@ impl PreparedLauncher {
         self.fit_output();
     }
 
-    pub fn compose_tiles(&mut self, left: &PreparedLauncherFrame, right: &PreparedLauncherFrame) {
-        assert_eq!(left.request, right.request);
-        assert_eq!(left.clip.0, 296);
-        assert_eq!(left.clip.1, right.clip.0);
-        assert_eq!(right.clip.1, 934);
-        let split = left.clip.1;
-        left.request.expect("rendered tile");
-        for y in 120..495 {
-            self.logical[y * 960 + 296..y * 960 + split]
-                .copy_from_slice(&left.pixels[y * 960 + 296..y * 960 + split]);
-            self.logical[y * 960 + split..y * 960 + 934]
-                .copy_from_slice(&right.pixels[y * 960 + split..y * 960 + 934]);
-        }
-        self.fit_output();
-    }
     pub fn frame_preparer(&self) -> LauncherFramePreparer {
         LauncherFramePreparer {
             faces: self.faces.clone(),

@@ -31,22 +31,18 @@ pub const EFFECTS: &[&str] = &[
 pub enum Preset {
     Default,
     Reduced,
-    Rgb888,
-    Scanline,
 }
 impl Preset {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "default" => Ok(Self::Default),
             "reduced" => Ok(Self::Reduced),
-            "rgb888" => Ok(Self::Rgb888),
-            "scanline" => Ok(Self::Scanline),
             _ => Err(format!("unknown preset: {value}")),
         }
     }
     pub const fn choose(self, default: usize, reduced: usize) -> usize {
         match self {
-            Self::Default | Self::Rgb888 | Self::Scanline => default,
+            Self::Default => default,
             Self::Reduced => reduced,
         }
     }
@@ -54,8 +50,6 @@ impl Preset {
         match self {
             Self::Default => "default",
             Self::Reduced => "reduced",
-            Self::Rgb888 => "rgb888",
-            Self::Scanline => "scanline",
         }
     }
 }
@@ -99,13 +93,8 @@ impl Scene {
         if RENDER_LABS.contains(&name) && (width, height) != (960, 540) {
             return Err("rendering labs require a confirmed 960x540 HDMI render surface".into());
         }
-        if RENDER_LABS.contains(&name) && preset == Preset::Reduced
-            || !RENDER_LABS.contains(&name) && matches!(preset, Preset::Rgb888 | Preset::Scanline)
-        {
+        if RENDER_LABS.contains(&name) && preset == Preset::Reduced {
             return Err("preset is not supported by this workload".into());
-        }
-        if matches!(preset, Preset::Scanline) && name != "arcade-transition" {
-            return Err("scanline requires arcade-transition".into());
         }
         let effect: Box<dyn Effect> = match name {
             "launcher-cards"

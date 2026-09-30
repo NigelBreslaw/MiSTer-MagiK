@@ -401,7 +401,7 @@ mod tests {
     fn geometry_and_preset_mismatches_are_rejected() {
         assert!(crate::Scene::new("launcher-cards", Preset::Default, 960, 600).is_err());
         assert!(crate::Scene::new("launcher-cards", Preset::Reduced, W, H).is_err());
-        assert!(crate::Scene::new("diagnostic", Preset::Rgb888, W, H).is_err());
-        assert!(crate::Scene::new("launcher-cards", Preset::Scanline, W, H).is_err());
+        assert!(Preset::parse("rgb888").is_err());
+        assert!(Preset::parse("scanline").is_err());
     }
 }

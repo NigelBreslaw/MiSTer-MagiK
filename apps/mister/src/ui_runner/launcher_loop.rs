@@ -6349,13 +6349,11 @@ pub(super) fn run_launcher_loop(
             {
                 arcade.set_selected_game_index(nav.arcade.selected as i32);
             }
-            if let Some((faces_rebuilt, worker_restarted, duration_us)) = launcher_card_home
-                .as_mut().and_then(super::launcher_card_home::LauncherCardHomeSession::take_preparation_measurement)
-            {
+            if let Some(duration_us) = launcher_card_home.as_mut().and_then(
+                super::launcher_card_home::LauncherCardHomeSession::take_preparation_measurement,
+            ) {
                 let metrics = &mut session.metrics;
-                metrics.counters.card_face_rebuilds += u64::from(faces_rebuilt);
-                metrics.counters.card_worker_restarts += u64::from(worker_restarted);
-                metrics.counters.card_chrome_refreshes += u64::from(!faces_rebuilt);
+                metrics.counters.card_chrome_refreshes += 1;
                 metrics.counters.card_prepare_us += duration_us;
                 metrics.card_prepare_max_us = metrics.card_prepare_max_us.max(duration_us);
             }
@@ -10202,7 +10200,7 @@ pub(super) fn run_launcher_loop(
                                 secondary_us: timing.secondary_us,
                                 wait_us: timing.wait_us,
                                 helper_start_delay_us: timing.helper_start_delay_us,
-                                completion_delivery_us: timing.completion_wake_us,
+                                completion_delivery_us: timing.completion_delivery_us,
                                 merge_us: timing.merge_us,
                                 primary_cpu_us: timing.primary_cpu_us,
                                 secondary_cpu_us: timing.secondary_cpu_us,

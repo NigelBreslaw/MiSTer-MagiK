@@ -145,7 +145,7 @@ def test_same_name_preset_selection_waits_for_new_generation(monkeypatch):
 @pytest.mark.parametrize(
     "effect", ["launcher-cards", "arcade-transition", "settings-transition"]
 )
-@pytest.mark.parametrize("preset", ["default", "rgb888"])
+@pytest.mark.parametrize("preset", ["default"])
 def test_render_labs_require_production_build_for_qualification(effect, preset):
     data = sample()
     data["window"]["context"].update(
@@ -161,10 +161,10 @@ def test_render_labs_require_production_build_for_qualification(effect, preset):
 def test_rendering_presets_are_scoped_to_rendering_labs():
     from magik.concepts import supported
 
-    assert supported("launcher-cards", "rgb888")
-    assert supported("arcade-transition", "rgb888")
+    assert supported("launcher-cards", "default")
+    assert supported("arcade-transition", "default")
     assert not supported("launcher-cards", "reduced")
-    assert not supported("starfield", "rgb888")
+    assert supported("starfield", "default")
     assert supported("starfield", "reduced")
 
 
@@ -198,11 +198,11 @@ def test_lab_requires_full_window_cadence_and_exact_geometry():
         validate(data, "abc", "launcher-cards", "default")
 
 
-@pytest.mark.parametrize("preset", ["scanline"])
-def test_arcade_specific_presets_are_only_available_for_arcade(preset):
+@pytest.mark.parametrize("preset", ["rgb888", "scanline"])
+def test_retired_rendering_presets_are_unavailable(preset):
     from magik.concepts import supported
 
-    assert supported("arcade-transition", preset)
+    assert not supported("arcade-transition", preset)
     assert not supported("launcher-cards", preset)
     assert not supported("starfield", preset)
 
@@ -262,7 +262,7 @@ def test_preparation_profile_waits_for_attributed_current_artifact(
         "physical_latch_flips": 2,
         "context": {
             "concept": "launcher-cards",
-            "preset": "rgb888",
+            "preset": "default",
             "build_profile": "release-device",
             "preparation_ms": 2026,
             "preparation_profile": {"complete": True, "process_cpu_us": 2_000_000},
@@ -292,7 +292,7 @@ def test_preparation_profile_waits_for_attributed_current_artifact(
     if identity_matches:
         assert (
             concepts.profile_preparation(
-                app, agent, tmp_path, "launcher-cards", "rgb888", sampled=sampled
+                app, agent, tmp_path, "launcher-cards", "default", sampled=sampled
             )
             == 0
         )
@@ -300,11 +300,11 @@ def test_preparation_profile_waits_for_attributed_current_artifact(
     else:
         with pytest.raises(ValueError, match="identity"):
             concepts.profile_preparation(
-                app, agent, tmp_path, "launcher-cards", "rgb888", sampled=sampled
+                app, agent, tmp_path, "launcher-cards", "default", sampled=sampled
             )
         assert not (tmp_path / "preparation-raw.json").exists()
     assert order == [
         "profile-preparation" if sampled else "bench-preparation",
-        ("launcher-cards", "rgb888"),
+        ("launcher-cards", "default"),
     ]
     assert captured.call_count == (1 if identity_matches and not sampled else 0)

@@ -156,7 +156,11 @@ captures after measurement. The original storyboard remains available. These
 fixtures isolate rendering; they do not exercise production input or nested
 menu transitions.
 
-Production motion windows report fresh and redisplayed carousel generations
-without enabling the CPU sampler. Compare those counters with physical refresh
-repeats: posting at 60 Hz while repeating carousel artwork is visible judder,
-even when the scanout driver reports zero missed refreshes.
+Production motion windows report `dropped_frames`: every missing fresh animation
+frame, including a repeated moving carousel generation. Settled idle frames are
+excluded. Confirmed display activations and generation accounting cover distinct
+refreshes; software target observations are not added again. Bounded records
+include worker execution and delivery costs, with a specific budget-overrun cause
+when measured and an explicit unknown cause otherwise. CPU sampling is disabled;
+thread CPU clocks remain available. A run measures performance and does not claim
+zero drops merely because its scenario checks passed.

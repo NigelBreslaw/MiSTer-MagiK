@@ -157,7 +157,7 @@ pub(super) struct LauncherCardHomeSession {
     compositor_stale: bool,
     compositor_content_generation: Option<u64>,
     measure_preparation: bool,
-    preparation_measurement: Option<(bool, bool, u64)>,
+    preparation_measurement: Option<u64>,
 }
 
 impl LauncherCardHomeSession {
@@ -280,10 +280,7 @@ impl LauncherCardHomeSession {
             if self.scene != scene {
                 self.clear_aside();
             }
-            let old = PreparedContent {
-                prepared: self.prepared.0.replace(content.prepared).unwrap(),
-                renderer: None,
-            };
+            let old = self.prepared.0.replace(content).unwrap();
             self.retire(Prepared::Built(old));
             self.scene = scene;
             self.level = level.clone();
@@ -328,13 +325,8 @@ impl LauncherCardHomeSession {
             self.refresh_chrome(self.frame.selected);
 
             self.content_dirty = true;
-            self.preparation_measurement = preparation_started.map(|start| {
-                (
-                    false,
-                    false,
-                    start.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
-                )
-            });
+            self.preparation_measurement = preparation_started
+                .map(|start| start.elapsed().as_micros().try_into().unwrap_or(u64::MAX));
         }
     }
 
@@ -483,10 +475,7 @@ impl LauncherCardHomeSession {
             || (None, self.frame.selected),
             |trick| (Some(trick.source_level.clone()), trick.destination_selected),
         );
-        let old = PreparedContent {
-            prepared: self.prepared.0.replace(content.prepared).unwrap(),
-            renderer: None,
-        };
+        let old = self.prepared.0.replace(content).unwrap();
         if let Some(source) = source {
             self.set_aside(source, Prepared::Built(old));
         } else {
@@ -682,7 +671,7 @@ impl LauncherCardHomeSession {
     }
 
     #[cfg(feature = "tooling")]
-    pub(super) fn take_preparation_measurement(&mut self) -> Option<(bool, bool, u64)> {
+    pub(super) fn take_preparation_measurement(&mut self) -> Option<u64> {
         self.preparation_measurement.take()
     }
 }
@@ -833,10 +822,7 @@ impl Drop for LauncherCardHomeSession {
     fn drop(&mut self) {
         let mut contents = Vec::with_capacity(ASIDE_LEVELS + 2);
         if let Some(prepared) = self.prepared.0.take() {
-            contents.push(PreparedContent {
-                prepared,
-                renderer: self.renderer.take(),
-            });
+            contents.push(prepared);
         }
         for aside in std::mem::take(&mut self.aside) {
             if let Prepared::Built(content) = aside.prepared {
@@ -848,7 +834,7 @@ impl Drop for LauncherCardHomeSession {
         {
             contents.push(content);
         }
-        self.preparation.shutdown(contents);
+        self.preparation.shutdown(contents, self.renderer.take());
     }
 }
 
@@ -1601,10 +1587,6 @@ mod tests {
             session.renderer.as_ref().unwrap().helper_thread_id(),
             helper
         );
-        assert!(session.aside.iter().all(|aside| match &aside.prepared {
-            Prepared::Built(content) => content.renderer.is_none(),
-            Prepared::Building(_) => true,
-        }));
         let trick = session.trick.as_ref().unwrap();
         assert_eq!(
             trick.deal_delay_ms,
