@@ -22,6 +22,7 @@ impl ControllerDb {
             save_observer: None,
         }
     }
+    #[cfg(any(feature = "ui", test))]
     pub(crate) fn observe_saves(
         &mut self,
         observer: mister_magik_controller_registry::SaveObserver,
