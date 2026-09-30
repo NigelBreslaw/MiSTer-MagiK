@@ -1373,17 +1373,6 @@ fn capture_system_watch_with_observations(
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
     let specification = watch_specification_from_profiles(storage_root, system_id, &profiles)?;
-    if let Some(observations) = observations.filter(|o| o.complete) {
-        let current_roots = specification
-            .scan_roots
-            .iter()
-            .filter(|p| p.is_dir())
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect::<BTreeSet<_>>();
-        if observations.roots != current_roots {
-            return Err(format!("source roots changed after scan for {system_id}"));
-        }
-    }
     capture_system_watch_from_specification(
         storage_root,
         system_id,
@@ -3159,6 +3148,57 @@ mod tests {
         assert_eq!((source, watch), (1, 1));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn incremental_refresh_with_aliased_roots_keeps_new_games_and_exact_watch() {
+        let storage = crate::test_support::unique_temp_dir("incremental-aliased-roots");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        fs::create_dir_all(storage.join("games/Atari2600")).unwrap();
+        fs::write(storage.join("_Console/Atari2600.rbf"), b"core").unwrap();
+        std::os::unix::fs::symlink("Atari2600", storage.join("games/ATARI2600-Sinden")).unwrap();
+        let snapshot = FastFiveSnapshot {
+            schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.into(),
+            source_fingerprint: "0".repeat(64),
+            systems: vec![],
+        };
+        for (index, name) in ["First", "New Game"].iter().enumerate() {
+            fs::write(storage.join(format!("games/Atari2600/{name}.a26")), b"rom").unwrap();
+            let rebuilt =
+                crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
+                    &storage,
+                    "atari2600",
+                )
+                .unwrap()
+                .unwrap();
+            let mut observed = rebuilt.observations.unwrap();
+            assert_eq!(observed.roots.len(), 1, "aliases must scan only once");
+            // Linux captures complete observations; other hosts exercise the
+            // same root-set decision without relying on their walker backend.
+            observed.complete = true;
+            let watch =
+                capture_system_watch_with_observations(&storage, "atari2600", Some(&observed))
+                    .unwrap();
+            assert_eq!(watch, capture_system_watch(&storage, "atari2600").unwrap());
+            let prepared = prepare_system_refresh(&storage, &snapshot, "atari2600")
+                .unwrap()
+                .unwrap();
+            assert_eq!(prepared.system.games.len(), index + 1);
+            assert_eq!(
+                prepared.state.watch,
+                capture_system_watch(&storage, "atari2600").unwrap()
+            );
+            for root in ["Atari2600", "ATARI2600-Sinden"] {
+                let path = storage
+                    .join("games")
+                    .join(root)
+                    .to_string_lossy()
+                    .into_owned();
+                assert!(prepared.state.watch.roots.contains(&path));
+            }
+        }
+        fs::remove_dir_all(storage).unwrap();
+    }
+
     #[test]
     fn incremental_observation_reuse_rejects_changes_and_falls_back_for_partial_capture() {
         let storage = crate::test_support::unique_temp_dir("incremental-observation-validation");
@@ -3189,10 +3229,20 @@ mod tests {
         assert_eq!(crate::io_test_metrics::watch_tree_walks() - before, 1);
         let mut mismatched = observed.clone();
         mismatched.roots.clear();
-        assert!(
-            capture_system_watch_with_observations(&storage, "snes", Some(&mismatched))
-                .unwrap_err()
-                .contains("source roots changed")
+        let before = crate::io_test_metrics::watch_tree_walks();
+        assert_eq!(
+            capture_system_watch_with_observations(&storage, "snes", Some(&mismatched)).unwrap(),
+            expected
+        );
+        assert_eq!(crate::io_test_metrics::watch_tree_walks() - before, 1);
+        mismatched.roots = observed
+            .roots
+            .iter()
+            .map(|root| root.to_lowercase())
+            .collect();
+        assert_eq!(
+            capture_system_watch_with_observations(&storage, "snes", Some(&mismatched)).unwrap(),
+            expected
         );
         fs::File::open(storage.join("games/SNES"))
             .unwrap()
