@@ -4,9 +4,7 @@
 //! Capsule second-pass lookup against real mapped navigation rows. Preparation
 //! and full hot-row hydration are excluded, matching the capsule's first pass.
 use mister_magik_catalog::arcade_catalog::PlatformKind;
-use mister_magik_catalog::arcade_catalog::{
-    ArcadeCatalog, ArcadeGameView, LaunchTarget, SystemCollection,
-};
+use mister_magik_catalog::arcade_catalog::{ArcadeCatalog, LaunchTarget, SystemCollection};
 use mister_magik_catalog::system_shard::{SystemGame, SystemLaunchPlan, SystemNavigationIndexes};
 use std::{path::PathBuf, sync::Arc, time::Instant};
 const SIZES: [usize; 3] = [1_000, 2_000, 4_000];
@@ -73,17 +71,10 @@ fn fixture(count: usize) -> Result<(Fixture, ArcadeCatalog), String> {
     }
     Ok((owned, catalog))
 }
-fn lookup(
-    catalog: &ArcadeCatalog,
-    view: ArcadeGameView<'_>,
-    ordinal: usize,
-) -> Option<LaunchTarget> {
-    catalog.launch_target_in_view(view, ordinal)
-}
 fn verify(catalog: &ArcadeCatalog, count: usize) -> Result<(), String> {
     let view = catalog.system_game_view("fixture");
     for i in 0..count {
-        let Some(LaunchTarget::Structured(plan)) = lookup(catalog, view, i) else {
+        let Some(LaunchTarget::Structured(plan)) = catalog.launch_target_in_view(view, i) else {
             return Err("missing structured plan".into());
         };
         if plan.launch_ref.as_ref() != format!("magik-plan:fixture:{i:04}")
@@ -104,7 +95,11 @@ fn measure(catalog: &ArcadeCatalog, count: usize) -> Result<u64, String> {
     let view = catalog.system_game_view("fixture");
     let started = Instant::now();
     for i in 0..count {
-        std::hint::black_box(lookup(catalog, view, i).ok_or("missing timed row")?);
+        std::hint::black_box(
+            catalog
+                .launch_target_in_view(view, i)
+                .ok_or("missing timed row")?,
+        );
     }
     Ok(started.elapsed().as_nanos().try_into().unwrap_or(u64::MAX))
 }
@@ -182,6 +177,10 @@ mod tests {
         let (_owned, catalog) = fixture(130).unwrap();
         verify(&catalog, 130).unwrap();
         verify_replacement_precedence().unwrap();
-        assert!(lookup(&catalog, catalog.system_game_view("fixture"), 130).is_none());
+        assert!(
+            catalog
+                .launch_target_in_view(catalog.system_game_view("fixture"), 130)
+                .is_none()
+        );
     }
 }
