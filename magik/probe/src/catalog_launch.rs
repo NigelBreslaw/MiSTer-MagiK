@@ -108,7 +108,47 @@ fn measure(catalog: &ArcadeCatalog, count: usize) -> Result<u64, String> {
     }
     Ok(started.elapsed().as_nanos().try_into().unwrap_or(u64::MAX))
 }
+fn verify_replacement_precedence() -> Result<(), String> {
+    let (owned, source) = fixture(2)?;
+    let view = source.system_game_view("fixture");
+    let Some(LaunchTarget::Structured(current)) = source.launch_target_in_view(view, 0) else {
+        return Err("missing replacement fixture plan".into());
+    };
+    let mut old = current.clone();
+    old.core_path = "OldCore".into();
+    old.payload_path = "/games/old.bin".into();
+    let legacy = ArcadeCatalog::new_with_launch_plans(
+        source.root.clone(),
+        vec![view.get(0).ok_or("missing fixture row")?.clone()],
+        vec![],
+        vec![old.clone()],
+    );
+    if legacy.launch_target_for_ref(&old.launch_ref) != LaunchTarget::Structured(old) {
+        return Err("invalid retained global fixture".into());
+    }
+    let path = owned.0.join("fixture.navpack");
+    let (replacement, _) = SystemCollection::open_navpack(
+        "fixture",
+        &path,
+        std::fs::metadata(&path).map_err(|e| e.to_string())?.len(),
+        7,
+        2,
+        PlatformKind::Computer,
+    )?;
+    let updated = legacy.with_system_collection(Arc::new(replacement));
+    let expected = LaunchTarget::Structured(current);
+    if updated.launch_target_in_view(updated.system_game_view("fixture"), 0)
+        != Some(expected.clone())
+        || updated.launch_target_for_ref(&view.get(0).ok_or("missing fixture row")?.mra_path)
+            != expected
+    {
+        return Err("replacement plan lost to retained global plan".into());
+    }
+    Ok(())
+}
+
 pub(super) fn run() -> Result<serde_json::Value, String> {
+    verify_replacement_precedence()?;
     let fixtures = SIZES
         .into_iter()
         .map(fixture)
@@ -141,6 +181,7 @@ mod tests {
     fn mapped_launch_fixture_preserves_all_plan_fields() {
         let (_owned, catalog) = fixture(130).unwrap();
         verify(&catalog, 130).unwrap();
+        verify_replacement_precedence().unwrap();
         assert!(lookup(&catalog, catalog.system_game_view("fixture"), 130).is_none());
     }
 }

@@ -1402,8 +1402,23 @@ mod tests {
             PlatformKind::Computer,
         )
         .unwrap();
-        let source = ArcadeCatalog::new(root.into(), vec![], vec![])
-            .with_system_collection(std::sync::Arc::new(collection));
+        // A replacement collection must override the retained global plan.
+        let source = ArcadeCatalog::new_with_launch_plans(
+            root.into(),
+            vec![],
+            vec![],
+            vec![StructuredLaunchPlan {
+                launch_ref: refs[0].into(),
+                title: "Old plan".into(),
+                system_id: "fixture".into(),
+                core_path: "/cores/old.rbf".into(),
+                payload_path: "/games/old.rom".into(),
+                mount_kind: "load-file".into(),
+                mount_index: 0,
+                delay_secs: 1,
+            }],
+        )
+        .with_system_collection(std::sync::Arc::new(collection));
         let mut expected = binding(root);
         expected.binary_version = "fixture-version".into();
         expected.binary_build = "fixture-build".into();

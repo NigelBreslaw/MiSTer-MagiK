@@ -1136,9 +1136,6 @@ impl ArcadeCatalog {
     ) -> Option<LaunchTarget> {
         let game = view.get(ordinal)?;
         Some(Self::launch_target_with_plan(&game.mra_path, || {
-            if let Some(plan) = self.launch_plans_by_ref.get(&game.mra_path) {
-                return Some(plan);
-            }
             let (collection, row_ordinal) = match view {
                 ArcadeGameView::Collection(collection) => (collection, ordinal),
                 ArcadeGameView::CollectionIndexed {
@@ -1148,9 +1145,16 @@ impl ArcadeCatalog {
                 _ => return self.structured_launch_plan_for_ref(&game.mra_path),
             };
             match &collection.games {
-                SystemCollectionRows::NavPack(rows) => {
-                    rows.launch_plan(rows.materialize(row_ordinal).ok()?)
-                }
+                SystemCollectionRows::NavPack(rows) => rows
+                    .launch_plan(rows.materialize(row_ordinal).ok()?)
+                    .or_else(|| {
+                        // Skip this collection: its exact row was already checked.
+                        self.system_collections
+                            .values()
+                            .filter(|other| !std::ptr::eq(other.as_ref(), collection))
+                            .find_map(|other| other.launch_plan_for_ref(&game.mra_path))
+                            .or_else(|| self.launch_plans_by_ref.get(&game.mra_path))
+                    }),
                 SystemCollectionRows::Owned(_) => {
                     self.structured_launch_plan_for_ref(&game.mra_path)
                 }
@@ -3119,7 +3123,7 @@ mod tests {
 
     #[cfg(feature = "builder")]
     #[test]
-    fn mapped_launch_views_remap_ordinals_and_keep_global_plan_precedence() {
+    fn mapped_launch_views_remap_ordinals_and_prefer_collection_plans() {
         let path = navpack_fixture(130);
         let (collection, _) = SystemCollection::open_navpack(
             "c64",
@@ -3152,7 +3156,133 @@ mod tests {
             .insert(override_plan.launch_ref.clone(), override_plan.clone());
         assert_eq!(
             catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
-            Some(LaunchTarget::Structured(override_plan))
+            Some(catalog.launch_target_for_ref("magik-plan:c64:0"))
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn view_launches_follow_replacement_plans_without_changing_launch_reference() {
+        let path = navpack_fixture(130);
+        let (replacement, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let game = replacement.game_at(0).unwrap().clone();
+        let new_plan = replacement
+            .launch_plan_for_ref(&game.mra_path)
+            .unwrap()
+            .clone();
+        let mut old_plan = new_plan.clone();
+        old_plan.core_path = "/cores/old.rbf".into();
+        old_plan.payload_path = "/games/old.d64".into();
+        let catalog = ArcadeCatalog::new_with_launch_plans(
+            PathBuf::new(),
+            vec![game.clone()],
+            vec![GameSystemEntry {
+                id: "c64".into(),
+                title: "C64".into(),
+                count: 1,
+            }],
+            vec![old_plan.clone()],
+        )
+        .with_system_collection(Arc::new(SystemCollection::new(
+            "c64",
+            vec![game],
+            vec![old_plan.clone()],
+            PlatformKind::Computer,
+        )));
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(old_plan.clone()))
+        );
+        let updated = catalog.with_system_collection(Arc::new(replacement));
+        assert_eq!(updated.launch_plans_by_ref[&old_plan.launch_ref], old_plan);
+        assert_eq!(
+            updated.launch_target_for_ref(&new_plan.launch_ref),
+            LaunchTarget::Structured(new_plan.clone())
+        );
+        assert_eq!(
+            updated.launch_target_in_view(updated.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(new_plan))
+        );
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(old_plan))
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn mapped_launch_misses_check_other_collections_before_global_fallback() {
+        let path = navpack_fixture(1);
+        let game = crate::system_shard::SystemGame {
+            stable_key: "c64:0".into(),
+            title: "Game".into(),
+            launch_ref: "magik-plan:c64:0".into(),
+            ..Default::default()
+        };
+        let indexes =
+            crate::system_shard::build_navigation_indexes(std::slice::from_ref(&game)).unwrap();
+        let bytes = crate::navpack::encode("c64", 7, &[game], &indexes).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            bytes.len() as u64,
+            7,
+            1,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let row = collection.game_at(0).unwrap().clone();
+        let global = StructuredLaunchPlan {
+            launch_ref: row.mra_path.clone(),
+            title: row.title.clone(),
+            system_id: "c64".into(),
+            core_path: "Old".into(),
+            payload_path: "/global/old.d64".into(),
+            mount_kind: "mount-image".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        };
+        let catalog = ArcadeCatalog::new_with_launch_plans(
+            PathBuf::new(),
+            vec![],
+            vec![],
+            vec![global.clone()],
+        )
+        .with_system_collection(Arc::new(collection));
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(global.clone()))
+        );
+        let mut other = global;
+        other.core_path = "New".into();
+        other.payload_path = "/other/new.d64".into();
+        let updated = catalog.with_system_collection_for_id(
+            "alias:c64",
+            Arc::new(SystemCollection::new(
+                "c64",
+                vec![row],
+                vec![other.clone()],
+                PlatformKind::Computer,
+            )),
+        );
+        assert_eq!(
+            updated.launch_target_in_view(updated.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(other))
+        );
+        assert_eq!(
+            updated.launch_target_in_view(updated.system_game_view("c64"), 0),
+            Some(updated.launch_target_for_ref("magik-plan:c64:0"))
         );
         std::fs::remove_file(path).unwrap();
     }
