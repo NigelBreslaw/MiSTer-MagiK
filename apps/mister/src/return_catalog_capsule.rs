@@ -257,18 +257,14 @@ fn prepare_return_catalog_capsule_inner(
     let count_offset = writer.bytes.len();
     writer.write_u32(0)?;
     let mut refs = HashSet::new();
-    let mut count = 0usize;
-    let mut plan_rows = 0;
-    for (ordinal, _) in view.iter().enumerate() {
-        plan_rows += 1;
+    for ordinal in 0..view.len() {
         let target = catalog
             .launch_target_in_view(view, ordinal)
             .ok_or("return collection has a missing launch row")?;
         if let LaunchTarget::Structured(plan) = target
             && refs.insert(plan.launch_ref.clone())
         {
-            count += 1;
-            if count > RETURN_CATALOG_CAPSULE_MAX_PLANS {
+            if refs.len() > RETURN_CATALOG_CAPSULE_MAX_PLANS {
                 return Err("return capsule has too many structured launch plans".into());
             }
             validate_plan(&plan)?;
@@ -282,10 +278,8 @@ fn prepare_return_catalog_capsule_inner(
             writer.write_u8(plan.delay_secs)?;
         }
     }
-    if plan_rows != view.len() {
-        return Err("return collection has missing rows during launch encoding".into());
-    }
-    writer.bytes[count_offset..count_offset + 4].copy_from_slice(&(count as u32).to_le_bytes());
+    writer.bytes[count_offset..count_offset + 4]
+        .copy_from_slice(&(refs.len() as u32).to_le_bytes());
     Ok(PreparedReturnCatalogCapsule {
         bytes: writer.finish(),
     })
