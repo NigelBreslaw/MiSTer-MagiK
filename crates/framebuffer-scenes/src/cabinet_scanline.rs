@@ -417,7 +417,7 @@ mod tests {
                 inverse_y,
             );
             let clip = |y: usize| {
-                if y % 13 == 0 {
+                if y.is_multiple_of(13) {
                     (0, 0)
                 } else {
                     (110 + y % 7, 400 - y % 11)

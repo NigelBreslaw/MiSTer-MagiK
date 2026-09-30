@@ -703,6 +703,176 @@ pub(super) fn over(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)) as u16)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn project_card_over_column_quality(
+    source: &[u32],
+    destination: &mut [Rgb565Pixel],
+    pitch: usize,
+    rows: usize,
+    sample: (i32, i32),
+    dithered: bool,
+    origin: (usize, usize),
+) {
+    if !dithered {
+        return project_card_over_column(source, destination, pitch, rows, sample);
+    }
+    assert!(
+        rows == 0
+            || pitch > 0
+                && (rows - 1)
+                    .checked_mul(pitch)
+                    .is_some_and(|last| last < destination.len())
+    );
+    assert!(
+        sample.1 > 0
+            && i32::try_from(i64::from(sample.0) + rows as i64 * i64::from(sample.1)).is_ok()
+    );
+    #[cfg(target_arch = "arm")]
+    {
+        unsafe extern "C" {
+            fn magik_launcher_project_dithered(
+                out: *mut u16,
+                pitch: usize,
+                src: *const u32,
+                height: usize,
+                rows: usize,
+                q: i32,
+                step: i32,
+                x: usize,
+                y: usize,
+            );
+        }
+        // SAFETY: destination span checked above; kernel bounds-checks source rows.
+        unsafe {
+            magik_launcher_project_dithered(
+                destination.as_mut_ptr().cast(),
+                pitch,
+                source.as_ptr(),
+                source.len(),
+                rows,
+                sample.0,
+                sample.1,
+                origin.0,
+                origin.1,
+            );
+        }
+    }
+    #[cfg(not(target_arch = "arm"))]
+    for y in 0..rows {
+        let q = i64::from(sample.0) + y as i64 * i64::from(sample.1);
+        let row = q.div_euclid(65536);
+        let get = |r: i64| {
+            usize::try_from(r)
+                .ok()
+                .and_then(|r| source.get(r))
+                .copied()
+                .unwrap_or(0)
+        };
+        let p = mix(get(row), get(row + 1), ((q & 65535) >> 8) as u32);
+        destination[y * pitch] = over_dithered(p, destination[y * pitch], origin.0, origin.1 + y);
+    }
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) fn project_flat_quality(
+    destination: &mut [Rgb565Pixel],
+    pitch: usize,
+    source: &[u32],
+    stride: usize,
+    height: usize,
+    width: usize,
+    rows: usize,
+    sample: (i32, i32),
+    dithered: bool,
+    origin: (usize, usize),
+) {
+    if !dithered {
+        return project_flat(
+            destination,
+            pitch,
+            source,
+            stride,
+            height,
+            width,
+            rows,
+            sample,
+        );
+    }
+    assert!(
+        width <= pitch
+            && rows
+                .checked_mul(pitch)
+                .is_some_and(|len| len <= destination.len())
+    );
+    assert!(
+        height <= stride
+            && width
+                .checked_mul(stride)
+                .is_some_and(|len| len <= source.len())
+    );
+    #[cfg(target_arch = "arm")]
+    {
+        unsafe extern "C" {
+            fn magik_launcher_flat_dithered(
+                out: *mut u16,
+                pitch: usize,
+                src: *const u32,
+                stride: usize,
+                height: usize,
+                width: usize,
+                rows: usize,
+                q: i32,
+                step: i32,
+                x: usize,
+                y: usize,
+            );
+        }
+        assert!(
+            sample.1 > 0
+                && i32::try_from(i64::from(sample.0) + rows as i64 * i64::from(sample.1)).is_ok()
+        );
+        // SAFETY: destination, source columns and coordinate progression checked above.
+        // The kernel checks every vertical sample and handles incomplete four-pixel groups.
+        unsafe {
+            magik_launcher_flat_dithered(
+                destination.as_mut_ptr().cast(),
+                pitch,
+                source.as_ptr(),
+                stride,
+                height,
+                width,
+                rows,
+                sample.0,
+                sample.1,
+                origin.0,
+                origin.1,
+            );
+        }
+    }
+    #[cfg(not(target_arch = "arm"))]
+    for x in 0..width {
+        project_card_over_column_quality(
+            &source[x * stride..x * stride + height],
+            &mut destination[x..],
+            pitch,
+            rows,
+            sample,
+            true,
+            (origin.0 + x, origin.1),
+        );
+    }
+}
+#[inline]
+#[cfg_attr(all(target_arch = "arm", not(test)), allow(dead_code))]
+pub(crate) fn over_dithered(p: u32, destination: Rgb565Pixel, x: usize, y: usize) -> Rgb565Pixel {
+    let alpha = p >> 24;
+    if alpha == 0 {
+        return destination;
+    }
+    let bg = rgba(destination, 255 - alpha);
+    let channel = |shift: u32| (((p >> shift) & 255) + ((bg >> shift) & 255)).min(255) as u8;
+    crate::dithered_image::quantise_rgb8([channel(0), channel(8), channel(16)], x, y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,174 +1220,4 @@ mod tests {
         let p = rgba(Rgb565Pixel(0xffff), 128);
         assert_eq!(over(p, Rgb565Pixel(0xffff)), Rgb565Pixel(0xffff));
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn project_card_over_column_quality(
-    source: &[u32],
-    destination: &mut [Rgb565Pixel],
-    pitch: usize,
-    rows: usize,
-    sample: (i32, i32),
-    dithered: bool,
-    origin: (usize, usize),
-) {
-    if !dithered {
-        return project_card_over_column(source, destination, pitch, rows, sample);
-    }
-    assert!(
-        rows == 0
-            || pitch > 0
-                && (rows - 1)
-                    .checked_mul(pitch)
-                    .is_some_and(|last| last < destination.len())
-    );
-    assert!(
-        sample.1 > 0
-            && i32::try_from(i64::from(sample.0) + rows as i64 * i64::from(sample.1)).is_ok()
-    );
-    #[cfg(target_arch = "arm")]
-    {
-        unsafe extern "C" {
-            fn magik_launcher_project_dithered(
-                out: *mut u16,
-                pitch: usize,
-                src: *const u32,
-                height: usize,
-                rows: usize,
-                q: i32,
-                step: i32,
-                x: usize,
-                y: usize,
-            );
-        }
-        // SAFETY: destination span checked above; kernel bounds-checks source rows.
-        unsafe {
-            magik_launcher_project_dithered(
-                destination.as_mut_ptr().cast(),
-                pitch,
-                source.as_ptr(),
-                source.len(),
-                rows,
-                sample.0,
-                sample.1,
-                origin.0,
-                origin.1,
-            );
-        }
-    }
-    #[cfg(not(target_arch = "arm"))]
-    for y in 0..rows {
-        let q = i64::from(sample.0) + y as i64 * i64::from(sample.1);
-        let row = q.div_euclid(65536);
-        let get = |r: i64| {
-            usize::try_from(r)
-                .ok()
-                .and_then(|r| source.get(r))
-                .copied()
-                .unwrap_or(0)
-        };
-        let p = mix(get(row), get(row + 1), ((q & 65535) >> 8) as u32);
-        destination[y * pitch] = over_dithered(p, destination[y * pitch], origin.0, origin.1 + y);
-    }
-}
-#[allow(clippy::too_many_arguments)]
-pub(super) fn project_flat_quality(
-    destination: &mut [Rgb565Pixel],
-    pitch: usize,
-    source: &[u32],
-    stride: usize,
-    height: usize,
-    width: usize,
-    rows: usize,
-    sample: (i32, i32),
-    dithered: bool,
-    origin: (usize, usize),
-) {
-    if !dithered {
-        return project_flat(
-            destination,
-            pitch,
-            source,
-            stride,
-            height,
-            width,
-            rows,
-            sample,
-        );
-    }
-    assert!(
-        width <= pitch
-            && rows
-                .checked_mul(pitch)
-                .is_some_and(|len| len <= destination.len())
-    );
-    assert!(
-        height <= stride
-            && width
-                .checked_mul(stride)
-                .is_some_and(|len| len <= source.len())
-    );
-    #[cfg(target_arch = "arm")]
-    {
-        unsafe extern "C" {
-            fn magik_launcher_flat_dithered(
-                out: *mut u16,
-                pitch: usize,
-                src: *const u32,
-                stride: usize,
-                height: usize,
-                width: usize,
-                rows: usize,
-                q: i32,
-                step: i32,
-                x: usize,
-                y: usize,
-            );
-        }
-        assert!(
-            sample.1 > 0
-                && i32::try_from(i64::from(sample.0) + rows as i64 * i64::from(sample.1)).is_ok()
-        );
-        // SAFETY: destination, source columns and coordinate progression checked above.
-        // The kernel checks every vertical sample and handles incomplete four-pixel groups.
-        unsafe {
-            magik_launcher_flat_dithered(
-                destination.as_mut_ptr().cast(),
-                pitch,
-                source.as_ptr(),
-                stride,
-                height,
-                width,
-                rows,
-                sample.0,
-                sample.1,
-                origin.0,
-                origin.1,
-            );
-        }
-    }
-    #[cfg(not(target_arch = "arm"))]
-    for x in 0..width {
-        project_card_over_column_quality(
-            &source[x * stride..x * stride + height],
-            &mut destination[x..],
-            pitch,
-            rows,
-            sample,
-            true,
-            (origin.0 + x, origin.1),
-        );
-    }
-}
-#[inline]
-#[cfg_attr(all(target_arch = "arm", not(test)), allow(dead_code))]
-pub(crate) fn over_dithered(p: u32, destination: Rgb565Pixel, x: usize, y: usize) -> Rgb565Pixel {
-    let alpha = p >> 24;
-    if alpha == 0 {
-        return destination;
-    }
-    let bg = rgba(destination, 255 - alpha);
-    let channel = |shift: u32| (((p >> shift) & 255) + ((bg >> shift) & 255)).min(255) as u8;
-    crate::dithered_image::quantise_rgb8([channel(0), channel(8), channel(16)], x, y)
 }

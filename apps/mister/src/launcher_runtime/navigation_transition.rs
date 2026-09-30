@@ -2097,6 +2097,50 @@ mod tests {
     }
 
     #[test]
+    fn cold_first_settings_cog_capture_keeps_the_complete_animation_after_readiness() {
+        use mister_magik_framebuffer_scenes::settings_cog::{
+            COG_ASSET_HEIGHT, COG_ASSET_WIDTH, CogArtwork,
+        };
+        let cog = Box::leak(Box::new(
+            CogArtwork::from_rgb888(&vec![0; COG_ASSET_WIDTH * COG_ASSET_HEIGHT * 3]).unwrap(),
+        ));
+        let source = vec![Rgb565Pixel(0x1111); 960 * 540];
+        let destination = vec![Rgb565Pixel(0x2222); 960 * 540];
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        for (requested_at, ready_at) in [(0, 1_500_000), (4_000_000, 4_010_000)] {
+            assert!(
+                runtime
+                    .begin_settings_cog_physical(
+                        NavigationTransitionDirection::Forward,
+                        960,
+                        540,
+                        &source,
+                        cog,
+                        requested_at
+                    )
+                    .unwrap()
+            );
+            assert_eq!(
+                runtime.tick(ready_at).phase,
+                NavigationTransitionPhase::Capture
+            );
+            runtime.capture_destination(&destination, ready_at).unwrap();
+            let first = runtime.tick(ready_at);
+            assert_eq!(first.progress_q16, 0);
+            assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
+            assert_eq!(runtime.render().unwrap(), source);
+            let moving = runtime.tick(ready_at + 16_667);
+            assert!(moving.progress_q16 > 0 && moving.progress_q16 < PROGRESS_MAX);
+            runtime.tick(ready_at + 1_000_000);
+            assert_eq!(runtime.render().unwrap(), destination);
+            assert_eq!(
+                runtime.complete().unwrap().endpoint,
+                NavigationTransitionEndpoint::Destination
+            );
+        }
+    }
+
+    #[test]
     fn settings_transition_waits_for_destination_before_animation() {
         let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];

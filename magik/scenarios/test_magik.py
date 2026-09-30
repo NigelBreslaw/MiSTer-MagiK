@@ -94,7 +94,7 @@ def test_smoke(application_session):
     app, agent, run, _ = application_session
     result = launcher_smoke(app, run / "smoke.png", agent.expected_sha256)
     result["paths"] = validate_development_paths(agent.metrics().get("context"))
-    result["navigation"] = launcher_navigation(app, run / "settings.png")
+    result["navigation"] = launcher_navigation(app, run / "settings.png", agent=agent)
     append_event(run, {"phase": "smoke", "outcome": "passed", **result})
 
 

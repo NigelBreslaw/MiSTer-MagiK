@@ -1149,6 +1149,13 @@ fn navigation_home_endpoint_is_live(
         )
 }
 
+fn settings_navigation_source_candidate(
+    nav: &LauncherNav,
+    event: Option<&crate::input_event::InputEvent>,
+) -> bool {
+    nav.pending_settings_activation() || settings_navigation_input_candidate(nav.screen, event)
+}
+
 fn settings_navigation_input_candidate(
     screen: Screen,
     event: Option<&crate::input_event::InputEvent>,
@@ -7964,8 +7971,8 @@ pub(super) fn run_launcher_loop(
                                 && !recovery_dialog_visible
                                 && !navigation_transition.is_active()
                                 && navigation_transition.enabled()
-                                && settings_navigation_input_candidate(
-                                    nav.screen,
+                                && settings_navigation_source_candidate(
+                                    &nav,
                                     routed_event_this_loop.as_ref(),
                                 ))
                             .then(|| (nav.screen, nav.navigation_transition_state()));
@@ -10990,10 +10997,6 @@ pub(super) fn run_launcher_loop(
         let mut navigation_logical_frame_rendered = false;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
-            let now_us = loop_start
-                .saturating_duration_since(start)
-                .as_micros()
-                .min(u64::MAX as u128) as u64;
             let destination_committed = pending_navigation_transition
                 .as_ref()
                 .is_some_and(|pending| pending.committed);
@@ -11127,6 +11130,13 @@ pub(super) fn run_launcher_loop(
                         let _ =
                             layer_target.render_custom_home(window, session.render(), true, None);
                     }
+                    // The first Slint destination raster can be expensive.
+                    // Start animation at readiness, never at the stale frame
+                    // start before that preparation: cold work is not motion.
+                    let now_us = Instant::now()
+                        .saturating_duration_since(start)
+                        .as_micros()
+                        .min(u64::MAX as u128) as u64;
                     if navigation_transition
                         .capture_destination(
                             if navigation_transition.settings_physical_space() {
@@ -14860,6 +14870,69 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_settings_activation_retains_its_transition_source_on_the_settling_tick() {
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let start = Instant::now();
+        nav.selected = 4;
+        nav.handle_held_tick_with_navigation_intents(&PadState::default(), start, &catalog);
+        let direction = LauncherUiAction::Navigate(slint_ui::launcher::NavigationDirection::Right)
+            .input_pulse(1, 16_000)
+            .unwrap();
+        nav.handle_action_with_navigation_intents(
+            &direction[0],
+            start + Duration::from_millis(16),
+            &catalog,
+        );
+        nav.handle_action_with_navigation_intents(
+            &direction[1],
+            start + Duration::from_millis(32),
+            &catalog,
+        );
+        assert_eq!(nav.selected, 5);
+        let activation = LauncherUiAction::Activate.input_pulse(2, 48_000).unwrap();
+        nav.handle_action_with_navigation_intents(
+            &activation[0],
+            start + Duration::from_millis(48),
+            &catalog,
+        );
+        nav.handle_action_with_navigation_intents(
+            &activation[1],
+            start + Duration::from_millis(64),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::Home);
+        assert!(nav.pending_settings_activation());
+        assert!(!settings_navigation_input_candidate(nav.screen, None));
+        let mut opened = false;
+        for frame in 5..180 {
+            let source = settings_navigation_source_candidate(&nav, None)
+                .then(|| (nav.screen, nav.navigation_transition_state()));
+            nav.handle_held_tick_with_navigation_intents(
+                &PadState::default(),
+                start + Duration::from_millis(frame * 16),
+                &catalog,
+            );
+            if nav.screen == Screen::Settings {
+                let (source_screen, _) =
+                    source.expect("queued activation lost its source on an idle tick");
+                assert_eq!(
+                    settings_page_transition(source_screen, nav.screen),
+                    Some((
+                        NavigationTransitionRoute::HomeToSettings,
+                        NavigationTransitionDirection::Forward
+                    ))
+                );
+                assert!(!nav.pending_settings_activation());
+                opened = true;
+                break;
+            }
+        }
+        assert!(opened, "queued Settings activation never completed");
+    }
 
     #[test]
     fn settings_activation_waits_for_the_moving_card_then_fires_once() {

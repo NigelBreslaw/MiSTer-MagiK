@@ -2345,6 +2345,15 @@ impl LauncherNav {
         }
     }
 
+    /// Settings activation can complete on a later carousel-settling tick.
+    /// The presentation owner must preserve its Home source on that tick too.
+    pub fn pending_settings_activation(&self) -> bool {
+        self.pending_home_activation
+            && self.screen == Screen::Home
+            && self.current_menu_id() == ROOT_MENU_ID
+            && self.selected == 5
+    }
+
     pub fn navigation_transition_state(&self) -> NavigationTransitionState {
         NavigationTransitionState {
             screen: self.screen,

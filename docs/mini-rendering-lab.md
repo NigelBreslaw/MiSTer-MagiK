@@ -152,3 +152,28 @@ Authoritative captures retained the forward handoff (180 ms), return handoff
 (2020 ms on the reversing storyboard) and settled Settings. The user confirmed
 the return handoff was fixed. This is one focused window, not broad CRT or
 full-app scheduling qualification.
+
+Cold production opening also exposed a stale clock boundary: destination
+capture used the frame-start timestamp from before preparing its first Slint
+raster. Navigation now refreshes its clock after composing the destination,
+so cold preparation cannot consume animation time. A runtime sequence covers
+1.5-second first preparation and a warm reopening; both start at the exact
+Home source and retain the complete one-second cog timeline. The smoke journey records whether transition ownership was observed and attempts
+one authoritative opening capture outside any cadence measurement. A changing
+scanout may reject that capture; this is retained as diagnostics without retry.
+
+The first-open check also exposed a missed navigation source: Activate can be
+queued while the carousel settles, and Settings then opens on a later held
+tick without a new key event. Source selection previously only considered the
+key event, so that opening fell back to the generic screen change. It now also
+preserves the Home source while Settings activation is pending. The regression
+uses actual UI press/release pulses, carousel ticks and the resulting screen
+change, rather than only testing an eligibility predicate.
+
+The final first-opening smoke passed in `20260930T183820Z-3bbf51c586a7`, reusing
+artifact `ce0164d4af370a34da106e6ba03420ea0f4b50b7a6b917ec11a54c061205f7e2`.
+The first opening reported transition ownership, unlike the earlier generic
+screen change. The live capture was refused because scanout changed during the
+animation; the settled screen and diagnostics were retained, and cleanup passed.
+Its 1509.3 ms activation-to-ready observation includes host RPC, capture and
+polling; it is not the cog texture preparation time or animation duration.

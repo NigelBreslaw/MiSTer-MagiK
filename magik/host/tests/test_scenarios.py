@@ -93,6 +93,45 @@ def test_idle_cannot_reuse_a_previous_completed_window(monkeypatch):
         actions.launcher_idle(SimpleNamespace(first_window=object()), agent)
 
 
+def test_navigation_retains_transition_when_live_capture_changes(monkeypatch, tmp_path):
+    state = {"open": False, "reads": 0, "captures": 0}
+
+    class Element:
+        @property
+        def accessible_description(self):
+            state["reads"] += 1
+            return "Transitioning" if state["reads"] == 1 else "Ready"
+
+    class Agent:
+        def capture_framebuffer(self):
+            state["captures"] += 1
+            raise actions.AgentError(
+                "capture-frame-changed: scanout changed during capture"
+            )
+
+    def open_settings(_):
+        state["open"] = True
+        return actions.time.monotonic()
+
+    monkeypatch.setattr(actions, "_open_settings_card", open_settings)
+    monkeypatch.setattr(
+        actions, "_settings_element", lambda _: Element() if state["open"] else None
+    )
+    monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(actions, "_press_key", lambda *_: state.update(open=False))
+    monkeypatch.setattr(actions, "screenshot", lambda *_: None)
+    monkeypatch.setattr(actions.time, "sleep", lambda _: None)
+    result = actions.launcher_navigation(
+        object(), tmp_path / "settings.png", agent=Agent()
+    )
+    assert result["transition_observed"]
+    assert (
+        result["opening_capture_unavailable"]
+        == "scanout changed during animation; no retry"
+    )
+    assert state["captures"] == 1 and not state["open"]
+
+
 def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_path):
     state = {"open": False}
     keys = []
@@ -110,7 +149,20 @@ def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_pa
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
     monkeypatch.setattr(actions, "_settings_ready", lambda _: state["open"])
-    monkeypatch.setattr(actions, "_open_settings_card", lambda app: press(app, "\n"))
+    monkeypatch.setattr(
+        actions,
+        "_settings_element",
+        lambda _: (
+            type("Settings", (), {"accessible_description": "Ready"})()
+            if state["open"]
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        actions,
+        "_open_settings_card",
+        lambda app: (press(app, "\n"), actions.time.monotonic())[1],
+    )
     monkeypatch.setattr(actions, "screenshot", capture)
     with pytest.raises(RuntimeError, match="capture failed"):
         actions.launcher_navigation(object(), tmp_path / "settings.png")

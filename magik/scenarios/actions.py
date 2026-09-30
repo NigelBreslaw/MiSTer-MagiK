@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from magik.client import NativeAgent
+from magik.client import AgentError, NativeAgent
 from magik.testing import one_element, screenshot
 
 
@@ -207,18 +208,60 @@ def _open_settings_card(application):
         time.sleep(1)  # Allow the carousel's spring to settle before retrying.
     else:
         raise AssertionError("Settings card was not selectable within 12 attempts")
+    activated_at = time.monotonic()
     _press_key(application, "\n")  # Slint Key.Return
+    return activated_at
 
 
-def launcher_navigation(application, screenshot_path):
+def launcher_navigation(application, screenshot_path, agent=None):
     """One bounded UI journey; response times include host RPC and polling."""
     started = time.monotonic()
-    _open_settings_card(application)
+    activated_at = _open_settings_card(application)
+    transition_observed = False
+    opening_capture = None
+    capture_attempted = False
+    opening_capture_unavailable = None
+
+    def settled():
+        nonlocal \
+            transition_observed, \
+            opening_capture, \
+            capture_attempted, \
+            opening_capture_unavailable
+        element = _settings_element(application)
+        if element is None:
+            return False
+        if element.accessible_description == "Transitioning":
+            transition_observed = True
+            if agent is not None and not capture_attempted:
+                capture_attempted = True
+                # One functional capture outside any cadence measurement. Allow
+                # the first source frame to advance into the card/cog handoff.
+                time.sleep(0.12)
+                from magik.capture import capture_png
+
+                try:
+                    fields, pixels = agent.capture_framebuffer()
+                except AgentError as error:
+                    if not str(error).startswith("capture-frame-changed:"):
+                        raise
+                    opening_capture_unavailable = (
+                        "scanout changed during animation; no retry"
+                    )
+                else:
+                    png, metadata = capture_png(fields, pixels, "raw")
+                    path = screenshot_path.with_name("settings-opening-native.png")
+                    path.write_bytes(png)
+                    path.with_suffix(".json").write_text(
+                        json.dumps(metadata, indent=2) + "\n"
+                    )
+                    opening_capture = path.name
+        return element.accessible_description == "Ready"
+
     try:
-        _wait(
-            lambda: _settings_ready(application), "Settings transition did not settle"
-        )
+        _wait(settled, "Settings transition did not settle")
         opened_ms = round((time.monotonic() - started) * 1000, 2)
+        activation_to_ready_ms = round((time.monotonic() - activated_at) * 1000, 2)
         screenshot(application, screenshot_path)
     finally:
         # Return without changing a setting, including after screenshot failure.
@@ -229,6 +272,10 @@ def launcher_navigation(application, screenshot_path):
     return {
         "workload": "home-settings-home",
         "open_response_ms": opened_ms,
+        "activation_to_ready_ms": activation_to_ready_ms,
+        "transition_observed": transition_observed,
+        "opening_capture": opening_capture,
+        "opening_capture_unavailable": opening_capture_unavailable,
         "back_response_ms": round((time.monotonic() - returned) * 1000, 2),
         "timing_source": "host RPC and accessibility polling; not frame latency",
         "screenshot": screenshot_path.name,
