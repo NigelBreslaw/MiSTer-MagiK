@@ -58,9 +58,9 @@ impl Drop for Fixture {
     }
 }
 fn fixture() -> Result<Fixture, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_arch = "arm", not(test)))]
     let base = PathBuf::from("/media/fat/mister-magik-dev/benchmark-fixtures");
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(target_os = "linux", target_arch = "arm", not(test))))]
     let base = std::env::temp_dir().join("mister-magik-benchmark-fixtures");
     let root = base.join(format!(
         "preview-shards-{}-{}",
