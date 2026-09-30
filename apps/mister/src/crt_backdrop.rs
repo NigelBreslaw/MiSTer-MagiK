@@ -441,6 +441,51 @@ impl CrtBackdropState {
         trace
     }
 
+    /// Preserve the overview's native glyphs and focus fill while composing the
+    /// same screenshot backdrop used by the list. No device hero is involved.
+    pub fn compose_system_hub_into_layout(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+        layout: UiLayoutGeometry,
+        metrics: CrtUiMetrics,
+    ) -> CrtBackdropWorkTrace {
+        let content = layout.content_rect();
+        let [header, footer] = product_chrome_rects(content, metrics);
+        let hub = (
+            content.x,
+            content.y + metrics.header_height.max(1) as usize,
+            content.x + content.width,
+            content.y + content.height - metrics.footer_height.max(1) as usize,
+        );
+        let protected = [header, footer, hub].map(|(x0, y0, x1, y1)| {
+            let r = layout.logical_rect_to_composition(
+                mister_magik_mister_runtime::framebuffer::damage::DirtyRect { x0, y0, x1, y1 },
+            );
+            (r.x0, r.y0, r.x1, r.y1)
+        });
+        let colors = [
+            CRT_PRODUCT_HEADER_TEXT,
+            CRT_PRODUCT_FOOTER_TEXT,
+            CRT_PRODUCT_WARNING_TEXT,
+            rgb565_from_rgb888(0xee, 0xe8, 0xd5),
+            rgb565_from_rgb888(0x8f, 0x97, 0x96),
+            rgb565_from_rgb888(0x3a, 0x1a, 0x16),
+            rgb565_from_rgb888(0x17, 0x1d, 0x3a),
+            rgb565_from_rgb888(0x3a, 0x31, 0x0f),
+            rgb565_from_rgb888(0x0d, 0x31, 0x24),
+            rgb565_from_rgb888(0xe7, 0x69, 0x5a),
+            rgb565_from_rgb888(0x5a, 0x71, 0xe7),
+            rgb565_from_rgb888(0xe6, 0xc2, 0x3a),
+            rgb565_from_rgb888(0x35, 0xc4, 0x8f),
+        ];
+        let trace = self.compose_to(now, destination, &protected, &colors, 1);
+        if !trace.active {
+            self.expand_to_logical();
+        }
+        trace
+    }
+
     fn compose_to(
         &mut self,
         now: Duration,

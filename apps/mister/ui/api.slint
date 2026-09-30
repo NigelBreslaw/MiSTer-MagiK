@@ -8,8 +8,9 @@ import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 // Shared semantic vocabulary. Finite launcher state crosses the Rust/Slint
 // boundary as enums; integers remain reserved for counts, geometry, timing,
 // percentages, and indices into dynamic models.
-export enum LauncherScreen { home, system-hub, controller, arcade, settings, about, licenses, license-text }
+export enum LauncherScreen { home, controller, arcade, settings, about, licenses, license-text }
 export enum MenuHierarchy { root, nested }
+export enum SystemPageMode { hub, list }
 export enum SystemHubSection { games, recent, favourites }
 // The generic device drawn behind a collection: only Arcade has the cabinet.
 export enum DeviceKind { cabinet, tv, monitor, handheld }
@@ -69,18 +70,18 @@ export global NavigationView {
     in property <MenuHierarchy> menu-hierarchy;
     in property <string> menu-title: "MiSTer MagiK";
     in property <string> menu-breadcrumb;
+    in property <SystemPageMode> system-page-mode: SystemPageMode.list;
     in property <SystemHubSection> system-hub-section;
     in property <int> system-hub-games-count;
     in property <int> system-hub-recent-count;
     in property <int> system-hub-favourites-count;
     // The system page's title block: `NINTENDO / 1990 / 16-BIT` and the device.
     in property <string> system-title;
+    in property <bool> system-title-wraps;
     in property <string> system-subtitle;
     // What the focused tile opens, e.g. `BROWSE ALL 1729 GAMES`.
     in property <string> system-hub-caption;
     in property <DeviceKind> system-device;
-    // The device scaled to the CRT raster; empty on HDMI and portrait CRT.
-    in property <image> system-hero;
     in property <int> home-selected-index;
     in property <HomeScrollPhase> home-scroll-phase;
     in property <int> home-scroll-x;

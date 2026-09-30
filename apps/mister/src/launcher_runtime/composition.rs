@@ -633,8 +633,8 @@ mod tests {
             ("home", Screen::Home, UiCompositionState::FullSlint, 0_u8),
             (
                 "system-hub",
-                Screen::SystemHub,
-                UiCompositionState::FullSlint,
+                Screen::Arcade,
+                UiCompositionState::MixedArcade,
                 0,
             ),
             ("arcade", Screen::Arcade, UiCompositionState::MixedArcade, 3),
@@ -664,7 +664,7 @@ mod tests {
             ),
             (
                 "navigation-transition",
-                Screen::SystemHub,
+                Screen::Arcade,
                 UiCompositionState::NavigationTransition,
                 16,
             ),

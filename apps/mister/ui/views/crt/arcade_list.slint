@@ -4,7 +4,7 @@
 import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
 import { PageTheme } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
+import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, NavigationView, SystemPageMode, FeedbackView, LauncherLayout } from "../../api.slint";
 
 component SearchKey inherits Rectangle {
     in property <string> label;
@@ -79,12 +79,13 @@ component SearchKeyboard inherits Rectangle {
 }
 
 export component ArcadeListScreen inherits Rectangle {
+    property <bool> hub: NavigationView.system-page-mode == SystemPageMode.hub;
     property <int> count: ArcadeView.active-count;
     property <bool> search: ArcadeView.search-mode == ArcadeSearchMode.active;
     property <bool> ready: ArcadeView.load-state == ArcadeLoadState.ready;
     background: transparent;
 
-    if ArcadeView.drawer-open : Rectangle {
+    if !root.hub && ArcadeView.drawer-open : Rectangle {
         accessible-role: list;
         accessible-label: ArcadeView.drawer-title;
         accessible-description: ArcadeView.active-filter-label;
@@ -98,12 +99,12 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     CrtPageChrome {
-        section: root.search ? "ARCADE / SEARCH" : "ARCADE";
-        hint-a: root.ready ? "A PLAY" : "";
+        section: root.hub ? "" : root.search ? ArcadeView.collection-title + " / SEARCH" : ArcadeView.collection-title;
+        hint-a: root.hub ? "A OPEN" : root.ready ? "A PLAY" : "";
         hint-b: "B BACK";
     }
 
-    CrtLauncherText {
+    if !root.hub : CrtLauncherText {
         x: CrtPageMetrics.px-x(MisterUi.window-width - CrtPageMetrics.margin-x) - self.preferred-width;
         y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 8 * CrtPageMetrics.sy);
         text: root.search
@@ -113,14 +114,14 @@ export component ArcadeListScreen inherits Rectangle {
         text-color: PageTheme.muted;
     }
 
-    if root.search : SearchKeyboard {
+    if !root.hub && root.search : SearchKeyboard {
         x: (LauncherLayout.crt-keyboard.x - MisterUi.crt-content-x) * 1px;
         y: (LauncherLayout.crt-keyboard.y - MisterUi.crt-content-y) * 1px;
         width: LauncherLayout.crt-keyboard.width * 1px;
         height: LauncherLayout.crt-keyboard.height * 1px;
     }
 
-    Rectangle {
+    if !root.hub : Rectangle {
         x: (LauncherLayout.arcade-list.x - MisterUi.crt-content-x) * 1px;
         y: (LauncherLayout.arcade-list.y - MisterUi.crt-content-y) * 1px;
         width: LauncherLayout.arcade-list.width * 1px;
@@ -134,7 +135,7 @@ export component ArcadeListScreen inherits Rectangle {
         accessible-enabled: true;
     }
 
-    if !root.ready || (root.search && root.count == 0) : Rectangle {
+    if !root.hub && (!root.ready || (root.search && root.count == 0)) : Rectangle {
         x: (LauncherLayout.arcade-list.x - MisterUi.crt-content-x) * 1px;
         y: (LauncherLayout.arcade-list.y - MisterUi.crt-content-y) * 1px;
         width: LauncherLayout.arcade-list.width * 1px;
@@ -152,7 +153,7 @@ export component ArcadeListScreen inherits Rectangle {
     CrtLauncherText {
         x: CrtPageMetrics.px-x(MisterUi.window-width - CrtPageMetrics.margin-x) - self.preferred-width;
         y: CrtPageMetrics.px-y(CrtPageMetrics.footer-rule + 5 * CrtPageMetrics.sy);
-        text: root.search ? "Y CLOSE" : "X OPTIONS   Y SEARCH";
+        text: root.hub ? "SELECT GAME LIST" : root.search ? "Y CLOSE" : "SELECT OVERVIEW   Y SEARCH";
         text-color: PageTheme.cream;
     }
 }

@@ -1,144 +1,47 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// A system's own page on CRT, shared by every console, computer and handheld:
-// identity and three tiles on the left, the generic device on the right. The
-// device image is scaled by Rust to this raster (rows are half height on 240p).
-
-import { DeviceKind, FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
-import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
-import { PageTheme } from "../../components/page_chrome.slint";
+import { CrtLauncherText, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
-
-global CrtHubTheme {
-    out property <color> accent: NavigationView.system-device == DeviceKind.monitor ? #e6c23a
-        : NavigationView.system-device == DeviceKind.handheld ? #35c48f : #5a71e7;
-}
-
-component CrtHubTile inherits Rectangle {
-    in property <string> label;
-    in property <int> count;
-    in property <bool> focused;
-    in property <bool> acknowledged;
-
-    accessible-role: list-item;
-    accessible-label: root.label;
-    accessible-description: root.count + "";
-    accessible-item-selectable: true;
-    accessible-item-selected: root.focused;
-
-    border-width: root.focused ? 2px : 1px;
-    border-color: root.focused ? CrtHubTheme.accent
-        : root.acknowledged ? CrtHubTheme.accent.mix(#000000, 0.7) : CrtHubTheme.accent.mix(#000000, 0.42);
-    background: root.focused ? CrtHubTheme.accent.mix(#0a0e18, 0.24) : CrtHubTheme.accent.mix(#0a0e18, 0.12);
-
-    CrtLauncherText {
-        x: 8px; y: CrtPageMetrics.len-y(6);
-        text: root.count;
-        text-color: PageTheme.cream;
-    }
-    Spleen6x12 {
-        x: 8px; y: parent.height - CrtPageMetrics.len-y(18);
-        text: root.label;
-        color: root.focused ? PageTheme.cream : PageTheme.muted;
-        size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
-    }
-}
+import { PageTheme } from "../../components/page_chrome.slint";
+import { NavigationView, SystemHubSection, DeviceKind, ArcadeView } from "../../api.slint";
 
 export component SystemHubScreen inherits Rectangle {
-    property <SystemHubSection> section: NavigationView.system-hub-section;
-    property <int> games: NavigationView.system-hub-games-count;
-    property <int> recent: NavigationView.system-hub-recent-count;
-    property <int> favourites: NavigationView.system-hub-favourites-count;
-    property <bool> has-hero: NavigationView.system-hero.width > 0;
-    property <int> left: CrtPageMetrics.margin-x;
-    property <int> top: CrtPageMetrics.header-bottom + 8 * CrtPageMetrics.sy;
-    property <length> hero-width: root.has-hero ? NavigationView.system-hero.width * 1px : 0px;
-    property <length> hero-height: NavigationView.system-hero.height * 1px;
-    property <length> column-width: (MisterUi.window-width - 2 * root.left) * 1px - root.hero-width - (root.has-hero ? 12px : 0px);
-    property <length> tile-gap: 6px;
-    property <length> tile-width: (root.column-width - 2 * root.tile-gap) / 3;
-    property <length> tile-height: CrtPageMetrics.len-y(50);
-    property <length> tiles-y: CrtPageMetrics.px-y(root.top) + CrtPageMetrics.len-y(58);
-
+    background: transparent;
     accessible-role: main;
     accessible-label: NavigationView.system-title;
-    background: transparent;
-
-    CrtPageChrome {
-        section: "";
-        hint-a: "A OPEN";
-        hint-b: "B BACK";
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(MisterUi.window-width - CrtPageMetrics.margin-x) - self.preferred-width;
+        y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 8);
+        text: NavigationView.system-subtitle; text-color: PageTheme.muted;
     }
-
-    // Hero: the device with a dim lit glass over its opening.
-    if root.has-hero : Rectangle {
-        x: CrtPageMetrics.px-x(MisterUi.window-width - root.left) - root.hero-width;
-        y: CrtPageMetrics.px-y(root.top);
-        width: root.hero-width;
-        height: root.hero-height;
-        clip: true;
-        Image {
-            width: parent.width; height: parent.height;
-            source: NavigationView.system-hero;
-            image-fit: fill;
-            image-rendering: pixelated;
-            accessible-role: none;
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(CrtPageMetrics.margin-x);
+        y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 8);
+        text: NavigationView.system-title.character-count > 26 ? ArcadeView.collection-title : NavigationView.system-title; text-color: PageTheme.cream;
+    }
+    for i in 3 : Rectangle {
+        x: CrtPageMetrics.px-x(CrtPageMetrics.margin-x);
+        y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy + i * 16 * CrtPageMetrics.sy);
+        width: (MisterUi.window-width - 2 * CrtPageMetrics.margin-x) * 1px; height: CrtPageMetrics.len-y(16);
+        property <bool> focused: i == (NavigationView.system-hub-section == SystemHubSection.games ? 0 : NavigationView.system-hub-section == SystemHubSection.recent ? 1 : 2);
+        property <color> accent: NavigationView.system-device == DeviceKind.monitor ? #e6c23a
+            : NavigationView.system-device == DeviceKind.handheld ? #35c48f : NavigationView.system-device == DeviceKind.cabinet ? #e7695a : #5a71e7;
+        background: self.focused ? (NavigationView.system-device == DeviceKind.monitor ? #3a310f
+            : NavigationView.system-device == DeviceKind.handheld ? #0d3124 : NavigationView.system-device == DeviceKind.cabinet ? #3a1a16 : #171d3a) : transparent;
+        if self.focused : Rectangle { width: 2px; height: parent.height; background: parent.accent; }
+        accessible-role: list-item;
+        accessible-label: i == 0 ? "GAMES" : i == 1 ? "RECENT" : "FAVOURITES";
+        accessible-item-selected: self.focused;
+        CrtLauncherText {
+            x: 8px; y: CrtPageMetrics.len-y(2);
+            text: i == 0 ? "GAMES" : i == 1 ? "RECENT" : "FAVOURITES";
+            text-color: PageTheme.cream;
         }
-        Rectangle {
-            x: parent.width * 82 / 483; y: parent.height * 19 / 423;
-            width: parent.width * 320 / 483; height: parent.height * 320 / 423;
-            background: CrtHubTheme.accent.mix(#03050a, 0.08);
+        CrtLauncherText {
+            x: parent.width - self.preferred-width - 24px; y: CrtPageMetrics.len-y(2);
+            text: i == 0 ? NavigationView.system-hub-games-count : i == 1 ? NavigationView.system-hub-recent-count : NavigationView.system-hub-favourites-count;
+            text-color: PageTheme.muted;
         }
-    }
-
-    CrtLauncherText {
-        x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(root.top);
-        text: NavigationView.system-subtitle;
-        text-color: CrtHubTheme.accent;
-    }
-    CrtLauncherText {
-        x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(root.top) + CrtPageMetrics.len-y(16);
-        text: NavigationView.system-title;
-    }
-    CrtLauncherText {
-        x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(root.top) + CrtPageMetrics.len-y(34);
-        text: root.games + " GAMES";
-        text-color: PageTheme.muted;
-    }
-
-    CrtHubTile {
-        x: CrtPageMetrics.px-x(root.left);
-        y: root.section == SystemHubSection.games ? root.tiles-y - 2px : root.tiles-y;
-        width: root.tile-width; height: root.tile-height;
-        label: "GAMES"; count: root.games;
-        focused: root.section == SystemHubSection.games;
-        acknowledged: FeedbackView.acknowledged("system-hub", "games", FeedbackView.revision);
-    }
-    CrtHubTile {
-        x: CrtPageMetrics.px-x(root.left) + root.tile-width + root.tile-gap;
-        y: root.section == SystemHubSection.recent ? root.tiles-y - 2px : root.tiles-y;
-        width: root.tile-width; height: root.tile-height;
-        label: "RECENT"; count: root.recent;
-        focused: root.section == SystemHubSection.recent;
-        acknowledged: FeedbackView.acknowledged("system-hub", "recent", FeedbackView.revision);
-    }
-    CrtHubTile {
-        x: CrtPageMetrics.px-x(root.left) + 2 * (root.tile-width + root.tile-gap);
-        y: root.section == SystemHubSection.favourites ? root.tiles-y - 2px : root.tiles-y;
-        width: root.tile-width; height: root.tile-height;
-        label: "FAVOURITES"; count: root.favourites;
-        focused: root.section == SystemHubSection.favourites;
-        acknowledged: FeedbackView.acknowledged("system-hub", "favorites", FeedbackView.revision);
-    }
-    Spleen6x12 {
-        x: CrtPageMetrics.px-x(root.left);
-        y: root.tiles-y + root.tile-height + CrtPageMetrics.len-y(8);
-        width: root.column-width;
-        text: NavigationView.system-hub-caption;
-        color: #c9c3b3;
-        overflow: elide;
-        size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
     }
 }

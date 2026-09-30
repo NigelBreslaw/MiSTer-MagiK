@@ -367,7 +367,7 @@ fn setup_selection_feedback_target(setup: &SetupNav) -> Option<SelectionFeedback
 fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackTarget> {
     match nav.screen {
         Screen::Home => SelectionFeedbackTarget::home(nav),
-        Screen::SystemHub => Some(SelectionFeedbackTarget::new(
+        Screen::Arcade if nav.is_system_hub() => Some(SelectionFeedbackTarget::new(
             "system-hub",
             ["games", "recent", "favorites", "info"]
                 .get(nav.system_hub_selected)
@@ -444,7 +444,7 @@ const SETTINGS_NAVIGATION_BENCHMARK_EVIDENCE_ENV: &str = "MISTER_SETTINGS_NAVIGA
 fn launcher_screen_input_focus(nav: &LauncherNav) -> FocusRequest {
     let (owner, directional_policy) = match nav.screen {
         Screen::Home => (1, DirectionalPolicy::HomeContinuous),
-        Screen::SystemHub => (2, DirectionalPolicy::MenuRepeat),
+        Screen::Arcade if nav.is_system_hub() => (2, DirectionalPolicy::MenuRepeat),
         Screen::Controller => (3, DirectionalPolicy::EdgeOnly),
         Screen::Arcade if nav.arcade_uses_menu_repeat() => (4, DirectionalPolicy::MenuRepeat),
         Screen::Arcade => (4, DirectionalPolicy::ArcadeContinuous),
@@ -1177,7 +1177,7 @@ fn settings_navigation_input_candidate(
         Screen::Settings | Screen::About | Screen::Licenses | Screen::LicenseText => {
             activated || backed || went_home
         }
-        Screen::Controller | Screen::Arcade | Screen::SystemHub => false,
+        Screen::Controller | Screen::Arcade => false,
     }
 }
 
@@ -2045,8 +2045,8 @@ impl LauncherResponseState {
                 .map(|target| target.item)
                 .unwrap_or_else(|| nav.current_menu_selected_item_id().to_string()),
             selected_index: match nav.screen {
+                Screen::Arcade if nav.is_system_hub() => nav.system_hub_selected,
                 Screen::Arcade => nav.arcade.selected,
-                Screen::SystemHub => nav.system_hub_selected,
                 Screen::Settings => nav.settings_selected,
                 Screen::About => 0,
                 Screen::Licenses => nav.licenses_selected,
@@ -5304,7 +5304,7 @@ pub(super) fn run_launcher_loop(
         .or_else(|| {
             env_start_system.as_ref().map(|_| {
                 env_start_screen
-                    .filter(|screen| *screen == Screen::SystemHub)
+                    .filter(|screen| *screen == Screen::Arcade)
                     .unwrap_or(Screen::Arcade)
             })
         })
@@ -5322,10 +5322,9 @@ pub(super) fn run_launcher_loop(
     }
     let startup_return_requested = launch_return_session.requested();
     let mut launch_return_restored = false;
-    let arcade_catalog_required_at_start =
-        matches!(start_screen, Screen::Arcade | Screen::SystemHub)
-            || matches!(lock_screen, Some(Screen::Arcade | Screen::SystemHub))
-            || launcher_bench_after_input_script;
+    let arcade_catalog_required_at_start = matches!(start_screen, Screen::Arcade)
+        || matches!(lock_screen, Some(Screen::Arcade))
+        || launcher_bench_after_input_script;
     let mut pending_start_system = env_start_system.clone();
     let mut pending_start_menu = env_start_system
         .is_none()
@@ -6715,12 +6714,12 @@ pub(super) fn run_launcher_loop(
                     true,
                 );
                 if nav.open_system(&catalog, &collection_id) {
-                    if nav.screen == Screen::SystemHub {
+                    if nav.is_system_hub() {
                         nav.set_arcade_user_list_mode(
                             &catalog,
                             launcher::ArcadeUserListMode::Games,
                         );
-                        nav.screen = Screen::Arcade;
+                        nav.system_page_mode = launcher::SystemPageMode::List;
                     }
                     arcade_entry_latency.record_rows_ready(
                         start,
@@ -7324,6 +7323,7 @@ pub(super) fn run_launcher_loop(
                     &system_id,
                     ui_frame_target::forced_arcade_selected_index(),
                 ) {
+                    nav.system_page_mode = benchmark_config.start_page_mode();
                     print_startup_event(
                         start,
                         "launcher_start_system_applied",
@@ -9264,7 +9264,7 @@ pub(super) fn run_launcher_loop(
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
         if background_work_allowed {
-            let visible_media_system_id = matches!(nav.screen, Screen::Arcade | Screen::SystemHub)
+            let visible_media_system_id = matches!(nav.screen, Screen::Arcade)
                 .then(|| {
                     nav.active_collection()
                         .map(|collection| {
@@ -9538,7 +9538,7 @@ pub(super) fn run_launcher_loop(
         preview.set_route(presentation_route);
         let crt_backdrop_eligible = preview_route.allows_crt_backdrop()
             && presentation_route == PreviewRoute::Eligible
-            && wants_arcade_list
+            && (wants_arcade_list || nav.is_system_hub())
             && !nav.arcade_filter.drawer_open;
         let crt_backdrop_was_eligible = crt_backdrop
             .as_ref()
@@ -11030,6 +11030,7 @@ pub(super) fn run_launcher_loop(
         // the settled custom backdrop in the same frame before the list layer.
         let force_crt_backdrop_repaint = full_screen_transition_release_raster_rendered;
         if let Some(backdrop) = crt_backdrop.as_mut() {
+            backdrop.set_hub_mode(nav.is_system_hub());
             let compose_start = Instant::now();
             let crt_arcade_layout = CrtArcadeLayout::for_layout(
                 layout,
@@ -11160,13 +11161,13 @@ pub(super) fn run_launcher_loop(
                         }
                         true
                     };
-                    if preview_surface_ready && arcade_status_only {
+                    if preview_surface_ready && (arcade_status_only || nav.is_system_hub()) {
                         // The Slint status panel is the complete destination for
                         // loading, empty and failed Arcade. Do not paint the old
                         // custom "NO GAMES" layer over it.
                         destination_layers_ready = true;
                     }
-                    if preview_surface_ready && !arcade_status_only {
+                    if preview_surface_ready && !arcade_status_only && !nav.is_system_hub() {
                         configure_arcade_list_renderer_geometry(
                             &mut arcade_list_renderer,
                             &nav,
@@ -11582,7 +11583,7 @@ pub(super) fn run_launcher_loop(
         } else if crt_backdrop_work_trace.active || crt_backdrop_full_damage.is_some() {
             crt_arcade_overlay.invalidate();
         }
-        let cached_arcade_rect = if crt_backdrop_eligible {
+        let cached_arcade_rect = if crt_backdrop_eligible && !nav.is_system_hub() {
             arcade_list_rect
                 .or_else(|| {
                     crt_backdrop_full_damage
@@ -14843,7 +14844,10 @@ fn should_draw_arcade_overlay(
     launching: bool,
     active_arcade_games_available: bool,
 ) -> bool {
-    !launching && nav.screen == Screen::Arcade && active_arcade_games_available
+    !launching
+        && nav.screen == Screen::Arcade
+        && !nav.is_system_hub()
+        && active_arcade_games_available
 }
 
 fn update_arcade_physical_layer_tracking(
@@ -14872,11 +14876,7 @@ fn effective_lock_screen(
     catalog: &ArcadeCatalog,
 ) -> Option<Screen> {
     match lock_screen {
-        Some(Screen::Arcade | Screen::SystemHub)
-            if !arcade_navigation_ready(catalog_ready, catalog) =>
-        {
-            None
-        }
+        Some(Screen::Arcade) if !arcade_navigation_ready(catalog_ready, catalog) => None,
         other => other,
     }
 }
@@ -15540,7 +15540,8 @@ mod tests {
     fn discrete_feedback_targets_cover_included_and_excluded_surfaces() {
         let mut nav = LauncherNav::new();
 
-        nav.screen = Screen::SystemHub;
+        nav.screen = Screen::Arcade;
+        nav.system_page_mode = launcher::SystemPageMode::Hub;
         nav.system_hub_selected = 2;
         assert_eq!(
             nav_selection_feedback_target(&nav),
@@ -15807,7 +15808,8 @@ mod tests {
     #[test]
     fn launcher_response_trace_confirms_the_visible_state_change() {
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::SystemHub;
+        nav.screen = Screen::Arcade;
+        nav.system_page_mode = launcher::SystemPageMode::Hub;
         let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
         trace.enable_execution_for_test();
         let mut event = normalized_test_press(LogicalAction::Right);
@@ -15942,7 +15944,8 @@ mod tests {
     #[test]
     fn launcher_response_confirmation_uses_the_stamped_frame_state() {
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::SystemHub;
+        nav.screen = Screen::Arcade;
+        nav.system_page_mode = launcher::SystemPageMode::Hub;
         let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
         let mut event = normalized_test_press(LogicalAction::Right);
         event.source.kind = InputSourceKind::MainProxy;
@@ -16166,7 +16169,8 @@ mod tests {
     #[test]
     fn launcher_response_trace_completes_after_focus_and_feedback_removal() {
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::SystemHub;
+        nav.screen = Screen::Arcade;
+        nav.system_page_mode = launcher::SystemPageMode::Hub;
         let mut trace = LauncherResponseTrace::configured_for_test(&nav, 1, 1);
         let mut event = normalized_test_press(LogicalAction::Right);
         event.source.kind = InputSourceKind::MainProxy;
@@ -17489,7 +17493,7 @@ mod tests {
         );
         let mut launched_nav = LauncherNav::new();
         assert!(launched_nav.open_system(&full_catalog, "snes"));
-        assert_eq!(launched_nav.screen, Screen::SystemHub);
+        assert_eq!(launched_nav.screen, Screen::Arcade);
         launched_nav.set_arcade_user_list_mode(&full_catalog, launcher::ArcadeUserListMode::Games);
         launched_nav.screen = Screen::Arcade;
         launched_nav.arcade.restore_position(
@@ -17955,14 +17959,11 @@ mod tests {
             Instant::now()
         ));
         // Every console, computer and handheld opens its own page first.
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert_eq!(nav.screen, Screen::Arcade);
         assert!(pending.is_none());
         assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
         assert!(!empty_collection_invariant_violated(&hydrated, &nav));
-        assert_eq!(
-            LauncherProjectionKey::from_nav(&nav).screen,
-            Screen::SystemHub
-        );
+        assert_eq!(LauncherProjectionKey::from_nav(&nav).screen, Screen::Arcade);
     }
 
     #[test]
@@ -17982,7 +17983,7 @@ mod tests {
         );
 
         for (open_game_list_directly, expected_screen) in
-            [(false, Screen::SystemHub), (true, Screen::Arcade)]
+            [(false, Screen::Arcade), (true, Screen::Arcade)]
         {
             let mut nav = LauncherNav::new();
             nav.sync_launcher_taxonomy(&registry);

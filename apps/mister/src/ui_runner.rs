@@ -229,7 +229,6 @@ const UPDATING_LIBRARY_SCAN_MESSAGE: &str = "Updating Library";
 fn screen_label(screen: Screen) -> &'static str {
     match screen {
         Screen::Home => "home",
-        Screen::SystemHub => "system-hub",
         Screen::Controller => "controller",
         Screen::Arcade => "arcade",
         Screen::Settings => "settings",

@@ -136,7 +136,7 @@ const fn settings_page_depth(screen: Screen) -> Option<u8> {
         Screen::About => Some(2),
         Screen::Licenses => Some(3),
         Screen::LicenseText => Some(4),
-        Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
+        Screen::Controller | Screen::Arcade => None,
     }
 }
 

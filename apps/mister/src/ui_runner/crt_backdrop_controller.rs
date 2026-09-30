@@ -135,6 +135,7 @@ pub(super) struct CrtBackdropFrame {
 
 pub(super) struct CrtBackdropController {
     state: CrtBackdropState,
+    hub_mode: bool,
     worker: PrepareWorker,
     cache: VecDeque<PreparedEntry>,
     cache_bytes: usize,
@@ -153,6 +154,7 @@ impl CrtBackdropController {
     pub(super) fn for_display(display: &UiDisplay) -> Option<Self> {
         Some(Self {
             state: CrtBackdropState::for_display(display)?,
+            hub_mode: false,
             worker: PrepareWorker::new(),
             cache: VecDeque::new(),
             cache_bytes: 0,
@@ -166,6 +168,13 @@ impl CrtBackdropController {
             was_eligible: false,
             active_layout: None,
         })
+    }
+
+    pub(super) fn set_hub_mode(&mut self, hub: bool) {
+        if self.hub_mode != hub {
+            self.hub_mode = hub;
+            self.was_eligible = false;
+        }
     }
 
     pub(super) fn width(&self) -> usize {
@@ -379,13 +388,18 @@ impl CrtBackdropController {
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
-            frame.trace = self.state.compose_product_into_layout(
-                now,
-                destination,
-                layout,
-                arcade_layout,
-                metrics,
-            );
+            frame.trace = if self.hub_mode {
+                self.state
+                    .compose_system_hub_into_layout(now, destination, layout, metrics)
+            } else {
+                self.state.compose_product_into_layout(
+                    now,
+                    destination,
+                    layout,
+                    arcade_layout,
+                    metrics,
+                )
+            };
             if prepared_changed {
                 frame.trace.prepare_us = self.pending_prepare_us;
                 frame.trace.prepare_pixels = self

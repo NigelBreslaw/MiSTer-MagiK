@@ -303,13 +303,19 @@ impl std::error::Error for LaunchError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Home,
-    SystemHub,
     Controller,
     Arcade,
     Settings,
     About,
     Licenses,
     LicenseText,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SystemPageMode {
+    Hub,
+    #[default]
+    List,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1130,6 +1136,7 @@ pub struct LauncherNav {
     portrait_layout: bool,
     license_viewport: crate::licenses::LicenseViewport,
     pub screen: Screen,
+    pub system_page_mode: SystemPageMode,
     pub selected: usize,
     pub system_hub_selected: usize,
     pub scroll_x: i32,
@@ -1229,6 +1236,7 @@ pub struct HomeViewState {
 #[derive(Clone, Debug)]
 pub struct NavigationTransitionState {
     screen: Screen,
+    system_page_mode: SystemPageMode,
     selected: usize,
     system_hub_selected: usize,
     scroll_x: i32,
@@ -1489,6 +1497,23 @@ impl LauncherNav {
         self.confirm_selected = 0;
     }
 
+    pub fn is_system_hub(&self) -> bool {
+        self.screen == Screen::Arcade && self.system_page_mode == SystemPageMode::Hub
+    }
+
+    pub fn toggle_system_page_mode(&mut self) {
+        if self.screen != Screen::Arcade || self.active_collection_id.is_none() {
+            return;
+        }
+        self.system_page_mode = if self.system_page_mode == SystemPageMode::Hub {
+            SystemPageMode::List
+        } else {
+            SystemPageMode::Hub
+        };
+        self.arcade_filter.drawer_open = false;
+        self.arcade_search.pane = ArcadeSearchPane::Results;
+    }
+
     pub fn for_crt_layout(crt_layout: bool) -> Self {
         Self::for_crt_layout_with_row_height(crt_layout, ARCADE_ROW_HEIGHT)
     }
@@ -1631,6 +1656,7 @@ impl LauncherNav {
             portrait_layout: false,
             license_viewport: crate::licenses::LicenseViewport::HDMI,
             screen: Screen::Home,
+            system_page_mode: SystemPageMode::List,
             selected: 0,
             system_hub_selected: 0,
             scroll_x: 0,
@@ -1752,8 +1778,9 @@ impl LauncherNav {
         }
 
         // A system's page whose collection has gone has nothing left to show.
-        if self.screen == Screen::SystemHub && self.active_collection_id.is_none() {
+        if self.is_system_hub() && self.active_collection_id.is_none() {
             self.screen = Screen::Home;
+            self.system_page_mode = SystemPageMode::List;
             self.restore_current_menu_view();
         }
 
@@ -1780,7 +1807,9 @@ impl LauncherNav {
             let preserved_search = self.arcade_search.clone();
             let preserved_selected = self.arcade.selected;
             let preserved_scroll_y = self.arcade.scroll_y;
+            let requested_page_mode = self.system_page_mode;
             if self.open_default_arcade_synced(catalog) {
+                self.system_page_mode = requested_page_mode;
                 let collection_id = self
                     .active_collection_id
                     .clone()
@@ -1884,9 +1913,9 @@ impl LauncherNav {
     /// Go from a system's page straight to its game list, as launch return,
     /// the start-system setting and benchmarks do.
     pub fn skip_system_page(&mut self, catalog: &ArcadeCatalog) {
-        if self.screen == Screen::SystemHub {
+        if self.is_system_hub() {
             self.set_arcade_user_list_mode(catalog, ArcadeUserListMode::Games);
-            self.screen = Screen::Arcade;
+            self.system_page_mode = SystemPageMode::List;
         }
     }
 
@@ -1895,6 +1924,9 @@ impl LauncherNav {
         let opened = self.open_system(catalog, system_id);
         if opened {
             self.skip_system_page(catalog);
+            let id = self.active_collection_scope_id(catalog).to_string();
+            let count = self.active_arcade_game_count(catalog, &id);
+            self.restore_game_list_state(&id, count);
         }
         opened
     }
@@ -2342,6 +2374,7 @@ impl LauncherNav {
         self.menu_path.push(ROOT_MENU_ID.to_string());
         self.active_collection_id = None;
         self.screen = Screen::Home;
+        self.system_page_mode = SystemPageMode::List;
         self.restore_current_menu_view();
     }
 
@@ -2426,11 +2459,23 @@ impl LauncherNav {
         }
         let count = self.active_arcade_game_count(catalog, &collection.id);
         self.restore_game_list_state(&collection.id, count);
-        self.screen = Screen::Arcade;
-        if self.device_kind_for_collection(&collection.id).is_some() {
-            self.screen = Screen::SystemHub;
-            self.system_hub_selected = 0;
+        let memory_key = collection_filter_memory_key(&collection.id, &self.arcade_filter.active);
+        if !self.game_list_memory.contains_key(&memory_key) {
+            let representative = self
+                .recent_launch_refs
+                .iter()
+                .find_map(|path| {
+                    self.active_arcade_game_view(catalog, &collection.id)
+                        .iter()
+                        .position(|game| game.mra_path.as_ref() == path.as_str())
+                })
+                .unwrap_or(0);
+            self.arcade.selected = representative.min(count.saturating_sub(1));
+            self.arcade.snap_to_selected();
         }
+        self.screen = Screen::Arcade;
+        self.system_page_mode = SystemPageMode::Hub;
+        self.system_hub_selected = 0;
         if let Some(system_index) = catalog.systems.iter().position(|system| {
             collection
                 .system_id
@@ -2493,6 +2538,7 @@ impl LauncherNav {
     pub fn navigation_transition_state(&self) -> NavigationTransitionState {
         NavigationTransitionState {
             screen: self.screen,
+            system_page_mode: self.system_page_mode,
             selected: self.selected,
             system_hub_selected: self.system_hub_selected,
             scroll_x: self.scroll_x,
@@ -2538,6 +2584,7 @@ impl LauncherNav {
 
     pub fn restore_navigation_transition_state(&mut self, state: NavigationTransitionState) {
         self.screen = state.screen;
+        self.system_page_mode = state.system_page_mode;
         self.selected = state.selected;
         self.system_hub_selected = state.system_hub_selected;
         self.scroll_x = state.scroll_x;
@@ -2860,9 +2907,6 @@ impl LauncherNav {
                 .is_some_and(|collection_id| self.activate_collection(catalog, collection_id)),
             LauncherAction::NavigateBack if self.screen == Screen::Home => self.pop_menu(),
             LauncherAction::NavigateBack if self.screen == Screen::Arcade => {
-                if self.return_arcade_to_system_hub() {
-                    return true;
-                }
                 let collection_id = self.active_collection_scope_id(catalog).to_string();
                 let before = self.screen;
                 self.leave_arcade(false, &collection_id);
@@ -2913,6 +2957,14 @@ impl LauncherNav {
         if self.confirm_action.is_some() {
             self.handle_confirm(pressed)
         } else {
+            if self.screen == Screen::Arcade
+                && pressed.btn_select
+                && !self.arcade_filter.drawer_open
+                && !matches!(self.arcade_filter.active, ArcadeFilter::Search)
+            {
+                self.toggle_system_page_mode();
+                return None;
+            }
             match self.screen {
                 Screen::Home => self.handle_home(
                     input,
@@ -2920,7 +2972,7 @@ impl LauncherNav {
                     emit_collection_intents,
                     emit_navigation_intents,
                 ),
-                Screen::SystemHub => self.handle_system_hub(pressed, catalog),
+
                 Screen::Controller => {
                     if pressed.btn_home {
                         self.go_root();
@@ -2929,6 +2981,9 @@ impl LauncherNav {
                         self.restore_current_menu_view();
                     }
                     None
+                }
+                Screen::Arcade if self.is_system_hub() => {
+                    self.handle_system_hub(pressed, catalog, emit_navigation_intents)
                 }
                 Screen::Arcade => self.handle_arcade(input, catalog, emit_navigation_intents),
                 Screen::Settings => self.handle_settings(pressed),
@@ -2945,23 +3000,33 @@ impl LauncherNav {
         &mut self,
         pressed: &PadState,
         catalog: &ArcadeCatalog,
+        emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
         if pressed.btn_home {
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateHome,
+                    path: None,
+                    settings: None,
+                });
+            }
             self.go_root();
             return None;
         }
         if pressed.btn_b {
-            self.active_collection_id = None;
-            self.screen = Screen::Home;
-            if let Some(source) = self.active_collection_source.take() {
-                self.restore_home_view_state(source);
-            } else {
-                self.restore_current_menu_view();
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateBack,
+                    path: None,
+                    settings: None,
+                });
             }
+            let collection_id = self.active_collection_scope_id(catalog).to_string();
+            self.leave_arcade(false, &collection_id);
             return None;
         }
         // Games, Recent and Favourites sit in a row; HDMI portrait stacks them.
-        let (next, previous) = if self.portrait_layout && !self.crt_layout {
+        let (next, previous) = if self.portrait_layout || self.crt_layout {
             (pressed.dpad_down, pressed.dpad_up)
         } else {
             (pressed.dpad_right, pressed.dpad_left)
@@ -2979,8 +3044,18 @@ impl LauncherNav {
                 2 => ArcadeUserListMode::Favourites,
                 _ => unreachable!(),
             };
+            let count = match mode {
+                ArcadeUserListMode::Games => {
+                    self.active_collection().map_or(0, |c| c.count as usize)
+                }
+                ArcadeUserListMode::Recent => self.active_collection_recent_count(catalog),
+                ArcadeUserListMode::Favourites => self.active_collection_favourite_count(catalog),
+            };
+            if count == 0 {
+                return None;
+            }
             self.set_arcade_user_list_mode(catalog, mode);
-            self.screen = Screen::Arcade;
+            self.system_page_mode = SystemPageMode::List;
         }
         None
     }
@@ -3115,6 +3190,7 @@ impl LauncherNav {
                 self.active_collection_id = None;
                 self.set_arcade_user_list_mode(catalog, ArcadeUserListMode::Favourites);
                 self.screen = Screen::Arcade;
+                self.system_page_mode = SystemPageMode::List;
                 return None;
             }
             5 => {
@@ -3246,9 +3322,6 @@ impl LauncherNav {
                     path: None,
                     settings: None,
                 });
-            }
-            if self.return_arcade_to_system_hub() {
-                return None;
             }
             self.leave_arcade(false, &collection_id);
             return None;
@@ -3992,8 +4065,9 @@ impl LauncherNav {
     }
 
     pub fn return_arcade_to_system_hub(&mut self) -> bool {
-        if self.active_collection_id.is_some() && self.device_kind().is_some() {
-            self.screen = Screen::SystemHub;
+        if self.active_collection_id.is_some() {
+            self.screen = Screen::Arcade;
+            self.system_page_mode = SystemPageMode::Hub;
             true
         } else {
             false
@@ -7511,6 +7585,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
 
@@ -7750,6 +7825,7 @@ mod tests {
         assert_no_catalog_loads_during(|| {
             let _ = nav.handle_input(&press_a, t0, &catalog);
             release(&mut nav, &catalog, t0, 16);
+            nav.skip_system_page(&catalog);
             let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
             release(&mut nav, &catalog, t0, 48);
             let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(64), &catalog);
@@ -8099,6 +8175,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
@@ -8374,6 +8451,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
@@ -8435,6 +8513,7 @@ mod tests {
             let mut ms = 0;
 
             tap(&mut nav, &catalog, t0, &mut ms, &press_a);
+            nav.skip_system_page(&catalog);
             open_filter_drawer(&mut nav, &catalog, t0, ms);
             ms += 64;
             for _ in 0..top_index {
@@ -8542,6 +8621,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
 
         let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
         release(&mut nav, &catalog, t0, 48);
@@ -8639,6 +8719,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
@@ -8749,7 +8830,7 @@ mod tests {
         assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
         assert!(nav.commit_navigation_intent(&event, &catalog));
         // A console opens its own page before its game list.
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
     }
 
     #[test]
@@ -8893,7 +8974,7 @@ mod tests {
             .expect("Nintendo 64");
 
         let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog);
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
         release(&mut nav, &catalog, t0, 16);
         let _ = nav.handle_input(
             &pad_with(|pad| pad.btn_b = true),
@@ -8911,7 +8992,7 @@ mod tests {
         let initial = hierarchy_catalog();
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&initial, "neogeopocket"));
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
 
         let computers_only = ArcadeCatalog::new(
             PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
@@ -11305,7 +11386,7 @@ mod tests {
             vec![arcade_system("snes", 1)],
         );
         let mut nav = LauncherNav::new();
-        assert!(nav.open_system(&catalog, "snes"));
+        assert!(nav.open_system_game_list(&catalog, "snes"));
         nav.screen = Screen::Arcade;
         let now = Instant::now();
 
@@ -11409,7 +11490,42 @@ mod tests {
     }
 
     #[test]
-    fn snes_routes_through_hub_and_lists_return_to_it() {
+    fn arcade_overview_and_list_share_selection_and_select_never_navigates() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+        assert!(nav.is_system_hub());
+        let collection = nav.active_collection_id().map(str::to_owned);
+        let now = Instant::now();
+        let select = pad_with(|pad| pad.btn_select = true);
+        nav.handle_input(&select, now, &catalog);
+        assert_eq!(nav.system_page_mode, SystemPageMode::List);
+        nav.arcade.selected = 1;
+        nav.arcade.snap_to_selected();
+        release(&mut nav, &catalog, now, 16);
+        nav.handle_input(&select, now + Duration::from_millis(32), &catalog);
+        assert!(nav.is_system_hub());
+        assert_eq!(nav.arcade.selected, 1);
+        assert_eq!(nav.active_collection_id().map(str::to_owned), collection);
+        nav.system_hub_selected = 1;
+        release(&mut nav, &catalog, now, 48);
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_a = true),
+            now + Duration::from_millis(64),
+            &catalog,
+        );
+        assert!(nav.is_system_hub(), "zero-count Recent tile is a no-op");
+        release(&mut nav, &catalog, now, 80);
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
+            now + Duration::from_millis(96),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn snes_routes_through_hub_and_back_from_list_leaves_the_page() {
         let catalog = arcade_catalog(
             vec![
                 arcade_game("F-Zero")
@@ -11421,7 +11537,7 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&catalog, "snes"));
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
 
         let now = Instant::now();
         nav.handle_input(&pad_with(|pad| pad.btn_a = true), now, &catalog);
@@ -11436,7 +11552,7 @@ mod tests {
             now + Duration::from_millis(2),
             &catalog,
         );
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert_eq!(nav.screen, Screen::Home);
     }
 
     #[test]
@@ -11539,7 +11655,7 @@ mod tests {
         let mut nav = LauncherNav::new();
 
         assert!(nav.open_system(&catalog, "c64"));
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
         assert_eq!(nav.active_collection_id(), Some("c64"));
         assert_eq!(
             nav.device_kind(),
@@ -11549,7 +11665,7 @@ mod tests {
         nav.skip_system_page(&catalog);
         assert_eq!(nav.screen, Screen::Arcade);
         assert!(nav.return_arcade_to_system_hub());
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
     }
 
     #[test]
