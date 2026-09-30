@@ -1327,6 +1327,14 @@ pub fn capture_system_watch(
     storage_root: &Path,
     system_id: &str,
 ) -> Result<FastSystemWatchIndex, String> {
+    capture_system_watch_with_observations(storage_root, system_id, None)
+}
+
+fn capture_system_watch_with_observations(
+    storage_root: &Path,
+    system_id: &str,
+    observations: Option<&GenericSourceWatchObservations>,
+) -> Result<FastSystemWatchIndex, String> {
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
     let specification = watch_specification_from_profiles(storage_root, system_id, &profiles)?;
@@ -1335,7 +1343,7 @@ pub fn capture_system_watch(
         system_id,
         specification,
         &mut BTreeMap::new(),
-        None,
+        observations,
     )
 }
 
@@ -1370,6 +1378,25 @@ fn capture_system_watch_from_specification(
     let reused_generic_observations = generic_observations
         .is_some_and(|observations| observations.complete && observations.roots == expected_roots);
     if let Some(observations) = generic_observations.filter(|_| reused_generic_observations) {
+        // Rows and their directory fingerprint come from the same source walk.
+        // Never publish that pair as current after an observed directory changes.
+        for directory in &observations.directories {
+            let metadata = fs::metadata(&directory.path).map_err(|e| {
+                format!(
+                    "source changed after scan {}: {e}",
+                    directory.path.display()
+                )
+            })?;
+            if !metadata.is_dir() || modified_ns(&metadata) != directory.modified_ns {
+                return Err(format!(
+                    "source changed after scan {}",
+                    directory.path.display()
+                ));
+            }
+        }
+
+        #[cfg(any(test, feature = "io-test-metrics"))]
+        crate::io_test_metrics::record_watch_reuse();
         directories.extend(
             observations
                 .directories
@@ -1759,12 +1786,21 @@ fn prepare_system_refresh(
     snapshot: &FastFiveSnapshot,
     system_id: &str,
 ) -> Result<Option<PreparedSystemRefresh>, String> {
-    let Some((system, source_report)) =
-        crate::fast_catalog_sources::rebuild_independent_system(storage_root, snapshot, system_id)?
+    let Some(rebuilt) = crate::fast_catalog_sources::rebuild_independent_system_with_observations(
+        storage_root,
+        snapshot,
+        system_id,
+    )?
     else {
         return Ok(None);
     };
-    let watch = capture_system_watch(storage_root, system_id)?;
+    let watch = capture_system_watch_with_observations(
+        storage_root,
+        system_id,
+        rebuilt.observations.as_ref(),
+    )?;
+    let system = rebuilt.system;
+    let source_report = rebuilt.report;
     let row_fingerprint =
         row_fingerprint_parts(&system.system_id, &system.games, &system.variants)?;
     let games = system.games.len().try_into().unwrap_or(u64::MAX);
@@ -2334,6 +2370,9 @@ fn capture_tree(
     directories: &mut Vec<FastWatchedDirectory>,
     containers: &mut Vec<FastWatchedContainer>,
 ) -> Result<(), String> {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_watch_tree_walk();
+
     let mut visited = 0usize;
     capture_tree_at_depth(root, system_id, directories, containers, 0, &mut visited)
 }
@@ -2358,12 +2397,9 @@ fn capture_tree_at_depth(
     let metadata = fs::metadata(root)
         .map_err(|error| format!("stat watch directory {}: {error}", root.display()))?;
     let mut entries = read_watch_directory_entries(root)?;
-    entries.sort_by(|left, right| {
-        let left = left.file_name().to_string_lossy().into_owned();
-        let right = right.file_name().to_string_lossy().into_owned();
-        left.to_ascii_lowercase()
-            .cmp(&right.to_ascii_lowercase())
-            .then_with(|| left.cmp(&right))
+    entries.sort_by_cached_key(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        (name.to_ascii_lowercase(), name)
     });
     let mut digest = Sha256::new();
     for entry in entries {
@@ -2484,12 +2520,7 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
             Some((entry.file_name().to_string_lossy().into_owned(), kind))
         })
         .collect::<Vec<_>>();
-    entries.sort_by(|left, right| {
-        left.0
-            .to_ascii_lowercase()
-            .cmp(&right.0.to_ascii_lowercase())
-            .then_with(|| left.0.cmp(&right.0))
-    });
+    crate::catalog_sort::sort_ascii_titles(&mut entries, |row| &row.0, |row| &row.0);
     let mut digest = Sha256::new();
     for (name, kind) in entries {
         digest.update([kind]);
@@ -2583,7 +2614,7 @@ fn is_watched_container(system_id: &str, path: &Path) -> bool {
     }
 }
 
-fn should_prune_source_directory(path: &Path) -> bool {
+pub(crate) fn should_prune_source_directory(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| {
@@ -3041,6 +3072,156 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(storage);
         let _ = fs::remove_dir_all(catalog);
+    }
+
+    #[test]
+    fn incremental_watch_walk_probe_matches_rows_and_exact_watch() {
+        let storage = crate::test_support::unique_temp_dir("incremental-watch-probe");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        fs::write(storage.join("_Console/SNES.rbf"), b"core").unwrap();
+        for i in 0..100 {
+            let path = storage.join(format!("games/SNES/Publisher{}/Game{i:03}.sfc", i % 4));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"rom").unwrap();
+        }
+        let unused = FastFiveSnapshot {
+            schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.into(),
+            source_fingerprint: "0".repeat(64),
+            systems: vec![],
+        };
+        let before = (
+            crate::io_test_metrics::source_walks(),
+            crate::io_test_metrics::watch_tree_walks(),
+        );
+        let prepared = prepare_system_refresh(&storage, &unused, "snes")
+            .unwrap()
+            .unwrap();
+        let source = crate::io_test_metrics::source_walks() - before.0;
+        let watch = crate::io_test_metrics::watch_tree_walks() - before.1;
+        assert_eq!(prepared.system.games.len(), 100);
+        assert_eq!(
+            prepared.state.watch,
+            capture_system_watch(&storage, "snes").unwrap()
+        );
+        fs::remove_dir_all(storage).unwrap();
+        eprintln!("incremental_watch_walk_probe: source={source} fallback_watch={watch}");
+        #[cfg(target_os = "linux")]
+        assert_eq!((source, watch), (1, 0));
+        // WalkDir cannot bracket nested directory signatures. Its conservative
+        // path must keep the existing exact watch-tree fallback.
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!((source, watch), (1, 1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incremental_refresh_with_aliased_roots_keeps_new_games_and_exact_watch() {
+        let storage = crate::test_support::unique_temp_dir("incremental-aliased-roots");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        fs::create_dir_all(storage.join("games/Atari2600")).unwrap();
+        fs::write(storage.join("_Console/Atari2600.rbf"), b"core").unwrap();
+        std::os::unix::fs::symlink("Atari2600", storage.join("games/ATARI2600-Sinden")).unwrap();
+        let snapshot = FastFiveSnapshot {
+            schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.into(),
+            source_fingerprint: "0".repeat(64),
+            systems: vec![],
+        };
+        for (index, name) in ["First", "New Game"].iter().enumerate() {
+            fs::write(storage.join(format!("games/Atari2600/{name}.a26")), b"rom").unwrap();
+            let rebuilt =
+                crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
+                    &storage,
+                    "atari2600",
+                )
+                .unwrap()
+                .unwrap();
+            let mut observed = rebuilt.observations.unwrap();
+            assert_eq!(observed.roots.len(), 1, "aliases must scan only once");
+            // Linux captures complete observations; other hosts exercise the
+            // same root-set decision without relying on their walker backend.
+            observed.complete = true;
+            let watch =
+                capture_system_watch_with_observations(&storage, "atari2600", Some(&observed))
+                    .unwrap();
+            assert_eq!(watch, capture_system_watch(&storage, "atari2600").unwrap());
+            let prepared = prepare_system_refresh(&storage, &snapshot, "atari2600")
+                .unwrap()
+                .unwrap();
+            assert_eq!(prepared.system.games.len(), index + 1);
+            assert_eq!(
+                prepared.state.watch,
+                capture_system_watch(&storage, "atari2600").unwrap()
+            );
+            for root in ["Atari2600", "ATARI2600-Sinden"] {
+                let path = storage
+                    .join("games")
+                    .join(root)
+                    .to_string_lossy()
+                    .into_owned();
+                assert!(prepared.state.watch.roots.contains(&path));
+            }
+        }
+        fs::remove_dir_all(storage).unwrap();
+    }
+
+    #[test]
+    fn incremental_observation_reuse_rejects_changes_and_falls_back_for_partial_capture() {
+        let storage = crate::test_support::unique_temp_dir("incremental-observation-validation");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        fs::create_dir_all(storage.join("games/SNES")).unwrap();
+        fs::write(storage.join("_Console/SNES.rbf"), b"core").unwrap();
+        fs::write(storage.join("games/SNES/Game.sfc"), b"rom").unwrap();
+        let rebuilt =
+            crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
+                &storage, "snes",
+            )
+            .unwrap()
+            .unwrap();
+        let observed = rebuilt.observations.unwrap();
+        assert!(observed.complete);
+        let expected = capture_system_watch(&storage, "snes").unwrap();
+        assert_eq!(
+            capture_system_watch_with_observations(&storage, "snes", Some(&observed)).unwrap(),
+            expected
+        );
+        let mut partial = observed.clone();
+        partial.complete = false;
+        let before = crate::io_test_metrics::watch_tree_walks();
+        assert_eq!(
+            capture_system_watch_with_observations(&storage, "snes", Some(&partial)).unwrap(),
+            expected
+        );
+        assert_eq!(crate::io_test_metrics::watch_tree_walks() - before, 1);
+        let mut mismatched = observed.clone();
+        mismatched.roots.clear();
+        let before = crate::io_test_metrics::watch_tree_walks();
+        assert_eq!(
+            capture_system_watch_with_observations(&storage, "snes", Some(&mismatched)).unwrap(),
+            expected
+        );
+        assert_eq!(crate::io_test_metrics::watch_tree_walks() - before, 1);
+        mismatched.roots = observed
+            .roots
+            .iter()
+            .map(|root| root.to_lowercase())
+            .collect();
+        assert_eq!(
+            capture_system_watch_with_observations(&storage, "snes", Some(&mismatched)).unwrap(),
+            expected
+        );
+        fs::File::open(storage.join("games/SNES"))
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(SystemTime::now() + std::time::Duration::from_secs(3)),
+            )
+            .unwrap();
+        assert!(
+            capture_system_watch_with_observations(&storage, "snes", Some(&observed))
+                .unwrap_err()
+                .contains("source changed after scan")
+        );
+        fs::remove_dir_all(storage).unwrap();
     }
 
     fn state(system_id: &str) -> FastRefreshSystemState {

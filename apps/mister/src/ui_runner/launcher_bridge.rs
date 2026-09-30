@@ -1732,6 +1732,43 @@ mod tests {
     }
 
     #[test]
+    fn selection_only_drawer_sync_retains_the_slint_model() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            vec![arcade_game("Alpha").build(), arcade_game("Beta").build()],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 2,
+            }],
+        );
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade_filter.drawer_open = true;
+        nav.arcade_filter.level = launcher::ArcadeFilterLevel::Alphabet;
+        let mut models = LauncherViewModels::default();
+        models.sync(&app, &nav, &catalog, None, false, None);
+        let before = app
+            .global::<slint_ui::launcher::ArcadeView>()
+            .get_drawer_items();
+        for tick in 0..120 {
+            nav.arcade_filter.selected = tick % 2;
+            models.sync(&app, &nav, &catalog, None, false, None);
+        }
+        let after = app
+            .global::<slint_ui::launcher::ArcadeView>()
+            .get_drawer_items();
+        println!("drawer_model retained={}", before == after);
+        assert!(
+            before == after,
+            "selection-only sync replaced the drawer model"
+        );
+        assert_eq!(after.row_count(), 2);
+    }
+
+    #[test]
     fn menu_item_state_mutates_only_the_previous_and_next_rows() {
         install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");

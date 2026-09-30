@@ -122,6 +122,26 @@ pub struct ArcadeCatalog {
     system_collections: Arc<HashMap<String, Arc<SystemCollection>>>,
 }
 
+/// Weak snapshot of the immutable inputs used by drawer projections. Weak
+/// ownership prevents a cached projection from retaining hydrated collections;
+/// keeping the control blocks also prevents pointer-reuse false matches.
+#[derive(Clone, Debug)]
+pub struct CatalogProjectionToken {
+    games: std::sync::Weak<Vec<ArcadeGameEntry>>,
+    collections: std::sync::Weak<HashMap<String, Arc<SystemCollection>>>,
+    filters: std::sync::Weak<HashMap<String, ArcadeSystemFilterOptions>>,
+    systems: Vec<GameSystemEntry>,
+}
+
+impl CatalogProjectionToken {
+    pub fn matches(&self, catalog: &ArcadeCatalog) -> bool {
+        self.games.as_ptr() == Arc::as_ptr(&catalog.games)
+            && self.collections.as_ptr() == Arc::as_ptr(&catalog.system_collections)
+            && self.filters.as_ptr() == Arc::as_ptr(&catalog.filter_options_by_system)
+            && self.systems == catalog.systems
+    }
+}
+
 /// Immutable navigation segment for one hydrated system.
 ///
 /// The complete row set and its navigation indexes are built on CPU0 before publication. Catalog
@@ -955,6 +975,15 @@ impl ArcadeCatalog {
             autocomplete: Arc::new(indexes.autocomplete),
             lazy_text_indexes: Arc::new(OnceLock::new()),
             system_collections: Arc::new(HashMap::new()),
+        }
+    }
+
+    pub fn projection_token(&self) -> CatalogProjectionToken {
+        CatalogProjectionToken {
+            games: Arc::downgrade(&self.games),
+            collections: Arc::downgrade(&self.system_collections),
+            filters: Arc::downgrade(&self.filter_options_by_system),
+            systems: self.systems.clone(),
         }
     }
 

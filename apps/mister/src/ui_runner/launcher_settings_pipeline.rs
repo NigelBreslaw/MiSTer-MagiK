@@ -1,14 +1,14 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! One-frame-ahead producer for the fixed 960x540 Home <-> Settings animation.
+//! Persistent producer for the fixed 960x540 Home <-> Settings animation.
 
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::settings_cog::render_settings_cog_transition_into;
 use std::collections::VecDeque;
-use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
-use std::thread::JoinHandle;
+use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 const FRAME_PIXELS: usize = 960 * 540;
@@ -21,162 +21,205 @@ pub(super) struct SettingsFrameRequest {
 }
 
 pub(super) struct PreparedSettingsFrame {
+    generation: u64,
     request: SettingsFrameRequest,
     pixels: Vec<Rgb565Pixel>,
     render_us: u64,
     completed_at: Instant,
 }
-
 impl PreparedSettingsFrame {
     pub(super) const fn request(&self) -> SettingsFrameRequest {
         self.request
     }
-
     pub(super) fn pixels(&self) -> &[Rgb565Pixel] {
         &self.pixels
     }
-
     pub(super) const fn render_us(&self) -> u64 {
         self.render_us
     }
-
     pub(super) const fn completed_at(&self) -> Instant {
         self.completed_at
     }
 }
-
-pub(super) struct SettingsCogRenderAhead {
-    request_tx: Option<SyncSender<(SettingsFrameRequest, Vec<Rgb565Pixel>)>>,
-    completed_rx: Receiver<PreparedSettingsFrame>,
-    free_tx: SyncSender<Vec<Rgb565Pixel>>,
-    free_rx: Receiver<Vec<Rgb565Pixel>>,
-    worker: Option<JoinHandle<()>>,
-    ready: VecDeque<PreparedSettingsFrame>,
-    last_submitted_target: Option<u64>,
+struct Work {
+    generation: u64,
+    request: SettingsFrameRequest,
+    launcher: Arc<Vec<Rgb565Pixel>>,
+    settings: Arc<Vec<Rgb565Pixel>>,
+    cog: &'static [Rgb565Pixel],
+    pixels: Vec<Rgb565Pixel>,
+}
+struct Endpoints {
+    launcher: Weak<Vec<Rgb565Pixel>>,
+    settings: Weak<Vec<Rgb565Pixel>>,
+    cog: &'static [Rgb565Pixel],
 }
 
-impl SettingsCogRenderAhead {
-    pub(super) fn start(
-        launcher: Vec<Rgb565Pixel>,
-        settings: Vec<Rgb565Pixel>,
+/// Created once during launcher initialization. The worker owns pool allocation;
+/// transition submission only shares immutable snapshots and moves free buffers.
+pub(super) struct SettingsCogSession {
+    requests: Option<SyncSender<Work>>,
+    completed: Receiver<PreparedSettingsFrame>,
+    free_tx: SyncSender<Vec<Rgb565Pixel>>,
+    free_rx: Receiver<Vec<Rgb565Pixel>>,
+    ready: VecDeque<PreparedSettingsFrame>,
+    generation: u64,
+    endpoints: Option<Endpoints>,
+    last_submitted_target: Option<u64>,
+}
+impl SettingsCogSession {
+    pub(super) fn new() -> Self {
+        Self::with_initializer(|| {})
+    }
+    fn with_initializer(initialize: impl FnOnce() + Send + 'static) -> Self {
+        let (requests, request_rx) = sync_channel::<Work>(1);
+        let (completed_tx, completed) = channel();
+        let (free_tx, free_rx) = sync_channel(BUFFER_COUNT);
+        let worker_free = free_tx.clone();
+        // Dropping the JoinHandle detaches this bounded worker. Disconnecting the
+        // request channel ends it after at most the running and queued frame.
+        let spawned = std::thread::Builder::new()
+            .name("settings-cog-ahead".into())
+            .spawn(move || {
+                apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+                initialize();
+                for _ in 0..BUFFER_COUNT {
+                    if worker_free
+                        .send(vec![Rgb565Pixel(0); FRAME_PIXELS])
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                while let Ok(mut work) = request_rx.recv() {
+                    let started = Instant::now();
+                    if !render_settings_cog_transition_into(
+                        &work.launcher,
+                        &work.settings,
+                        work.cog,
+                        work.request.t_ms,
+                        &mut work.pixels,
+                    ) {
+                        let _ = worker_free.try_send(work.pixels);
+                        continue;
+                    }
+                    if completed_tx
+                        .send(PreparedSettingsFrame {
+                            generation: work.generation,
+                            request: work.request,
+                            pixels: work.pixels,
+                            render_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                            completed_at: Instant::now(),
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .is_ok();
+        Self {
+            requests: spawned.then_some(requests),
+            completed,
+            free_tx,
+            free_rx,
+            ready: VecDeque::with_capacity(BUFFER_COUNT),
+            generation: 0,
+            endpoints: None,
+            last_submitted_target: None,
+        }
+    }
+    pub(super) fn clear(&mut self) {
+        if self.endpoints.take().is_some() {
+            self.generation = self.generation.wrapping_add(1);
+            self.last_submitted_target = None;
+        }
+        while let Some(frame) = self.ready.pop_front() {
+            self.recycle(frame);
+        }
+        self.drain_completed();
+    }
+    pub(super) fn submit(
+        &mut self,
+        launcher: Arc<Vec<Rgb565Pixel>>,
+        settings: Arc<Vec<Rgb565Pixel>>,
         cog: &'static [Rgb565Pixel],
-    ) -> Option<Self> {
+        request: SettingsFrameRequest,
+    ) {
         if launcher.len() != FRAME_PIXELS
             || settings.len() != FRAME_PIXELS
             || cog.len()
                 != mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
                     * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
         {
-            return None;
+            return;
         }
-        let (completed_tx, completed_rx) = channel();
-        let (free_tx, free_rx) = sync_channel(BUFFER_COUNT);
-        for _ in 0..BUFFER_COUNT {
-            free_tx.send(vec![Rgb565Pixel(0); FRAME_PIXELS]).ok()?;
+        let same = self.endpoints.as_ref().is_some_and(|e| {
+            e.launcher.as_ptr() == Arc::as_ptr(&launcher)
+                && e.settings.as_ptr() == Arc::as_ptr(&settings)
+                && std::ptr::eq(e.cog, cog)
+        });
+        if !same {
+            self.clear();
+            self.endpoints = Some(Endpoints {
+                launcher: Arc::downgrade(&launcher),
+                settings: Arc::downgrade(&settings),
+                cog,
+            });
+            self.generation = self.generation.wrapping_add(1);
         }
-        let (request_tx, request_rx) = sync_channel(1);
-        let worker = std::thread::Builder::new()
-            .name("settings-cog-ahead".into())
-            .spawn(move || run_worker(request_rx, completed_tx, launcher, settings, cog))
-            .ok()?;
-        Some(Self {
-            request_tx: Some(request_tx),
-            completed_rx,
-            free_tx,
-            free_rx,
-            worker: Some(worker),
-            ready: VecDeque::with_capacity(BUFFER_COUNT),
-            last_submitted_target: None,
-        })
-    }
-
-    pub(super) fn submit(&mut self, request: SettingsFrameRequest) {
         self.drain_completed();
         if self.last_submitted_target == Some(request.target_vblank) {
             return;
         }
-        let Ok(buffer) = self.free_rx.try_recv() else {
+        let Ok(pixels) = self.free_rx.try_recv() else {
             return;
         };
-        let Some(request_tx) = self.request_tx.as_ref() else {
-            let _ = self.free_tx.try_send(buffer);
+        let work = Work {
+            generation: self.generation,
+            request,
+            launcher,
+            settings,
+            cog,
+            pixels,
+        };
+        let Some(requests) = self.requests.as_ref() else {
+            let _ = self.free_tx.try_send(work.pixels);
             return;
         };
-        match request_tx.try_send((request, buffer)) {
+        match requests.try_send(work) {
             Ok(()) => self.last_submitted_target = Some(request.target_vblank),
-            Err(std::sync::mpsc::TrySendError::Full((_, buffer)))
-            | Err(std::sync::mpsc::TrySendError::Disconnected((_, buffer))) => {
-                let _ = self.free_tx.try_send(buffer);
+            Err(std::sync::mpsc::TrySendError::Full(work))
+            | Err(std::sync::mpsc::TrySendError::Disconnected(work)) => {
+                let _ = self.free_tx.try_send(work.pixels);
             }
         }
     }
-
-    pub(super) fn take_for_vblank(&mut self, target_vblank: u64) -> Option<PreparedSettingsFrame> {
+    pub(super) fn take_for_vblank(&mut self, target: u64) -> Option<PreparedSettingsFrame> {
         self.drain_completed();
         while self
             .ready
             .front()
-            .is_some_and(|frame| frame.request.target_vblank < target_vblank)
+            .is_some_and(|f| f.request.target_vblank < target)
         {
-            let stale = self.ready.pop_front().expect("front was present");
+            let stale = self.ready.pop_front().expect("front present");
             self.recycle(stale);
         }
         self.ready
             .front()
-            .is_some_and(|frame| frame.request.target_vblank == target_vblank)
-            .then(|| self.ready.pop_front().expect("front was present"))
+            .is_some_and(|f| f.request.target_vblank == target)
+            .then(|| self.ready.pop_front().expect("front present"))
     }
-
     pub(super) fn recycle(&mut self, frame: PreparedSettingsFrame) {
         let _ = self.free_tx.try_send(frame.pixels);
     }
-
     fn drain_completed(&mut self) {
-        while let Ok(completed) = self.completed_rx.try_recv() {
-            self.ready.push_back(completed);
-        }
-    }
-}
-
-impl Drop for SettingsCogRenderAhead {
-    fn drop(&mut self) {
-        self.request_tx.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-    }
-}
-
-fn run_worker(
-    requests: Receiver<(SettingsFrameRequest, Vec<Rgb565Pixel>)>,
-    completed: Sender<PreparedSettingsFrame>,
-    launcher: Vec<Rgb565Pixel>,
-    settings: Vec<Rgb565Pixel>,
-    cog: &'static [Rgb565Pixel],
-) {
-    apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
-    while let Ok((request, mut pixels)) = requests.recv() {
-        let started = Instant::now();
-        if !render_settings_cog_transition_into(
-            &launcher,
-            &settings,
-            cog,
-            request.t_ms,
-            &mut pixels,
-        ) {
-            continue;
-        }
-        let render_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
-        if completed
-            .send(PreparedSettingsFrame {
-                request,
-                pixels,
-                render_us,
-                completed_at: Instant::now(),
-            })
-            .is_err()
-        {
-            break;
+        while let Ok(frame) = self.completed.try_recv() {
+            if self.endpoints.is_some() && frame.generation == self.generation {
+                self.ready.push_back(frame);
+            } else {
+                self.recycle(frame);
+            }
         }
     }
 }
@@ -185,75 +228,167 @@ fn run_worker(
 mod tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn settings_transition_lifecycle_has_no_launcher_pixel_allocations() {
+        let launcher = std::sync::Arc::new(vec![Rgb565Pixel(0x1234); FRAME_PIXELS]);
+        let settings = std::sync::Arc::new(vec![Rgb565Pixel(0x4321); FRAME_PIXELS]);
+        let cog = Box::leak(
+            vec![
+                Rgb565Pixel(0);
+                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+            ]
+            .into_boxed_slice(),
+        );
+        let mut session = SettingsCogSession::new();
+        let mut measurements = Vec::new();
+        for generation in 1..=2 {
+            crate::allocation_metrics::begin();
+            session.submit(
+                launcher.clone(),
+                settings.clone(),
+                cog,
+                SettingsFrameRequest {
+                    target_vblank: generation,
+                    t_ms: 0,
+                },
+            );
+            let allocated = crate::allocation_metrics::finish();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let frame = loop {
+                // Submission is retried if the asynchronously initialized pool was not ready.
+                session.submit(
+                    launcher.clone(),
+                    settings.clone(),
+                    cog,
+                    SettingsFrameRequest {
+                        target_vblank: generation,
+                        t_ms: 0,
+                    },
+                );
+                if let Some(frame) = session.take_for_vblank(generation) {
+                    break frame;
+                }
+                assert!(Instant::now() < deadline, "pool never became ready");
+                std::thread::yield_now();
+            };
+            assert!(frame.pixels().iter().all(|p| p.0 == 0x1234));
+            session.recycle(frame);
+            session.clear();
+            measurements.push(allocated.bytes);
+        }
+        println!("settings_transition_ui_allocated_bytes={measurements:?}");
+        assert!(
+            measurements
+                .iter()
+                .all(|bytes| *bytes < FRAME_PIXELS as u64 * 2),
+            "pixel buffers allocated on launcher thread"
+        );
+    }
 
-    fn take(pipeline: &mut SettingsCogRenderAhead, target_vblank: u64) -> PreparedSettingsFrame {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            if let Some(frame) = pipeline.take_for_vblank(target_vblank) {
-                return frame;
-            }
-            assert!(Instant::now() < deadline, "Settings producer timed out");
+    #[test]
+    fn blocked_initialization_does_not_block_transition_input_or_retirement() {
+        let (entered_tx, entered_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (go_tx, go_rx) = channel();
+        let (input_tx, input_rx) = channel();
+        let ui = std::thread::spawn(move || {
+            let mut session = SettingsCogSession::with_initializer(move || {
+                entered_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+            go_rx.recv().unwrap();
+            let launcher = Arc::new(vec![Rgb565Pixel(7); FRAME_PIXELS]);
+            let settings = Arc::new(vec![Rgb565Pixel(9); FRAME_PIXELS]);
+            let cog = Box::leak(
+                vec![
+                    Rgb565Pixel(0);
+                    mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                        * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+                ]
+                .into_boxed_slice(),
+            );
+            session.submit(
+                launcher,
+                settings,
+                cog,
+                SettingsFrameRequest {
+                    target_vblank: 1,
+                    t_ms: 0,
+                },
+            );
+            assert!(session.take_for_vblank(1).is_none());
+            session.clear();
+            drop(session);
+            let mut nav = crate::launcher::LauncherNav::new();
+            let catalog = crate::arcade_catalog::ArcadeCatalog::new(
+                std::path::PathBuf::new(),
+                vec![],
+                vec![],
+            );
+            let pad = crate::input::PadState {
+                dpad_right: true,
+                ..Default::default()
+            };
+            nav.handle_input(&pad, Instant::now(), &catalog);
+            input_tx.send(nav.selected).unwrap();
+        });
+        let entered = entered_rx.recv_timeout(Duration::from_secs(3));
+        let _ = go_tx.send(());
+        let input = input_rx.recv_timeout(Duration::from_secs(3));
+        // Always release the watchdog gate before asserting or joining.
+        let _ = release_tx.send(());
+        ui.join().unwrap();
+        assert!(entered.is_ok());
+        assert_eq!(
+            input.unwrap(),
+            1,
+            "actual Home navigation must precede worker release"
+        );
+    }
+    #[test]
+    fn latest_generation_and_duplicate_targets_preserve_exact_pixels() {
+        let mut session = SettingsCogSession::new();
+        let launcher = Arc::new(vec![Rgb565Pixel(0x1234); FRAME_PIXELS]);
+        let settings = Arc::new(vec![Rgb565Pixel(0x4321); FRAME_PIXELS]);
+        let cog = Box::leak(
+            vec![
+                Rgb565Pixel(0);
+                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+            ]
+            .into_boxed_slice(),
+        );
+        let request = SettingsFrameRequest {
+            target_vblank: 21,
+            t_ms: 0,
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while session.last_submitted_target.is_none() {
+            session.submit(launcher.clone(), settings.clone(), cog, request);
+            assert!(Instant::now() < deadline);
             std::thread::yield_now();
         }
-    }
-
-    #[test]
-    fn prepared_frames_preserve_target_vblank_and_exact_endpoints() {
-        let launcher = vec![Rgb565Pixel(0x1234); FRAME_PIXELS];
-        let settings = vec![Rgb565Pixel(0x4321); FRAME_PIXELS];
-        let cog = Box::leak(
-            vec![
-                Rgb565Pixel(0);
-                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
-        let mut pipeline =
-            SettingsCogRenderAhead::start(launcher, settings, cog).expect("valid pipeline");
-
-        pipeline.submit(SettingsFrameRequest {
-            target_vblank: 12,
-            t_ms: 0,
-        });
-        let first = take(&mut pipeline, 12);
-        assert_eq!(first.request().target_vblank, 12);
-        assert!(first.pixels().iter().all(|pixel| pixel.0 == 0x1234));
-        pipeline.recycle(first);
-
-        pipeline.submit(SettingsFrameRequest {
-            target_vblank: 13,
-            t_ms: 1_000,
-        });
-        let last = take(&mut pipeline, 13);
-        assert!(last.pixels().iter().all(|pixel| pixel.0 == 0x4321));
-    }
-
-    #[test]
-    fn duplicate_target_is_only_queued_once() {
-        let launcher = vec![Rgb565Pixel(0x1234); FRAME_PIXELS];
-        let settings = vec![Rgb565Pixel(0x4321); FRAME_PIXELS];
-        let cog = Box::leak(
-            vec![
-                Rgb565Pixel(0);
-                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
-        let mut pipeline =
-            SettingsCogRenderAhead::start(launcher, settings, cog).expect("valid pipeline");
-
-        pipeline.submit(SettingsFrameRequest {
-            target_vblank: 21,
-            t_ms: 400,
-        });
-        pipeline.submit(SettingsFrameRequest {
-            target_vblank: 21,
-            t_ms: 417,
-        });
-        let first = take(&mut pipeline, 21);
-        assert_eq!(first.request().t_ms, 400);
-        assert!(pipeline.take_for_vblank(21).is_none());
+        session.clear();
+        loop {
+            session.submit(
+                launcher.clone(),
+                settings.clone(),
+                cog,
+                SettingsFrameRequest {
+                    t_ms: 1000,
+                    ..request
+                },
+            );
+            if let Some(frame) = session.take_for_vblank(21) {
+                assert!(frame.pixels().iter().all(|p| p.0 == 0x4321));
+                session.submit(launcher.clone(), settings.clone(), cog, request);
+                assert!(session.take_for_vblank(21).is_none());
+                session.recycle(frame);
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
     }
 }

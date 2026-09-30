@@ -33,13 +33,14 @@ use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, Displ
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
 use mister_magik_mister_runtime::runtime_state::SystemRuntimeState;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1007,6 +1008,7 @@ pub struct LauncherTaxonomySyncTiming {
 }
 
 pub struct LauncherNav {
+    drawer_projection: RefCell<Option<ArcadeDrawerProjection>>,
     crt_layout: bool,
     portrait_layout: bool,
     license_viewport: crate::licenses::LicenseViewport,
@@ -1064,6 +1066,18 @@ pub struct LauncherNav {
     test_repeat: RepeatNav,
     #[cfg(test)]
     test_prev: PadState,
+}
+
+struct ArcadeDrawerProjection {
+    catalog: crate::arcade_catalog::CatalogProjectionToken,
+    system_id: String,
+    level: ArcadeFilterLevel,
+    filter: ArcadeFilter,
+    user_list_mode: ArcadeUserListMode,
+    search_query: String,
+    search_request: u64,
+    search_status: ArcadeSearchStatus,
+    items: Arc<Vec<ArcadeDrawerItem>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1476,6 +1490,7 @@ impl LauncherNav {
 
     pub fn new() -> Self {
         Self {
+            drawer_projection: RefCell::new(None),
             crt_layout: false,
             portrait_layout: false,
             license_viewport: crate::licenses::LicenseViewport::HDMI,
@@ -2405,6 +2420,7 @@ impl LauncherNav {
         self.favourite_launch_refs_revision = state.favourite_launch_refs_revision;
         self.recent_launch_refs = state.recent_launch_refs;
         self.arcade_user_list_mode = state.arcade_user_list_mode;
+        self.drawer_projection.get_mut().take();
         self.user_list_indexes = state.user_list_indexes;
         self.pending_game_action_path = state.pending_game_action_path;
         self.game_list_memory = state.game_list_memory;
@@ -3245,7 +3261,7 @@ impl LauncherNav {
             tick_continuous,
             frame_now,
         } = input;
-        let items = self.arcade_filter_items(catalog, system_id);
+        let items = self.arcade_filter_projection(catalog, system_id);
         if self.arcade_filter.activation_release_required && (released.btn_a || released.dpad_right)
         {
             self.arcade_filter.activation_release_required = false;
@@ -3833,6 +3849,7 @@ impl LauncherNav {
     }
 
     fn rebuild_user_list_indexes(&mut self, catalog: &ArcadeCatalog) {
+        self.drawer_projection.get_mut().take();
         let active_collection = self.active_collection_id().map(str::to_owned);
         self.user_list_indexes = match (self.arcade_user_list_mode, active_collection.as_deref()) {
             (ArcadeUserListMode::Games, _) => Vec::new(),
@@ -3971,7 +3988,50 @@ impl LauncherNav {
         catalog: &ArcadeCatalog,
         system_id: &str,
     ) -> Vec<ArcadeDrawerItem> {
+        self.arcade_filter_projection(catalog, system_id)
+            .as_ref()
+            .clone()
+    }
+
+    pub(crate) fn arcade_filter_projection(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> Arc<Vec<ArcadeDrawerItem>> {
         let system_id = self.effective_collection_id(system_id);
+        let mut cached = self.drawer_projection.borrow_mut();
+        if let Some(projection) = cached.as_ref()
+            && projection.catalog.matches(catalog)
+            && projection.system_id == system_id
+            && projection.level == self.arcade_filter.level
+            && projection.filter == self.arcade_filter.active
+            && projection.user_list_mode == self.arcade_user_list_mode
+            && projection.search_query == self.arcade_search.query
+            && projection.search_request == self.arcade_search.request_id
+            && projection.search_status == self.arcade_search.status
+        {
+            return Arc::clone(&projection.items);
+        }
+        let items = Arc::new(self.build_arcade_filter_items(catalog, system_id));
+        *cached = Some(ArcadeDrawerProjection {
+            catalog: catalog.projection_token(),
+            system_id: system_id.to_owned(),
+            level: self.arcade_filter.level,
+            filter: self.arcade_filter.active.clone(),
+            user_list_mode: self.arcade_user_list_mode,
+            search_query: self.arcade_search.query.clone(),
+            search_request: self.arcade_search.request_id,
+            search_status: self.arcade_search.status,
+            items: Arc::clone(&items),
+        });
+        items
+    }
+
+    fn build_arcade_filter_items(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> Vec<ArcadeDrawerItem> {
         match self.arcade_filter.level {
             ArcadeFilterLevel::Alphabet => self.arcade_alphabet_items(catalog, system_id),
             ArcadeFilterLevel::Top => self.arcade_filter_top_items(catalog, system_id),
@@ -4169,7 +4229,7 @@ impl LauncherNav {
         } else {
             0
         };
-        let items = self.arcade_filter_items(catalog, system_id);
+        let items = self.arcade_filter_projection(catalog, system_id);
         if self.arcade_filter.level != ArcadeFilterLevel::Top
             && let Some(active_idx) = items.iter().position(|item| item.active)
         {
@@ -4298,7 +4358,7 @@ impl LauncherNav {
         self.arcade_filter.level = level;
         self.arcade_filter.activation_release_required = true;
         self.arcade_filter.selected = 0;
-        let items = self.arcade_filter_items(catalog, system_id);
+        let items = self.arcade_filter_projection(catalog, system_id);
         if let Some(active_idx) = items.iter().position(|item| item.active) {
             self.arcade_filter.selected = active_idx;
         }
@@ -4446,6 +4506,7 @@ impl LauncherNav {
     }
 
     fn clear_arcade_search_results(&mut self, system_id: &str) {
+        self.drawer_projection.get_mut().take();
         self.arcade_search.results.clear();
         self.arcade_search.suggestion.clear();
         self.arcade_search.result_system_id.clear();
@@ -4478,6 +4539,7 @@ impl LauncherNav {
         let Some(suggestion) =
             catalog.try_autocomplete_search_word(system_id, &self.arcade_search.query)
         else {
+            self.drawer_projection.get_mut().take();
             self.arcade_search.results.clear();
             self.arcade_search.suggestion.clear();
             self.arcade_search.result_system_id = system_id.to_string();
@@ -4489,6 +4551,7 @@ impl LauncherNav {
             self.arcade.reset();
             return;
         };
+        self.drawer_projection.get_mut().take();
         self.arcade_search.results = results;
         self.arcade_search.suggestion = suggestion;
         self.arcade_search.status = ArcadeSearchStatus::Ready;
@@ -4510,6 +4573,7 @@ impl LauncherNav {
     }
 
     fn queue_arcade_search_request(&mut self, system_id: &str) {
+        self.drawer_projection.get_mut().take();
         self.arcade_search.results.clear();
         self.arcade_search.suggestion.clear();
         self.arcade_search.result_system_id = system_id.to_string();
@@ -4555,6 +4619,7 @@ impl LauncherNav {
             return false;
         }
         let collection_indexes = catalog.collection_game_index_set(&request.collection_id);
+        self.drawer_projection.get_mut().take();
         self.arcade_search.results = result
             .matches
             .into_iter()
@@ -4589,6 +4654,7 @@ impl LauncherNav {
         {
             return false;
         }
+        self.drawer_projection.get_mut().take();
         self.arcade_search.results.clear();
         self.arcade_search.suggestion.clear();
         self.arcade_search.status = ArcadeSearchStatus::Failed;
@@ -4711,7 +4777,12 @@ impl ArcadeTitleGroup {
     }
 }
 
+#[cfg(test)]
+thread_local! { static DRAWER_TITLE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 fn arcade_title_group(title: &str) -> Option<ArcadeTitleGroup> {
+    #[cfg(test)]
+    DRAWER_TITLE_VISITS.with(|count| count.set(count.get() + 1));
     let first = title.trim_start().chars().next()?;
     if first.is_ascii_digit() {
         Some(ArcadeTitleGroup::Digits)
@@ -7287,6 +7358,64 @@ mod tests {
         assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
         assert!(!nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade.selected, 0);
+    }
+
+    #[test]
+    fn warmed_drawer_does_not_rescan_on_stationary_ticks() {
+        let catalog = alphabet_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.open_arcade_alphabet(&catalog, "arcade");
+        let expected = nav.arcade_filter_items(&catalog, "arcade");
+        DRAWER_TITLE_VISITS.with(|count| count.set(0));
+        let now = Instant::now();
+        let state = PadState::default();
+        for tick in 0..120 {
+            nav.handle_arcade_filter(
+                NavigationInput {
+                    pressed: &state,
+                    released: &state,
+                    held: &state,
+                    tick_continuous: true,
+                    frame_now: now + Duration::from_millis(tick * 16),
+                },
+                &catalog,
+                "arcade",
+            );
+        }
+        let visits = DRAWER_TITLE_VISITS.with(std::cell::Cell::get);
+        println!(
+            "drawer_baseline games={} ticks=120 title_visits={visits}",
+            catalog.len()
+        );
+        assert_eq!(nav.arcade_filter_items(&catalog, "arcade"), expected);
+        assert_eq!(visits, 0, "stationary drawer rescanned titles");
+    }
+
+    #[test]
+    fn drawer_projection_invalidates_on_equal_size_replacement_and_cow_edit() {
+        let mut catalog = alphabet_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.open_arcade_alphabet(&catalog, "arcade");
+        let initial = nav.arcade_filter_projection(&catalog, "arcade");
+        assert!(Arc::ptr_eq(
+            &initial,
+            &nav.arcade_filter_projection(&catalog.clone(), "arcade")
+        ));
+        Arc::make_mut(&mut catalog.games)[0].title = Arc::from("Zebra");
+        let edited = nav.arcade_filter_projection(&catalog, "arcade");
+        assert!(!Arc::ptr_eq(&initial, &edited));
+        assert!(edited.iter().any(|item| item.label == "Z"));
+        let replacement = alphabet_catalog();
+        let replaced = nav.arcade_filter_projection(&replacement, "arcade");
+        assert_eq!(*replaced, *initial);
+        assert!(!Arc::ptr_eq(&edited, &replaced));
+        nav.arcade_filter.level = ArcadeFilterLevel::Top;
+        assert!(!Arc::ptr_eq(
+            &replaced,
+            &nav.arcade_filter_projection(&replacement, "arcade")
+        ));
     }
 
     #[test]

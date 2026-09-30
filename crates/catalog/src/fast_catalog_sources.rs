@@ -372,19 +372,53 @@ fn build_and_record_prepared_system(
     Ok(())
 }
 
+pub(crate) struct IndependentSystemRebuild {
+    pub(crate) system: FastFiveSystem,
+    pub(crate) report: FastSourceSystemReport,
+    pub(crate) observations: Option<GenericSourceWatchObservations>,
+}
+
 pub fn rebuild_independent_system(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    system_id: &str,
+) -> Result<Option<(FastFiveSystem, FastSourceSystemReport)>, String> {
+    rebuild_independent_system_impl(storage_root, snapshot, system_id, false)
+        .map(|result| result.map(|r| (r.system, r.report)))
+}
+
+pub(crate) fn rebuild_independent_system_with_observations(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    system_id: &str,
+) -> Result<Option<IndependentSystemRebuild>, String> {
+    rebuild_independent_system_impl(storage_root, snapshot, system_id, true)
+}
+
+fn rebuild_independent_system_impl(
     storage_root: &Path,
     _snapshot: &FastFiveSnapshot,
     system_id: &str,
-) -> Result<Option<(FastFiveSystem, FastSourceSystemReport)>, String> {
+    capture_watch: bool,
+) -> Result<Option<IndependentSystemRebuild>, String> {
     let started = Instant::now();
     let mut family_resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
     let prepared = PREPARED_SYSTEM_IDS
         .contains(&system_id)
         .then(|| build_prepared_system(storage_root, system_id, false, &mut family_resolver))
         .transpose()?;
+    let mut observations = None;
     let generic = if prepared.is_some() {
         None
+    } else if capture_watch {
+        crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
+            storage_root,
+            system_id,
+        )?
+        .map(|r| {
+            observations = r.observations;
+            (r.system, r.report)
+        })
     } else {
         rebuild_installed_generic_system(storage_root, system_id)?
     };
@@ -448,7 +482,11 @@ pub fn rebuild_independent_system(
     if system.games.is_empty() && system.variants.is_empty() {
         Ok(None)
     } else {
-        Ok(Some((system, report)))
+        Ok(Some(IndependentSystemRebuild {
+            system,
+            report,
+            observations,
+        }))
     }
 }
 
@@ -546,15 +584,31 @@ pub fn launcher_catalog_for_fast_system(
 fn merge_system_rows(target: &mut FastFiveSystem, mut additional: FastFiveSystem) {
     target.games.append(&mut additional.games);
     target.variants.append(&mut additional.variants);
-    target.games.sort_by(|left, right| {
-        left.title
-            .to_ascii_lowercase()
-            .cmp(&right.title.to_ascii_lowercase())
-            .then_with(|| left.stable_key.cmp(&right.stable_key))
-    });
+    crate::catalog_sort::sort_ascii_titles(
+        &mut target.games,
+        |game| &game.title,
+        |game| &game.stable_key,
+    );
     target
         .games
         .dedup_by(|left, right| left.launch_ref == right.launch_ref);
+}
+
+fn sort_game_variants(variants: &mut [FastFiveGameVariant]) {
+    // Preserve the old primary family ordering. A singleton family requires no
+    // title normalization; equal-family groups normalize each title once.
+    variants.sort_by(|left, right| left.family_stable_key.cmp(&right.family_stable_key));
+    for family in
+        variants.chunk_by_mut(|left, right| left.family_stable_key == right.family_stable_key)
+    {
+        if family.len() > 1 {
+            crate::catalog_sort::sort_ascii_titles(
+                family,
+                |row| &row.game.title,
+                |row| &row.game.launch_ref,
+            );
+        }
+    }
 }
 
 fn merge_source_report(target: &mut FastSourceSystemReport, additional: &FastSourceSystemReport) {
@@ -634,24 +688,9 @@ fn build_prepared_system(
         }
         _ => return Err(format!("unsupported prepared fast system {system_id}")),
     };
-    games.sort_by(|left, right| {
-        left.title
-            .to_ascii_lowercase()
-            .cmp(&right.title.to_ascii_lowercase())
-            .then_with(|| left.stable_key.cmp(&right.stable_key))
-    });
+    crate::catalog_sort::sort_ascii_titles(&mut games, |game| &game.title, |game| &game.stable_key);
     games.dedup_by(|left, right| left.launch_ref == right.launch_ref);
-    variants.sort_by(|left, right| {
-        left.family_stable_key
-            .cmp(&right.family_stable_key)
-            .then_with(|| {
-                left.game
-                    .title
-                    .to_ascii_lowercase()
-                    .cmp(&right.game.title.to_ascii_lowercase())
-            })
-            .then_with(|| left.game.launch_ref.cmp(&right.game.launch_ref))
-    });
+    sort_game_variants(&mut variants);
     Ok((
         FastFiveSystem {
             system_id: system_id.to_string(),
@@ -1048,7 +1087,7 @@ fn collect_arcade_mras_at_depth(
     let Some(mut entries) = read_dir_entries_checked(root)? else {
         return Ok(());
     };
-    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    entries.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
         crate::catalog_progress::report_inner_progress_at(*visited);
@@ -1420,7 +1459,7 @@ fn collect_matching_files_at_depth(
     let Some(mut entries) = read_dir_entries_checked(root)? else {
         return Ok(());
     };
-    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    entries.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
         crate::catalog_progress::report_inner_progress_at(*visited);
@@ -1908,13 +1947,14 @@ fn machine_source_label(source: Option<MachineSource>) -> &'static str {
 }
 
 fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSystem]) {
-    let title_index = if systems
-        .iter()
-        .any(|system| matches!(system.system_id.as_str(), "snes" | "saturn"))
-    {
-        load_fast_console_preview_title_index(storage_root)
-    } else {
+    let requested = ["snes", "saturn"]
+        .into_iter()
+        .filter(|id| systems.iter().any(|system| system.system_id == *id))
+        .collect::<Vec<_>>();
+    let title_index = if requested.is_empty() {
         BTreeMap::new()
+    } else {
+        load_fast_console_preview_title_index(storage_root, &requested)
     };
     let mut visited = 0usize;
     for system in systems {
@@ -1948,6 +1988,7 @@ fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSy
 
 fn load_fast_console_preview_title_index(
     storage_root: &Path,
+    requested: &[&str],
 ) -> BTreeMap<(String, String), Option<String>> {
     if let Some(metadata) = [
         storage_root
@@ -1963,7 +2004,7 @@ fn load_fast_console_preview_title_index(
     {
         let mut index = BTreeMap::new();
         let mut complete = true;
-        for list_name in ["snes", "saturn"] {
+        for &list_name in requested {
             let Ok(Some(shard)) = metadata.software_shard(list_name) else {
                 complete = false;
                 break;
@@ -2117,6 +2158,220 @@ fn elapsed_us(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_title_and_family_sorts_preserve_transport_bytes() {
+        let mut variants: Vec<_> = (0..3_000)
+            .map(|i| FastFiveGameVariant {
+                family_stable_key: format!("family-{}", i % 19),
+                relation: crate::fast_five_catalog::FastFiveVariantRelation::LanguageEdition,
+                game: direct_row(
+                    "snes",
+                    "Console",
+                    Path::new(&format!("games/SNES/{i}.sfc")),
+                    format!(
+                        "{} {}",
+                        ["TITLE", "title", "Éclair", "éclair"][i % 4],
+                        i % 23
+                    ),
+                ),
+            })
+            .collect();
+        variants.reverse();
+        let mut expected = variants.clone();
+        expected.sort_by(|a, b| {
+            a.family_stable_key
+                .cmp(&b.family_stable_key)
+                .then_with(|| {
+                    a.game
+                        .title
+                        .to_ascii_lowercase()
+                        .cmp(&b.game.title.to_ascii_lowercase())
+                })
+                .then_with(|| a.game.launch_ref.cmp(&b.game.launch_ref))
+        });
+        sort_game_variants(&mut variants);
+        assert_eq!(variants, expected);
+        let mut games: Vec<_> = variants.iter().map(|v| v.game.clone()).collect();
+        let mut expected_games = games.clone();
+        expected_games.sort_by(|a, b| {
+            a.title
+                .to_ascii_lowercase()
+                .cmp(&b.title.to_ascii_lowercase())
+                .then_with(|| a.stable_key.cmp(&b.stable_key))
+        });
+        crate::catalog_sort::sort_ascii_titles(&mut games, |r| &r.title, |r| &r.stable_key);
+        let actual = FastFiveSystem {
+            system_id: "snes".into(),
+            display_title: "SNES".into(),
+            games,
+            variants,
+        };
+        let expected = FastFiveSystem {
+            games: expected_games,
+            variants: expected,
+            ..actual.clone()
+        };
+        assert_eq!(
+            crate::fast_five_catalog::encode_fast_system_transport(&actual).unwrap(),
+            crate::fast_five_catalog::encode_fast_system_transport(&expected).unwrap()
+        );
+    }
+
+    fn requested_preview_fixture(
+        root: &Path,
+        lists: &[&str],
+        development: bool,
+        family: &str,
+    ) -> PathBuf {
+        let path = root
+            .join(if development {
+                "mister-magik-dev"
+            } else {
+                "mister-magik"
+            })
+            .join(crate::runtime_metadata::FILE_NAME);
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        for list in lists {
+            builder
+                .add_software(
+                    list,
+                    &crate::runtime_metadata::SoftwareShard {
+                        items: vec![crate::runtime_metadata::SoftwareItem {
+                            name: "item".into(),
+                            parent_name: Some(family.into()),
+                            description: "Title".into(),
+                            year: None,
+                            publisher: None,
+                            region: None,
+                        }],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        builder.write_to(&path).unwrap();
+        path
+    }
+    fn requested_preview_system(id: &str) -> FastFiveSystem {
+        FastFiveSystem {
+            system_id: id.into(),
+            display_title: id.into(),
+            games: vec![direct_row(
+                id,
+                "Console",
+                Path::new("games/Title.rom"),
+                "Title".into(),
+            )],
+            variants: vec![],
+        }
+    }
+    #[test]
+    fn requested_preview_single_system_decode_probe() {
+        let root = crate::test_support::unique_temp_dir("requested-preview-probe");
+        requested_preview_fixture(&root, &["snes", "saturn"], false, "family");
+        let mut systems = [requested_preview_system("snes")];
+        let before = crate::io_test_metrics::software_decodes();
+        enrich_fast_preview_identities(&root, &mut systems);
+        let decodes = crate::io_test_metrics::software_decodes() - before;
+        assert_eq!(
+            systems[0].games[0].preview_asset_key,
+            "mame-software__snes__family"
+        );
+        fs::remove_dir_all(root).unwrap();
+        eprintln!("requested_preview_decode_probe: {decodes}");
+        assert_eq!(decodes, 1);
+    }
+
+    #[test]
+    fn requested_preview_ignores_unrelated_missing_and_corrupt_shards() {
+        for requested in ["snes", "saturn"] {
+            for corrupt in [false, true] {
+                let root = crate::test_support::unique_temp_dir("requested-preview-isolation");
+                let unrelated = if requested == "snes" {
+                    "saturn"
+                } else {
+                    "snes"
+                };
+                let lists = if corrupt {
+                    vec![requested, unrelated]
+                } else {
+                    vec![requested]
+                };
+                let path = requested_preview_fixture(&root, &lists, false, "family");
+                if corrupt {
+                    let mut bytes = fs::read(&path).unwrap();
+                    for i in 0..2 {
+                        let start = crate::runtime_metadata::HEADER_LEN
+                            + i * crate::runtime_metadata::INDEX_ENTRY_LEN;
+                        if bytes[start..start + unrelated.len()] == *unrelated.as_bytes() {
+                            let offset = u64::from_le_bytes(
+                                bytes[start + 40..start + 48].try_into().unwrap(),
+                            ) as usize;
+                            bytes[offset + 4] ^= 0xff;
+                        }
+                    }
+                    fs::write(&path, bytes).unwrap();
+                    assert!(
+                        crate::runtime_metadata::MetadataStore::open(&path)
+                            .unwrap()
+                            .software_shard(unrelated)
+                            .is_err()
+                    );
+                }
+                let mut systems = [requested_preview_system(requested)];
+                let before = crate::io_test_metrics::software_decodes();
+                enrich_fast_preview_identities(&root, &mut systems);
+                assert_eq!(crate::io_test_metrics::software_decodes() - before, 1);
+                assert_eq!(
+                    systems[0].games[0].preview_asset_key,
+                    format!("mame-software__{requested}__family")
+                );
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+    #[test]
+    fn requested_preview_deduplicates_requests_and_preserves_failure_and_priority() {
+        let root = crate::test_support::unique_temp_dir("requested-preview-priority");
+        requested_preview_fixture(&root, &["snes", "saturn"], false, "production");
+        let mut systems = [
+            requested_preview_system("snes"),
+            requested_preview_system("snes"),
+            requested_preview_system("saturn"),
+        ];
+        let before = crate::io_test_metrics::software_decodes();
+        enrich_fast_preview_identities(&root, &mut systems);
+        assert_eq!(crate::io_test_metrics::software_decodes() - before, 2);
+        assert!(
+            systems
+                .iter()
+                .all(|s| s.games[0].preview_asset_key.ends_with("__production"))
+        );
+        let path = requested_preview_fixture(&root, &["snes"], true, "development");
+        let mut systems = [requested_preview_system("snes")];
+        enrich_fast_preview_identities(&root, &mut systems);
+        assert_eq!(
+            systems[0].games[0].preview_asset_key,
+            "mame-software__snes__development"
+        );
+        let mut missing = [requested_preview_system("saturn")];
+        enrich_fast_preview_identities(&root, &mut missing);
+        assert!(missing[0].games[0].preview_asset_key.is_empty()); // no lower-priority takeover
+        let mut bytes = fs::read(&path).unwrap();
+        let start = crate::runtime_metadata::HEADER_LEN;
+        let offset = u64::from_le_bytes(bytes[start + 40..start + 48].try_into().unwrap()) as usize;
+        bytes[offset + 4] ^= 0xff;
+        fs::write(&path, bytes).unwrap();
+        let mut corrupt = [requested_preview_system("snes")];
+        enrich_fast_preview_identities(&root, &mut corrupt);
+        assert!(corrupt[0].games[0].preview_asset_key.is_empty());
+        let mut unrelated = [requested_preview_system("c64")];
+        let before = crate::io_test_metrics::software_decodes();
+        enrich_fast_preview_identities(&root, &mut unrelated);
+        assert_eq!(crate::io_test_metrics::software_decodes(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn write_compact_arcade_metadata(
         root: &Path,

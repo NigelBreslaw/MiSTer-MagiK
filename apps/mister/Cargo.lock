@@ -3191,6 +3191,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-controller-registry"
+version = "0.1.0"
+dependencies = [
+ "mister-magik-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mister-magik-core"
 version = "0.1.0"
 
@@ -3209,6 +3218,7 @@ dependencies = [
  "libc",
  "lz4_flex",
  "mister-magik-catalog",
+ "mister-magik-controller-registry",
  "mister-magik-core",
  "mister-magik-framebuffer-scenes",
  "mister-magik-framebuffer-stream",

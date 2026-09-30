@@ -230,7 +230,12 @@ impl PreparedLauncher {
     }
 }
 
-fn neighbour(faces: &[CardFaces], cyclic: bool, selected: usize, relative: isize) -> Option<usize> {
+fn neighbour(
+    faces: &[Arc<CardFaces>],
+    cyclic: bool,
+    selected: usize,
+    relative: isize,
+) -> Option<usize> {
     let count = faces.len() as isize;
     if count == 0 {
         return None;

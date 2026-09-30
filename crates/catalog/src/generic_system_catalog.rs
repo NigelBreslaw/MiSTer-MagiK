@@ -284,6 +284,19 @@ pub fn rebuild_installed_generic_system(
     rebuild_generic_system_from_profiles(storage_root, system_id, &profiles)
 }
 
+pub(crate) fn rebuild_installed_generic_system_with_observations(
+    storage_root: &Path,
+    system_id: &str,
+) -> Result<Option<GenericSystemRebuild>, String> {
+    let roots = [storage_root.display().to_string()];
+    let profiles = ProfileSet::try_for_roots(&roots)?
+        .into_profiles()
+        .into_iter()
+        .filter(|profile| profile.system_id == system_id)
+        .collect::<Vec<_>>();
+    rebuild_generic_system_from_profiles_with_observations(storage_root, system_id, &profiles, true)
+}
+
 /// Discover every installed profile-backed system without assuming a fixed
 /// console or computer list.
 ///
@@ -1047,11 +1060,27 @@ pub fn discover_generic_system_ids(storage_root: &Path) -> BTreeSet<String> {
         .collect()
 }
 
+pub(crate) struct GenericSystemRebuild {
+    pub(crate) system: FastFiveSystem,
+    pub(crate) report: GenericSystemStats,
+    pub(crate) observations: Option<GenericSourceWatchObservations>,
+}
+
 fn rebuild_generic_system_from_profiles(
     storage_root: &Path,
     system_id: &str,
     profiles: &[LaunchProfile],
 ) -> Result<Option<(FastFiveSystem, GenericSystemStats)>, String> {
+    rebuild_generic_system_from_profiles_with_observations(storage_root, system_id, profiles, false)
+        .map(|result| result.map(|r| (r.system, r.report)))
+}
+
+fn rebuild_generic_system_from_profiles_with_observations(
+    storage_root: &Path,
+    system_id: &str,
+    profiles: &[LaunchProfile],
+    capture_watch: bool,
+) -> Result<Option<GenericSystemRebuild>, String> {
     if profiles.is_empty() {
         return Ok(None);
     }
@@ -1059,6 +1088,10 @@ fn rebuild_generic_system_from_profiles(
     let mut stats = GenericSystemStats {
         system_id: system_id.to_string(),
         ..GenericSystemStats::default()
+    };
+    let mut observations = GenericSourceWatchObservations {
+        complete: true,
+        ..Default::default()
     };
     let mut scanned = Vec::new();
     let mut visited_roots = BTreeSet::new();
@@ -1068,23 +1101,29 @@ fn rebuild_generic_system_from_profiles(
             if !candidate.is_dir() {
                 continue;
             }
-            let root = candidate.canonicalize().unwrap_or(candidate);
+            let root = candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone());
             if visited_roots.insert(root.to_string_lossy().to_ascii_lowercase()) {
                 stats.roots += 1;
-                scan_namespace_borrowed(&root, profile, &mut stats, &mut scanned);
+                scan_namespace_borrowed(
+                    &root,
+                    profile,
+                    &mut stats,
+                    &mut scanned,
+                    capture_watch.then_some((&mut observations, candidate.as_path())),
+                );
             }
         }
     }
     if stats.roots == 0 {
         return Ok(None);
     }
-    scanned.sort_by(|left, right| {
-        left.game
-            .title
-            .to_ascii_lowercase()
-            .cmp(&right.game.title.to_ascii_lowercase())
-            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
-    });
+    crate::catalog_sort::sort_ascii_titles(
+        &mut scanned,
+        |row| &row.game.title,
+        |row| &row.game.stable_key,
+    );
     scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
     stats.games = scanned.len();
     stats.elapsed_us = started.elapsed().as_micros() as u64;
@@ -1094,8 +1133,8 @@ fn rebuild_generic_system_from_profiles(
             stats.read_errors
         ));
     }
-    Ok(Some((
-        FastFiveSystem {
+    Ok(Some(GenericSystemRebuild {
+        system: FastFiveSystem {
             system_id: system_id.to_string(),
             display_title: profiles
                 .iter()
@@ -1106,8 +1145,9 @@ fn rebuild_generic_system_from_profiles(
             games: scanned.into_iter().map(|row| row.game).collect(),
             variants: Vec::new(),
         },
-        stats,
-    )))
+        report: stats,
+        observations: capture_watch.then_some(observations),
+    }))
 }
 
 #[derive(Debug)]
@@ -1120,49 +1160,99 @@ fn scan_namespace_borrowed(
     profile: &LaunchProfile,
     stats: &mut GenericSystemStats,
     games: &mut Vec<ScannedGame>,
+    watch: Option<(&mut GenericSourceWatchObservations, &Path)>,
 ) {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_source_walk();
     stats.directories += 1;
     crate::catalog_progress::report_inner_progress_at(stats.directories);
-    let namespace = namespace_walk::visit(root, None, should_ignore_path, |entry| {
-        if entry.kind == NamespaceEntryKind::Directory {
-            stats.directories += 1;
-            crate::catalog_progress::report_inner_progress_at(stats.directories);
-            return true;
-        }
-        if entry.kind != NamespaceEntryKind::File {
-            return true;
-        }
-        let path = entry.path.as_path();
-        stats.files += 1;
-        crate::catalog_progress::report_inner_progress_at(stats.files);
-        match profile.classify_path_borrowed(path) {
-            BorrowedProfilePathClass::Payload { rule }
-                if rule.disposition == PayloadDisposition::Playable =>
-            {
-                stats.candidate_files += 1;
-                games.push(direct_game(profile, path, rule));
+    let mut capture = watch.as_ref().map(|_| IncrementalWatchCapture::new(root));
+    let signatures = if capture.is_some() {
+        NamespaceSignatureCapture::AllDirectories
+    } else {
+        NamespaceSignatureCapture::None
+    };
+    let namespace = namespace_walk::visit_with_signature_capture(
+        root,
+        None,
+        signatures,
+        should_ignore_path,
+        |entry| {
+            if let Some(capture) = capture.as_mut() {
+                capture.record(entry);
             }
-            BorrowedProfilePathClass::NotMatched
-                if path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-                    && !profile.archive_entry_rules.is_empty() =>
-            {
-                stats.candidate_files += 1;
-                scan_archive(profile, path, stats, games);
+
+            if entry.kind == NamespaceEntryKind::Directory {
+                stats.directories += 1;
+                crate::catalog_progress::report_inner_progress_at(stats.directories);
+                return true;
             }
-            BorrowedProfilePathClass::Ignored { reason } => {
-                stats.ignored_files += 1;
-                if reason == IgnoreReason::CueTrack {
-                    stats.dependency_files += 1;
+            if entry.kind != NamespaceEntryKind::File {
+                return true;
+            }
+            let path = entry.path.as_path();
+            stats.files += 1;
+            crate::catalog_progress::report_inner_progress_at(stats.files);
+            match profile.classify_path_borrowed(path) {
+                BorrowedProfilePathClass::Payload { rule }
+                    if rule.disposition == PayloadDisposition::Playable =>
+                {
+                    stats.candidate_files += 1;
+                    games.push(direct_game(profile, path, rule));
                 }
+                BorrowedProfilePathClass::NotMatched
+                    if path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+                        && !profile.archive_entry_rules.is_empty() =>
+                {
+                    stats.candidate_files += 1;
+                    scan_archive(profile, path, stats, games);
+                }
+                BorrowedProfilePathClass::Ignored { reason } => {
+                    stats.ignored_files += 1;
+                    if reason == IgnoreReason::CueTrack {
+                        stats.dependency_files += 1;
+                    }
+                }
+                BorrowedProfilePathClass::Payload { .. } => stats.dependency_files += 1,
+                _ => stats.unmatched_files += 1,
             }
-            BorrowedProfilePathClass::Payload { .. } => stats.dependency_files += 1,
-            _ => stats.unmatched_files += 1,
+            true
+        },
+    );
+    if let (Some((watch, configured_root)), Some(capture)) = (watch, capture) {
+        let mut observed = capture.finish(&namespace);
+        // Scan launch references retain canonical paths; persisted watch paths
+        // retain the configured alias, matching independent watch capture.
+        observed.roots = BTreeSet::from([configured_root.to_string_lossy().into_owned()]);
+        for directory in &mut observed.directories {
+            let relative = directory
+                .path
+                .strip_prefix(root)
+                .expect("observed directory below scan root");
+            directory.path = if relative.as_os_str().is_empty() {
+                configured_root.to_owned()
+            } else {
+                configured_root.join(relative)
+            };
         }
-        true
-    });
+        for path in &mut observed.containers {
+            *path = configured_root.join(
+                path.strip_prefix(root)
+                    .expect("observed container below scan root"),
+            );
+        }
+        watch.complete &= observed.complete;
+        watch.roots.extend(observed.roots);
+        watch.directories.extend(observed.directories);
+        watch.containers.extend(observed.containers);
+        watch.directories.sort_by(|a, b| a.path.cmp(&b.path));
+        watch.directories.dedup_by(|a, b| a.path == b.path);
+        watch.containers.sort();
+        watch.containers.dedup();
+    }
     stats.namespace_backend = namespace.backend.to_string();
     stats.namespace_read_calls = stats
         .namespace_read_calls
@@ -1545,5 +1635,145 @@ mod tests {
         assert!(!should_ignore_path(Path::new(
             "/media/fat/games/SNES/Real Game.sfc"
         )));
+    }
+}
+
+/// Watch-only observations from the streaming rebuild. Match namespace capture
+/// limits so a fallback walk never leaves an unbounded second entry inventory.
+struct IncrementalWatchCapture {
+    root: PathBuf,
+    builders: BTreeMap<PathBuf, GenericDirectoryObservationBuilder>,
+    containers: Vec<PathBuf>,
+    entries: usize,
+    path_bytes: usize,
+    complete: bool,
+    max_entries: usize,
+    max_path_bytes: usize,
+}
+impl IncrementalWatchCapture {
+    fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_owned(),
+            builders: BTreeMap::from([(root.to_owned(), Default::default())]),
+            containers: vec![],
+            entries: 0,
+            path_bytes: 0,
+            complete: true,
+            max_entries: 65_536,
+            max_path_bytes: 16 * 1024 * 1024,
+        }
+    }
+    fn record(&mut self, entry: &crate::namespace_walk::NamespaceEntry) {
+        if !self.complete {
+            return;
+        }
+        self.entries = self.entries.saturating_add(1);
+        self.path_bytes = self.path_bytes.saturating_add(entry.path.as_os_str().len());
+        if self.entries > self.max_entries
+            || self.path_bytes > self.max_path_bytes
+            || entry.kind == NamespaceEntryKind::Other
+            || (entry.kind == NamespaceEntryKind::Directory
+                && crate::fast_catalog_refresh::should_prune_source_directory(&entry.path))
+        {
+            self.complete = false;
+            self.builders.clear();
+            self.containers.clear();
+            return;
+        }
+        if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
+            self.builders
+                .entry(parent.to_owned())
+                .or_default()
+                .entries
+                .push((
+                    name.to_string_lossy().into_owned(),
+                    if entry.kind == NamespaceEntryKind::Directory {
+                        b'd'
+                    } else {
+                        b'f'
+                    },
+                ));
+        }
+        if entry.kind == NamespaceEntryKind::Directory {
+            self.builders
+                .entry(entry.path.clone())
+                .or_default()
+                .signature = entry.directory_signature;
+        } else if entry
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+        {
+            self.containers.push(entry.path.clone());
+        }
+    }
+    fn finish(mut self, namespace: &NamespaceWalkStats) -> GenericSourceWatchObservations {
+        if let Some(root) = self.builders.get_mut(&self.root) {
+            root.signature = namespace.target_signature;
+        }
+        self.complete &= namespace.errors == 0;
+        let mut directories = Vec::with_capacity(self.builders.len());
+        for (path, mut builder) in self.builders {
+            let Some((_, modified_ns)) = builder.signature else {
+                self.complete = false;
+                continue;
+            };
+            crate::catalog_sort::sort_ascii_titles(
+                &mut builder.entries,
+                |entry| &entry.0,
+                |entry| &entry.0,
+            );
+            let mut digest = Sha256::new();
+            for (name, kind) in builder.entries {
+                digest.update([kind]);
+                digest.update(name.as_bytes());
+                digest.update([0]);
+            }
+            directories.push(GenericWatchedDirectoryObservation {
+                path,
+                modified_ns: i128::from(modified_ns),
+                entry_fingerprint: hex_lower(&digest.finalize()),
+            });
+        }
+        GenericSourceWatchObservations {
+            roots: BTreeSet::from([self.root.to_string_lossy().into_owned()]),
+            directories,
+            containers: self.containers,
+            complete: self.complete,
+        }
+    }
+}
+
+#[cfg(test)]
+mod incremental_observation_tests {
+    use super::*;
+    #[test]
+    fn capture_abandons_partial_data_at_budget_or_uncertain_entry() {
+        let root = Path::new("games/SNES");
+        let mut capture = IncrementalWatchCapture::new(root);
+        capture.max_entries = 1;
+        let mut entry = crate::namespace_walk::NamespaceEntry {
+            path: root.join("first.sfc"),
+            kind: NamespaceEntryKind::File,
+            zip_signature: None,
+            directory_signature: None,
+        };
+        capture.record(&entry);
+        assert!(capture.complete);
+        entry.path = root.join("second.sfc");
+        capture.record(&entry);
+        assert!(!capture.complete);
+        assert!(capture.builders.is_empty());
+        assert!(capture.containers.is_empty());
+        let mut capture = IncrementalWatchCapture::new(root);
+        entry.kind = NamespaceEntryKind::Other;
+        capture.record(&entry);
+        assert!(!capture.complete);
+        let mut capture = IncrementalWatchCapture::new(root);
+        entry.kind = NamespaceEntryKind::Directory;
+        entry.path = root.join("manuals");
+        capture.record(&entry);
+        assert!(!capture.complete);
     }
 }

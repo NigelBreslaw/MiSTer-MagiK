@@ -267,6 +267,105 @@ enum Artwork<'a> {
     Rgb888(&'a [&'a [u8]]),
 }
 
+/// Face cache for an immutable artwork/font context. Advance `asset_generation`
+/// when either input changes. Geometry and all card text/count/colour inputs
+/// are compared independently; only the most recent card generation stays cached.
+#[derive(Default)]
+pub struct LauncherFaceCache {
+    scene: Option<LauncherScene>,
+    asset_generation: u64,
+    slides: bool,
+    artwork_kind: u8,
+    keys: Vec<CardFaceKey>,
+    faces: Vec<Arc<CardFaces>>,
+}
+#[derive(Eq, PartialEq)]
+struct CardFaceKey {
+    id: LauncherCardId,
+    name: String,
+    games: Option<u32>,
+    colour: u16,
+}
+impl From<&LauncherCard<'_>> for CardFaceKey {
+    fn from(card: &LauncherCard<'_>) -> Self {
+        Self {
+            id: card.id,
+            name: card.name.to_owned(),
+            games: card.games,
+            colour: card.colour,
+        }
+    }
+}
+#[cfg(test)]
+thread_local! { static FACE_BAKES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+impl LauncherScene {
+    pub fn prepare_with_face_cache(
+        self,
+        data: LauncherData<'_>,
+        cache: &mut LauncherFaceCache,
+    ) -> PreparedLauncher {
+        self.initial_cached(data, None, None, cache, 0).finish()
+    }
+    pub fn prepare_initial_with_artwork_typography_and_cache(
+        self,
+        data: LauncherData<'_>,
+        artwork: &[&[Rgb565Pixel]],
+        typography: LauncherTypography<'_>,
+        cache: &mut LauncherFaceCache,
+        asset_generation: u64,
+    ) -> InitialLauncher {
+        self.initial_cached(
+            data,
+            Some(Artwork::Rgb565(artwork)),
+            Some(typography),
+            cache,
+            asset_generation,
+        )
+    }
+    pub fn prepare_initial_with_rgb888_artwork_typography_and_cache(
+        self,
+        data: LauncherData<'_>,
+        artwork: &[&[u8]],
+        typography: LauncherTypography<'_>,
+        cache: &mut LauncherFaceCache,
+        asset_generation: u64,
+    ) -> InitialLauncher {
+        self.initial_cached(
+            data,
+            Some(Artwork::Rgb888(artwork)),
+            Some(typography),
+            cache,
+            asset_generation,
+        )
+    }
+    fn initial_cached(
+        self,
+        data: LauncherData<'_>,
+        artwork: Option<Artwork<'_>>,
+        typography: Option<LauncherTypography<'_>>,
+        cache: &mut LauncherFaceCache,
+        asset_generation: u64,
+    ) -> InitialLauncher {
+        let mut prepared = PreparedLauncher::new_cached(
+            self,
+            data,
+            artwork,
+            typography,
+            Some(cache),
+            asset_generation,
+        );
+        prepared.render_frame(BrowseFrame {
+            selected: data.selected,
+            target: data.selected,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+        });
+        InitialLauncher { prepared }
+    }
+}
+
 pub struct InitialLauncher {
     prepared: PreparedLauncher,
 }
@@ -290,7 +389,7 @@ pub struct PreparedLauncher {
     chrome: Vec<Rgb565Pixel>,
     cyclic: bool,
     fitted: Vec<Rgb565Pixel>,
-    faces: Arc<Vec<CardFaces>>,
+    faces: Arc<Vec<Arc<CardFaces>>>,
     flip_columns: Vec<crate::launcher_flip::Scratch>,
 }
 
@@ -346,7 +445,7 @@ impl PreparedLauncherFrame {
 
 #[derive(Clone)]
 pub struct LauncherFramePreparer {
-    faces: Arc<Vec<CardFaces>>,
+    faces: Arc<Vec<Arc<CardFaces>>>,
     cyclic: bool,
 }
 
@@ -569,11 +668,17 @@ impl PreparedLauncher {
     /// Owned raster-buffer capacity, excluding strings and small metadata.
     /// This is not process RSS; it makes the quality/cache tradeoff measurable.
     pub fn cached_raster_bytes(&self) -> usize {
-        (self.logical.capacity() + self.fitted.capacity()) * 2
+        (self.logical.capacity() + self.chrome.capacity() + self.fitted.capacity()) * 2
             + self
                 .faces
                 .iter()
-                .map(|f| f.compact.storage_bytes() + f.detail.storage_bytes())
+                .map(|f| {
+                    f.compact.storage_bytes()
+                        + f.detail.storage_bytes()
+                        + f.back
+                            .as_ref()
+                            .map_or(0, crate::launcher_flip::Face::storage_bytes)
+                })
                 .sum::<usize>()
             + self
                 .flip_columns
@@ -588,34 +693,29 @@ impl PreparedLauncher {
         artwork: Option<Artwork<'_>>,
         typography: Option<LauncherTypography<'_>>,
     ) -> Self {
-        let cards = data
-            .cards
-            .iter()
-            .enumerate()
-            .map(|(index, card)| PreparedCard {
-                id: card.id,
-                name: card.name,
-                games: card.games,
-                colour: card.colour,
-                name_mask: text_mask(card.name),
-                games_mask: card
-                    .games
-                    .map_or_else(Vec::new, |games| text_mask(&format_games(games))),
-                artwork: artwork
-                    .and_then(|items| match items {
-                        Artwork::Rgb565(items) => items.get(index),
-                        Artwork::Rgb888(_) => None,
-                    })
-                    .filter(|pixels| pixels.len() == 180 * card_height(180))
-                    .copied(),
-                rgb888: artwork
-                    .and_then(|items| match items {
-                        Artwork::Rgb888(items) => items.get(index),
-                        Artwork::Rgb565(_) => None,
-                    })
-                    .filter(|pixels| pixels.len() == 360 * 504 * 3)
-                    .copied(),
-            });
+        Self::new_cached(scene, data, artwork, typography, None, 0)
+    }
+
+    fn new_cached(
+        scene: LauncherScene,
+        data: LauncherData<'_>,
+        artwork: Option<Artwork<'_>>,
+        typography: Option<LauncherTypography<'_>>,
+        cache: Option<&mut LauncherFaceCache>,
+        asset_generation: u64,
+    ) -> Self {
+        let keys: Vec<_> = data.cards.iter().map(CardFaceKey::from).collect();
+        let artwork_kind = match artwork {
+            None => 0,
+            Some(Artwork::Rgb565(_)) => 1,
+            Some(Artwork::Rgb888(_)) => 2,
+        };
+        let reusable = cache.as_ref().filter(|cache| {
+            cache.scene == Some(scene)
+                && cache.asset_generation == asset_generation
+                && cache.slides == data.level.slides()
+                && cache.artwork_kind == artwork_kind
+        });
         let responsive = responsive::Layout::for_scene(scene);
         let fonts = responsive.map(|layout| layout.fonts(typography));
         let pixel_count = if responsive.is_some() {
@@ -630,20 +730,64 @@ impl PreparedLauncher {
             render_logical(&mut chrome, data, typography);
         }
         let mut bodies = artwork::BodyCache::default();
-        let faces: Vec<_> = cards
-            .map(|card| {
-                if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
-                    layout.faces(&card, fonts, &mut bodies, data.level.slides())
-                } else {
-                    CardFaces {
-                        compact: bake_face(&card, 180, false, typography, &mut bodies),
-                        detail: bake_face(&card, 180, true, typography, &mut bodies),
-                        back: bodies.back_face(&card),
-                        slides: data.level.slides(),
-                    }
+        let faces: Vec<_> = data
+            .cards
+            .iter()
+            .enumerate()
+            .map(|(index, card)| {
+                if let Some(cache) = reusable
+                    && cache.keys.get(index) == Some(&keys[index])
+                {
+                    return Arc::clone(&cache.faces[index]);
                 }
+                let card = PreparedCard {
+                    id: card.id,
+                    name: card.name,
+                    games: card.games,
+                    colour: card.colour,
+                    name_mask: text_mask(card.name),
+                    games_mask: card
+                        .games
+                        .map_or_else(Vec::new, |games| text_mask(&format_games(games))),
+                    artwork: artwork
+                        .and_then(|items| match items {
+                            Artwork::Rgb565(items) => items.get(index),
+                            Artwork::Rgb888(_) => None,
+                        })
+                        .filter(|pixels| pixels.len() == 180 * card_height(180))
+                        .copied(),
+                    rgb888: artwork
+                        .and_then(|items| match items {
+                            Artwork::Rgb888(items) => items.get(index),
+                            Artwork::Rgb565(_) => None,
+                        })
+                        .filter(|pixels| pixels.len() == 360 * 504 * 3)
+                        .copied(),
+                };
+                #[cfg(test)]
+                FACE_BAKES.set(FACE_BAKES.get() + 2);
+                Arc::new(
+                    if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
+                        layout.faces(&card, fonts, &mut bodies, data.level.slides())
+                    } else {
+                        CardFaces {
+                            compact: bake_face(&card, 180, false, typography, &mut bodies),
+                            detail: bake_face(&card, 180, true, typography, &mut bodies),
+                            back: bodies.back_face(&card),
+                            slides: data.level.slides(),
+                        }
+                    },
+                )
             })
             .collect();
+        if let Some(cache) = cache {
+            cache.scene = Some(scene);
+            cache.asset_generation = asset_generation;
+            cache.slides = data.level.slides();
+            cache.artwork_kind = artwork_kind;
+            cache.keys = keys;
+            cache.faces = faces.clone();
+        }
         Self {
             scene,
             responsive,
@@ -1130,7 +1274,7 @@ struct CarouselPlan<'a> {
 }
 
 fn build_carousel_plan<'a>(
-    faces: &'a [CardFaces],
+    faces: &'a [Arc<CardFaces>],
     mut motion: BrowseFrame,
     cyclic: bool,
 ) -> CarouselPlan<'a> {
@@ -1666,6 +1810,120 @@ mod tests {
             progress_millis: 0,
             duration_millis: 0,
         }
+    }
+
+    #[test]
+    fn one_card_change_reuses_unchanged_faces_and_generic_backs() {
+        for nested in [false, true] {
+            let scene = LauncherScene::new(960, 540);
+            let mut cache = LauncherFaceCache::default();
+            let mut cards = [data().cards[0]; 6];
+            if nested {
+                for card in &mut cards {
+                    card.id = LauncherCardId::Consoles;
+                    card.name = "NINTENDO";
+                }
+            }
+            let level = if nested {
+                LauncherLevel::Nested(NestedLevel {
+                    path: &["CONSOLES"],
+                    games: 60,
+                    children: 6,
+                    children_label: "MAKERS",
+                    detail: Some((9, "SYSTEMS")),
+                    accent: 0x2a7f,
+                })
+            } else {
+                LauncherLevel::Root
+            };
+            let mut input = data();
+            input.cards = &cards;
+            input.level = level;
+            let first = scene.prepare_with_face_cache(input, &mut cache);
+            cards[0].games = Some(999);
+            let mut input = data();
+            input.cards = &cards;
+            input.level = level;
+            FACE_BAKES.set(0);
+            let mut updated = scene.prepare_with_face_cache(input, &mut cache);
+            let bakes = FACE_BAKES.get();
+            println!("changed_card_front_face_bakes={bakes} nested={nested}");
+            assert_eq!(bakes, 2);
+            assert!(!Arc::ptr_eq(&first.faces[0], &updated.faces[0]));
+            for index in 1..6 {
+                assert!(Arc::ptr_eq(&first.faces[index], &updated.faces[index]));
+                assert_eq!(updated.faces[index].back.is_some(), nested);
+            }
+            let mut reference = scene.prepare(input);
+            for phase in [0, 1, 90, 179, 180] {
+                let frame = BrowseFrame {
+                    selected: 0,
+                    target: 1,
+                    phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                    direction: Some(crate::launcher_navigation::BrowseDirection::Right),
+                    progress_millis: phase,
+                    duration_millis: 180,
+                };
+                updated.render_frame(frame);
+                reference.render_frame(frame);
+                assert!(
+                    updated.pixels() == reference.pixels(),
+                    "motion differs at {phase}, nested={nested}"
+                );
+            }
+            for elapsed in [0, 200, 400, 600, 920] {
+                updated.render_level_gather(0, LevelChange::Descend, elapsed);
+                reference.render_level_gather(0, LevelChange::Descend, elapsed);
+                assert!(
+                    updated.pixels() == reference.pixels(),
+                    "gather differs at {elapsed}"
+                );
+                updated.render_level_deal(0, LevelChange::Ascend, elapsed);
+                reference.render_level_deal(0, LevelChange::Ascend, elapsed);
+                assert!(
+                    updated.pixels() == reference.pixels(),
+                    "deal differs at {elapsed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn face_cache_invalidates_browse_style_geometry_and_asset_context() {
+        let scene = LauncherScene::new(960, 540);
+        let mut cache = LauncherFaceCache::default();
+        let input = data();
+        let _first = scene.prepare_with_face_cache(input, &mut cache);
+        let mut nested = input;
+        nested.level = LauncherLevel::Nested(NestedLevel {
+            path: &["CONSOLES"],
+            games: 60,
+            children: 6,
+            children_label: "MAKERS",
+            detail: None,
+            accent: 0x2a7f,
+        });
+        FACE_BAKES.set(0);
+        let updated = scene.prepare_with_face_cache(nested, &mut cache);
+        assert_eq!(FACE_BAKES.get(), input.cards.len() * 2);
+        assert!(updated.pixels() == scene.prepare(nested).pixels());
+        for scene in [
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(640, 480),
+            LauncherScene::crt(480, 640),
+        ] {
+            FACE_BAKES.set(0);
+            let updated = scene.prepare_with_face_cache(nested, &mut cache);
+            assert_eq!(FACE_BAKES.get(), input.cards.len() * 2);
+            assert!(updated.pixels() == scene.prepare(nested).pixels());
+        }
+        let scene = LauncherScene::crt(480, 640);
+        FACE_BAKES.set(0);
+        let _updated = scene.initial_cached(nested, None, None, &mut cache, 1);
+        assert_eq!(FACE_BAKES.get(), input.cards.len() * 2);
+        FACE_BAKES.set(0);
+        let _same = scene.initial_cached(nested, None, None, &mut cache, 1);
+        assert_eq!(FACE_BAKES.get(), 0);
     }
 
     #[test]

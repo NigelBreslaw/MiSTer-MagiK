@@ -17,7 +17,7 @@ use super::launcher_pacing::{
     LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::{ScreensaverRenderTrace, ScreensaverStartupTimeline};
-use super::launcher_settings_pipeline::{SettingsCogRenderAhead, SettingsFrameRequest};
+use super::launcher_settings_pipeline::{SettingsCogSession, SettingsFrameRequest};
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -5413,7 +5413,7 @@ pub(super) fn run_launcher_loop(
         layout.logical_h(),
         navigation_motion_enabled,
     );
-    let mut settings_cog_render_ahead: Option<SettingsCogRenderAhead> = None;
+    let mut settings_cog_render_ahead = SettingsCogSession::new();
     let mut full_screen_transition = FullScreenTransitionStateChart::default();
     let mut navigation_transition_generation = None;
     nav.screen = start_screen;
@@ -7626,13 +7626,32 @@ pub(super) fn run_launcher_loop(
                     }
                 }
             }
+            if let Some(completion) = pad.take_controller_save_completion() {
+                match completion.result {
+                    Ok(()) => crate::ui_errln!(
+                        "controller setup: persisted registry revision {}",
+                        completion.revision
+                    ),
+                    Err(error) => crate::ui_errln!(
+                        "controller setup: revision {} save failed: {error}",
+                        completion.revision
+                    ),
+                }
+                full_bridge_dirty = true;
+            }
+            let controller_save_notice = pad.controller_save_notice();
             let input_notice = input_fault_notice.or_else(|| {
                 setup_disconnect_notice.then_some(
                     "Controller disconnected. Press a button after reconnecting to restart setup.",
                 )
             });
             let input = app.global::<slint_ui::launcher::InputView>();
-            input.set_fault_notice(input_notice.unwrap_or_default().into());
+            input.set_fault_notice(
+                input_notice
+                    .or(controller_save_notice)
+                    .unwrap_or_default()
+                    .into(),
+            );
             input.set_input_availability(if input_notice.is_some() {
                 slint_ui::launcher::InputAvailability::Unavailable
             } else {
@@ -7829,16 +7848,22 @@ pub(super) fn run_launcher_loop(
                             SetupAction::SaveFinish { label, kind } => {
                                 if let Err(e) = pad.finish_setup(&target_device, label, kind) {
                                     crate::ui_errln!("controller setup: save: {e}");
-                                } else if let Some(info) = pad.info_for_device(&target_device) {
+                                } else {
                                     crate::ui_errln!(
-                                        "controller setup: saved \"{}\" ({})",
-                                        pad.db().display_label(info),
-                                        kind.as_str()
+                                        "controller setup: queued registry revision {}",
+                                        pad.controller_save_status().requested
                                     );
                                 }
                                 setup.advance_to_next_pad(&pad);
                             }
                             SetupAction::Done => {
+                                if pad.controller_save_status().is_failed()
+                                    && let Err(error) = pad.retry_controller_save()
+                                {
+                                    crate::ui_errln!(
+                                        "controller setup: retry could not be queued: {error}"
+                                    );
+                                }
                                 setup.advance_to_next_pad(&pad);
                             }
                         }
@@ -9645,6 +9670,9 @@ pub(super) fn run_launcher_loop(
         } else if let Some(session) = launcher_card_home.as_mut() {
             session.set_inactive();
         }
+        let custom_home_scene_ready = launcher_card_home.as_ref().is_some_and(|session| {
+            session.scene_ready(super::launcher_card_home::scene_for_display(ui, layout))
+        });
         let custom_home_needs_render = launcher_card_home
             .as_ref()
             .is_some_and(super::launcher_card_home::LauncherCardHomeSession::needs_render);
@@ -10062,7 +10090,11 @@ pub(super) fn run_launcher_loop(
         if !card_motion_only && let Some(session) = launcher_card_home.as_mut() {
             session.invalidate_compositor();
         }
-        let card_direct_path_eligible = !force_card_fallback && card_motion_only;
+        let card_direct_path_eligible =
+            !force_card_fallback && card_motion_only && custom_home_scene_ready;
+        if let Some(session) = launcher_card_home.as_mut() {
+            session.set_render_ahead_enabled(card_direct_path_eligible);
+        }
         if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
             let now_us = loop_start.duration_since(run_start).as_micros() as u64;
             if let Some(frame) =
@@ -10083,7 +10115,10 @@ pub(super) fn run_launcher_loop(
                     chrome,
                     tiles,
                     CARD_DIRECT_TILE_DAMAGE,
-                    session.content_generation(),
+                    mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
+                        session.content_generation(),
+                        request.render.generation,
+                    ),
                 ) {
                     Ok(Some(copy)) => {
                         frame_production_trace.class = FrameProductionClass::Prepared;
@@ -10130,7 +10165,10 @@ pub(super) fn run_launcher_loop(
                     chrome,
                     tiles,
                     CARD_DIRECT_TILE_DAMAGE,
-                    session.content_generation(),
+                    mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
+                        session.content_generation(),
+                        request.render.generation,
+                    ),
                 ) {
                     Ok(Some(copy)) => {
                         frame_production_trace.class = FrameProductionClass::Prepared;
@@ -10434,6 +10472,7 @@ pub(super) fn run_launcher_loop(
         macro_rules! render_launcher_base {
             ($full_slint_raster:expr) => {{
                 if custom_home_active
+                    && custom_home_scene_ready
                     && ($full_slint_raster
                         || custom_home_needs_render
                         || launcher_card_home.as_ref().is_some_and(
@@ -10921,7 +10960,7 @@ pub(super) fn run_launcher_loop(
         }
         let navigation_transition_composition_active = navigation_transition.is_active();
         if !navigation_transition_composition_active {
-            settings_cog_render_ahead = None;
+            settings_cog_render_ahead.clear();
         }
         let navigation_settings_physical_space = navigation_transition.settings_physical_space();
         let navigation_transition_frame_active = navigation_transition_composition_active
@@ -10965,8 +11004,15 @@ pub(super) fn run_launcher_loop(
                         && full_screen_transition.capture_issued());
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
                     && controlled_destination_raster_ready;
-                let mut destination_layers_ready =
-                    destination_raster_ready && nav.screen != Screen::Arcade;
+                let mut destination_layers_ready = destination_raster_ready
+                    && nav.screen != Screen::Arcade
+                    && (nav.screen != Screen::Home
+                        || launcher_card_home.as_ref().is_none_or(|session| {
+                            session.content_ready(
+                                super::launcher_card_home::scene_for_display(ui, layout),
+                                &card_level,
+                            )
+                        }));
                 if destination_raster_ready && nav.screen == Screen::Arcade {
                     let preview_expected = selected_arcade_game_has_preview(&nav, &catalog);
                     let preview_exact = preview_expected
@@ -11107,24 +11153,9 @@ pub(super) fn run_launcher_loop(
                     gui_profiling.phase_span(gui_custom_selection.navigation_transition_raster);
                 let mut rendered_direct = false;
                 if navigation_transition.settings_physical_space() {
-                    if (layout.logical_w(), layout.logical_h())
-                        == (
-                            mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_WIDTH,
-                            mister_magik_framebuffer_scenes::settings_cog::SETTINGS_COG_HEIGHT,
-                        )
-                        && settings_cog_render_ahead.is_none()
+                    if (layout.logical_w(), layout.logical_h()) == (960, 540)
                         && let Some(input) = navigation_transition.settings_cog_render_input()
                     {
-                        settings_cog_render_ahead = SettingsCogRenderAhead::start(
-                            input.launcher.to_vec(),
-                            input.settings.to_vec(),
-                            input.cog,
-                        );
-                    }
-                    if let (Some(pipeline), Some(input)) = (
-                        settings_cog_render_ahead.as_mut(),
-                        navigation_transition.settings_cog_render_input(),
-                    ) {
                         const SETTINGS_RENDER_LEAD_VBLANKS: u64 = 2;
                         let lead_ms = pacer
                             .period_us()
@@ -11141,17 +11172,20 @@ pub(super) fn run_launcher_loop(
                                 input.t_ms.saturating_sub(lead_ms)
                             }
                         };
-                        pipeline.submit(SettingsFrameRequest {
-                            target_vblank: pacer
-                                .hits()
-                                .saturating_add(SETTINGS_RENDER_LEAD_VBLANKS),
-                            t_ms,
-                        });
+                        settings_cog_render_ahead.submit(
+                            input.launcher,
+                            input.settings,
+                            input.cog,
+                            SettingsFrameRequest {
+                                target_vblank: pacer
+                                    .hits()
+                                    .saturating_add(SETTINGS_RENDER_LEAD_VBLANKS),
+                                t_ms,
+                            },
+                        );
                     }
                     let expected_vblank = pacer.hits().saturating_add(1);
-                    let mut prepared = settings_cog_render_ahead
-                        .as_mut()
-                        .and_then(|pipeline| pipeline.take_for_vblank(expected_vblank));
+                    let mut prepared = settings_cog_render_ahead.take_for_vblank(expected_vblank);
                     let mut direct_render_timing = None;
                     match launcher_presenter.try_render_direct_hidden_frame(
                         f,
@@ -11200,10 +11234,8 @@ pub(super) fn run_launcher_loop(
                         Ok(None) => {}
                         Err(failure) => launcher_presenter.fail_latch_completion(failure),
                     }
-                    if let (Some(pipeline), Some(frame)) =
-                        (settings_cog_render_ahead.as_mut(), prepared.take())
-                    {
-                        pipeline.recycle(frame);
+                    if let Some(frame) = prepared.take() {
+                        settings_cog_render_ahead.recycle(frame);
                     }
                     if !rendered_direct {
                         let _ = navigation_transition
@@ -13110,6 +13142,11 @@ pub(super) fn run_launcher_loop(
     );
     if let Err(e) = cpu_profile::finish(cpu.take()) {
         crate::ui_errln!("{e}");
+    }
+    // Input processing has ended. Finish accepted writes without making a
+    // setup action or normal frame wait for filesystem I/O.
+    if let Err(error) = pad.shutdown_controller_saves(Duration::from_secs(2)) {
+        crate::ui_errln!("controller setup: shutdown save incomplete: {error}");
     }
 }
 

@@ -578,6 +578,8 @@ impl MetadataStore {
             return Err(format!("metadata shard {system_id} is not software"));
         }
         let payload = self.read_shard(entry)?;
+        #[cfg(any(test, feature = "io-test-metrics"))]
+        crate::io_test_metrics::record_software_decode();
         let shard = decode_software(&payload)?;
         if shard.items.len() != entry.item_rows as usize
             || shard.hash_candidates.len() != entry.hash_rows as usize

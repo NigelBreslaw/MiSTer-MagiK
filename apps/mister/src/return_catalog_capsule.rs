@@ -100,15 +100,11 @@ impl CapsuleBinding {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PreparedReturnCatalogCapsule {
-    binding: CapsuleBinding,
-    collection_id: String,
-    return_game_path: String,
-    systems: Vec<GameSystemEntry>,
-    games: Vec<ArcadeGameEntry>,
-    platform_kinds: HashMap<String, PlatformKind>,
-    launch_plans: Vec<StructuredLaunchPlan>,
+    // Serialized, independently bounded return seed; no decoded collection
+    // ownership crosses into the launch handoff session.
+    bytes: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -211,119 +207,68 @@ fn prepare_return_catalog_capsule_inner(
         ));
     }
 
-    let games: Vec<_> = view.iter().cloned().collect();
-    if !games
-        .iter()
-        .any(|game| game.mra_path.as_ref() == return_game_path)
-    {
-        return Err("return game is absent from the current collection".to_string());
+    validate_binding(&binding)?;
+    let _encode_pmu = mister_magik_perf_events::sampled_span("launch.return-capsule-encode");
+    let mut writer = CapsuleBinaryWriter::new();
+    writer.write_bytes(RETURN_CATALOG_CAPSULE_MAGIC)?;
+    writer.write_u32(RETURN_CATALOG_CAPSULE_SCHEMA)?;
+    encode_binding(&mut writer, &binding)?;
+    writer.write_string(collection_id)?;
+    writer.write_string(return_game_path)?;
+    writer.write_count(catalog.systems.len(), "systems")?;
+    for system in &catalog.systems {
+        writer.write_string(&system.id)?;
+        writer.write_string(&system.title)?;
+        writer.write_u64(system.count as u64)?;
+        writer.write_u8(encode_platform_kind(catalog.platform_kind(&system.id)))?;
     }
-    let mut plan_refs = HashSet::new();
-    let mut launch_plans = Vec::new();
-    for game in &games {
+    writer.write_count(view.len(), "games")?;
+    let mut found_return = false;
+    let mut rows = 0;
+    for game in view.iter() {
+        validate_game(game)?;
+        found_return |= game.mra_path.as_ref() == return_game_path;
+        rows += 1;
+        writer.write_string(&game.title)?;
+        writer.write_string(&game.mra_path)?;
+        writer.write_string(&game.preview_archive_path)?;
+        writer.write_string(&game.preview_asset_key)?;
+        writer.write_bool(game.has_preview)?;
+        writer.write_string(&game.system_id)?;
+        writer.write_bool(game.year.is_some())?;
+        if let Some(year) = game.year {
+            writer.write_u16(year)?;
+        }
+        writer.write_string(&game.manufacturer)?;
+        writer.write_string(&game.category)?;
+        writer.write_bool(game.players.is_some())?;
+        if let Some(players) = game.players {
+            writer.write_u8(players)?;
+        }
+        writer.write_string(&game.control)?;
+        writer.write_bool(game.is_new)?;
+    }
+    if rows != view.len() {
+        return Err("return collection has missing rows".into());
+    }
+    if !found_return {
+        return Err("return game is absent from the current collection".into());
+    }
+    let count_offset = writer.bytes.len();
+    writer.write_u32(0)?;
+    let mut refs = HashSet::new();
+    let mut count = 0usize;
+    let mut plan_rows = 0;
+    for game in view.iter() {
+        plan_rows += 1;
         if let LaunchTarget::Structured(plan) = catalog.launch_target_for_ref(&game.mra_path)
-            && plan_refs.insert(plan.launch_ref.clone())
+            && refs.insert(plan.launch_ref.clone())
         {
-            launch_plans.push(plan);
-        }
-    }
-    if launch_plans.len() > RETURN_CATALOG_CAPSULE_MAX_PLANS {
-        return Err("return capsule has too many structured launch plans".to_string());
-    }
-
-    let systems = catalog.systems.clone();
-    let platform_kinds = systems
-        .iter()
-        .map(|system| (system.id.clone(), catalog.platform_kind(&system.id)))
-        .collect();
-    let prepared = PreparedReturnCatalogCapsule {
-        binding,
-        collection_id: collection_id.to_string(),
-        return_game_path: return_game_path.to_string(),
-        systems,
-        games,
-        platform_kinds,
-        launch_plans,
-    };
-    prepared.validate()?;
-    Ok(prepared)
-}
-
-impl PreparedReturnCatalogCapsule {
-    fn validate(&self) -> Result<(), String> {
-        validate_binding(&self.binding)?;
-        validate_string("collection id", &self.collection_id)?;
-        validate_string("return game path", &self.return_game_path)?;
-        validate_count(
-            "systems",
-            self.systems.len(),
-            RETURN_CATALOG_CAPSULE_MAX_SYSTEMS,
-        )?;
-        validate_count("games", self.games.len(), RETURN_CATALOG_CAPSULE_MAX_ROWS)?;
-        validate_count(
-            "launch plans",
-            self.launch_plans.len(),
-            RETURN_CATALOG_CAPSULE_MAX_PLANS,
-        )?;
-        for system in &self.systems {
-            validate_string("system id", &system.id)?;
-            validate_string("system title", &system.title)?;
-        }
-        for game in &self.games {
-            validate_game(game)?;
-        }
-        for plan in &self.launch_plans {
-            validate_plan(plan)?;
-        }
-        Ok(())
-    }
-
-    fn encode(&self) -> Result<Vec<u8>, String> {
-        self.validate()?;
-        let mut writer = CapsuleBinaryWriter::new();
-        writer.write_bytes(RETURN_CATALOG_CAPSULE_MAGIC)?;
-        writer.write_u32(RETURN_CATALOG_CAPSULE_SCHEMA)?;
-        encode_binding(&mut writer, &self.binding)?;
-        writer.write_string(&self.collection_id)?;
-        writer.write_string(&self.return_game_path)?;
-
-        writer.write_count(self.systems.len(), "systems")?;
-        for system in &self.systems {
-            writer.write_string(&system.id)?;
-            writer.write_string(&system.title)?;
-            writer.write_u64(system.count as u64)?;
-            writer.write_u8(encode_platform_kind(
-                self.platform_kinds
-                    .get(&system.id)
-                    .copied()
-                    .unwrap_or_default(),
-            ))?;
-        }
-
-        writer.write_count(self.games.len(), "games")?;
-        for game in &self.games {
-            writer.write_string(&game.title)?;
-            writer.write_string(&game.mra_path)?;
-            writer.write_string(&game.preview_archive_path)?;
-            writer.write_string(&game.preview_asset_key)?;
-            writer.write_bool(game.has_preview)?;
-            writer.write_string(&game.system_id)?;
-            writer.write_bool(game.year.is_some())?;
-            if let Some(year) = game.year {
-                writer.write_u16(year)?;
+            count += 1;
+            if count > RETURN_CATALOG_CAPSULE_MAX_PLANS {
+                return Err("return capsule has too many structured launch plans".into());
             }
-            writer.write_string(&game.manufacturer)?;
-            writer.write_string(&game.category)?;
-            writer.write_bool(game.players.is_some())?;
-            if let Some(players) = game.players {
-                writer.write_u8(players)?;
-            }
-            writer.write_string(&game.control)?;
-            writer.write_bool(game.is_new)?;
-        }
-
-        writer.write_count(self.launch_plans.len(), "launch plans")?;
-        for plan in &self.launch_plans {
+            validate_plan(&plan)?;
             writer.write_string(&plan.launch_ref)?;
             writer.write_string(&plan.title)?;
             writer.write_string(&plan.system_id)?;
@@ -333,7 +278,19 @@ impl PreparedReturnCatalogCapsule {
             writer.write_u8(plan.mount_index)?;
             writer.write_u8(plan.delay_secs)?;
         }
-        Ok(writer.finish())
+    }
+    if plan_rows != view.len() {
+        return Err("return collection has missing rows during launch encoding".into());
+    }
+    writer.bytes[count_offset..count_offset + 4].copy_from_slice(&(count as u32).to_le_bytes());
+    Ok(PreparedReturnCatalogCapsule {
+        bytes: writer.finish(),
+    })
+}
+impl PreparedReturnCatalogCapsule {
+    #[cfg(test)]
+    fn encode(&self) -> Result<Vec<u8>, String> {
+        Ok(self.bytes.to_vec())
     }
 }
 
@@ -346,9 +303,7 @@ fn save_return_catalog_capsule_at(
     path: &Path,
     capsule: &PreparedReturnCatalogCapsule,
 ) -> Result<(), String> {
-    let encode_pmu = mister_magik_perf_events::sampled_span("launch.return-capsule-encode");
-    let bytes = capsule.encode()?;
-    drop(encode_pmu);
+    let bytes = &capsule.bytes;
     let parent = path
         .parent()
         .ok_or_else(|| format!("return capsule path has no parent: {}", path.display()))?;
@@ -361,7 +316,7 @@ fn save_return_catalog_capsule_at(
         .mode(0o600)
         .open(&tmp)
         .map_err(|e| format!("create return capsule temp: {e}"))?;
-    file.write_all(&bytes)
+    file.write_all(bytes)
         .map_err(|e| format!("write return capsule temp: {e}"))?;
     file.flush()
         .map_err(|e| format!("flush return capsule temp: {e}"))?;
@@ -1388,5 +1343,52 @@ mod tests {
         );
         assert!(!path.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn capsule_wire_fixture_preserves_rows_and_deduplicated_structured_plans() {
+        let root = Path::new("/fixture/catalog");
+        let game = arcade_game("Plan").path("magik-plan:arcade:one").build();
+        let source = ArcadeCatalog::new_with_launch_plans(
+            root.to_path_buf(),
+            vec![game.clone(), game],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 2,
+            }],
+            vec![StructuredLaunchPlan {
+                launch_ref: "magik-plan:arcade:one".into(),
+                title: "Plan".into(),
+                system_id: "arcade".into(),
+                core_path: "/cores/test.rbf".into(),
+                payload_path: "/games/test.rom".into(),
+                mount_kind: "mount-image".into(),
+                mount_index: 2,
+                delay_secs: 3,
+            }],
+        );
+        let mut expected = binding(root);
+        expected.binary_version = "fixture-version".into();
+        expected.binary_build = "fixture-build".into();
+        let bytes = prepare_return_catalog_capsule_with_binding(
+            &source,
+            "arcade",
+            "magik-plan:arcade:one",
+            expected.clone(),
+        )
+        .expect("prepare")
+        .encode()
+        .expect("encode");
+        // Frozen from the pre-streaming encoder with the same schema fixture.
+        assert_eq!((bytes.len(), crc32fast::hash(&bytes)), (485, 2_083_954_638));
+        let restored =
+            decode_return_catalog_capsule(&bytes, &expected, "arcade", "magik-plan:arcade:one")
+                .expect("decode");
+        assert_eq!(restored.len(), 2);
+        assert_eq!(
+            restored.launch_target_for_ref("magik-plan:arcade:one"),
+            source.launch_target_for_ref("magik-plan:arcade:one")
+        );
     }
 }

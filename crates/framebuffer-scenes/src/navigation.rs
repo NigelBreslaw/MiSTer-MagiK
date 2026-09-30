@@ -6,6 +6,7 @@
 use crate::Rgb565Pixel;
 use crate::settings_cog::CrtSettingsGeometry;
 use crate::spring_animation::smooth_spring_q16;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub fn warm_navigation_transition_rasterizer() {
@@ -824,8 +825,8 @@ pub fn scale_progress(elapsed_us: u64, duration_us: u64, maximum: u16) -> u16 {
 pub struct NavigationTransitionBuffers {
     width: usize,
     height: usize,
-    source: Vec<Rgb565Pixel>,
-    destination: Vec<Rgb565Pixel>,
+    source: Arc<Vec<Rgb565Pixel>>,
+    destination: Arc<Vec<Rgb565Pixel>>,
     working: Vec<Rgb565Pixel>,
     scale_source_x: Vec<usize>,
     scale_source_y: Vec<usize>,
@@ -849,8 +850,8 @@ impl NavigationTransitionBuffers {
             return;
         }
         let len = width.saturating_mul(height);
-        self.source.resize(len, Rgb565Pixel(0));
-        self.destination.resize(len, Rgb565Pixel(0));
+        Arc::make_mut(&mut self.source).resize(len, Rgb565Pixel(0));
+        Arc::make_mut(&mut self.destination).resize(len, Rgb565Pixel(0));
         self.working.resize(len, Rgb565Pixel(0));
         self.scale_source_x.resize(width, 0);
         self.scale_source_y.resize(height, 0);
@@ -870,7 +871,7 @@ impl NavigationTransitionBuffers {
         pixels: &[Rgb565Pixel],
     ) -> Result<(), NavigationTransitionFailure> {
         self.source_ready = false;
-        copy_snapshot(&mut self.source, pixels)?;
+        capture_shared_snapshot(&mut self.source, pixels)?;
         self.source_ready = true;
         Ok(())
     }
@@ -880,7 +881,7 @@ impl NavigationTransitionBuffers {
         pixels: &[Rgb565Pixel],
     ) -> Result<(), NavigationTransitionFailure> {
         self.destination_ready = false;
-        copy_snapshot(&mut self.destination, pixels)?;
+        capture_shared_snapshot(&mut self.destination, pixels)?;
         self.destination_ready = true;
         Ok(())
     }
@@ -923,6 +924,14 @@ impl NavigationTransitionBuffers {
         self.working.as_slice()
     }
 
+    pub fn source_handle(&self) -> Option<Arc<Vec<Rgb565Pixel>>> {
+        self.source_ready.then(|| Arc::clone(&self.source))
+    }
+    pub fn destination_handle(&self) -> Option<Arc<Vec<Rgb565Pixel>>> {
+        self.destination_ready
+            .then(|| Arc::clone(&self.destination))
+    }
+
     /// The 412x374 RGB565 Settings cog used by `settings_cog` requests.
     pub fn set_settings_cog_asset(&mut self, asset: &'static [Rgb565Pixel]) {
         self.settings_cog_asset = Some(asset);
@@ -946,6 +955,22 @@ impl NavigationTransitionBuffers {
         }
         self.working.copy_from_slice(&self.source);
         Ok(self.source.len())
+    }
+}
+
+fn capture_shared_snapshot(
+    destination: &mut Arc<Vec<Rgb565Pixel>>,
+    source: &[Rgb565Pixel],
+) -> Result<(), NavigationTransitionFailure> {
+    if destination.len() != source.len() {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    if Arc::strong_count(destination) > 1 {
+        // Capture the new endpoint once rather than COW-cloning the obsolete pixels.
+        *destination = Arc::new(source.to_vec());
+        Ok(())
+    } else {
+        copy_snapshot(Arc::make_mut(destination).as_mut_slice(), source)
     }
 }
 
