@@ -27,4 +27,6 @@ pub struct BrowseFrame {
     pub duration_millis: u32,
 }
 
+pub const NESTED_STEP_MILLIS: u32 = 460;
+
 pub const SPRING_POSITION_UNITS: u32 = 65536;

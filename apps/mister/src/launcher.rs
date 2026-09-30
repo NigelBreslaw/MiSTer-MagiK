@@ -433,6 +433,7 @@ pub struct ArcadeNav {
     row_height: i32,
     step_rows: usize,
     input_policy: ScrollInputPolicy,
+    nested_step: Option<NestedCardStep>,
     /// Card carousels wrap only at the root; nested levels stop at their ends.
     wraps: bool,
     scroll: ArcadeScrollState,
@@ -444,6 +445,14 @@ pub struct ArcadeNav {
 enum ScrollInputPolicy {
     Arcade,
     RootCards,
+    NestedCards,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NestedCardStep {
+    from: i64,
+    direction: i32,
+    started: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -494,6 +503,7 @@ impl ArcadeNav {
             row_height: row_height.max(1),
             step_rows: step_rows.max(1),
             input_policy: ScrollInputPolicy::Arcade,
+            nested_step: None,
             wraps: false,
             scroll: ArcadeScrollState::default(),
             scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
@@ -502,6 +512,7 @@ impl ArcadeNav {
     }
 
     pub fn reset(&mut self) {
+        self.nested_step = None;
         self.selected = 0;
         self.scroll_y = 0;
         self.visual_index = 0.0;
@@ -511,6 +522,7 @@ impl ArcadeNav {
     }
 
     pub fn snap_to_selected(&mut self) {
+        self.nested_step = None;
         self.scroll.target_index = self.selected;
         self.scroll.intent_queue = 0;
         self.scroll_animation
@@ -538,7 +550,7 @@ impl ArcadeNav {
     }
 
     pub fn is_settled_at_selected(&self) -> bool {
-        if self.input_policy == ScrollInputPolicy::RootCards {
+        if self.input_policy != ScrollInputPolicy::Arcade {
             return self.is_settled() && !self.is_scroll_active();
         }
         self.scroll_y == self.selected as i32 * self.row_height
@@ -551,6 +563,9 @@ impl ArcadeNav {
     /// The spring's long tail is not motion anyone can see, so this is what
     /// decides when a press on a card may act.
     pub fn is_visually_at_rest(&self, count: usize) -> bool {
+        if self.nested_step.is_some() {
+            return false;
+        }
         if count == 0 || self.scroll.intent_queue != 0 || self.scroll.held_dir != 0 {
             return false;
         }
@@ -560,6 +575,7 @@ impl ArcadeNav {
     }
 
     pub fn restore_position(&mut self, selected: usize, scroll_y: i32, count: usize) {
+        self.nested_step = None;
         if count == 0 {
             self.reset();
             return;
@@ -602,6 +618,16 @@ impl ArcadeNav {
 
         let dir = dir.signum();
         let previous_dir = previous_dir.signum();
+        if self.input_policy == ScrollInputPolicy::NestedCards {
+            self.scroll.held_dir = dir;
+            if previous_dir != dir {
+                self.scroll.hold_started_at = if dir == 0 { None } else { Some(now) };
+                if dir != 0 && self.nested_step.is_none() {
+                    self.start_nested_step(dir, count, now);
+                }
+            }
+            return;
+        }
         let reversing_hold =
             self.scroll.continuous_active && previous_dir != 0 && dir != 0 && dir != previous_dir;
         if previous_dir != 0 && previous_dir != dir {
@@ -647,6 +673,10 @@ impl ArcadeNav {
     }
 
     pub fn tick(&mut self, count: usize, now: Instant) {
+        if self.input_policy == ScrollInputPolicy::NestedCards {
+            self.tick_nested(count, now);
+            return;
+        }
         if count == 0 {
             self.reset();
             return;
@@ -741,6 +771,93 @@ impl ArcadeNav {
             self.scroll.intent_queue = 0;
         }
         self.sync_visual_from_px();
+    }
+
+    fn start_nested_step(&mut self, dir: i32, count: usize, now: Instant) {
+        if count < 2 {
+            return;
+        }
+        self.scroll.last_frame_at = Some(now);
+        self.nested_step = Some(NestedCardStep {
+            from: self.visual_index.round() as i64,
+            direction: dir.signum(),
+            started: now,
+        });
+    }
+
+    fn tick_nested(&mut self, count: usize, now: Instant) {
+        use mister_magik_framebuffer_scenes::launcher_navigation::NESTED_STEP_MILLIS;
+        if count == 0 {
+            self.reset();
+            return;
+        }
+        if let Some(step) = self.nested_step {
+            let elapsed = now
+                .saturating_duration_since(step.started)
+                .as_millis()
+                .min(u128::from(NESTED_STEP_MILLIS)) as u32;
+            self.visual_index = step.from as f32
+                + step.direction as f32 * elapsed as f32 / NESTED_STEP_MILLIS as f32;
+            self.scroll_y = (self.visual_index * self.row_height as f32).round() as i32;
+            if elapsed == NESTED_STEP_MILLIS {
+                self.selected =
+                    (step.from + i64::from(step.direction)).rem_euclid(count as i64) as usize;
+                self.scroll.target_index = self.selected;
+                self.nested_step = None;
+            }
+        }
+        self.scroll.continuous_active = self.scroll.held_dir != 0
+            && self
+                .scroll
+                .hold_started_at
+                .is_some_and(|at| now.saturating_duration_since(at) > ROOT_CARD_HOLD_DELAY);
+        if self.nested_step.is_none()
+            && self.scroll.continuous_active
+            && self.scroll.last_frame_at.is_none_or(|at| {
+                now.saturating_duration_since(at)
+                    >= Duration::from_millis(u64::from(NESTED_STEP_MILLIS))
+            })
+        {
+            // Schedule at most one step, even after a late UI frame.
+            self.start_nested_step(self.scroll.held_dir, count, now);
+        }
+    }
+
+    fn nested_browse_frame(
+        &self,
+        count: usize,
+        at: Instant,
+    ) -> mister_magik_framebuffer_scenes::launcher_navigation::BrowseFrame {
+        use mister_magik_framebuffer_scenes::launcher_navigation::{
+            BrowseDirection, BrowseFrame, BrowsePhase, NESTED_STEP_MILLIS,
+        };
+        let Some(step) = self.nested_step else {
+            return BrowseFrame {
+                selected: self.selected,
+                target: self.selected,
+                phase: BrowsePhase::Settled,
+                direction: None,
+                progress_millis: 0,
+                duration_millis: NESTED_STEP_MILLIS,
+            };
+        };
+        let elapsed = at
+            .saturating_duration_since(step.started)
+            .as_millis()
+            .min(u128::from(NESTED_STEP_MILLIS)) as u32;
+        BrowseFrame {
+            selected: step.from.rem_euclid(count.max(1) as i64) as usize,
+            target: (step.from + i64::from(step.direction)).rem_euclid(count.max(1) as i64)
+                as usize,
+            phase: BrowsePhase::Flipping,
+            direction: Some(if step.direction > 0 {
+                BrowseDirection::Right
+            } else {
+                BrowseDirection::Left
+            }),
+            progress_millis: elapsed,
+            duration_millis: NESTED_STEP_MILLIS,
+        }
     }
 
     pub fn bench_direction_tick(
@@ -895,7 +1012,7 @@ impl ArcadeNav {
     }
 
     pub fn is_settled(&self) -> bool {
-        self.scroll_animation.is_settled()
+        self.nested_step.is_none() && self.scroll_animation.is_settled()
     }
 
     pub fn is_scroll_active(&self) -> bool {
@@ -1405,6 +1522,11 @@ impl LauncherNav {
     }
 
     fn restore_home_card_scroll(&mut self) {
+        self.home_card_scroll.input_policy = if self.current_menu_id() == ROOT_MENU_ID {
+            ScrollInputPolicy::RootCards
+        } else {
+            ScrollInputPolicy::NestedCards
+        };
         // Root and nested levels cycle; a single-card level stays still.
         self.home_card_scroll.set_wraps(
             self.current_menu_id() == ROOT_MENU_ID
@@ -1479,6 +1601,21 @@ impl LauncherNav {
         let mut predicted = self.home_card_scroll.clone();
         predicted.tick(self.home_navigation_count(), at);
         (predicted.selected, predicted.visual_index)
+    }
+
+    pub fn home_card_browse_prediction(
+        &self,
+        at: Instant,
+    ) -> Option<mister_magik_framebuffer_scenes::launcher_navigation::BrowseFrame> {
+        if self.home_card_scroll.input_policy != ScrollInputPolicy::NestedCards {
+            return None;
+        }
+        // Predict only the already accepted step. Future time cannot create
+        // another held input before its capture boundary has been observed.
+        Some(
+            self.home_card_scroll
+                .nested_browse_frame(self.home_navigation_count(), at),
+        )
     }
 
     pub fn arcade_uses_menu_repeat(&self) -> bool {
@@ -3039,6 +3176,17 @@ impl LauncherNav {
         self.home_card_scroll
             .handle_direction_input(dir, previous_dir, frame_now, count);
         self.home_card_scroll.tick(count, frame_now);
+        if self.settings.reduce_motion
+            && let Some(step) = self.home_card_scroll.nested_step
+        {
+            self.home_card_scroll.selected =
+                (step.from + i64::from(step.direction)).rem_euclid(count as i64) as usize;
+            self.home_card_scroll.scroll.target_index = self.home_card_scroll.selected;
+            self.home_card_scroll.visual_index = (step.from + i64::from(step.direction)) as f32;
+            self.home_card_scroll.scroll_y =
+                (self.home_card_scroll.visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
+            self.home_card_scroll.nested_step = None;
+        }
         self.selected = self.home_card_scroll.selected;
         keep_home_visible(self.selected, &mut self.scroll_x, count);
     }
@@ -7152,6 +7300,43 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn nested_steps_use_elapsed_time_and_ignore_taps_until_the_endpoint() {
+        use mister_magik_framebuffer_scenes::launcher_navigation::BrowsePhase;
+        let mut nav = ArcadeNav::new_cyclic();
+        nav.input_policy = ScrollInputPolicy::NestedCards;
+        let start = Instant::now();
+        nav.handle_direction_input(1, 0, start, 2);
+        nav.handle_direction_input(0, 1, start + Duration::from_millis(16), 2);
+        nav.tick(2, start + Duration::from_millis(230));
+        let frame = nav.nested_browse_frame(2, start + Duration::from_millis(230));
+        assert_eq!((frame.progress_millis, frame.duration_millis), (230, 460));
+        assert_eq!((frame.selected, frame.target), (0, 1));
+        assert_eq!(nav.visual_index, 0.5);
+        nav.handle_direction_input(1, 0, start + Duration::from_millis(240), 2);
+        nav.handle_direction_input(0, 1, start + Duration::from_millis(256), 2);
+        nav.tick(2, start + Duration::from_millis(459));
+        assert_eq!(nav.selected, 0);
+        assert!(!nav.is_visually_at_rest(2));
+        nav.tick(2, start + Duration::from_millis(460));
+        assert_eq!(nav.selected, 1);
+        assert_eq!(
+            nav.nested_browse_frame(2, start + Duration::from_millis(460))
+                .phase,
+            BrowsePhase::Settled
+        );
+        nav.handle_direction_input(-1, 0, start + Duration::from_millis(500), 2);
+        let reverse = nav.nested_browse_frame(2, start + Duration::from_millis(730));
+        assert_eq!(
+            (reverse.selected, reverse.target, reverse.progress_millis),
+            (1, 0, 230)
+        );
+        nav.handle_direction_input(0, -1, start + Duration::from_millis(516), 2);
+        nav.tick(2, start + Duration::from_secs(5));
+        assert_eq!(nav.selected, 0);
+        assert!(nav.is_visually_at_rest(2));
     }
 
     #[test]

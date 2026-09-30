@@ -9741,6 +9741,7 @@ pub(super) fn run_launcher_loop(
                     &last_clock_text,
                     loop_start.duration_since(run_start).as_millis() as u64,
                     !nav.settings.reduce_motion,
+                    nav.home_card_browse_prediction(prediction_time),
                 );
                 // Idle on a card: prepare the level it opens and the parent, so
                 // the level trick never waits on preparation.
