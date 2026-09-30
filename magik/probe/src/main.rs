@@ -346,7 +346,7 @@ fn main() -> Result<(), String> {
                 let scene = c.scene.as_mut().unwrap();
                 let d = scene.render()?;
                 probe.set_concept_frame((scene.elapsed().as_millis().min(i32::MAX as u128)) as i32);
-                session.borrow_mut().metrics.context = serde_json::json!({"late_frames":late_frames,"animation_clock":"monotonic","animation_elapsed_ms":c.scene.as_ref().unwrap().elapsed().as_millis() as u64,"concept":c.name,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes(),"build_profile":env!("MAGIK_MINI_BUILD_PROFILE"),"preparation_ms":c.preparation_ms,"preparation_profile":c.preparation_profile,"preparation_stages_ms":c.scene.as_ref().unwrap().preparation_stages(),"tile_max_us":c.scene.as_ref().unwrap().render_stage_max_us()});
+                session.borrow_mut().metrics.context = serde_json::json!({"late_frames":late_frames,"animation_clock":"monotonic","animation_elapsed_ms":c.scene.as_ref().unwrap().elapsed().as_millis() as u64,"concept":c.name,"concept_generation":c.generation,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes(),"build_profile":env!("MAGIK_MINI_BUILD_PROFILE"),"preparation_ms":c.preparation_ms,"preparation_benchmark":c.preparation_benchmark,"preparation_profile":c.preparation_profile,"preparation_stages_ms":c.scene.as_ref().unwrap().preparation_stages(),"tile_max_us":c.scene.as_ref().unwrap().render_stage_max_us()});
                 DirtyRectList::from_one(DirtyRect {
                     x0: d.x0,
                     y0: d.y0,
@@ -393,6 +393,13 @@ fn main() -> Result<(), String> {
                 .ok_or("latch did not settle")?;
             let mut session = session.borrow_mut();
             let metrics = &mut session.metrics;
+            if let Some(preparation_started) = c.startup_started.take() {
+                metrics.context["startup"] = serde_json::json!({
+                    "preparation_to_first_confirmed_present_us": preparation_started.elapsed().as_micros() as u64,
+                    "first_render_us": render_us, "first_transfer_us": transfer_us,
+                    "first_frame_to_present_us": started.elapsed().as_micros() as u64,
+                });
+            }
             metrics.counters.posts += 1;
             metrics.counters.flips += 1;
             let previous_drops = metrics.counters.drops;

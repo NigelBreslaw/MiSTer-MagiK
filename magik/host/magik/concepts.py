@@ -323,15 +323,25 @@ def verify_installed(fields, sha256):
         )
 
 
-def profile_preparation(application, agent, run, effect, preset):
-    action(application, "profile-preparation")
+def profile_preparation(application, agent, run, effect, preset, *, sampled=True):
+    action(application, "profile-preparation" if sampled else "bench-preparation")
     select(application, effect, preset)
+    generation = int(value(application, "generation"))
     samples = []
 
     def completed():
         raw = agent.metrics()
         context = raw.get("context") or {}
-        if (context.get("preparation_profile") or {}).get("complete"):
+        preparation_complete = (
+            (context.get("preparation_profile") or {}).get("complete")
+            if sampled
+            else context.get("preparation_benchmark")
+        )
+        if (
+            preparation_complete
+            and context.get("startup")
+            and context.get("concept_generation") == generation
+        ):
             samples.append(raw)
             return True
         return False
@@ -345,11 +355,29 @@ def profile_preparation(application, agent, run, effect, preset):
         context.get("build_profile"),
     ) != (effect, preset, "release-device"):
         raise ValueError("preparation profile identity or build mismatch")
+    if (
+        raw.get("evidence_error", "missing") is not None
+        or raw.get("latch_rejections") != 0
+        or any(
+            type(raw.get(key)) is not int or raw[key] < 1
+            for key in ("presentations", "physical_latch_posts", "physical_latch_flips")
+        )
+    ):
+        raise ValueError("startup measurement lacks valid first-presentation evidence")
     (run / "preparation-raw.json").write_text(json.dumps(raw, indent=2) + "\n")
-    append_event(run, {"phase": "preparation-profile", "context": context})
+    append_event(
+        run,
+        {
+            "phase": "preparation-profile" if sampled else "preparation-benchmark",
+            "context": context,
+        },
+    )
+    if not sampled:
+        capture(agent, run / "startup.png")
     print(
         f"{effect}/{preset}: cold preparation={context['preparation_ms']}ms "
-        f"cpu={context['preparation_profile']['process_cpu_us']}us (instrumented)",
+        f"first confirmed present={context['startup']['preparation_to_first_confirmed_present_us']}us "
+        f"({'instrumented' if sampled else 'uninstrumented'})",
         flush=True,
     )
     return 0
@@ -361,8 +389,11 @@ def run_concept(arguments, run: Path):
     effect = arguments.effect if arguments.command == "concept" else arguments.concept
     if not supported(effect, arguments.preset) or arguments.app != "mini-magik":
         raise ValueError("select one supported concept with --app mini-magik")
-    preparation = bool(getattr(arguments, "profile_preparation", False))
-    profile = bool(getattr(arguments, "profile", False)) or preparation
+    preparation_profile = bool(getattr(arguments, "profile_preparation", False))
+    preparation = preparation_profile or bool(
+        getattr(arguments, "bench_preparation", False)
+    )
+    profile = bool(getattr(arguments, "profile", False)) or preparation_profile
     profile_id = f"{run.name}-{uuid.uuid4().hex[:8]}" if profile else None
     agent, status = connect_agent(
         run,
@@ -373,6 +404,7 @@ def run_concept(arguments, run: Path):
             "capture-framebuffer",
             "device-control-v1",
             "artifacts-v1",
+            "lifecycle-v1",
         },
     )
     # Main's confirmed mode must be checked before taking display ownership.
@@ -394,11 +426,18 @@ def run_concept(arguments, run: Path):
             if arguments.command == "concept":
                 return interactive(application, agent, run, effect, arguments.preset)
             result = (
-                profile_preparation(application, agent, run, effect, arguments.preset)
+                profile_preparation(
+                    application,
+                    agent,
+                    run,
+                    effect,
+                    arguments.preset,
+                    sampled=preparation_profile,
+                )
                 if preparation
                 else measure(application, agent, run, effect, arguments.preset, profile)
             )
-            if not profile:
+            if not profile and not preparation:
                 review(application, agent, run, effect, arguments.preset)
         if profile_id is not None:
             for name in ("profile.json", "profile.folded", "flamegraph.svg"):
@@ -414,3 +453,9 @@ def run_concept(arguments, run: Path):
     except Exception as error:
         append_event(run, {"phase": "concept-error", "error": str(error)})
         raise
+    finally:
+        if preparation:
+            # End a startup-only experiment when its first frame is complete.
+            # Avoid leaving a restored Mini storyboard running after this command.
+            stopped = agent.stop()
+            append_event(run, {"phase": "preparation-stop", "result": stopped})

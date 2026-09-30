@@ -811,9 +811,22 @@ impl PreparedLauncher {
                 };
                 #[cfg(test)]
                 FACE_BAKES.set(FACE_BAKES.get() + 2);
-                #[cfg(feature = "launcher-profile")]
-                let initial_faces = crate::launcher_profile::span("prepare.initial_faces");
-                let mut faces =
+                let mut faces = if scene.quality == CardRenderQuality::Rgb888
+                    && card.rgb888.is_some()
+                    && responsive.is_none()
+                {
+                    #[cfg(feature = "launcher-profile")]
+                    let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
+                    let [compact, detail] = artwork::faces_rgb888(&card, typography);
+                    CardFaces {
+                        compact,
+                        detail,
+                        back: None,
+                        slides: data.level.slides(),
+                    }
+                } else {
+                    #[cfg(feature = "launcher-profile")]
+                    let _faces = crate::launcher_profile::span("prepare.initial_faces");
                     if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
                         layout.faces(&card, fonts, &mut bodies, data.level.slides())
                     } else {
@@ -823,19 +836,8 @@ impl PreparedLauncher {
                             back: bodies.back_face(&card),
                             slides: data.level.slides(),
                         }
-                    };
-                #[cfg(feature = "launcher-profile")]
-                drop(initial_faces);
-                if scene.quality == CardRenderQuality::Rgb888
-                    && card.rgb888.is_some()
-                    && responsive.is_none()
-                {
-                    #[cfg(feature = "launcher-profile")]
-                    let _replacement =
-                        crate::launcher_profile::span("prepare.rgb888_replacement_faces");
-                    faces.compact = artwork::face_rgb888(&card, false, typography);
-                    faces.detail = artwork::face_rgb888(&card, true, typography);
-                }
+                    }
+                };
                 let dithered = scene.quality != CardRenderQuality::Current;
                 faces.compact.dithered = dithered;
                 faces.detail.dithered = dithered;

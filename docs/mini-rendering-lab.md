@@ -479,3 +479,86 @@ reuse each card's common source reduction for its two label variants, and reserv
 subpixel framing work for pixels near actual boundaries. Their speedup and pixel
 parity require new-implementation validation; the profile alone does not qualify
 those changes or establish a sub-second first-latched-frame guarantee.
+
+## Efficient cold startup, 2026-09-30
+
+The shared landscape RGB888 preparation now constructs its retained faces directly,
+reduces each card's artwork once for both label variants, and uses direct source
+pixels for artwork interiors wholly inside the innermost frame. The conservative
+interior bands include all subpixel offsets 1..7; edges and corners still use the
+original 4x4 samples. Generic cards and native responsive paths retain their face
+selection rules. No graphics, baked animation frames or persistent startup cache
+were added. The temporary common reduction is released after each face pair is
+constructed; both prepared faces retain their original pixels and mipmaps.
+
+Each step was measured on the physical Cortex-A9 using the same preparation-only
+99 Hz profile. The baseline is the previously recorded result, not a rerun:
+
+| Implementation | Cold scene preparation | Improvement from previous step |
+| --- | ---: | ---: |
+| Recorded preparation profile | 2078 ms | |
+| Construct RGB888 faces directly | 1281 ms | 797 ms |
+| Share artwork reduction between faces | 1112 ms | 169 ms |
+| Use direct pixels for identical interior samples | 547 ms | 565 ms |
+
+Final measurements disable CPU sampling and stop at the first complete initial
+frame. Each measurement uses a fresh native test process, prepares all six cards,
+and leaves motion paused. The host checks the exact artifact, selection generation,
+production-matched profile and valid first-presentation counters, captures the
+settled first frame after timing, then returns to the normal Dev launcher. It
+performs no storyboard, quality-switch review or cadence window in this mode.
+
+```sh
+scripts/magik check concept --app mini-magik --concept launcher-cards --preset rgb888 --production-build --bench-preparation
+scripts/magik check concept --app mini-magik --concept arcade-transition --preset scanline --production-build --bench-preparation
+```
+
+| Fresh process | Cold preparation | First confirmed complete presentation |
+| --- | ---: | ---: |
+| Cards 1 | 538 ms | 565.993 ms |
+| Cards 2 | 540 ms | 573.457 ms |
+| Cards 3 | 531 ms | 560.477 ms |
+| Arcade, including cold launcher preparation | 601 ms | 621.855 ms |
+
+Card preparation averages 536.3 ms, about 74% below the recorded uninstrumented
+2020–2043 ms baseline. Cold Arcade preparation falls from the recorded 2098 ms to
+601 ms. The Arcade breakdown is 527 ms launcher fixture, 33 ms demo destination
+PNG decode, 23 ms cabinet texture preparation, 14 ms worker setup, and remaining
+setup. The prior 73 ms warm Arcade result was not rerun.
+
+The first-presentation clock starts immediately before scene construction and
+stops after the posted slot has been confirmed settled by the existing presenter.
+It includes preparation, initial scene rendering, transfer, post and refresh wait;
+it is a host-observed confirmation time, not a new hardware latch timestamp.
+It excludes process launch, driver/display acquisition, preceding control delivery
+and full-app catalog setup. Instrumented profile runs also include sampler report
+export between preparation and first presentation; use the sampling-disabled runs
+above for readiness. Raw repeated-refresh counters include the stationary initial
+probe and paused frame, so they are not animation cadence results.
+
+Validation passed: 154 renderer library tests, one existing ignored microbenchmark,
+three Mini timeline/control tests, 44 host concept tests, six CLI default tests,
+focused library/Mini Clippy and Python lint/format checks. The new face-pair test
+compares all six actual RGB888 assets, compact/detail pixels and every retained RGBA
+mip level with single-face reference construction, with fallback and bitmap fonts.
+The interior test compares every pixel at four card sizes with the full subpixel
+reference. All three physical card captures and the Arcade initial capture match
+their saved reference images pixel-for-pixel. These checks establish startup pixel
+parity; no new physical motion/60 Hz or full-app boot qualification was run.
+
+The final artifact SHA256 is
+`8439ce0057472aab82ffb0f86881d5c98cccf2d50e2a20aa0f87124a404bcbfb`.
+Scene storage stays 19,548,522 bytes for cards and 10,425,694 bytes for Arcade.
+Evidence is ignored under `build/magik-results/`:
+
+- `20260930T150355Z-37dfc6998f54`: direct face construction, profile.
+- `20260930T150758Z-23910b53d596`: shared artwork reduction, profile.
+- `20260930T151110Z-9bf8b3e1d3d2`: interior shortcut, profile.
+- `20260930T151326Z-f2b02572c769`: final cards start 1 and authoritative capture.
+- `20260930T151352Z-ff934206adf7`: final cards start 2 and authoritative capture.
+- `20260930T151417Z-bebfe2157fc9`: final cards start 3 and authoritative capture.
+- `20260930T151514Z-b2596ab09229`: cold Arcade start and authoritative capture.
+
+All final startup commands completed their typed stop operation; subsequent status
+confirmed `MiSTer_MagiKDev` active and ready, with no crashes or invariant failures.
+Production quality defaults, thread affinity and priority were unchanged.

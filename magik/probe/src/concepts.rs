@@ -20,6 +20,9 @@ pub struct Concepts {
     pub error: Option<String>,
     pub preparation_ms: u64,
     profile_preparation: bool,
+    benchmark_preparation: bool,
+    pub preparation_benchmark: bool,
+    pub startup_started: Option<Instant>,
     pub preparation_profile: serde_json::Value,
     width: usize,
     height: usize,
@@ -40,6 +43,9 @@ impl Concepts {
             error: None,
             preparation_ms: 0,
             profile_preparation: false,
+            benchmark_preparation: false,
+            preparation_benchmark: false,
+            startup_started: None,
             preparation_profile: serde_json::Value::Null,
             width,
             height,
@@ -64,6 +70,9 @@ impl Concepts {
             None
         };
         let profiling = std::mem::take(&mut self.profile_preparation);
+        let benchmarking = std::mem::take(&mut self.benchmark_preparation);
+        self.preparation_benchmark = benchmarking || profiling;
+        self.startup_started = None;
         self.preparation_profile = serde_json::Value::Null;
         let sampler = if profiling {
             match mister_magik_tooling_support::CpuProfile::start() {
@@ -91,6 +100,7 @@ impl Concepts {
         }
         let cpu_start = resources.process_cpu_us;
         let preparation_started = std::time::Instant::now();
+        self.startup_started = self.preparation_benchmark.then_some(preparation_started);
         match Scene::new_with_worker_setup(name, preset, self.width, self.height, worker_setup) {
             Ok(mut scene) => {
                 self.preparation_ms = preparation_started
@@ -123,7 +133,7 @@ impl Concepts {
                 if !keep_time {
                     self.paused = false;
                 }
-                if profiling {
+                if self.preparation_benchmark {
                     self.paused = true;
                 }
                 self.dirty = true;
@@ -165,6 +175,10 @@ impl Concepts {
         }
     }
     pub fn action(&mut self, action: &str) {
+        if action == "bench-preparation" {
+            self.benchmark_preparation = true;
+            return;
+        }
         if action == "profile-preparation" {
             self.profile_preparation = true;
             return;

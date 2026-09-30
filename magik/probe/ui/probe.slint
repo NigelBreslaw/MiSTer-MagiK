@@ -74,7 +74,7 @@ export component Probe inherits Window {
         Text { accessible-role: text; accessible-label: "concept-frame"; accessible-value: "" + root.concept-frame; }
         Text { accessible-role: text; accessible-label: "concept-paused"; accessible-value: root.concept-paused ? "true" : "false"; }
         Text { accessible-role: text; accessible-label: "concept-measuring"; accessible-value: root.concept-measuring ? "true" : "false"; }
-        for action in ["pause","resume","step","restart","measure","profile-preparation","capture-initial","capture-midpoint","capture-boundary"] : Rectangle {
+        for action in ["pause","resume","step","restart","measure","profile-preparation","bench-preparation","capture-initial","capture-midpoint","capture-boundary"] : Rectangle {
             accessible-role: button; accessible-label: "concept-" + action;
             accessible-action-default => {root.concept-action(action);}
         }

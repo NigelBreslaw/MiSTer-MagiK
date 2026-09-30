@@ -5,9 +5,11 @@
 //! coverage before filtering, so transparent rounded corners cannot halo.
 use crate::Rgb565Pixel;
 
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct Texture {
     levels: Vec<Level>,
 }
+#[cfg_attr(test, derive(PartialEq, Eq))]
 struct Level {
     pixels: Vec<u32>,
     width: usize,

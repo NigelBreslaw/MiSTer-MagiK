@@ -222,9 +222,10 @@ def test_motion_evidence_accounts_for_device_warmup():
     assert validate(data, "abc", "launcher-cards", "default")["motion_qualified"]
 
 
+@pytest.mark.parametrize("sampled", [True, False])
 @pytest.mark.parametrize("identity_matches", [True, False])
 def test_preparation_profile_waits_for_attributed_current_artifact(
-    tmp_path, monkeypatch, identity_matches
+    tmp_path, monkeypatch, identity_matches, sampled
 ):
     from magik import concepts
     from unittest.mock import Mock
@@ -233,20 +234,36 @@ def test_preparation_profile_waits_for_attributed_current_artifact(
     agent = Mock(expected_sha256="a" * 64)
     raw = {
         "sha256": "a" * 64 if identity_matches else "b" * 64,
+        "evidence_error": None,
+        "latch_rejections": 0,
+        "presentations": 2,
+        "physical_latch_posts": 2,
+        "physical_latch_flips": 2,
         "context": {
             "concept": "launcher-cards",
             "preset": "rgb888",
             "build_profile": "release-device",
             "preparation_ms": 2026,
             "preparation_profile": {"complete": True, "process_cpu_us": 2_000_000},
+            "startup": {"preparation_to_first_confirmed_present_us": 2_050_000},
+            "concept_generation": 7,
+            "preparation_benchmark": True,
         },
     }
+    import copy
+
+    stale = copy.deepcopy(raw)
+    stale["context"]["concept_generation"] = 6
     agent.metrics.side_effect = [
         {"context": None},
         {"context": {"preparation_profile": None}},
+        stale,
         raw,
     ]
     order = []
+    monkeypatch.setattr(concepts, "value", lambda app, name: "7")
+    captured = Mock()
+    monkeypatch.setattr(concepts, "capture", captured)
     monkeypatch.setattr(concepts, "action", lambda app, name: order.append(name))
     monkeypatch.setattr(
         concepts, "select", lambda app, name, preset: order.append((name, preset))
@@ -254,7 +271,7 @@ def test_preparation_profile_waits_for_attributed_current_artifact(
     if identity_matches:
         assert (
             concepts.profile_preparation(
-                app, agent, tmp_path, "launcher-cards", "rgb888"
+                app, agent, tmp_path, "launcher-cards", "rgb888", sampled=sampled
             )
             == 0
         )
@@ -262,7 +279,11 @@ def test_preparation_profile_waits_for_attributed_current_artifact(
     else:
         with pytest.raises(ValueError, match="identity"):
             concepts.profile_preparation(
-                app, agent, tmp_path, "launcher-cards", "rgb888"
+                app, agent, tmp_path, "launcher-cards", "rgb888", sampled=sampled
             )
         assert not (tmp_path / "preparation-raw.json").exists()
-    assert order == ["profile-preparation", ("launcher-cards", "rgb888")]
+    assert order == [
+        "profile-preparation" if sampled else "bench-preparation",
+        ("launcher-cards", "rgb888"),
+    ]
+    assert captured.call_count == (1 if identity_matches and not sampled else 0)

@@ -103,6 +103,11 @@ def main() -> int:
         action="store_true",
         help="profile cold Mini rendering-lab preparation instead of animation",
     )
+    profiles.add_argument(
+        "--bench-preparation",
+        action="store_true",
+        help="benchmark cold Mini preparation and first confirmed presentation only",
+    )
     check_command.add_argument("--concept")
     check_command.add_argument(
         "--preset",
@@ -166,12 +171,15 @@ def main() -> int:
             help="use Mini's production-matched optimization profile for cadence qualification",
         )
     arguments = parser.parse_args()
-    if getattr(arguments, "profile_preparation", False) and not (
+    if (
+        getattr(arguments, "profile_preparation", False)
+        or getattr(arguments, "bench_preparation", False)
+    ) and not (
         arguments.scenario == "concept"
         and arguments.app == "mini-magik"
         and arguments.concept in {"launcher-cards", "arcade-transition"}
     ):
-        parser.error("--profile-preparation requires a Mini rendering-lab concept")
+        parser.error("preparation measurements require a Mini rendering-lab concept")
     if getattr(arguments, "production_build", False):
         if arguments.app != "mini-magik":
             parser.error("--production-build requires --app mini-magik")
