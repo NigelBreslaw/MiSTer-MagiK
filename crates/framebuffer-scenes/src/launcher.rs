@@ -1467,17 +1467,64 @@ fn draw_carousel_plan(
     scratch: &mut [crate::launcher_flip::Scratch],
     clip: (usize, usize),
 ) {
-    draw_carousel_reflections(pixels, pitch, origin, plan, scratch, clip);
+    draw_carousel_plan_prepared::<true>(pixels, pitch, origin, plan, scratch, clip);
+}
+
+fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
+    pixels: &mut [Rgb565Pixel],
+    pitch: usize,
+    origin: (usize, usize),
+    plan: &CarouselPlan<'_>,
+    scratch: &mut [crate::launcher_flip::Scratch],
+    clip: (usize, usize),
+) {
     let mut covered = crate::launcher_flip::BodyOcclusion::new(clip);
     let mut occlusion = [covered; 6];
-    for (slot, item) in plan.items.iter().enumerate().rev() {
-        occlusion[slot] = covered;
-        let Some(item) = item else { continue };
-        let mut pose = item.pose;
-        pose.clip = clip;
-        pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
-        pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
-        crate::launcher_flip::add_opaque_coverage(item.face, pose, &scratch[slot], &mut covered);
+    if CULL_SOURCE {
+        // Prepare front to back so only proven-opaque foreground spans
+        // can remove source filtering from the cards behind them.
+        for (slot, item) in plan.items.iter().enumerate().rev() {
+            occlusion[slot] = covered;
+            let Some(item) = item else { continue };
+            let mut pose = item.pose;
+            pose.clip = clip;
+            pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
+            pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
+            crate::launcher_flip::prepare_target(
+                pixels,
+                pitch,
+                origin,
+                item.face,
+                pose,
+                &mut scratch[slot],
+                item.blend,
+                &covered,
+            );
+            crate::launcher_flip::add_opaque_coverage(
+                item.face,
+                pose,
+                &scratch[slot],
+                &mut covered,
+            );
+        }
+    }
+    draw_carousel_reflections(pixels, pitch, origin, plan, scratch, clip);
+    if !CULL_SOURCE {
+        // Reference path prepares every column before applying body occlusion.
+        for (slot, item) in plan.items.iter().enumerate().rev() {
+            occlusion[slot] = covered;
+            let Some(item) = item else { continue };
+            let mut pose = item.pose;
+            pose.clip = clip;
+            pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
+            pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
+            crate::launcher_flip::add_opaque_coverage(
+                item.face,
+                pose,
+                &scratch[slot],
+                &mut covered,
+            );
+        }
     }
     for (slot, item) in plan.items.iter().enumerate() {
         let Some(item) = item else { continue };
@@ -1868,6 +1915,59 @@ mod tests {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
+        }
+    }
+
+    #[test]
+    fn culled_source_preparation_matches_full_columns_through_motion_and_reversal() {
+        let prepared = LauncherScene::new(960, 540).prepare(data());
+        let mut culled_scratch: Vec<_> = (0..6)
+            .map(|_| crate::launcher_flip::Scratch::strip())
+            .collect();
+        let mut full_scratch: Vec<_> = (0..6)
+            .map(|_| crate::launcher_flip::Scratch::strip())
+            .collect();
+        for direction in [BrowseDirection::Right, BrowseDirection::Left] {
+            for (selected, target) in [(0, 1), (4, 0)] {
+                for progress in [0, 1, 30, 89, 91, 140, 179, 180, 140, 91, 30] {
+                    let frame = BrowseFrame {
+                        selected,
+                        target,
+                        phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                        direction: Some(direction),
+                        progress_millis: progress,
+                        duration_millis: 180,
+                    };
+                    let plan = build_carousel_plan(&prepared.faces, frame, true);
+                    // Keep the scratch alive between poses: newly uncovered
+                    // source rows must be prepared after a reversal or wrap.
+                    for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
+                        let right = (left + crate::launcher_flip::STRIP_WIDTH).min(934);
+                        let mut culled = vec![Rgb565Pixel(BACKGROUND); (right - left) * 375];
+                        let mut full = culled.clone();
+                        draw_carousel_plan_prepared::<true>(
+                            &mut culled,
+                            right - left,
+                            (left, 120),
+                            &plan,
+                            &mut culled_scratch,
+                            (left, right),
+                        );
+                        draw_carousel_plan_prepared::<false>(
+                            &mut full,
+                            right - left,
+                            (left, 120),
+                            &plan,
+                            &mut full_scratch,
+                            (left, right),
+                        );
+                        assert!(
+                            culled == full,
+                            "pixel mismatch: {direction:?} {selected}->{target} progress={progress} strip={left}"
+                        );
+                    }
+                }
+            }
         }
     }
 

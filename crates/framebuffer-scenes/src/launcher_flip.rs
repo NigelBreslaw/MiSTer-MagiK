@@ -13,6 +13,8 @@ pub(super) struct Scratch {
     columns: Vec<Column>,
     texels: Vec<u32>,
     key: Option<(usize, usize, u32, Pose)>,
+    source_occlusion: Option<BodyOcclusion>,
+    reflection_ready: bool,
     blend: Vec<u32>,
     reflection_pixels: Vec<u16>,
 }
@@ -38,6 +40,8 @@ impl Scratch {
             columns: vec![Column::default(); screen_width],
             texels: vec![0; width * column_height],
             key: None,
+            source_occlusion: None,
+            reflection_ready: false,
             blend: vec![0; column_height],
             reflection_pixels: vec![0; width * 64],
         }
@@ -111,13 +115,13 @@ pub(super) struct Pose {
     pub vertical_clip: (usize, usize, usize),
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
 struct OpaqueSpan {
     top: u16,
     bottom: u16,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct BodyOcclusion {
     clip: (usize, usize),
     spans: [OpaqueSpan; STRIP_WIDTH],
@@ -300,6 +304,31 @@ pub(super) fn draw_occluded_target(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_target(
+    destination: &mut [Rgb565Pixel],
+    pitch: usize,
+    origin: (usize, usize),
+    face: &Face,
+    pose: Pose,
+    scratch: &mut Scratch,
+    blend: Option<(&Face, u32)>,
+    covered: &BodyOcclusion,
+) {
+    render(
+        RenderTarget {
+            pixels: destination,
+            pitch,
+            origin,
+        },
+        face,
+        pose,
+        scratch,
+        RenderPass::Prepare(Some(covered)),
+        blend,
+    );
+}
+
 struct RenderTarget<'a> {
     pixels: &'a mut [Rgb565Pixel],
     pitch: usize,
@@ -315,6 +344,7 @@ impl RenderTarget<'_> {
 
 #[derive(Clone, Copy)]
 enum RenderPass<'a> {
+    Prepare(Option<&'a BodyOcclusion>),
     Reflection(&'a dyn Fn(u16, usize, usize) -> u16),
     Body(Option<&'a BodyOcclusion>),
 }
@@ -330,7 +360,7 @@ fn render(
     let reflections_only = !matches!(pass, RenderPass::Body(_));
     let occlusion = match pass {
         RenderPass::Body(occlusion) => occlusion,
-        RenderPass::Reflection(_) => None,
+        RenderPass::Reflection(_) | RenderPass::Prepare(_) => None,
     };
     let (clip_top, body_bottom, reflection_bottom) = pose.vertical_clip;
     let left =
@@ -369,7 +399,17 @@ fn render(
         blend.map_or(0, |(_, w)| w),
         pose,
     );
-    let rebuild = scratch.key != Some(key);
+    let prepare_coverage = match pass {
+        RenderPass::Prepare(covered) => covered.copied(),
+        _ => None,
+    };
+    let rebuild = scratch.key != Some(key)
+        || matches!(pass, RenderPass::Prepare(_)) && scratch.source_occlusion != prepare_coverage
+        || matches!(pass, RenderPass::Body(None)) && scratch.source_occlusion.is_some();
+    if rebuild {
+        scratch.source_occlusion = prepare_coverage;
+        scratch.reflection_ready = false;
+    }
     scratch.key = Some(key);
     let columns = &mut scratch.columns;
     let texels = &mut scratch.texels;
@@ -488,46 +528,88 @@ fn render(
             } else {
                 0
             };
-            face.texture.prepare_column_rows(
-                column.filter,
-                start,
-                &mut texels[(x - left) * scratch.column_height + start
-                    ..(x - left) * scratch.column_height + face.height],
-            );
-            if let Some((other, weight)) = blend {
-                other.texture.prepare_column_rows(
+            let mut ranges = [(start, face.height), (0, 0), (0, 0), (0, 0)];
+            if let Some((top, bottom)) = prepare_coverage.and_then(|covered| covered.span(x))
+                && start == 0
+            {
+                ranges = [
+                    (face.height - face.height / 4, face.height),
+                    (8.min(face.height), 9.min(face.height)),
+                    (0, 0),
+                    (0, 0),
+                ];
+                let source_range = |top: usize, bottom: usize| {
+                    if top >= bottom {
+                        return (0, 0);
+                    }
+                    let q = |y: usize| {
+                        i64::from(column.source_y)
+                            + (y as i64 - clip_top as i64) * i64::from(column.step)
+                    };
+                    (
+                        (q(top).div_euclid(ONE)).clamp(0, face.height as i64) as usize,
+                        (q(bottom - 1).div_euclid(ONE) + 2).clamp(0, face.height as i64) as usize,
+                    )
+                };
+                // Retain the reflected quarter, opacity-proof row, and both
+                // bilinear taps for every body row outside the hidden span.
+                ranges[2] = source_range(column.top, column.bottom.saturating_add(1).min(top));
+                ranges[3] = source_range(column.top.max(bottom), column.bottom + 1);
+                ranges.sort_unstable_by_key(|range| range.0);
+                for i in 1..4 {
+                    if ranges[i - 1].1 >= ranges[i].0 && ranges[i - 1].0 < ranges[i - 1].1 {
+                        ranges[i].0 = ranges[i - 1].0;
+                        ranges[i].1 = ranges[i].1.max(ranges[i - 1].1);
+                        ranges[i - 1] = (0, 0);
+                    }
+                }
+            }
+            for (start, end) in ranges {
+                if start >= end {
+                    continue;
+                }
+                face.texture.prepare_column_rows(
                     column.filter,
                     start,
-                    &mut scratch.blend[start..face.height],
-                );
-                crate::launcher_texture::mix_rgba(
                     &mut texels[(x - left) * scratch.column_height + start
-                        ..(x - left) * scratch.column_height + face.height],
-                    &scratch.blend[start..face.height],
-                    weight,
+                        ..(x - left) * scratch.column_height + end],
+                );
+                if let Some((other, weight)) = blend {
+                    other.texture.prepare_column_rows(
+                        column.filter,
+                        start,
+                        &mut scratch.blend[start..end],
+                    );
+                    crate::launcher_texture::mix_rgba(
+                        &mut texels[(x - left) * scratch.column_height + start
+                            ..(x - left) * scratch.column_height + end],
+                        &scratch.blend[start..end],
+                        weight,
+                    );
+                }
+                if spine_weight > 0 {
+                    face.texture.prepare_column_rows(
+                        face.texture.filter(4 * ONE as i32, ONE as u32),
+                        start,
+                        &mut scratch.blend[start..end],
+                    );
+                    crate::launcher_texture::mix_rgba(
+                        &mut texels[(x - left) * scratch.column_height + start
+                            ..(x - left) * scratch.column_height + end],
+                        &scratch.blend[start..end],
+                        spine_weight,
+                    );
+                }
+                crate::launcher_texture::shade_rgba(
+                    &mut texels[(x - left) * scratch.column_height + start
+                        ..(x - left) * scratch.column_height + end],
+                    light,
                 );
             }
-            if spine_weight > 0 {
-                // The visible two-pixel side uses the existing coloured rim
-                // rather than an average of the dark face artwork.
-                face.texture.prepare_column_rows(
-                    face.texture.filter(4 * ONE as i32, ONE as u32),
-                    start,
-                    &mut scratch.blend[start..face.height],
-                );
-                crate::launcher_texture::mix_rgba(
-                    &mut texels[(x - left) * scratch.column_height + start
-                        ..(x - left) * scratch.column_height + face.height],
-                    &scratch.blend[start..face.height],
-                    spine_weight,
-                );
-            }
-            crate::launcher_texture::shade_rgba(
-                &mut texels[(x - left) * scratch.column_height + start
-                    ..(x - left) * scratch.column_height + face.height],
-                light,
-            );
         }
+    }
+    if matches!(pass, RenderPass::Prepare(_)) {
+        return;
     }
     if !reflections_only {
         let active_left = (left..right).find(|&x| columns[x].valid).unwrap_or(right);
@@ -612,7 +694,7 @@ fn render(
         }
     }
     if let RenderPass::Reflection(_reflection) = pass
-        && rebuild
+        && !scratch.reflection_ready
     {
         #[cfg(feature = "launcher-profile")]
         let _profile = crate::launcher_profile::span("reflection.prepare");
@@ -663,6 +745,9 @@ fn render(
                 }
             }
         }
+    }
+    if matches!(pass, RenderPass::Reflection(_)) {
+        scratch.reflection_ready = true;
     }
     if matches!(pass, RenderPass::Reflection(_)) {
         let target = &mut target;
