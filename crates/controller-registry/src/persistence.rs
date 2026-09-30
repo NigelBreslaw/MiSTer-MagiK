@@ -75,10 +75,13 @@ pub struct ControllerPersistence {
 }
 impl ControllerPersistence {
     pub fn start(db: &ControllerDb) -> io::Result<Self> {
-        Self::start_with_waker(db, || {})
+        Self::start_with_initializer(db, || {}, || {})
     }
-    pub fn start_with_waker(
+    /// Run owner setup on the writer before processing any accepted changes.
+    /// The portable registry leaves scheduling policy to its application owner.
+    pub fn start_with_initializer(
         db: &ControllerDb,
+        initialize: impl FnOnce() + Send + 'static,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> io::Result<Self> {
         // One startup snapshot, before entering the input loop. Subsequent
@@ -100,7 +103,7 @@ impl ControllerPersistence {
         let owner = shared.clone();
         let worker = thread::Builder::new()
             .name("controller-persist".into())
-            .spawn(move || run_owner(state, owner))?;
+            .spawn(move || run_owner(state, owner, initialize))?;
         Ok(Self {
             shared,
             worker: Some(worker),
@@ -370,7 +373,7 @@ fn charge(id_capacity: usize, entry: &ControllerEntry) -> usize {
         + entry.kernel_name.capacity()
         + entry.last_usb_port.capacity()
 }
-fn run_owner(mut db: ControllerDb, shared: Arc<Shared>) {
+fn run_owner(mut db: ControllerDb, shared: Arc<Shared>, initialize: impl FnOnce()) {
     struct Exited(Arc<Shared>);
     impl Drop for Exited {
         fn drop(&mut self) {
@@ -386,6 +389,7 @@ fn run_owner(mut db: ControllerDb, shared: Arc<Shared>) {
         }
     }
     let _exited = Exited(shared.clone());
+    initialize();
     loop {
         // Allocate replacement bookkeeping before taking the short queue lock.
         let empty = HashMap::with_capacity(MAX_PENDING_CONTROLLERS);
@@ -535,6 +539,86 @@ mod tests {
         assert_eq!(disk.get(&device), db.get(&device));
         assert!(!owner.status().is_pending());
     }
+    #[test]
+    fn owner_initializes_once_before_queued_save_and_preserves_durability() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let f = fixture("initialize");
+        let mut db = ControllerDb::load_from(&f.0.join("controllers.json").to_string_lossy());
+        let gate = Arc::new(Gate::default());
+        let _release = Release(vec![gate.clone()]);
+        let initialized = Arc::new(AtomicUsize::new(0));
+        let owner_thread = Arc::new(Mutex::new(None));
+        let initialized_probe = initialized.clone();
+        let thread_probe = owner_thread.clone();
+        db.set_save_probe(SaveProbe::new(move |phase| {
+            if matches!(phase, SavePhase::Started) {
+                assert_eq!(initialized_probe.load(Ordering::SeqCst), 1);
+                assert_eq!(Some(thread::current().id()), *thread_probe.lock().unwrap());
+            }
+        }));
+        let g = gate.clone();
+        let init_count = initialized.clone();
+        let mut owner = ControllerPersistence::start_with_initializer(
+            &db,
+            move || {
+                *owner_thread.lock().unwrap() = Some(thread::current().id());
+                g.wait();
+                init_count.fetch_add(1, Ordering::SeqCst);
+            },
+            || {},
+        )
+        .unwrap();
+        gate.entered();
+        let device = info(0);
+        let revision = owner.register_new(&mut db, &device).unwrap();
+        assert_eq!(initialized.load(Ordering::SeqCst), 0);
+        assert!(owner.status().is_pending());
+        assert!(!std::path::Path::new(db.path()).exists());
+        gate.release();
+        owner.flush(Duration::from_secs(2)).unwrap();
+        assert_eq!(owner.take_completion().unwrap().revision, revision);
+        owner
+            .finish_setup(
+                &mut db,
+                &device,
+                "Configured".into(),
+                ControllerKind::FightStick,
+            )
+            .unwrap();
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        assert_eq!(initialized.load(Ordering::SeqCst), 1);
+        let disk = ControllerDb::load_from(db.path());
+        assert_eq!(disk.get(&device), db.get(&device));
+    }
+
+    #[test]
+    fn initializer_panic_reports_failure_for_accepted_save() {
+        let f = fixture("initialize-panic");
+        let mut db = ControllerDb::load_from(&f.0.join("controllers.json").to_string_lossy());
+        let gate = Arc::new(Gate::default());
+        let _release = Release(vec![gate.clone()]);
+        let g = gate.clone();
+        let mut owner = ControllerPersistence::start_with_initializer(
+            &db,
+            move || {
+                g.wait();
+                panic!("initializer failure");
+            },
+            || {},
+        )
+        .unwrap();
+        gate.entered();
+        let revision = owner.register_new(&mut db, &info(0)).unwrap();
+        gate.release();
+        assert!(owner.flush(Duration::from_secs(2)).is_err());
+        assert_eq!(owner.status().failed_revision, revision);
+        assert_eq!(
+            owner.register_new(&mut db, &info(1)).unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert!(owner.shutdown(Duration::from_secs(2)).is_err());
+    }
+
     #[test]
     fn repeated_edits_coalesce_and_distinct_queue_saturates_without_mutating_view() {
         let f = fixture("bounds");

@@ -237,29 +237,6 @@ pub(super) fn run() -> Result<serde_json::Value, String> {
         serde_json::json!({"schema_version":1,"workload":"controller-save","mode":"timing","artifact_sha256":artifact,"correctness":"passed","work_count":work_count,"fixture":{"identity":FIXTURE,"initial_controllers":ROWS,"storage":"isolated development SD fixture; RAII cleanup","actions":"register new, claim existing, finish setup; flush separately after each caller window","oracle":"every loaded final field equals immediate in-memory registry","input_probe":"portable production HeldState consumes Down after registration; gated storage is a mechanism probe, not physical input-to-scanout latency"},"samples":samples}),
     )
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn final_controller_fields_match_serialized_registry() {
-        let f = fixture().unwrap();
-        let mut db = database(&f.0.join("controllers.json"));
-        let mut owner = ControllerPersistence::start(&db).unwrap();
-        let info = info();
-        owner.register_new(&mut db, &info).unwrap();
-        owner.claim_existing(&mut db, &info, 0).unwrap();
-        owner
-            .finish_setup(
-                &mut db,
-                &info,
-                "Final controller".into(),
-                ControllerKind::Arcade,
-            )
-            .unwrap();
-        owner.shutdown(Duration::from_secs(2)).unwrap();
-        verify(&db, &info).unwrap();
-    }
-}
 // Remove only abandoned fixtures created by our preview-shard benchmark. A
 // service timeout can bypass the fixture's Drop. Unknown names, files, symlinks,
 // active owners or contents are retained. Never traverse user catalog roots.
@@ -379,5 +356,29 @@ fn remove_abandoned_preview_fixtures(base: &Path) -> usize {
     {
         let _ = base;
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn final_controller_fields_match_serialized_registry() {
+        let f = fixture().unwrap();
+        let mut db = database(&f.0.join("controllers.json"));
+        let mut owner = ControllerPersistence::start(&db).unwrap();
+        let info = info();
+        owner.register_new(&mut db, &info).unwrap();
+        owner.claim_existing(&mut db, &info, 0).unwrap();
+        owner
+            .finish_setup(
+                &mut db,
+                &info,
+                "Final controller".into(),
+                ControllerKind::Arcade,
+            )
+            .unwrap();
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        verify(&db, &info).unwrap();
     }
 }

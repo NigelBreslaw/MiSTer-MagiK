@@ -193,14 +193,21 @@ impl PadPool {
         hub: Option<&InputHub>,
     ) -> io::Result<mister_magik_controller_registry::ControllerPersistence> {
         let wake = hub.map(InputHub::observation_probe);
-        let owner = mister_magik_controller_registry::ControllerPersistence::start_with_waker(
-            &db.inner,
-            move || {
-                if let Some(wake) = &wake {
-                    wake.wake_external();
-                }
-            },
-        )?;
+        let owner =
+            mister_magik_controller_registry::ControllerPersistence::start_with_initializer(
+                &db.inner,
+                || {
+                    use mister_magik_catalog::runtime_thread::{
+                        RuntimeThreadRole, apply_runtime_thread_policy,
+                    };
+                    apply_runtime_thread_policy(RuntimeThreadRole::ControllerPersistence);
+                },
+                move || {
+                    if let Some(wake) = &wake {
+                        wake.wake_external();
+                    }
+                },
+            )?;
         db.observe_saves(owner.observer());
         Ok(owner)
     }

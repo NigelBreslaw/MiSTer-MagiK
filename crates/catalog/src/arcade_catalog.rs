@@ -156,6 +156,7 @@ pub struct SystemCollection {
     preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
     launch_plans: Arc<Vec<StructuredLaunchPlan>>,
     rich_indexes: Arc<OnceLock<ArcadeCatalogIndexes>>,
+    filter_options: Arc<OnceLock<Option<ArcadeSystemFilterOptions>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -242,6 +243,11 @@ impl std::fmt::Debug for NavPackSystemRows {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static NAVPACK_REVERSE_LOOKUP_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl NavPackSystemRows {
     const FIRST_VIEWPORT_ROWS: usize = 10;
     const PAGE_ROWS: usize = 64;
@@ -317,12 +323,16 @@ impl NavPackSystemRows {
     fn launch_plan_for_ref(&self, launch_ref: &str) -> Option<&StructuredLaunchPlan> {
         for page in self.row_pages.iter().filter_map(OnceLock::get) {
             for row in page.iter().filter_map(OnceLock::get) {
+                #[cfg(test)]
+                NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
                 if row.game.mra_path.as_ref() == launch_ref {
                     return self.launch_plan(row);
                 }
             }
         }
         let ordinal = (0..self.len()).find(|ordinal| {
+            #[cfg(test)]
+            NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
             self.pack
                 .row(*ordinal)
                 .is_ok_and(|row| row.launch_ref == launch_ref)
@@ -493,6 +503,9 @@ impl SystemCollection {
         let preview_games_by_system =
             build_system_collection_preview_indexes(&games, &platform_kinds);
         launch_plans.sort_unstable_by(|left, right| left.launch_ref.cmp(&right.launch_ref));
+        let filter_options = Arc::new(OnceLock::from(Some(build_system_filter_options(
+            &cold_metadata,
+        ))));
         Self {
             system_id,
             games: SystemCollectionRows::Owned(Arc::new(games)),
@@ -501,6 +514,7 @@ impl SystemCollection {
             preview_games_by_system: Arc::new(preview_games_by_system),
             launch_plans: Arc::new(launch_plans),
             rich_indexes: Arc::new(OnceLock::new()),
+            filter_options,
         }
     }
 
@@ -547,6 +561,7 @@ impl SystemCollection {
                 preview_games_by_system: Arc::new(HashMap::new()),
                 launch_plans: Arc::new(Vec::new()),
                 rich_indexes: Arc::new(OnceLock::new()),
+                filter_options: Arc::new(OnceLock::new()),
             },
             timing,
         ))
@@ -587,6 +602,17 @@ impl SystemCollection {
     }
 
     fn filter_options(&self) -> &ArcadeSystemFilterOptions {
+        if let Some(options) = self.filter_options.get_or_init(|| match &self.games {
+            SystemCollectionRows::NavPack(rows) => rows
+                .pack
+                .filter_counts()
+                .ok()
+                .map(ArcadeSystemFilterOptions::from),
+            // Owned counts are populated before publication.
+            SystemCollectionRows::Owned(_) => None,
+        }) {
+            return options;
+        }
         static EMPTY: OnceLock<ArcadeSystemFilterOptions> = OnceLock::new();
         self.rich_indexes()
             .filter_options_by_system
@@ -1051,6 +1077,50 @@ impl ArcadeCatalog {
     }
 
     pub fn launch_target_for_ref(&self, launch_ref: &str) -> LaunchTarget {
+        Self::launch_target_with_plan(launch_ref, || {
+            self.structured_launch_plan_for_ref(launch_ref)
+        })
+    }
+
+    /// Resolve a known view row through its persisted launch index when mapped.
+    /// Prepared launches and legacy/global plan precedence remain unchanged.
+    pub fn launch_target_in_view(
+        &self,
+        view: ArcadeGameView<'_>,
+        ordinal: usize,
+    ) -> Option<LaunchTarget> {
+        let game = view.get(ordinal)?;
+        Some(Self::launch_target_with_plan(&game.mra_path, || {
+            let (collection, row_ordinal) = match view {
+                ArcadeGameView::Collection(collection) => (collection, ordinal),
+                ArcadeGameView::CollectionIndexed {
+                    collection,
+                    indexes,
+                } => (collection, *indexes.get(ordinal)?),
+                _ => return self.structured_launch_plan_for_ref(&game.mra_path),
+            };
+            match &collection.games {
+                SystemCollectionRows::NavPack(rows) => rows
+                    .launch_plan(rows.materialize(row_ordinal).ok()?)
+                    .or_else(|| {
+                        // Skip this collection: its exact row was already checked.
+                        self.system_collections
+                            .values()
+                            .filter(|other| !std::ptr::eq(other.as_ref(), collection))
+                            .find_map(|other| other.launch_plan_for_ref(&game.mra_path))
+                            .or_else(|| self.launch_plans_by_ref.get(&game.mra_path))
+                    }),
+                SystemCollectionRows::Owned(_) => {
+                    self.structured_launch_plan_for_ref(&game.mra_path)
+                }
+            }
+        }))
+    }
+
+    fn launch_target_with_plan<'a>(
+        launch_ref: &str,
+        find_plan: impl FnOnce() -> Option<&'a StructuredLaunchPlan>,
+    ) -> LaunchTarget {
         if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
             || launch_ref == AMIGAVISION_LAUNCHER_REF
         {
@@ -1059,7 +1129,7 @@ impl ArcadeCatalog {
                 launch_ref: Arc::from(launch_ref),
             });
         }
-        self.structured_launch_plan_for_ref(launch_ref)
+        find_plan()
             .cloned()
             .map(LaunchTarget::Structured)
             .unwrap_or_else(|| {
@@ -1896,32 +1966,7 @@ fn build_arcade_catalog_indexes(
 
     let filter_options_by_system = filter_counts_by_system
         .into_iter()
-        .map(|(system_id, counts)| {
-            (
-                system_id,
-                ArcadeSystemFilterOptions {
-                    categories: string_filter_options_from_counts(counts.categories),
-                    decades: counts
-                        .decades
-                        .into_iter()
-                        .map(|(decade, count)| ArcadeFilterOption {
-                            label: format!("{decade}'s"),
-                            count,
-                        })
-                        .collect(),
-                    manufacturers: string_filter_options_from_counts(counts.manufacturers),
-                    players: counts
-                        .players
-                        .into_iter()
-                        .map(|(players, count)| ArcadeFilterOption {
-                            label: player_count_label(players),
-                            count,
-                        })
-                        .collect(),
-                    controls: string_filter_options_from_counts(counts.controls),
-                },
-            )
-        })
+        .map(|(system_id, counts)| (system_id, counts.into()))
         .collect();
     let launch_plans_by_ref = launch_plans
         .into_iter()
@@ -2472,10 +2517,78 @@ struct FilterOptionCounts {
     controls: BTreeMap<String, usize>,
 }
 
-fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<ArcadeFilterOption> {
+fn build_system_filter_options(metadata: &[ArcadeGameMetadataKey]) -> ArcadeSystemFilterOptions {
+    let mut counts = FilterOptionCounts::default();
+    for row in metadata {
+        let category = row.category.trim();
+        if !category.is_empty() {
+            *counts.categories.entry(category.to_owned()).or_default() += 1;
+        }
+        if let Some(year) = row.year {
+            *counts.decades.entry((year / 10) * 10).or_default() += 1;
+        }
+        let manufacturer = row.manufacturer.trim();
+        if !manufacturer.is_empty() {
+            *counts
+                .manufacturers
+                .entry(manufacturer.to_owned())
+                .or_default() += 1;
+        }
+        if let Some(players) = row.players {
+            *counts.players.entry(players).or_default() += 1;
+        }
+        let control = canonical_control_label(&row.control);
+        if !control.is_empty() {
+            *counts.controls.entry(control).or_default() += 1;
+        }
+    }
+    counts.into()
+}
+impl From<crate::navpack::NavPackFilterCounts<'_>> for ArcadeSystemFilterOptions {
+    fn from(counts: crate::navpack::NavPackFilterCounts<'_>) -> Self {
+        // Persisted controls retain raw spellings; the drawer has always
+        // used canonical labels, so merge groups which normalize alike.
+        let mut controls = BTreeMap::<String, usize>::new();
+        for (label, count) in counts.controls {
+            let label = canonical_control_label(label);
+            if !label.is_empty() {
+                *controls.entry(label).or_default() += count;
+            }
+        }
+        Self {
+            categories: filter_options_from_counts(counts.categories, String::from),
+            decades: filter_options_from_counts(counts.decades, |decade| format!("{decade}'s")),
+            manufacturers: filter_options_from_counts(counts.manufacturers, String::from),
+            players: filter_options_from_counts(counts.players, |players| {
+                player_count_label(players as u8)
+            }),
+            controls: filter_options_from_counts(controls, String::from),
+        }
+    }
+}
+
+impl From<FilterOptionCounts> for ArcadeSystemFilterOptions {
+    fn from(counts: FilterOptionCounts) -> Self {
+        Self {
+            categories: filter_options_from_counts(counts.categories, String::from),
+            decades: filter_options_from_counts(counts.decades, |decade| format!("{decade}'s")),
+            manufacturers: filter_options_from_counts(counts.manufacturers, String::from),
+            players: filter_options_from_counts(counts.players, player_count_label),
+            controls: filter_options_from_counts(counts.controls, String::from),
+        }
+    }
+}
+
+fn filter_options_from_counts<T>(
+    counts: impl IntoIterator<Item = (T, usize)>,
+    label: impl Fn(T) -> String,
+) -> Vec<ArcadeFilterOption> {
     counts
         .into_iter()
-        .map(|(label, count)| ArcadeFilterOption { label, count })
+        .map(|(value, count)| ArcadeFilterOption {
+            label: label(value),
+            count,
+        })
         .collect()
 }
 
@@ -2751,6 +2864,421 @@ mod tests {
             "/games/129.d64"
         );
         assert_eq!(collection.games.iter().count(), 130);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn navpack_drawer_counts_do_not_materialize_rows_or_build_rich_indexes() {
+        for count in [999, 4096] {
+            let path = navpack_fixture(count);
+            let (collection, _) = SystemCollection::open_navpack(
+                "c64",
+                &path,
+                std::fs::metadata(&path).unwrap().len(),
+                7,
+                count,
+                PlatformKind::Computer,
+            )
+            .unwrap();
+            let SystemCollectionRows::NavPack(rows) = &collection.games else {
+                panic!("expected NavPack");
+            };
+            let options = collection.filter_options().clone();
+            eprintln!(
+                "drawer_count={count} resident_rows={} rich_indexes={}",
+                rows.resident_rows(),
+                collection.rich_indexes.get().is_some()
+            );
+            assert_eq!(rows.resident_rows(), NavPackSystemRows::FIRST_VIEWPORT_ROWS);
+            assert!(collection.rich_indexes.get().is_none());
+            assert_eq!(
+                options.categories,
+                vec![ArcadeFilterOption {
+                    label: "Action".into(),
+                    count
+                }]
+            );
+            assert_eq!(
+                options.manufacturers,
+                vec![ArcadeFilterOption {
+                    label: "Fixture".into(),
+                    count
+                }]
+            );
+            assert_eq!(
+                options.controls,
+                vec![ArcadeFilterOption {
+                    label: "Joystick".into(),
+                    count
+                }]
+            );
+            assert_eq!(
+                options.decades,
+                vec![ArcadeFilterOption {
+                    label: "1980's".into(),
+                    count
+                }]
+            );
+            assert_eq!(collection.filter_options().categories, options.categories);
+            let reference = &collection.rich_indexes().filter_options_by_system["c64"];
+            assert_eq!(options.categories, reference.categories);
+            assert_eq!(options.manufacturers, reference.manufacturers);
+            assert_eq!(options.controls, reference.controls);
+            assert_eq!(options.players, reference.players);
+            assert_eq!(options.decades, reference.decades);
+            assert_eq!(
+                collection
+                    .filtered_game_indexes(&ArcadeFilter::Category("Action".into()))
+                    .len(),
+                count
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn navpack_drawer_counts_merge_control_aliases_and_preserve_empty_metadata() {
+        let path = navpack_fixture(3);
+        let games = ["joy", "joystick", ""]
+            .into_iter()
+            .enumerate()
+            .map(|(i, control)| crate::system_shard::SystemGame {
+                stable_key: format!("c64:{i}"),
+                title: format!("Game {i}"),
+                launch_ref: format!("/games/{i}.d64"),
+                control: control.into(),
+                manufacturer: " Maker ".into(),
+                category: " Action ".into(),
+                players: Some(i as u8),
+                year: (i != 0).then_some(1991),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let indexes = crate::system_shard::build_navigation_indexes(&games).unwrap();
+        std::fs::write(
+            &path,
+            crate::navpack::encode("c64", 7, &games, &indexes).unwrap(),
+        )
+        .unwrap();
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            3,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let options = collection.filter_options().clone();
+        assert!(collection.rich_indexes.get().is_none());
+        assert_eq!(
+            options.controls,
+            vec![ArcadeFilterOption {
+                label: "Joystick".into(),
+                count: 2
+            }]
+        );
+        let reference = &collection.rich_indexes().filter_options_by_system["c64"];
+        assert_eq!(options.controls, reference.controls);
+        assert_eq!(options.categories, reference.categories);
+        assert_eq!(options.manufacturers, reference.manufacturers);
+        assert_eq!(options.decades, reference.decades);
+        assert_eq!(options.players, reference.players);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn navpack_drawer_counts_fall_back_when_persisted_postings_are_invalid() {
+        let path = navpack_fixture(130);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let offset = u64::from_le_bytes(bytes[104..112].try_into().unwrap()) as usize;
+        bytes[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            bytes.len() as u64,
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        assert_eq!(
+            collection.filter_options().categories,
+            vec![ArcadeFilterOption {
+                label: "Action".into(),
+                count: 130
+            }]
+        );
+        assert!(collection.filter_options.get().unwrap().is_none());
+        assert!(collection.rich_indexes.get().is_some());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn owned_drawer_counts_are_prepared_before_publication_without_rich_indexes() {
+        let path = navpack_fixture(999);
+        let (mapped, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            999,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let hot = mapped.games.iter().cloned().collect::<Vec<_>>();
+        let cold = (0..999)
+            .map(|i| mapped.metadata_at(i).unwrap().clone())
+            .collect::<Vec<_>>();
+        let collection = SystemCollection::new_with_metadata(
+            "c64",
+            hot,
+            cold,
+            mapped.all_launch_plans(),
+            PlatformKind::Computer,
+        );
+        let options = collection.filter_options().clone();
+        assert!(collection.rich_indexes.get().is_none());
+        let reference = &collection.rich_indexes().filter_options_by_system["c64"];
+        assert_eq!(options.categories, reference.categories);
+        assert_eq!(options.manufacturers, reference.manufacturers);
+        assert_eq!(options.controls, reference.controls);
+        assert_eq!(options.players, reference.players);
+        assert_eq!(options.decades, reference.decades);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn known_mapped_launch_ordinals_avoid_reverse_row_scans() {
+        let mut comparisons = Vec::new();
+        for count in [1000, 2000, 4000] {
+            let path = navpack_fixture(count);
+            let (collection, _) = SystemCollection::open_navpack(
+                "c64",
+                &path,
+                std::fs::metadata(&path).unwrap().len(),
+                7,
+                count,
+                PlatformKind::Computer,
+            )
+            .unwrap();
+            let catalog = ArcadeCatalog::new(PathBuf::new(), vec![], vec![])
+                .with_system_collection(Arc::new(collection));
+            let view = catalog.system_game_view("c64");
+            assert_eq!(view.iter().count(), count);
+            NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(|visits| visits.set(0));
+            for ordinal in 0..count {
+                let LaunchTarget::Structured(plan) =
+                    catalog.launch_target_in_view(view, ordinal).unwrap()
+                else {
+                    panic!("missing plan");
+                };
+                assert_eq!(plan.payload_path.as_ref(), format!("/games/{ordinal}.d64"));
+            }
+            comparisons.push(NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(std::cell::Cell::get));
+            std::fs::remove_file(path).unwrap();
+        }
+        eprintln!("mapped_launch_rows=[1000,2000,4000] reverse_comparisons={comparisons:?}");
+        assert_eq!(comparisons, vec![0, 0, 0]);
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn mapped_launch_views_remap_ordinals_and_prefer_collection_plans() {
+        let path = navpack_fixture(130);
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let mut catalog = ArcadeCatalog::new(PathBuf::new(), vec![], vec![])
+            .with_system_collection(Arc::new(collection));
+        let collection = catalog.system_collection("c64").unwrap();
+        let subset = [129, 0, 64];
+        let view = ArcadeGameView::collection_indexed(collection, &subset);
+        for ordinal in 0..subset.len() {
+            assert_eq!(
+                catalog.launch_target_in_view(view, ordinal).unwrap(),
+                catalog.launch_target_for_ref(&view.get(ordinal).unwrap().mra_path)
+            );
+        }
+        assert!(catalog.launch_target_in_view(view, subset.len()).is_none());
+        let LaunchTarget::Structured(mut override_plan) =
+            catalog.launch_target_for_ref("magik-plan:c64:0")
+        else {
+            panic!("missing plan");
+        };
+        override_plan.payload_path = "/global/override.d64".into();
+        Arc::make_mut(&mut catalog.launch_plans_by_ref)
+            .insert(override_plan.launch_ref.clone(), override_plan.clone());
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(catalog.launch_target_for_ref("magik-plan:c64:0"))
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn view_launches_follow_replacement_plans_without_changing_launch_reference() {
+        let path = navpack_fixture(130);
+        let (replacement, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let game = replacement.game_at(0).unwrap().clone();
+        let new_plan = replacement
+            .launch_plan_for_ref(&game.mra_path)
+            .unwrap()
+            .clone();
+        let mut old_plan = new_plan.clone();
+        old_plan.core_path = "/cores/old.rbf".into();
+        old_plan.payload_path = "/games/old.d64".into();
+        let catalog = ArcadeCatalog::new_with_launch_plans(
+            PathBuf::new(),
+            vec![game.clone()],
+            vec![GameSystemEntry {
+                id: "c64".into(),
+                title: "C64".into(),
+                count: 1,
+            }],
+            vec![old_plan.clone()],
+        )
+        .with_system_collection(Arc::new(SystemCollection::new(
+            "c64",
+            vec![game],
+            vec![old_plan.clone()],
+            PlatformKind::Computer,
+        )));
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(old_plan.clone()))
+        );
+        let updated = catalog.with_system_collection(Arc::new(replacement));
+        assert_eq!(updated.launch_plans_by_ref[&old_plan.launch_ref], old_plan);
+        assert_eq!(
+            updated.launch_target_for_ref(&new_plan.launch_ref),
+            LaunchTarget::Structured(new_plan.clone())
+        );
+        assert_eq!(
+            updated.launch_target_in_view(updated.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(new_plan))
+        );
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(old_plan))
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn mapped_launch_misses_check_other_collections_before_global_fallback() {
+        let path = navpack_fixture(1);
+        let game = crate::system_shard::SystemGame {
+            stable_key: "c64:0".into(),
+            title: "Game".into(),
+            launch_ref: "magik-plan:c64:0".into(),
+            ..Default::default()
+        };
+        let indexes =
+            crate::system_shard::build_navigation_indexes(std::slice::from_ref(&game)).unwrap();
+        let bytes = crate::navpack::encode("c64", 7, &[game], &indexes).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            bytes.len() as u64,
+            7,
+            1,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let row = collection.game_at(0).unwrap().clone();
+        let global = StructuredLaunchPlan {
+            launch_ref: row.mra_path.clone(),
+            title: row.title.clone(),
+            system_id: "c64".into(),
+            core_path: "Old".into(),
+            payload_path: "/global/old.d64".into(),
+            mount_kind: "mount-image".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        };
+        let catalog = ArcadeCatalog::new_with_launch_plans(
+            PathBuf::new(),
+            vec![],
+            vec![],
+            vec![global.clone()],
+        )
+        .with_system_collection(Arc::new(collection));
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(global.clone()))
+        );
+        let mut other = global;
+        other.core_path = "New".into();
+        other.payload_path = "/other/new.d64".into();
+        let updated = catalog.with_system_collection_for_id(
+            "alias:c64",
+            Arc::new(SystemCollection::new(
+                "c64",
+                vec![row],
+                vec![other.clone()],
+                PlatformKind::Computer,
+            )),
+        );
+        assert_eq!(
+            updated.launch_target_in_view(updated.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(other))
+        );
+        assert_eq!(
+            updated.launch_target_in_view(updated.system_game_view("c64"), 0),
+            Some(updated.launch_target_for_ref("magik-plan:c64:0"))
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn filter_option_cache_is_shared_by_clones_and_isolated_for_replacements() {
+        let path = navpack_fixture(130);
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        assert!(collection.filter_options.get().is_none());
+        let snapshot = collection.clone();
+        let options = snapshot.filter_options();
+        assert_eq!(options.categories[0].count, 130);
+        assert!(std::ptr::eq(options, collection.filter_options()));
+        assert!(collection.rich_indexes.get().is_none());
+        let game = collection.game_at(0).unwrap().clone();
+        let replacement = SystemCollection::new("c64", vec![game], vec![], PlatformKind::Computer);
+        assert!(replacement.filter_options.get().is_some());
+        assert_eq!(replacement.filter_options().categories.len(), 0);
+        assert!(replacement.rich_indexes.get().is_none());
+        assert_eq!(collection.filter_options().categories[0].count, 130);
         std::fs::remove_file(path).unwrap();
     }
 

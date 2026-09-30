@@ -143,21 +143,6 @@ pub(super) fn run() -> Result<serde_json::Value, String> {
         "fixture":{"identity":FIXTURE,"sizes":SIZES,"seed":"24b712ca","ordering":"stable ASCII lowercase title then raw stable key","timed_work":"production sort only; allocation observations and exact whole-row oracle outside timing","allocator":"same consumer System adapter on both revisions; accounting disabled during timing"},"mechanisms":mechanisms,"samples":samples}),
     )
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn allocation_scope_releases_owned_sort_keys() {
-        let mut rows = fixture(1_000);
-        COUNTS.with(|slot| slot.set(Some(Counts::default())));
-        sort(&mut rows);
-        let c = COUNTS.with(|slot| slot.replace(None).unwrap());
-        assert!(c.allocations > 0);
-        assert!(c.peak > 0);
-        assert_eq!(c.live, 0);
-    }
-}
-
 /// Consumer-only matched accounting; excludes reporter allocations and restores
 /// a previous observation when unwinding.
 pub(super) fn observe_allocations<R>(f: impl FnOnce() -> R) -> (R, serde_json::Value) {
@@ -175,4 +160,19 @@ pub(super) fn observe_allocations<R>(f: impl FnOnce() -> R) -> (R, serde_json::V
         result,
         serde_json::json!({"allocations":counts.allocations,"allocated_bytes":counts.allocated,"peak_temporary_bytes":counts.peak,"final_observed_bytes":counts.live}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn allocation_scope_releases_owned_sort_keys() {
+        let mut rows = fixture(1_000);
+        COUNTS.with(|slot| slot.set(Some(Counts::default())));
+        sort(&mut rows);
+        let c = COUNTS.with(|slot| slot.replace(None).unwrap());
+        assert!(c.allocations > 0);
+        assert!(c.peak > 0);
+        assert_eq!(c.live, 0);
+    }
 }

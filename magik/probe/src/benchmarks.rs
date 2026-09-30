@@ -116,6 +116,13 @@ fn run(args: &[String]) -> Result<(), String> {
         println!("{}", crate::preview_shards::run()?);
         return Ok(());
     }
+    if args[1] == "catalog-launch" {
+        if args[3] != "timing" {
+            return Err("catalog-launch supports timing mode".into());
+        }
+        println!("{}", crate::catalog_launch::run()?);
+        return Ok(());
+    }
     if args[1] == "catalog-sort" {
         if args[3] != "timing" {
             return Err("catalog-sort supports timing mode".into());
