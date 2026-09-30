@@ -230,12 +230,23 @@ fn render_hdmi(
     let y1 = (((cabinet_y + CABINET_HEIGHT as i64 * scale) >> 16) + 1)
         .clamp(HDMI_CONTENT_TOP as i64, HDMI_CONTENT_BOTTOM as i64) as usize;
     let y1 = y1.min(rows.1);
+    let screen_alpha = alpha_of(ease_out(window_q16(t, 760, 160)));
     if fast {
         scanline::render(
             filtered.unwrap(),
             output,
             (x0, x1, y0, y1),
             (cabinet_x, cabinet_y, inverse),
+            (((screen_alpha + 4) >> 3) == 32).then_some((
+                HDMI_SCREEN.x as usize,
+                HDMI_SCREEN.right() as usize,
+                HDMI_SCREEN.y as usize,
+                HDMI_SCREEN.bottom() as usize,
+            )),
+            ((launcher_alpha + 4) >> 3) == 0
+                && x0 >= HDMI_CABINET_X as usize
+                && y0 >= HDMI_CONTENT_TOP
+                && y1 <= HDMI_CONTENT_BOTTOM,
         );
     } else {
         for y in y0..y1 {
@@ -275,7 +286,6 @@ fn render_hdmi(
         output,
     );
 
-    let screen_alpha = alpha_of(ease_out(window_q16(t, 760, 160)));
     copy_rect_alpha(W, arcade, output, HDMI_SCREEN, screen_alpha, 0, fast, rows);
     for (index, &(top, bottom)) in LIST_BANDS.iter().enumerate() {
         let p = ease_out(window_q16(t, 500 + index as u32 * 22, 280));

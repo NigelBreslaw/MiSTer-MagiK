@@ -30,19 +30,77 @@ impl Scanlines {
         }
     }
 }
+// Exclude only pixels that this frame's opaque game overlay will replace.
+// Keep each remaining region contiguous so horizontal row reuse is retained.
 pub(super) fn render(
     texture: &CabinetTexture,
     out: &mut [Rgb565Pixel],
     bounds: (usize, usize, usize, usize),
     transform: (i64, i64, i64),
+    covered: Option<(usize, usize, usize, usize)>,
+    black: bool,
+) {
+    let (x0, x1, y0, y1) = bounds;
+    if let Some((left, right, top, bottom)) = covered {
+        let left = left.max(x0).min(x1);
+        let right = right.min(x1).max(x0);
+        let top = top.max(y0).min(y1);
+        let bottom = bottom.min(y1).max(y0);
+        if left < right && top < bottom {
+            for bounds in [
+                (x0, x1, y0, top),
+                (x0, x1, bottom, y1),
+                (x0, left, top, bottom),
+                (right, x1, top, bottom),
+            ] {
+                render_region(texture, out, bounds, transform, black);
+            }
+            return;
+        }
+    }
+    render_region(texture, out, bounds, transform, black);
+}
+fn render_region(
+    texture: &CabinetTexture,
+    out: &mut [Rgb565Pixel],
+    bounds: (usize, usize, usize, usize),
+    transform: (i64, i64, i64),
+    black: bool,
 ) {
     let (x0, x1, y0, y1) = bounds;
     let (cx, cy, inverse) = transform;
-    if y0 >= y1 {
+    if x0 >= x1 || y0 >= y1 {
         return;
     }
     let n = x1 - x0;
     assert!(n <= N && out.len() == 960 * 540);
+    // At integer 1:1 geometry the reference bilinear weights and mip blend
+    // are zero. Quantise the original row directly, preserving alpha and phase.
+    if inverse == 65536 && (cx | cy) & 65535 == 0 {
+        let source = &texture.levels[0];
+        let sx = x0 as i64 - (cx >> 16);
+        let sy = y0 as i64 - (cy >> 16);
+        if sx >= 0
+            && sy >= 0
+            && sx as usize + n <= source.width
+            && sy as usize + y1 - y0 <= source.height
+        {
+            for y in y0..y1 {
+                let start = (sy as usize + y - y0) * source.width + sx as usize;
+                let row = &source.pixels[start..start + n];
+                composite(
+                    &mut out[y * 960 + x0..y * 960 + x1],
+                    [row; 4],
+                    [0; 2],
+                    0,
+                    x0,
+                    y,
+                    black,
+                );
+            }
+            return;
+        }
+    }
     let mut scratch = texture.scanlines.as_ref().unwrap().borrow_mut();
     scratch.tags = [[i64::MIN; 2]; 2];
     let footprint = inverse as u32;
@@ -121,6 +179,7 @@ pub(super) fn render(
             lod,
             x0,
             y,
+            black,
         );
     }
 }
@@ -173,6 +232,7 @@ fn composite(
     lod: u32,
     x: usize,
     y: usize,
+    black: bool,
 ) {
     #[cfg(target_arch = "arm")]
     {
@@ -189,6 +249,7 @@ fn composite(
                 lod: u32,
                 x: usize,
                 y: usize,
+                black: u32,
             );
         }
         // SAFETY: render supplies four rows of exactly out.len() elements;
@@ -206,9 +267,12 @@ fn composite(
                 lod,
                 x,
                 y,
+                u32::from(black),
             );
         }
     }
+    #[cfg(not(target_arch = "arm"))]
+    let _ = black;
     #[cfg(not(target_arch = "arm"))]
     for (i, dest) in out.iter_mut().enumerate() {
         let a = mix(rows[0][i], rows[1][i], weights[0]);

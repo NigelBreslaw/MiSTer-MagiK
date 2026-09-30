@@ -265,3 +265,142 @@ then reuses its launcher snapshot. `quit` closes the test session and restores
 persistent Mini under the native session contract; run `scripts/magik stop` to
 return to the Dev launcher. No production default, firmware, display mode or
 full-application deployment was changed by this follow-up.
+
+## Live optimisation round, 2026-09-30
+
+This round retains the accepted RGB888-source image quality, final ordered RGB565
+quantisation, original interpolation rounding, and two-worker thread policy.
+It adds no artwork, animation poses, atlases or render-ahead queue. Production
+quality defaults are unchanged. All physical measurements below use the Cortex-A9
+release-device build at 960x540, with two separate 30-second windows per step.
+No sub-agents were used during implementation.
+
+Mini now uses the existing production vblank pacer before checking the posted
+slot, avoiding continuous polling through available slack. Motion advances with
+monotonic elapsed time, rather than one synthetic 16.667 ms tick per completed
+frame. Pause excludes paused time; step/bookmarks remain deterministic. The host
+qualification gate checks that animation time follows the device measurement
+clock, including warmup. This prevents slow playback from appearing qualified.
+`--installed-sha256` now verifies and reuses the requested ready Mini artifact
+instead of rebuilding it.
+
+Retained improvements and their independently measured impact:
+
+| Change | Workload | FPS, two windows | Render p99, ms | Process CPU |
+| --- | --- | --- | --- | --- |
+| Pacing and monotonic motion baseline | Cards | 32.433 / 35.080 | 19.09 / 18.74 | 111 / 115% |
+| Four vertical NEON quantiser lanes; hoist Bayer phase | Cards | 45.800 / 43.033 | 16.83 / 16.92 | 135 / 130% |
+| Render primary tile into scene buffer; merge only helper band | Cards | 59.798 / 59.833 | 14.25 / 13.90 | 148 / 147% |
+| Pacing and monotonic motion baseline | Arcade | 53.367 / 53.067 | 17.38 / 17.41 | 111 / 111% |
+| Dispatch base fade endpoints outside pixel loops | Arcade | 54.667 / 55.333 | 16.39 / 15.99 | 109 / 109% |
+| Exact signed 16-bit horizontal variable-weight interpolation | Arcade | 56.831 / 56.231 | 15.40 / 15.51 | 111 / 111% |
+| Direct 1:1 rows; skip pixels covered by opaque game overlay | Arcade | 56.731 / 56.867 | 15.38 / 15.25 | 104 / 105% |
+| SIMD premultiplied over, row phase hoist, overlay endpoints | Arcade | 59.898 / 59.967 | 13.66 / 13.40 | 100 / 99% |
+| Guarded known-black background composition | Arcade | 59.965 / 59.967 | 11.99 / 11.91 | 92 / 93% |
+
+The card copy reduction saves approximately 1.29 MB of frame-buffer traffic per
+frame. The fixed Home background is seeded once and restored on scene reset;
+the changing primary region is rendered directly into the scene buffer. Only
+the helper's x=629..934, y=120..495 region is merged. Both workers remain joined
+before presentation. Arcade's black-background shortcut is enabled only when
+rounded Home fade weight is zero and the entire cabinet render bounds are inside
+the subject region that the base pass wrote black. Its zero-alpha behavior and
+RGB565 background decoding remain exactly equal to the scalar reference.
+
+Several plausible arithmetic/layout changes were discarded after full-workload
+measurement. Smaller instruction counts alone were not a useful selection rule:
+
+| Rejected trial | Physical result | Reason |
+| --- | --- | --- |
+| Fused filtering/lighting | Cards 45.300 / 43.867 FPS | No useful gain over four quantiser lanes |
+| Four-column microtiles | Cards 45.867 / 45.400 FPS | No useful gain for added complexity |
+| Constant-weight signed delta blend | Cards 59.731 / 59.731 FPS; CPU 153 / 152% | Higher CPU and p99 |
+| Signed delta perspective filter | Cards 59.767 / 59.800 FPS | No useful improvement |
+| Direct 16-column strips | Cards 59.800 / 59.800 FPS | No useful improvement |
+| 32-column blocked output | Cards 59.700 / 59.767 FPS; CPU 155 / 154% | Higher CPU and p99 |
+| 16-column blocked output | Cards 59.731 / 59.600 FPS; CPU 157 / 156% | Higher CPU, p99 and misses |
+| Direct vblank wait policy | Arcade 59.933 / 59.898 FPS; 2 / 3 repeats | Worse cadence than retained pacing |
+| Defer hidden card body colours | Cards 59.765 / 59.800 FPS; CPU 153 / 152% | No gain despite reference equality |
+
+### Final retained implementation
+
+The same final artifact was used for both workloads:
+`67d01282b252f8807286b5d4fb3089b7e0f5d54ae4b4bfbe8411d649139131ab`.
+These runs include the bounded miss records described below.
+
+| Workload | FPS | Repeated refreshes | Mean / p99 render, ms | Process CPU | Peak RSS |
+| --- | --- | --- | --- | --- | --- |
+| Cards, window 1 | 59.800 | 6 | 12.59 / 14.46 | 148.6% | 42.88 MiB |
+| Cards, window 2 | 59.767 | 7 | 12.49 / 14.48 | 148.1% | 42.88 MiB |
+| Arcade, window 1 | 59.967 | 1 | 7.44 / 11.89 | 92.6% | 42.88 MiB |
+| Arcade, window 2 | 59.967 | 1 | 7.47 / 11.92 | 92.9% | 42.88 MiB |
+
+Both workloads still fail the strict zero-repeat cadence gate. There were zero
+latch drops/rejections; the reported repeats are physically observed refreshes
+without a new presentation. Scene storage remains 19,548,522 bytes for cards and
+10,425,694 bytes for live Arcade; no complete-frame cache is introduced.
+The final initial/midpoint/boundary FPGA-latched captures match the pre-change
+reference captures pixel-for-pixel. This does not replace full-app live-input,
+variable data or CRT qualification.
+
+Evidence remains ignored under `build/magik-results/`:
+
+- `20260930T141221Z-05b1371be29b`: final cards, two windows and control/capture checks.
+- `20260930T141542Z-092265babf15`: final Arcade, same installed artifact.
+- `20260930T124822Z-e694675e94fb`: card copy-reduction comparison.
+- `20260930T133554Z-67ced19077e3`: Arcade known-black comparison.
+- `20260930T141851Z-3be07e681cde`: restore normal Dev launcher.
+
+The complete per-step run identifiers, hashes and rejected-trial snapshots are
+under ignored `outputs/mini-card-fidelity/optimisation/`.
+
+### What the current miss record can establish
+
+Mini retains at most 32 records per measurement window in `context.late_frames`.
+Each records animation time, render/transfer/frame-to-present wall time,
+primary/helper/wait wall times, and the number of repeated refreshes observed.
+`tile_max_us` still includes scene lead-in; `tile_us` in a miss record instead
+refers to that frame. This is bounded stage attribution, not a scheduler trace.
+
+All six misses in card window 1 were separated by about 5.03 seconds; window 2
+showed the same periodicity, plus one adjacent miss. They occurred at different
+animation poses. For example, the window-1 miss at animation time 14,215 ms had
+19,959 us total render time, 11,579 us primary time, 16,114 us helper time, 7,245 us
+helper wait and 1,197 us transfer. This suggests a periodic disturbance but does
+not identify the competing task or prove preemption. Arcade's single miss in each
+window supplies insufficient samples to establish the same periodicity.
+
+CPU percentages and p99 discard the ordering and correlation needed to explain
+rare misses. Worker wall time includes both execution and off-CPU delay. The
+current trace does not record worker wakeup-to-first-run latency, per-thread CPU
+time, competing scheduler/IRQ events, or a precise target/actual latch timeline.
+Those are the remaining diagnostic gaps. No affinity or priority changes were
+made on the strength of the observed periodicity.
+
+A follow-up diagnostic should correlate one frame ID across enqueue, worker
+start/end, join, transfer/post, target refresh and actual latch. Record per-thread
+CPU time alongside wall time. A bounded scheduler-event trace should distinguish
+runnable waiting, blocking, preemption and interrupt time, retaining history
+before a miss and exporting it after measurement. Kernel tracing availability
+must be checked through a typed device operation. Measure instrumentation overhead
+with tracing disabled/enabled before treating that evidence as representative.
+Optimisation is paused after this round for discussion of that diagnostic.
+
+### Focused validation
+
+Portable scene tests compare live scanline output with the scalar reference,
+including every millisecond across fade/identity/coverage boundaries. Native ARM
+NEON harnesses compare projection, variable-weight interpolation, final alpha
+composition, base/overlay endpoints and known-black rows with the original/scalar
+arithmetic. They exercise tails, canaries and destination dither phases. These
+host ARM64 checks establish arithmetic parity; Cortex-A9 timings and captures
+come from the actual device rather than host extrapolation.
+
+```sh
+scripts/cargo test --manifest-path crates/framebuffer-scenes/Cargo.toml --lib
+scripts/cargo test --manifest-path crates/visual-concepts/Cargo.toml --lib
+scripts/cargo test --manifest-path magik/probe/Cargo.toml --bin mini-magik concepts::tests
+clang -O3 -Wall -Wextra -Werror crates/framebuffer-scenes/tests/launcher_neon_parity.c -o /tmp/launcher-neon-parity
+clang -O3 -Wall -Wextra -Werror crates/framebuffer-scenes/tests/arcade_neon_parity.c -o /tmp/arcade-neon-parity
+clang -O3 -Wall -Wextra -Werror crates/framebuffer-scenes/tests/cabinet_neon_parity.c -o /tmp/cabinet-neon-parity
+```

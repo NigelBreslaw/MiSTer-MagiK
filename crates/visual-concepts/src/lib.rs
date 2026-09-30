@@ -69,8 +69,12 @@ impl Preset {
     }
 }
 trait Effect {
+    fn reset(&mut self) {}
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String>;
     fn storage_bytes(&self) -> usize;
+    fn render_stage_last_us(&self) -> [u64; 3] {
+        [0; 3]
+    }
     fn render_stage_max_us(&self) -> [u64; 3] {
         [0; 3]
     }
@@ -149,6 +153,7 @@ impl Scene {
         self.elapsed += interval;
     }
     pub fn reset(&mut self) {
+        self.effect.reset();
         self.pixels.fill(Pixel(0));
         self.elapsed = Duration::ZERO;
         self.first = true;
@@ -167,6 +172,9 @@ impl Scene {
     }
     pub fn elapsed(&self) -> Duration {
         self.elapsed
+    }
+    pub fn render_stage_last_us(&self) -> [u64; 3] {
+        self.effect.render_stage_last_us()
     }
     pub fn render_stage_max_us(&self) -> [u64; 3] {
         self.effect.render_stage_max_us()

@@ -7,6 +7,7 @@ use mister_magik_core::display::{DisplayGeometry, ResolvedDisplayPlan};
 use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
 use mister_magik_mister_runtime::framebuffer::hidden_latch::CachedHiddenLatchPresenter;
 use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
+use mister_magik_mister_runtime::framebuffer::vsync::VsyncPacer;
 use mister_magik_visual_concepts::Preset;
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
@@ -294,7 +295,9 @@ fn main() -> Result<(), String> {
     let control = concepts.clone();
     probe.on_concept_action(move |action| control.borrow_mut().action(&action));
     let mut evidence = measurement::Evidence::default();
+    let mut late_frames: Vec<serde_json::Value> = Vec::with_capacity(32);
     let mut cached = vec![Rgb565Pixel(0); width * height];
+    let mut pacer = VsyncPacer::from_env();
     loop {
         window.event_loop.process_pending_callbacks();
         if STOP_REQUESTED.load(Ordering::Relaxed)
@@ -310,6 +313,7 @@ fn main() -> Result<(), String> {
             probe.set_concept_error(c.error.clone().unwrap_or_default().into());
             probe.set_concept_paused(c.paused);
             if c.measure {
+                late_frames.clear();
                 c.measure = false;
                 session.borrow_mut().set_measurement_duration(Some(30_000));
                 session.borrow_mut().begin();
@@ -333,11 +337,8 @@ fn main() -> Result<(), String> {
             window.redraw_pending.replace(false)
         };
         if should_render {
-            if is_concept && !c.paused && c.advance_next {
-                c.scene
-                    .as_mut()
-                    .unwrap()
-                    .advance(Duration::from_nanos(16_666_667));
+            if is_concept {
+                c.advance_frame(Instant::now());
             }
             let started = Instant::now();
             let damage = if is_concept {
@@ -345,7 +346,7 @@ fn main() -> Result<(), String> {
                 let scene = c.scene.as_mut().unwrap();
                 let d = scene.render()?;
                 probe.set_concept_frame((scene.elapsed().as_millis().min(i32::MAX as u128)) as i32);
-                session.borrow_mut().metrics.context = serde_json::json!({"concept":c.name,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes(),"build_profile":env!("MAGIK_MINI_BUILD_PROFILE"),"preparation_ms":c.preparation_ms,"preparation_stages_ms":c.scene.as_ref().unwrap().preparation_stages(),"arcade_tile_max_us":c.scene.as_ref().unwrap().render_stage_max_us()});
+                session.borrow_mut().metrics.context = serde_json::json!({"late_frames":late_frames,"animation_clock":"monotonic","animation_elapsed_ms":c.scene.as_ref().unwrap().elapsed().as_millis() as u64,"concept":c.name,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes(),"build_profile":env!("MAGIK_MINI_BUILD_PROFILE"),"preparation_ms":c.preparation_ms,"preparation_stages_ms":c.scene.as_ref().unwrap().preparation_stages(),"tile_max_us":c.scene.as_ref().unwrap().render_stage_max_us()});
                 DirtyRectList::from_one(DirtyRect {
                     x0: d.x0,
                     y0: d.y0,
@@ -382,6 +383,10 @@ fn main() -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             let transfer_us = transfer.elapsed().as_micros() as u64;
             framebuffer.post_prepared().map_err(|e| e.to_string())?;
+            // Use the production vblank wait before verifying the posted slot.
+            // settle_pending retains bounded polling for late completion and all
+            // sequence/base/ownership checks, without burning CPU through slack.
+            pacer.wait();
             let presented = framebuffer
                 .settle_pending()
                 .map_err(|e| e.to_string())?
@@ -390,6 +395,7 @@ fn main() -> Result<(), String> {
             let metrics = &mut session.metrics;
             metrics.counters.posts += 1;
             metrics.counters.flips += 1;
+            let previous_drops = metrics.counters.drops;
             match framebuffer.presentation_telemetry() {
                 Ok(sample) => evidence.observe(sample, presented.drop_count, metrics),
                 Err(error) => metrics.error = Some(error.to_string()),
@@ -405,6 +411,20 @@ fn main() -> Result<(), String> {
                     transfer_us,
                     started.elapsed().as_micros() as u64,
                 ]);
+            }
+            if metrics.window_start.is_some()
+                && metrics.window.is_none()
+                && metrics.counters.drops > previous_drops
+                && late_frames.len() < 32
+            {
+                late_frames.push(serde_json::json!({
+                    "animation_ms": c.scene.as_ref().map(|s| s.elapsed().as_millis() as u64),
+                    "render_us": render_us, "transfer_us": transfer_us,
+                    "frame_to_present_us": started.elapsed().as_micros() as u64,
+                    "tile_us": c.scene.as_ref().map(|s| s.render_stage_last_us()),
+                    "repeats": metrics.counters.drops - previous_drops,
+                }));
+                metrics.context["late_frames"] = serde_json::json!(&late_frames);
             }
             if is_concept {
                 c.advance_next = true;

@@ -5,6 +5,7 @@ import pytest
 def sample():
     return {
         "sha256": "abc",
+        "motion_started_ms": 2000,
         "window": dict(
             width=960,
             height=540,
@@ -12,7 +13,13 @@ def sample():
             start_ms=2000,
             end_ms=32000,
             elapsed_ms=30000,
-            context={"concept": "diagnostic", "preset": "default", "route": "hdmi"},
+            context={
+                "concept": "diagnostic",
+                "preset": "default",
+                "route": "hdmi",
+                "animation_clock": "monotonic",
+                "animation_elapsed_ms": 30000,
+            },
             process_cpu_percent=75,
             peak_rss_bytes=4_000_000,
             refresh_hz=60,
@@ -177,3 +184,39 @@ def test_arcade_specific_presets_are_only_available_for_arcade(preset):
     assert supported("arcade-transition", preset)
     assert not supported("launcher-cards", preset)
     assert not supported("starfield", preset)
+
+
+@pytest.mark.parametrize("phase", [15000, 29900, 30000, 30100, 31000, None])
+def test_motion_cannot_qualify_with_a_stretched_animation_clock(phase):
+    data = sample()
+    data["window"]["context"].update(
+        concept="launcher-cards",
+        build_profile="release-device",
+        animation_elapsed_ms=phase,
+    )
+    result = validate(data, "abc", "launcher-cards", "default")
+    assert result["qualified"] is (phase is not None and 29900 <= phase <= 30100)
+
+
+@pytest.mark.parametrize("field", ["running", "ready", "artifact", "running_sha256"])
+def test_installed_concept_requires_the_requested_ready_artifact(field):
+    from magik.concepts import verify_installed
+
+    fields = dict(
+        running=True, ready=True, artifact="mini-magik", running_sha256="a" * 64
+    )
+    verify_installed(fields, "a" * 64)
+    fields[field] = None
+    with pytest.raises(ValueError, match="artifact"):
+        verify_installed(fields, "a" * 64)
+
+
+def test_motion_evidence_accounts_for_device_warmup():
+    data = sample()
+    data["motion_started_ms"] = 0
+    data["window"]["context"].update(
+        concept="launcher-cards",
+        build_profile="release-device",
+        animation_elapsed_ms=32000,
+    )
+    assert validate(data, "abc", "launcher-cards", "default")["motion_qualified"]

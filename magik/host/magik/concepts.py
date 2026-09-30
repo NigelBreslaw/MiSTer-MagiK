@@ -153,6 +153,14 @@ def validate(metrics, sha256, effect, preset, profile=False):
     fps = n * 1000 / w["elapsed_ms"]
     if effect in RENDER_LABS:
         passed = passed and abs(fps - refresh) <= 0.1
+    phase_ms = context.get("animation_elapsed_ms")
+    motion_started = metrics.get("motion_started_ms")
+    motion_qualified = effect not in RENDER_LABS or (
+        context.get("animation_clock") == "monotonic"
+        and type(phase_ms) is int
+        and type(motion_started) is int
+        and abs(phase_ms - (w["end_ms"] - motion_started)) <= 100
+    )
     build_qualified = (
         effect not in RENDER_LABS or context.get("build_profile") == "release-device"
     )
@@ -160,7 +168,8 @@ def validate(metrics, sha256, effect, preset, profile=False):
         **w,
         "sha256": sha256,
         "fps": fps,
-        "qualified": passed and build_qualified and not profile,
+        "qualified": passed and build_qualified and motion_qualified and not profile,
+        "motion_qualified": motion_qualified,
         "build_qualified": build_qualified,
         "instrumented": profile,
     }
@@ -298,6 +307,22 @@ def interactive(application, agent, run, effect, preset):
             print("Unknown command or arguments", flush=True)
 
 
+def verify_installed(fields, sha256):
+    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+        raise ValueError(
+            "installed SHA-256 must be 64 lowercase hexadecimal characters"
+        )
+    if not (
+        fields.get("running")
+        and fields.get("ready")
+        and fields.get("artifact") == "mini-magik"
+        and fields.get("running_sha256") == sha256
+    ):
+        raise ValueError(
+            "running development artifact does not match requested SHA-256"
+        )
+
+
 def run_concept(arguments, run: Path):
     from .cli import connect_agent, ensure_application, CHECK_AGENT_CAPABILITIES
 
@@ -321,7 +346,14 @@ def run_concept(arguments, run: Path):
     display = agent.device_operation("display-status").get("reply", "")
     if "active=hdmi-" not in display or "pending=none" not in display:
         raise ValueError("concept qualification requires a confirmed HDMI mode")
-    ensure_application(agent, status, run, "mini-magik")
+    installed = getattr(arguments, "installed_sha256", None)
+    if installed:
+        verify_installed(status.fields, installed)
+        agent.artifact = "mini-magik"
+        agent.expected_sha256 = installed
+        append_event(run, {"phase": "artifact", "sha256": installed, "installed": True})
+    else:
+        ensure_application(agent, status, run, "mini-magik")
     try:
         with fresh_session(
             agent, profile_id=profile_id, concept_session=True

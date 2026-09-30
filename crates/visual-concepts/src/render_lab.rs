@@ -27,6 +27,7 @@ const CARD: NavigationTransitionRect = NavigationTransitionRect {
     height: 252,
 };
 pub(super) struct Lab {
+    first_frame: bool,
     launcher: Option<PreparedLauncher>,
     arcade: Option<Vec<Pixel>>,
     cabinet: Vec<Pixel>,
@@ -163,6 +164,7 @@ impl Lab {
         preparation.push(("worker_setup", stage.elapsed().as_millis() as u64));
         stage = Instant::now();
         let mut lab = Self {
+            first_frame: true,
             tiles,
             reveal,
             launcher,
@@ -218,6 +220,7 @@ impl Lab {
 const REVEAL_SPLIT: usize = 311;
 struct ParallelReveal {
     max_us: [u64; 3],
+    last_us: [u64; 3],
     tile: Option<Vec<Pixel>>,
     request: Option<std::sync::mpsc::Sender<(u32, Vec<Pixel>)>>,
     completed: std::sync::mpsc::Receiver<(u32, Vec<Pixel>, u64)>,
@@ -270,6 +273,7 @@ impl ParallelReveal {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             max_us: [0; 3],
+            last_us: [0; 3],
             tile: Some(tile),
             request: Some(request),
             completed,
@@ -299,6 +303,7 @@ impl ParallelReveal {
         let waiting = Instant::now();
         let (completed, tile, secondary_us) = self.completed.recv().map_err(|e| e.to_string())?;
         let wait_us = waiting.elapsed().as_micros() as u64;
+        self.last_us = [primary_us, secondary_us, wait_us];
         self.max_us[0] = self.max_us[0].max(primary_us);
         self.max_us[1] = self.max_us[1].max(secondary_us);
         self.max_us[2] = self.max_us[2].max(wait_us);
@@ -372,6 +377,9 @@ fn browse(ms: u64) -> BrowseFrame {
     }
 }
 impl Effect for Lab {
+    fn reset(&mut self) {
+        self.first_frame = true;
+    }
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String> {
         let ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
         if let Some(arcade) = &self.arcade {
@@ -430,8 +438,11 @@ impl Effect for Lab {
                 timestamp_us: ms * 1000,
                 generation: ms,
             };
-            tiles.render(request, self.launcher.as_mut().unwrap())?;
-            pixels.copy_from_slice(self.launcher.as_ref().unwrap().pixels());
+            if self.first_frame {
+                pixels.copy_from_slice(&self.home);
+                self.first_frame = false;
+            }
+            tiles.render(request, pixels)?;
             Ok(Rect {
                 x0: 296,
                 y0: 120,
@@ -440,8 +451,17 @@ impl Effect for Lab {
             })
         }
     }
+    fn render_stage_last_us(&self) -> [u64; 3] {
+        self.reveal.as_ref().map_or_else(
+            || self.tiles.as_ref().map_or([0; 3], |t| t.last_us),
+            |r| r.last_us,
+        )
+    }
     fn render_stage_max_us(&self) -> [u64; 3] {
-        self.reveal.as_ref().map_or([0; 3], |r| r.max_us)
+        self.reveal.as_ref().map_or_else(
+            || self.tiles.as_ref().map_or([0; 3], |t| t.max_us),
+            |r| r.max_us,
+        )
     }
     fn preparation_stages(&self) -> &[(&'static str, u64)] {
         &self.preparation
@@ -469,7 +489,9 @@ struct ParallelTiles {
     left: PreparedLauncherFrame,
     right: Option<PreparedLauncherFrame>,
     request: Option<std::sync::mpsc::SyncSender<(LauncherFrameRequest, PreparedLauncherFrame)>>,
-    completed: std::sync::mpsc::Receiver<PreparedLauncherFrame>,
+    completed: std::sync::mpsc::Receiver<(PreparedLauncherFrame, u64)>,
+    max_us: [u64; 3],
+    last_us: [u64; 3],
     worker: Option<std::thread::JoinHandle<()>>,
     storage_bytes: usize,
 }
@@ -489,8 +511,12 @@ impl ParallelTiles {
                     setup();
                 }
                 while let Ok((request, mut tile)) = receive.recv() {
+                    let started = Instant::now();
                     helper.render_tile(request, &mut tile, (629, 934));
-                    if send.send(tile).is_err() {
+                    if send
+                        .send((tile, started.elapsed().as_micros() as u64))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -498,6 +524,8 @@ impl ParallelTiles {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             preparer,
+            max_us: [0; 3],
+            last_us: [0; 3],
             left,
             right: Some(right),
             request: Some(request),
@@ -509,20 +537,33 @@ impl ParallelTiles {
     fn render(
         &mut self,
         request: LauncherFrameRequest,
-        launcher: &mut PreparedLauncher,
+        pixels: &mut [Pixel],
     ) -> Result<(), String> {
         self.request
             .as_ref()
             .ok_or("tile worker stopped")?
             .send((request, self.right.take().ok_or("missing tile buffer")?))
             .map_err(|e| e.to_string())?;
+        let started = Instant::now();
         self.preparer
-            .render_tile(request, &mut self.left, (296, 629));
-        let right = self.completed.recv().map_err(|e| e.to_string())?;
+            .render_tile_into(request, &mut self.left, pixels, (296, 629), false);
+        let primary_us = started.elapsed().as_micros() as u64;
+        self.max_us[0] = self.max_us[0].max(primary_us);
+        let waiting = Instant::now();
+        let (right, secondary_us) = self.completed.recv().map_err(|e| e.to_string())?;
+        self.max_us[1] = self.max_us[1].max(secondary_us);
+        let wait_us = waiting.elapsed().as_micros() as u64;
+        self.last_us = [primary_us, secondary_us, wait_us];
+        self.max_us[2] = self.max_us[2].max(wait_us);
         if right.request() != Some(request) {
             return Err("stale card tile completion".into());
         }
-        launcher.compose_tiles(&self.left, &right);
+        // The primary tile already owns this cached-memory destination. Merge
+        // only the helper band, then the presenter transfers the completed frame.
+        for y in 120..495 {
+            pixels[y * W + 629..y * W + 934]
+                .copy_from_slice(&right.pixels()[y * W + 629..y * W + 934]);
+        }
         self.right = Some(right);
         Ok(())
     }
@@ -627,6 +668,22 @@ mod tests {
             .render(Duration::from_millis(500), &mut expected)
             .unwrap();
         assert_eq!(actual, expected);
+    }
+    #[test]
+    fn arcade_visible_regions_and_identity_match_every_late_millisecond() {
+        let mut reference = Lab::new("arcade-transition", Preset::Rgb888, None).unwrap();
+        let mut candidate = Lab::new("arcade-transition", Preset::Scanline, None).unwrap();
+        let mut expected = vec![Pixel(0); W * H];
+        let mut actual = expected.clone();
+        for ms in (340..=380).chain(760..=1000) {
+            reference
+                .render(Duration::from_millis(ms), &mut expected)
+                .unwrap();
+            candidate
+                .render(Duration::from_millis(ms), &mut actual)
+                .unwrap();
+            assert_eq!(actual, expected, "Arcade visible regions at {ms}ms");
+        }
     }
     #[test]
     fn scanlines_match_reference_through_mip_changes_edges_and_reverse() {

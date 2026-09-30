@@ -515,6 +515,32 @@ static inline uint16x4_t pack_dithered16(uint32x4_t p,uint16x4_t offset) {
   uint16x4_t b=quantise_image16(vmovn_u32(vandq_u32(vshrq_n_u32(p,16),mask)),31,offset);
   return vorr_u16(vorr_u16(vshl_n_u16(r,11),vshl_n_u16(g,5)),b);
 }
+// Exact four-pixel premultiplied over. RGB565 background decoding uses
+// floor(value*255/levels), and division by 255 preserves the scalar floor.
+static inline uint16x4_t dither_decode5(uint16x4_t v) {
+  uint16x4_t n=vmla_n_u16(vdup_n_u16(1),v,7);
+  return vadd_u16(vshl_n_u16(v,3),vshr_n_u16(vadd_u16(n,vshr_n_u16(n,5)),5));
+}
+static inline uint16x4_t dither_decode6(uint16x4_t v) {
+  uint16x4_t n=vmla_n_u16(vdup_n_u16(1),v,3);
+  return vadd_u16(vshl_n_u16(v,2),vshr_n_u16(vadd_u16(n,vshr_n_u16(n,6)),6));
+}
+static inline uint16x4_t dither_over_channel4(uint16x4_t source,uint16x4_t bg,uint16x4_t inverse) {
+  uint16x4_t n=vadd_u16(vmul_u16(bg,inverse),vdup_n_u16(1));
+  uint16x4_t over=vadd_u16(source,vshr_n_u16(vadd_u16(n,vshr_n_u16(n,8)),8));
+  return vmin_u16(over,vdup_n_u16(255));
+}
+static inline uint16x4_t dither_over4(uint32x4_t p,uint16x4_t dst,uint16x4_t offset) {
+  const uint32x4_t mask=vdupq_n_u32(255);
+  uint16x4_t alpha=vmovn_u32(vshrq_n_u32(p,24));
+  uint16x4_t inverse=vsub_u16(vdup_n_u16(255),alpha);
+  uint16x4_t r=dither_over_channel4(vmovn_u32(vandq_u32(p,mask)),dither_decode5(vshr_n_u16(dst,11)),inverse);
+  uint16x4_t g=dither_over_channel4(vmovn_u32(vandq_u32(vshrq_n_u32(p,8),mask)),dither_decode6(vand_u16(vshr_n_u16(dst,5),vdup_n_u16(63))),inverse);
+  uint16x4_t b=dither_over_channel4(vmovn_u32(vandq_u32(vshrq_n_u32(p,16),mask)),dither_decode5(vand_u16(dst,vdup_n_u16(31))),inverse);
+  r=quantise_image16(r,31,offset);g=quantise_image16(g,63,offset);b=quantise_image16(b,31,offset);
+  uint16x4_t packed=vorr_u16(vorr_u16(vshl_n_u16(r,11),vshl_n_u16(g,5)),b);
+  return vbsl_u16(vceq_u16(alpha,vdup_n_u16(0)),dst,packed);
+}
 static uint16_t dither_pixel(uint32_t p, uint16_t dst, size_t x, size_t y) {
   uint32_t a=p>>24;
   if(!a) return dst;
@@ -536,6 +562,39 @@ static inline uint32x2_t pack_dithered2(uint32x2_t p,size_t x,size_t y) {
 void magik_launcher_project_dithered(uint16_t *out,size_t pitch,const uint32_t *src,
     size_t height,size_t rows,int32_t q,int32_t step,size_t x,size_t y0) {
   size_t y=0;
+  // Four vertical outputs fill every quantiser lane. The Bayer phase repeats
+  // after four rows, so these offsets stay outside the interior loop.
+  uint16_t offsets[4];
+  for(size_t j=0;j<4;++j) offsets[j]=(uint16_t)(256-image_threshold[(y0+j)&3][x&3]);
+  const uint16x4_t phase=vld1_u16(offsets);
+  for(;y+3<rows;y+=4) {
+    int32_t q1=q+step,q2=q1+step,q3=q2+step;
+    int32_t r=q>>16,r3=q3>>16;
+    if(r>=0 && (size_t)(r3+1)<height) {
+      uint32x4_t p=vcombine_u32(interpolate2(src,q,q1),interpolate2(src,q2,q3));
+      uint32x4_t alpha=vshrq_n_u32(p,24);
+      uint32x2_t minimum=vmin_u32(vget_low_u32(alpha),vget_high_u32(alpha));
+      if(vget_lane_u32(minimum,0)==255 && vget_lane_u32(minimum,1)==255) {
+        uint16x4_t packed=pack_dithered16(p,phase);
+        out[y*pitch]=vget_lane_u16(packed,0);
+        out[(y+1)*pitch]=vget_lane_u16(packed,1);
+        out[(y+2)*pitch]=vget_lane_u16(packed,2);
+        out[(y+3)*pitch]=vget_lane_u16(packed,3);
+      } else {
+        uint32_t pixels[4];vst1q_u32(pixels,p);
+        for(size_t j=0;j<4;++j) out[(y+j)*pitch]=dither_pixel(pixels[j],out[(y+j)*pitch],x,y0+y+j);
+      }
+    } else {
+      int32_t qj=q;
+      for(size_t j=0;j<4;++j,qj+=step) {
+        int32_t rj=qj>>16;
+        uint32_t a=rj>=0 && (size_t)rj<height?src[rj]:0;
+        uint32_t b=rj+1>=0 && (size_t)(rj+1)<height?src[rj+1]:0;
+        out[(y+j)*pitch]=dither_pixel(scalar(a,b,((uint32_t)qj&65535)>>8),out[(y+j)*pitch],x,y0+y+j);
+      }
+    }
+    q=q3+step;
+  }
   for (;y+1<rows;y+=2) {
     int32_t r=q>>16, q1=q+step, r1=q1>>16;
     if (r>=0 && r1>=0 && (size_t)(r+1)<height && (size_t)(r1+1)<height) {
@@ -611,11 +670,18 @@ void magik_launcher_flat_dithered(uint16_t *out, size_t pitch,
 // Separable cabinet rows. These bounded gathers are per horizontal row, while
 // vertical filtering, mip blending and output use contiguous four-pixel batches.
 typedef struct { int16_t index; uint16_t weight; } cabinet_column;
+// Each map weight is 0..255. VQDMULH(delta, weight<<7) is exactly
+// floor(delta*weight/256), including negative deltas, without saturation.
+// Keep the two byte channels in each halfword separate until the final pack.
 static inline uint32x4_t cabinet_mix4(uint32x4_t a,uint32x4_t b,uint32x4_t weight) {
-  uint32x4_t inv=vsubq_u32(vdupq_n_u32(256),weight),mask=vdupq_n_u32(0x00ff00ff);
-  uint32x4_t rb=vandq_u32(vshrq_n_u32(vaddq_u32(vmulq_u32(vandq_u32(a,mask),inv),vmulq_u32(vandq_u32(b,mask),weight)),8),mask);
-  uint32x4_t ga=vandq_u32(vshrq_n_u32(vaddq_u32(vmulq_u32(vandq_u32(vshrq_n_u32(a,8),mask),inv),vmulq_u32(vandq_u32(vshrq_n_u32(b,8),mask),weight)),8),mask);
-  return vorrq_u32(rb,vshlq_n_u32(ga,8));
+  uint16x8_t w=vreinterpretq_u16_u32(weight);
+  int16x8_t coefficient=vreinterpretq_s16_u16(vshlq_n_u16(vtrnq_u16(w,w).val[0],7));
+  uint16x8_t aa=vreinterpretq_u16_u32(a),bb=vreinterpretq_u16_u32(b),mask=vdupq_n_u16(255);
+  int16x8_t al=vreinterpretq_s16_u16(vandq_u16(aa,mask)),bl=vreinterpretq_s16_u16(vandq_u16(bb,mask));
+  int16x8_t ah=vreinterpretq_s16_u16(vshrq_n_u16(aa,8)),bh=vreinterpretq_s16_u16(vshrq_n_u16(bb,8));
+  uint16x8_t lo=vreinterpretq_u16_s16(vaddq_s16(al,vqdmulhq_s16(vsubq_s16(bl,al),coefficient)));
+  uint16x8_t hi=vreinterpretq_u16_s16(vaddq_s16(ah,vqdmulhq_s16(vsubq_s16(bh,ah),coefficient)));
+  return vreinterpretq_u32_u16(vorrq_u16(lo,vshlq_n_u16(hi,8)));
 }
 static inline uint32_t cabinet_border(const uint32_t *source,size_t width,cabinet_column column) {
   int32_t ix=column.index;
@@ -641,7 +707,32 @@ void magik_cabinet_horizontal(uint32_t *out,const uint32_t *source,size_t width,
   }
   for(;i<n;++i) out[i]=cabinet_border(source,width,columns[i]);
 }
-void magik_cabinet_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y) {
+static void cabinet_composite_black(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y) {
+  uint16_t offsets[4];
+  for(size_t j=0;j<4;++j) offsets[j]=(uint16_t)(256-image_threshold[y&3][(x+j)&3]);
+  const uint16x4_t phase=vld1_u16(offsets),zero=vdup_n_u16(0);
+  size_t i=0;
+  for(;i+3<n;i+=4) {
+    uint32x4_t p=blend(vld1q_u32(a+i),vld1q_u32(b+i),wy);
+    if(lod) p=blend(p,blend(vld1q_u32(c+i),vld1q_u32(d+i),wy2),lod);
+    uint32x4_t alpha=vshrq_n_u32(p,24);
+    uint32x2_t maximum=vmax_u32(vget_low_u32(alpha),vget_high_u32(alpha));
+    if(vget_lane_u32(maximum,0)==0 && vget_lane_u32(maximum,1)==0) continue;
+    uint16x4_t packed=pack_dithered16(p,phase);
+    vst1_u16(out+i,vbsl_u16(vceq_u16(vmovn_u32(alpha),zero),zero,packed));
+  }
+  for(;i<n;++i) {
+    uint32_t p=scalar(a[i],b[i],wy);
+    if(lod) p=scalar(p,scalar(c[i],d[i],wy2),lod);
+    out[i]=(p>>24)?pack_dithered_scalar(p,x+i,y):0;
+  }
+}
+
+void magik_cabinet_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y,uint32_t black) {
+  if(black) {cabinet_composite_black(out,a,b,c,d,n,wy,wy2,lod,x,y);return;}
+  uint16_t offsets[4];
+  for(size_t j=0;j<4;++j) offsets[j]=(uint16_t)(256-image_threshold[y&3][(x+j)&3]);
+  const uint16x4_t phase=vld1_u16(offsets);
   size_t i=0;
   for(;i+3<n;i+=4) {
     uint32x4_t p=blend(vld1q_u32(a+i),vld1q_u32(b+i),wy);
@@ -650,11 +741,8 @@ void magik_cabinet_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,c
     uint32x2_t maximum=vmax_u32(vget_low_u32(alpha),vget_high_u32(alpha));
     if(vget_lane_u32(maximum,0)==0 && vget_lane_u32(maximum,1)==0) continue;
     uint32x2_t m=vmin_u32(vget_low_u32(alpha),vget_high_u32(alpha));
-    if(vget_lane_u32(m,0)==255 && vget_lane_u32(m,1)==255) vst1_u16(out+i,pack_dithered4(p,x+i,y));
-    else {
-      uint32_t pixels[4];vst1q_u32(pixels,p);
-      for(size_t j=0;j<4;++j) out[i+j]=dither_pixel(pixels[j],out[i+j],x+i+j,y);
-    }
+    if(vget_lane_u32(m,0)==255 && vget_lane_u32(m,1)==255) vst1_u16(out+i,pack_dithered16(p,phase));
+    else vst1_u16(out+i,dither_over4(p,vld1_u16(out+i),phase));
   }
   for(;i<n;++i) {
     uint32_t p=scalar(a[i],b[i],wy);

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 use mister_magik_visual_concepts::{Preset, Scene};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 fn configure_card_worker() {
     use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
     apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
@@ -15,6 +15,7 @@ pub struct Concepts {
     pub measure: bool,
     pub generation: i32,
     pub advance_next: bool,
+    animation_at: Option<Instant>,
     pub stop_at: Option<Duration>,
     pub error: Option<String>,
     pub preparation_ms: u64,
@@ -32,6 +33,7 @@ impl Concepts {
             measure: false,
             generation: 0,
             advance_next: false,
+            animation_at: None,
             stop_at: None,
             error: None,
             preparation_ms: 0,
@@ -40,6 +42,7 @@ impl Concepts {
         }
     }
     pub fn select(&mut self, name: &str, preset: Preset) {
+        self.animation_at = None;
         self.stop_at = None;
         self.generation = self.generation.wrapping_add(1);
         let previous_time = self.scene.as_ref().map(Scene::elapsed);
@@ -86,7 +89,28 @@ impl Concepts {
             Err(e) => self.error = Some(e),
         }
     }
+    /// Live motion follows monotonic time even when a render misses a refresh.
+    /// Bookmarks retain deterministic stepping and clamp to the exact pose.
+    pub fn advance_frame(&mut self, now: Instant) {
+        if self.paused {
+            self.animation_at = None;
+            return;
+        }
+        let previous = self.animation_at.replace(now);
+        if !self.advance_next {
+            return;
+        }
+        if let Some(scene) = &mut self.scene {
+            let delta = if let Some(target) = self.stop_at {
+                Duration::from_nanos(16_666_667).min(target.saturating_sub(scene.elapsed()))
+            } else {
+                previous.map_or(Duration::ZERO, |at| now.saturating_duration_since(at))
+            };
+            scene.advance(delta);
+        }
+    }
     pub fn action(&mut self, action: &str) {
+        self.animation_at = None;
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {
                 "launcher-cards" => (210, 420),
@@ -118,6 +142,7 @@ impl Concepts {
             }
             return;
         }
+        self.animation_at = None;
         self.stop_at = None;
         match action {
             "pause" => self.paused = true,
@@ -189,5 +214,35 @@ mod tests {
         c.select("diagnostic", Preset::Reduced);
         assert_ne!(c.generation, generation);
         assert_eq!(c.preset, Preset::Reduced);
+    }
+    #[test]
+    fn live_clock_follows_time_without_including_paused_time() {
+        let mut c = Concepts::new(960, 540);
+        c.select("diagnostic", Preset::Default);
+        let start = Instant::now();
+        c.advance_frame(start);
+        c.advance_next = true;
+        c.advance_frame(start + Duration::from_millis(47));
+        assert_eq!(
+            c.scene.as_ref().unwrap().elapsed(),
+            Duration::from_millis(47)
+        );
+        c.action("pause");
+        c.advance_frame(start + Duration::from_secs(5));
+        c.action("resume");
+        c.advance_frame(start + Duration::from_secs(6));
+        c.advance_frame(start + Duration::from_millis(6019));
+        assert_eq!(
+            c.scene.as_ref().unwrap().elapsed(),
+            Duration::from_millis(66)
+        );
+        c.action("capture-midpoint");
+        for frame in 0..200 {
+            c.advance_frame(start + Duration::from_secs(7) + Duration::from_millis(frame * 29));
+        }
+        assert_eq!(
+            c.scene.as_ref().unwrap().elapsed(),
+            Duration::from_millis(100)
+        );
     }
 }
