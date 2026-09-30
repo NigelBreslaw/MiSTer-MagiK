@@ -259,9 +259,12 @@ fn prepare_return_catalog_capsule_inner(
     let mut refs = HashSet::new();
     let mut count = 0usize;
     let mut plan_rows = 0;
-    for game in view.iter() {
+    for (ordinal, _) in view.iter().enumerate() {
         plan_rows += 1;
-        if let LaunchTarget::Structured(plan) = catalog.launch_target_for_ref(&game.mra_path)
+        let target = catalog
+            .launch_target_in_view(view, ordinal)
+            .ok_or("return collection has a missing launch row")?;
+        if let LaunchTarget::Structured(plan) = target
             && refs.insert(plan.launch_ref.clone())
         {
             count += 1;
@@ -1343,6 +1346,102 @@ mod tests {
         );
         assert!(!path.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mapped_capsule_wire_preserves_launch_variants_and_hot_metadata_semantics() {
+        use mister_magik_catalog::arcade_catalog::SystemCollection;
+        use mister_magik_catalog::system_shard::{
+            SystemGame, SystemLaunchPlan, SystemNavigationIndexes,
+        };
+        let root = Path::new("/fixture/catalog");
+        let temp = unique_temp_dir("mapped-capsule");
+        let refs = [
+            "magik-plan:fixture:one",
+            "/games/path.rom",
+            "magik-plan:fixture:missing",
+            "magik-amigavision:Agony",
+            "magik-plan:fixture:one",
+        ];
+        let games = refs
+            .iter()
+            .enumerate()
+            .map(|(i, launch_ref)| SystemGame {
+                stable_key: format!("fixture:{i}"),
+                title: format!("Game {i}"),
+                launch_ref: (*launch_ref).into(),
+                year: Some(1982),
+                manufacturer: "Cold Fixture".into(),
+                launch_plan: (i == 0 || i == 4).then(|| SystemLaunchPlan {
+                    launch_ref: (*launch_ref).into(),
+                    title: "Plan".into(),
+                    system_id: "fixture".into(),
+                    core_path: "/cores/test.rbf".into(),
+                    payload_path: "/games/test.rom".into(),
+                    mount_kind: "mount-image".into(),
+                    mount_index: 2,
+                    delay_secs: 3,
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let indexes = SystemNavigationIndexes {
+            title_ordinals: (0..5).collect(),
+            launch_ordinals: vec![0, 4],
+            ..Default::default()
+        };
+        let pack = mister_magik_catalog::navpack::encode("fixture", 7, &games, &indexes).unwrap();
+        let path = temp.join("fixture.navpack");
+        fs::write(&path, &pack).unwrap();
+        let (collection, _) = SystemCollection::open_navpack(
+            "fixture",
+            &path,
+            pack.len() as u64,
+            7,
+            5,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let source = ArcadeCatalog::new(root.into(), vec![], vec![])
+            .with_system_collection(std::sync::Arc::new(collection));
+        let mut expected = binding(root);
+        expected.binary_version = "fixture-version".into();
+        expected.binary_build = "fixture-build".into();
+        let bytes = prepare_return_catalog_capsule_with_binding(
+            &source,
+            "fixture",
+            refs[0],
+            expected.clone(),
+        )
+        .unwrap()
+        .encode()
+        .unwrap();
+        assert_eq!((bytes.len(), crc32fast::hash(&bytes)), (679, 938_203_297));
+        let restored =
+            decode_return_catalog_capsule(&bytes, &expected, "fixture", refs[0]).unwrap();
+        assert_eq!(restored.system_game_count("fixture"), 5);
+        for (ordinal, launch_ref) in refs.iter().enumerate() {
+            assert_eq!(
+                restored.launch_target_for_ref(launch_ref),
+                source.launch_target_for_ref(launch_ref)
+            );
+            // Preserve the existing capsule's hot-row metadata representation.
+            assert_eq!(
+                restored
+                    .system_game_at("fixture", ordinal)
+                    .unwrap()
+                    .metadata_key(),
+                source
+                    .system_game_at("fixture", ordinal)
+                    .unwrap()
+                    .metadata_key()
+            );
+        }
+        assert_eq!(
+            source.system_game_metadata_at("fixture", 0).unwrap().year,
+            Some(1982)
+        );
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]

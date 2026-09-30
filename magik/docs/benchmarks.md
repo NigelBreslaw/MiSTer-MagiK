@@ -118,3 +118,14 @@ Linux's complete fd observations can be reused. Streaming WalkDir, uncertain
 entries, pruned directories or exceeded 65,536-entry / 16 MiB observed-path
 limits retain the existing full watch capture. Those limits bound observation
 capture; they are not an exact total allocation budget.
+
+## Mapped capsule launch lookup
+
+`scripts/magik bench catalog-launch` measures the production catalog's lookup of
+structured launch plans through known view ordinals. Its fixed 1,000-, 2,000- and
+4,000-row navigation packs live in owned temporary directories and are removed
+on exit. Mapping, hot-row hydration and exact plan checks run before timing;
+two unprofiled repetitions report each size separately. The native benchmark
+restores the Dev launcher and never launches a core or modifies the installed
+catalog. This measures the capsule's second-pass lookup mechanism; full capsule
+encoding, cold metadata handling and Main handoff are outside its timing window.

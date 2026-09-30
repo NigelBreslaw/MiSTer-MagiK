@@ -244,6 +244,11 @@ impl std::fmt::Debug for NavPackSystemRows {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static NAVPACK_REVERSE_LOOKUP_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl NavPackSystemRows {
     const FIRST_VIEWPORT_ROWS: usize = 10;
     const PAGE_ROWS: usize = 64;
@@ -320,12 +325,16 @@ impl NavPackSystemRows {
     fn launch_plan_for_ref(&self, launch_ref: &str) -> Option<&StructuredLaunchPlan> {
         for page in self.row_pages.iter().filter_map(OnceLock::get) {
             for row in page.iter().filter_map(OnceLock::get) {
+                #[cfg(test)]
+                NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
                 if row.game.mra_path.as_ref() == launch_ref {
                     return self.launch_plan(row);
                 }
             }
         }
         let ordinal = (0..self.len()).find(|ordinal| {
+            #[cfg(test)]
+            NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
             self.pack
                 .row(*ordinal)
                 .is_ok_and(|row| row.launch_ref == launch_ref)
@@ -1113,6 +1122,46 @@ impl ArcadeCatalog {
     }
 
     pub fn launch_target_for_ref(&self, launch_ref: &str) -> LaunchTarget {
+        Self::launch_target_with_plan(launch_ref, || {
+            self.structured_launch_plan_for_ref(launch_ref)
+        })
+    }
+
+    /// Resolve a known view row through its persisted launch index when mapped.
+    /// Prepared launches and legacy/global plan precedence remain unchanged.
+    pub fn launch_target_in_view(
+        &self,
+        view: ArcadeGameView<'_>,
+        ordinal: usize,
+    ) -> Option<LaunchTarget> {
+        let game = view.get(ordinal)?;
+        Some(Self::launch_target_with_plan(&game.mra_path, || {
+            if let Some(plan) = self.launch_plans_by_ref.get(&game.mra_path) {
+                return Some(plan);
+            }
+            let (collection, row_ordinal) = match view {
+                ArcadeGameView::Collection(collection) => (collection, ordinal),
+                ArcadeGameView::CollectionIndexed {
+                    collection,
+                    indexes,
+                } => (collection, *indexes.get(ordinal)?),
+                _ => return self.structured_launch_plan_for_ref(&game.mra_path),
+            };
+            match &collection.games {
+                SystemCollectionRows::NavPack(rows) => {
+                    rows.launch_plan(rows.materialize(row_ordinal).ok()?)
+                }
+                SystemCollectionRows::Owned(_) => {
+                    self.structured_launch_plan_for_ref(&game.mra_path)
+                }
+            }
+        }))
+    }
+
+    fn launch_target_with_plan<'a>(
+        launch_ref: &str,
+        find_plan: impl FnOnce() -> Option<&'a StructuredLaunchPlan>,
+    ) -> LaunchTarget {
         if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
             || launch_ref == AMIGAVISION_LAUNCHER_REF
         {
@@ -1121,7 +1170,7 @@ impl ArcadeCatalog {
                 launch_ref: Arc::from(launch_ref),
             });
         }
-        self.structured_launch_plan_for_ref(launch_ref)
+        find_plan()
             .cloned()
             .map(LaunchTarget::Structured)
             .unwrap_or_else(|| {
@@ -3030,6 +3079,81 @@ mod tests {
         assert_eq!(options.controls, reference.controls);
         assert_eq!(options.players, reference.players);
         assert_eq!(options.decades, reference.decades);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn known_mapped_launch_ordinals_avoid_reverse_row_scans() {
+        let mut comparisons = Vec::new();
+        for count in [1000, 2000, 4000] {
+            let path = navpack_fixture(count);
+            let (collection, _) = SystemCollection::open_navpack(
+                "c64",
+                &path,
+                std::fs::metadata(&path).unwrap().len(),
+                7,
+                count,
+                PlatformKind::Computer,
+            )
+            .unwrap();
+            let catalog = ArcadeCatalog::new(PathBuf::new(), vec![], vec![])
+                .with_system_collection(Arc::new(collection));
+            let view = catalog.system_game_view("c64");
+            assert_eq!(view.iter().count(), count);
+            NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(|visits| visits.set(0));
+            for ordinal in 0..count {
+                let LaunchTarget::Structured(plan) =
+                    catalog.launch_target_in_view(view, ordinal).unwrap()
+                else {
+                    panic!("missing plan");
+                };
+                assert_eq!(plan.payload_path.as_ref(), format!("/games/{ordinal}.d64"));
+            }
+            comparisons.push(NAVPACK_REVERSE_LOOKUP_ROW_VISITS.with(std::cell::Cell::get));
+            std::fs::remove_file(path).unwrap();
+        }
+        eprintln!("mapped_launch_rows=[1000,2000,4000] reverse_comparisons={comparisons:?}");
+        assert_eq!(comparisons, vec![0, 0, 0]);
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn mapped_launch_views_remap_ordinals_and_keep_global_plan_precedence() {
+        let path = navpack_fixture(130);
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let mut catalog = ArcadeCatalog::new(PathBuf::new(), vec![], vec![])
+            .with_system_collection(Arc::new(collection));
+        let collection = catalog.system_collection("c64").unwrap();
+        let subset = [129, 0, 64];
+        let view = ArcadeGameView::collection_indexed(collection, &subset);
+        for ordinal in 0..subset.len() {
+            assert_eq!(
+                catalog.launch_target_in_view(view, ordinal).unwrap(),
+                catalog.launch_target_for_ref(&view.get(ordinal).unwrap().mra_path)
+            );
+        }
+        assert!(catalog.launch_target_in_view(view, subset.len()).is_none());
+        let LaunchTarget::Structured(mut override_plan) =
+            catalog.launch_target_for_ref("magik-plan:c64:0")
+        else {
+            panic!("missing plan");
+        };
+        override_plan.payload_path = "/global/override.d64".into();
+        Arc::make_mut(&mut catalog.launch_plans_by_ref)
+            .insert(override_plan.launch_ref.clone(), override_plan.clone());
+        assert_eq!(
+            catalog.launch_target_in_view(catalog.system_game_view("c64"), 0),
+            Some(LaunchTarget::Structured(override_plan))
+        );
         std::fs::remove_file(path).unwrap();
     }
 
