@@ -43,10 +43,47 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
+const LIBRARY_RESET_REBOOT_TIMEOUT: Duration = Duration::from_secs(15);
+
 enum LibraryResetState {
     Idle,
     Deleting(std::sync::mpsc::Receiver<Result<launcher::PurgeLibraryDataOutcome, String>>),
-    RebootRequested,
+    RebootRequested { deadline: Instant },
+}
+
+impl LibraryResetState {
+    /// True while ordinary launcher work must remain paused.
+    fn poll(&mut self, now: Instant) -> Result<bool, String> {
+        let error = match self {
+            Self::Idle => return Ok(false),
+            Self::RebootRequested { deadline } => {
+                if now < *deadline {
+                    return Ok(true);
+                }
+                "Database deleted, but MiSTer did not reboot. Restart MiSTer manually.".to_string()
+            }
+            Self::Deleting(worker) => match worker.try_recv() {
+                Ok(Ok(outcome)) => {
+                    crate::ui_logln!(
+                        "library_reset_reboot_requested catalog_removed={} screenshot_removed={}",
+                        outcome.catalog_artifacts_removed,
+                        outcome.screenshot_artifacts_removed
+                    );
+                    *self = Self::RebootRequested {
+                        deadline: now + LIBRARY_RESET_REBOOT_TIMEOUT,
+                    };
+                    return Ok(true);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(true),
+                Ok(Err(error)) => error,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    "Database reset worker stopped unexpectedly".to_string()
+                }
+            },
+        };
+        *self = Self::Idle;
+        Err(error)
+    }
 }
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
@@ -6324,39 +6361,19 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
-        match &library_reset {
-            LibraryResetState::RebootRequested => {
+        match library_reset.poll(loop_start) {
+            Ok(true) => {
                 let _pace = pacer.wait();
                 continue 'launcher;
             }
-            LibraryResetState::Deleting(worker) => match worker.try_recv() {
-                Ok(Ok(outcome)) => {
-                    crate::ui_logln!(
-                        "library_reset_reboot_requested catalog_removed={} screenshot_removed={}",
-                        outcome.catalog_artifacts_removed,
-                        outcome.screenshot_artifacts_removed
-                    );
-                    library_reset = LibraryResetState::RebootRequested;
-                    continue 'launcher;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    let _pace = pacer.wait();
-                    continue 'launcher;
-                }
-                result => {
-                    let error = match result {
-                        Ok(Err(error)) => error,
-                        _ => "Database reset worker stopped unexpectedly".to_string(),
-                    };
-                    crate::ui_errln!("library reset failed: {error}");
-                    library_reset = LibraryResetState::Idle;
-                    loading_title.clear();
-                    nav.show_library_reset_error(error);
-                    library_reset_bridge_dirty = true;
-                    request_launcher_redraw!();
-                }
-            },
-            LibraryResetState::Idle => {}
+            Ok(false) => {}
+            Err(error) => {
+                crate::ui_errln!("library reset failed: {error}");
+                loading_title.clear();
+                nav.show_library_reset_error(error);
+                library_reset_bridge_dirty = true;
+                request_launcher_redraw!();
+            }
         }
         let slint_timer_dispatch_started = Instant::now();
         let gui_timer_dispatch_pmu = gui_profiling.span("gui.timer-dispatch");
@@ -16307,6 +16324,64 @@ mod tests {
             );
         }
         assert_eq!(nav.selected, 1);
+    }
+
+    #[test]
+    fn library_reset_reboot_wait_expires_and_resumes_input_without_retrying() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut reset = LibraryResetState::Deleting(receiver);
+        let now = Instant::now();
+        assert_eq!(reset.poll(now), Ok(true));
+        sender
+            .send(Ok(launcher::PurgeLibraryDataOutcome::default()))
+            .unwrap();
+        assert_eq!(reset.poll(now), Ok(true));
+        assert!(matches!(reset, LibraryResetState::RebootRequested { .. }));
+        assert_eq!(
+            reset.poll(now + LIBRARY_RESET_REBOOT_TIMEOUT - Duration::from_millis(1)),
+            Ok(true)
+        );
+
+        let error = reset
+            .poll(now + LIBRARY_RESET_REBOOT_TIMEOUT)
+            .expect_err("missing reboot must time out");
+        assert!(error.contains("MiSTer did not reboot"));
+        assert!(matches!(reset, LibraryResetState::Idle));
+        assert_eq!(reset.poll(now + LIBRARY_RESET_REBOOT_TIMEOUT), Ok(false));
+
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.show_library_reset_error(error);
+        let press = normalized_test_press(LogicalAction::Activate);
+        assert!(
+            nav.handle_action_with_navigation_intents(&press, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    fn library_reset_worker_failure_and_disconnect_resume_launcher() {
+        for disconnect in [false, true] {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let mut reset = LibraryResetState::Deleting(receiver);
+            if !disconnect {
+                sender.send(Err("delete failed".into())).unwrap();
+            }
+            drop(sender);
+            let error = reset.poll(Instant::now()).expect_err("failed worker");
+            assert_eq!(
+                error,
+                if disconnect {
+                    "Database reset worker stopped unexpectedly"
+                } else {
+                    "delete failed"
+                }
+            );
+            assert!(matches!(reset, LibraryResetState::Idle));
+            assert_eq!(reset.poll(Instant::now()), Ok(false));
+        }
     }
 
     #[test]
