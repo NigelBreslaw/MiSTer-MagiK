@@ -12,7 +12,8 @@ use mister_magik_framebuffer_scenes::{
 };
 use std::{
     collections::VecDeque,
-    sync::{Arc, Condvar, Mutex},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     thread::JoinHandle,
 };
 
@@ -39,6 +40,7 @@ struct State {
     retired: Vec<PreparedContent>,
     counters: CardPipelineCounters,
     stopped: bool,
+    failure: Option<Box<dyn std::any::Any + Send>>,
 }
 struct Shared {
     state: Mutex<State>,
@@ -74,6 +76,7 @@ impl HomePreparation {
                 retired: Vec::with_capacity(RETIRED + JOBS),
                 counters: CardPipelineCounters::default(),
                 stopped: false,
+                failure: None,
             }),
             wake: Condvar::new(),
         });
@@ -81,128 +84,153 @@ impl HomePreparation {
         let worker = std::thread::Builder::new()
             .name("card-home-prepare".into())
             .spawn(move || {
-                use mister_magik_catalog::runtime_thread::{
-                    RuntimeThreadRole, apply_runtime_thread_policy,
-                };
-                apply_runtime_thread_policy(RuntimeThreadRole::SystemEntryPrepare);
-                let mut caches = vec![(initial_level, initial_cache)];
-                let mut retired = Vec::with_capacity(RETIRED + JOBS);
-                loop {
-                    // Move cancellation and retirement onto this thread before
-                    // picking another job. The UI never drops a ready raster.
-                    let (request, stopped) = {
-                        let mut state = worker_shared
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    use mister_magik_catalog::runtime_thread::{
+                        RuntimeThreadRole, apply_runtime_thread_policy,
+                    };
+                    apply_runtime_thread_policy(RuntimeThreadRole::SystemEntryPrepare);
+                    let mut caches = vec![(initial_level, initial_cache)];
+                    let mut retired = Vec::with_capacity(RETIRED + JOBS);
+                    loop {
+                        // Move cancellation and retirement onto this thread before
+                        // picking another job. The UI never drops a ready raster.
+                        let (request, stopped) = {
+                            let mut state = worker_shared
+                                .state
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            loop {
+                                let cancelled = state
+                                    .ready
+                                    .iter()
+                                    .any(|(id, _)| !state.interested.contains(id));
+                                if state.stopped
+                                    || !state.retired.is_empty()
+                                    || !state.pending.is_empty()
+                                    || cancelled
+                                {
+                                    break;
+                                }
+                                state = worker_shared
+                                    .wake
+                                    .wait(state)
+                                    .unwrap_or_else(|e| e.into_inner());
+                            }
+                            std::mem::swap(&mut retired, &mut state.retired);
+                            let mut index = 0;
+                            while index < state.ready.len() {
+                                if state.stopped
+                                    || !state.interested.contains(&state.ready[index].0)
+                                {
+                                    retired.push(state.ready.swap_remove(index).1);
+                                } else {
+                                    index += 1;
+                                }
+                            }
+                            let request = if state.stopped {
+                                None
+                            } else {
+                                state.pending.pop_front()
+                            };
+                            (request, state.stopped)
+                        };
+                        let mut counters = CardPipelineCounters::default();
+                        for mut content in retired.drain(..) {
+                            if let Some(pipeline) = content.pipeline.as_mut() {
+                                pipeline.stop();
+                                counters.add_assign(
+                                    pipeline.counters().delta(content.retirement_baseline),
+                                );
+                            }
+                            drop(content);
+                        }
+                        worker_shared
                             .state
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        loop {
-                            let cancelled = state
-                                .ready
-                                .iter()
-                                .any(|(id, _)| !state.interested.contains(id));
-                            if state.stopped
-                                || !state.retired.is_empty()
-                                || !state.pending.is_empty()
-                                || cancelled
-                            {
-                                break;
-                            }
-                            state = worker_shared
-                                .wake
-                                .wait(state)
-                                .unwrap_or_else(|e| e.into_inner());
+                            .unwrap_or_else(|e| e.into_inner())
+                            .counters
+                            .add_assign(counters);
+                        if stopped {
+                            break;
                         }
-                        std::mem::swap(&mut retired, &mut state.retired);
-                        let mut index = 0;
-                        while index < state.ready.len() {
-                            if state.stopped || !state.interested.contains(&state.ready[index].0) {
-                                retired.push(state.ready.swap_remove(index).1);
-                            } else {
-                                index += 1;
-                            }
-                        }
-                        let request = if state.stopped {
-                            None
-                        } else {
-                            state.pending.pop_front()
+                        let Some(request) = request else {
+                            continue;
                         };
-                        (request, state.stopped)
-                    };
-                    let mut counters = CardPipelineCounters::default();
-                    for mut content in retired.drain(..) {
-                        if let Some(pipeline) = content.pipeline.as_mut() {
-                            pipeline.stop();
-                            counters
-                                .add_assign(pipeline.counters().delta(content.retirement_baseline));
+                        if !worker_shared
+                            .state
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .interested
+                            .contains(&request.id)
+                        {
+                            continue;
                         }
+                        let cache_index = match caches
+                            .iter()
+                            .position(|(menu, _)| menu == &request.level.menu_id)
+                        {
+                            Some(index) => index,
+                            None => {
+                                if caches.len() > ASIDE_LEVELS {
+                                    caches.remove(0);
+                                }
+                                caches.push((
+                                    request.level.menu_id.clone(),
+                                    LauncherFaceCache::default(),
+                                ));
+                                caches.len() - 1
+                            }
+                        };
+                        let mut cache = caches.remove(cache_index);
+                        let build = |face_cache: &mut LauncherFaceCache| {
+                            before_build(request.id);
+                            prepare_cached(
+                                request.scene,
+                                &request.level,
+                                request.selected,
+                                &request.clock,
+                                &artwork,
+                                &fonts,
+                                face_cache,
+                            )
+                        };
+                        let prepared = match catch_unwind(AssertUnwindSafe(|| build(&mut cache.1)))
+                        {
+                            Ok(prepared) => prepared,
+                            Err(_) => {
+                                // A failed build may leave partially updated faces.
+                                // Retry once with cold state, still on this worker.
+                                cache.1 = LauncherFaceCache::default();
+                                build(&mut cache.1)
+                            }
+                        };
+                        caches.push(cache);
+                        let pipeline = native_render_ahead(request.scene, &prepared);
+                        let mut content = Some(PreparedContent {
+                            prepared: Box::new(prepared),
+                            pipeline,
+                            retirement_baseline: CardPipelineCounters::default(),
+                        });
+                        {
+                            let mut state = worker_shared
+                                .state
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            if !state.stopped && state.interested.contains(&request.id) {
+                                state.ready.push((request.id, content.take().unwrap()));
+                            }
+                        }
+                        // A cancelled completion is destroyed here, including joins.
                         drop(content);
                     }
-                    worker_shared
+                }));
+                if let Err(failure) = outcome {
+                    let mut state = worker_shared
                         .state
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .counters
-                        .add_assign(counters);
-                    if stopped {
-                        break;
-                    }
-                    let Some(request) = request else {
-                        continue;
-                    };
-                    if !worker_shared
-                        .state
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .interested
-                        .contains(&request.id)
-                    {
-                        continue;
-                    }
-                    before_build(request.id);
-                    let cache_index = match caches
-                        .iter()
-                        .position(|(menu, _)| menu == &request.level.menu_id)
-                    {
-                        Some(index) => index,
-                        None => {
-                            if caches.len() > ASIDE_LEVELS {
-                                caches.remove(0);
-                            }
-                            caches.push((
-                                request.level.menu_id.clone(),
-                                LauncherFaceCache::default(),
-                            ));
-                            caches.len() - 1
-                        }
-                    };
-                    let mut cache = caches.remove(cache_index);
-                    let prepared = prepare_cached(
-                        request.scene,
-                        &request.level,
-                        request.selected,
-                        &request.clock,
-                        &artwork,
-                        &fonts,
-                        &mut cache.1,
-                    );
-                    caches.push(cache);
-                    let pipeline = native_render_ahead(request.scene, &prepared);
-                    let mut content = Some(PreparedContent {
-                        prepared: Box::new(prepared),
-                        pipeline,
-                        retirement_baseline: CardPipelineCounters::default(),
-                    });
-                    {
-                        let mut state = worker_shared
-                            .state
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        if !state.stopped && state.interested.contains(&request.id) {
-                            state.ready.push((request.id, content.take().unwrap()));
-                        }
-                    }
-                    // A cancelled completion is destroyed here, including joins.
-                    drop(content);
+                        .unwrap_or_else(|e| e.into_inner());
+                    state.stopped = true;
+                    state.failure = Some(failure);
                 }
             })
             .map_err(|e| format!("start card preparation worker: {e}"))?;
@@ -210,6 +238,16 @@ impl HomePreparation {
             shared,
             worker: Some(worker),
         })
+    }
+    fn lock_state(&self) -> MutexGuard<'_, State> {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(failure) = state.failure.take() {
+            // A second panic (or another worker failure) must reach the caller,
+            // rather than leave a permanently pending ticket or accept more jobs.
+            drop(state);
+            resume_unwind(failure);
+        }
+        state
     }
     pub(super) fn request(
         &self,
@@ -219,7 +257,7 @@ impl HomePreparation {
         clock: &str,
         visible: bool,
     ) -> Option<u64> {
-        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.lock_state();
         if state.stopped || state.interested.len() >= JOBS {
             return None;
         }
@@ -242,13 +280,13 @@ impl HomePreparation {
         Some(id)
     }
     pub(super) fn cancel(&self, id: u64) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.lock_state();
         state.interested.retain(|candidate| *candidate != id);
         state.pending.retain(|request| request.id != id);
         self.shared.wake.notify_one();
     }
     pub(super) fn take(&self, id: u64) -> Option<PreparedContent> {
-        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.lock_state();
         let index = state
             .ready
             .iter()
@@ -257,17 +295,10 @@ impl HomePreparation {
         Some(state.ready.swap_remove(index).1)
     }
     pub(super) fn can_retire(&self, count: usize) -> bool {
-        self.shared
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retired
-            .len()
-            + count
-            <= RETIRED
+        self.lock_state().retired.len() + count <= RETIRED
     }
     pub(super) fn retire(&self, content: PreparedContent) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.lock_state();
         assert!(
             state.retired.len() < RETIRED,
             "card retirement ownership exceeded its bound"
@@ -277,14 +308,7 @@ impl HomePreparation {
     }
     #[cfg(feature = "tooling")]
     pub(super) fn take_retired_counters(&self) -> CardPipelineCounters {
-        std::mem::take(
-            &mut self
-                .shared
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .counters,
-        )
+        std::mem::take(&mut self.lock_state().counters)
     }
     pub(super) fn shutdown(&self, contents: impl IntoIterator<Item = PreparedContent>) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -304,6 +328,10 @@ impl HomePreparation {
             && state.pending.len() <= JOBS
             && state.ready.len() <= JOBS + 1
             && state.retired.len() <= RETIRED
+    }
+    #[cfg(test)]
+    pub(super) fn has_failed(&self) -> bool {
+        self.shared.state.lock().unwrap().failure.is_some()
     }
     #[cfg(test)]
     pub(super) fn is_ready(&self, id: u64) -> bool {
