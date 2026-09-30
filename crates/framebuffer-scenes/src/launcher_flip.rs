@@ -488,6 +488,17 @@ fn render(
             } else {
                 0
             };
+            if spine_weight == 0 {
+                face.texture.prepare_lit_column_rows(
+                    column.filter,
+                    start,
+                    &mut texels[(x - left) * scratch.column_height + start
+                        ..(x - left) * scratch.column_height + face.height],
+                    blend.map(|(face, weight)| (&face.texture, weight)),
+                    light,
+                );
+                continue;
+            }
             face.texture.prepare_column_rows(
                 column.filter,
                 start,
