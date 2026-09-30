@@ -227,45 +227,6 @@ void magik_launcher_filter_column(uint32_t *out, const uint32_t *a0,
   }
 }
 
-// Keep every existing interpolation floor, then shade without a scratch round trip.
-static inline uint32x4_t shaded4(uint32x4_t p,uint32_t light) {
-  if(light==256)return p;
-  uint8x16_t bytes=vreinterpretq_u8_u32(p);
-  uint8x8_t factor=vdup_n_u8((uint8_t)light);
-  uint8x16_t shaded=vcombine_u8(vshrn_n_u16(vmull_u8(vget_low_u8(bytes),factor),8),
-                               vshrn_n_u16(vmull_u8(vget_high_u8(bytes),factor),8));
-  return vbslq_u32(vdupq_n_u32(0xff000000),p,vreinterpretq_u32_u8(shaded));
-}
-static inline uint32_t shaded1(uint32_t p,uint32_t light) {
-  return (p&0xff000000)|((((p&0x00ff00ff)*light)>>8)&0x00ff00ff)|(((((p>>8)&255)*light)>>8)<<8);
-}
-void magik_launcher_filter_blend_shade_column(uint32_t *out,
-    const uint32_t *a0,const uint32_t *a1,const uint32_t *b0,const uint32_t *b1,
-    const uint32_t *c0,const uint32_t *c1,const uint32_t *d0,const uint32_t *d1,
-    size_t n,uint32_t wx,uint32_t wx2,uint32_t lod,uint32_t weight,uint32_t light) {
-  size_t i=0;
-  for(;i+4<=n;i+=4) {
-    uint32x4_t a=blend(vld1q_u32(a0+i),vld1q_u32(a1+i),wx);
-    if(lod)a=blend(a,blend(vld1q_u32(b0+i),vld1q_u32(b1+i),wx2),lod);
-    if(weight) {
-      uint32x4_t c=blend(vld1q_u32(c0+i),vld1q_u32(c1+i),wx);
-      if(lod)c=blend(c,blend(vld1q_u32(d0+i),vld1q_u32(d1+i),wx2),lod);
-      a=blend(a,c,weight);
-    }
-    vst1q_u32(out+i,shaded4(a,light));
-  }
-  for(;i<n;++i) {
-    uint32_t a=scalar(a0[i],a1[i],wx);
-    if(lod)a=scalar(a,scalar(b0[i],b1[i],wx2),lod);
-    if(weight) {
-      uint32_t c=scalar(c0[i],c1[i],wx);
-      if(lod)c=scalar(c,scalar(d0[i],d1[i],wx2),lod);
-      a=scalar(a,c,weight);
-    }
-    out[i]=shaded1(a,light);
-  }
-}
-
 static uint16_t over_pixel(uint32_t p, uint16_t dst) {
   uint32_t alpha = p >> 24;
   if (!alpha)
