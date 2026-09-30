@@ -58,6 +58,21 @@ pub(super) struct Layout {
 }
 
 impl Layout {
+    pub fn for_level(scene: LauncherScene, nested: bool) -> Option<Self> {
+        let mut layout = Self::for_scene(scene)?;
+        if nested && layout.crt && layout.width > layout.height {
+            let (ax, ay) = if (layout.width, layout.height) == (640, 288) {
+                (5, 3)
+            } else {
+                (layout.sx, layout.sy)
+            };
+            // Derive width from the native height so the row retains 5:7 after
+            // pixel-aspect correction. Root geometry remains exactly as prepared.
+            layout.card_w = layout.card_h * 5 * ax / (7 * ay) / 2 * 2;
+        }
+        Some(layout)
+    }
+
     pub fn for_scene(scene: LauncherScene) -> Option<Self> {
         if !scene.crt && scene.width >= scene.height {
             return None;
@@ -395,7 +410,11 @@ impl Layout {
         if faces.is_empty() {
             return;
         }
-        let mut plan = build_carousel_plan(faces, frame, cyclic);
+        let mut plan = if self.crt && faces.first().is_some_and(|f| f.slides) {
+            row::build_with_tilt(faces, frame, 0)
+        } else {
+            build_carousel_plan(faces, frame, cyclic)
+        };
         self.map_plan(&mut plan);
         self.draw_plan(pixels, &plan, scratch);
     }
@@ -412,54 +431,48 @@ impl Layout {
     /// same navigation, flip, occlusion and reflection contract; only the
     /// route-owned card geometry changes.
     pub fn map_plan(&self, plan: &mut CarouselPlan<'_>) {
+        for item in plan.items.iter_mut().flatten() {
+            item.pose = self.map_pose(item.pose, plan.row);
+        }
+    }
+
+    pub fn map_pose(
+        &self,
+        old: crate::launcher_flip::Pose,
+        row: bool,
+    ) -> crate::launcher_flip::Pose {
+        let mut pose = old;
         let clip = (self.margin_x, self.width - self.margin_x);
-        let near = self.card_w as i64 * 4 / 5;
-        let far = (self.width - 2 * self.margin_x) as i64 / 2 - self.card_w as i64 * 31 / 100;
-        let offset = |x: i64| {
+        let width = old.width * self.card_w as i64 / 180;
+        let height = old.height * self.card_h as i64 / 252;
+        if row {
+            pose.x = self.margin_x as i64 * GEOMETRY_ONE
+                + (old.x - 292 * GEOMETRY_ONE) * self.card_w as i64 / 180;
+            pose.top = self.centre_y as i64 * GEOMETRY_ONE - height / 2;
+            if self.crt {
+                pose.brightness = row::crt_brightness(old.brightness);
+            }
+        } else {
+            let near = self.card_w as i64 * 4 / 5;
+            let far = (self.width - 2 * self.margin_x) as i64 / 2 - self.card_w as i64 * 31 / 100;
+            let x = old.x + old.width / 2 - 610 * GEOMETRY_ONE;
             let distance = x.abs();
             let mapped = if distance <= 144 * GEOMETRY_ONE {
                 distance * near / 144
             } else {
                 near * GEOMETRY_ONE + (distance - 144 * GEOMETRY_ONE) * (far - near) / 110
             };
-            x.signum() * mapped
-        };
-        for item in plan.items.iter_mut().flatten() {
-            if plan.row {
-                let old = item.pose;
-                let width = old.width * self.card_w as i64 / 180;
-                let height = old.height * self.card_h as i64 / 252;
-                item.pose.x = self.margin_x as i64 * GEOMETRY_ONE
-                    + (old.x - 292 * GEOMETRY_ONE) * self.card_w as i64 / 180;
-                item.pose.top = self.centre_y as i64 * GEOMETRY_ONE - height / 2;
-                item.pose.width = width;
-                item.pose.height = height;
-                if self.crt {
-                    item.pose.angle =
-                        (old.angle - row::TILT).max(0) * GEOMETRY_ONE / (GEOMETRY_ONE - row::TILT);
-                    // Native CRT darkening has its own depth profile.
-                    item.pose.brightness = row::crt_brightness(old.brightness);
-                }
-                item.pose.clip = clip;
-                item.pose.body_clip = clip;
-                item.pose.vertical_clip = (self.top, self.bottom, self.bottom);
-                continue;
-            }
-            let old = item.pose;
-            let centre = self.width as i64 * GEOMETRY_ONE / 2
-                + offset(old.x + old.width / 2 - 610 * GEOMETRY_ONE);
-            let width = old.width * self.card_w as i64 / 180;
-            let height = old.height * self.card_h as i64 / 252;
-            // Vertical displacement from the resting row scales with the card.
+            let centre = self.width as i64 * GEOMETRY_ONE / 2 + x.signum() * mapped;
             let lift = (old.top + old.height / 2 - 284 * GEOMETRY_ONE) * self.card_h as i64 / 252;
-            item.pose.x = centre - width / 2;
-            item.pose.top = self.centre_y as i64 * GEOMETRY_ONE + lift - height / 2;
-            item.pose.width = width;
-            item.pose.height = height;
-            item.pose.clip = clip;
-            item.pose.body_clip = clip;
-            item.pose.vertical_clip = (self.top, self.bottom, self.bottom);
+            pose.x = centre - width / 2;
+            pose.top = self.centre_y as i64 * GEOMETRY_ONE + lift - height / 2;
         }
+        pose.width = width;
+        pose.height = height;
+        pose.clip = clip;
+        pose.body_clip = clip;
+        pose.vertical_clip = (self.top, self.bottom, self.bottom);
+        pose
     }
 
     pub fn draw_plan(
@@ -483,6 +496,15 @@ impl Layout {
 
     /// Chrome rows that differ between hierarchy levels: the header with the
     /// breadcrumb and section label, and the portrait group summary.
+    pub fn title_rect(&self) -> (usize, usize, usize, usize) {
+        (
+            self.margin_x,
+            0,
+            self.width.saturating_sub(self.margin_x + 80 * self.sx),
+            self.margin_y + if self.crt { 18 * self.sy } else { 46 },
+        )
+    }
+
     pub fn level_chrome_rows(&self) -> [(usize, usize); 2] {
         let summary = if self.crt {
             (0, 0)

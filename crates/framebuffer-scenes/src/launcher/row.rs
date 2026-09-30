@@ -54,28 +54,59 @@ fn between(a: Pose, b: Pose, k: i64) -> Pose {
 }
 
 pub(super) fn build(faces: &[CardFaces], frame: BrowseFrame) -> CarouselPlan<'_> {
+    build_with_tilt(faces, frame, TILT)
+}
+
+pub(super) fn build_with_tilt(
+    faces: &[CardFaces],
+    mut frame: BrowseFrame,
+    tilt: i64,
+) -> CarouselPlan<'_> {
+    if frame.phase != crate::launcher_navigation::BrowsePhase::Settled
+        && (frame.progress_millis == 0 || frame.progress_millis >= frame.duration_millis)
+    {
+        frame.selected = if frame.progress_millis == 0 {
+            frame.selected
+        } else {
+            frame.target
+        };
+        frame.phase = crate::launcher_navigation::BrowsePhase::Settled;
+    }
+    let slot = |k| {
+        let mut pose = self::slot(k);
+        if k != 0 {
+            pose.angle = tilt;
+        }
+        pose
+    };
     let n = faces.len();
     let visible = n.min(5);
     let selected = frame.selected % n;
     let mut items = [None; CAROUSEL_CAPACITY];
     let mut count = 0;
-    let mut push = |index: usize, pose: Pose, back: bool| {
+    let mut push = |index: usize, pose: Pose, back: bool, prominence: u32| {
         items[count] = Some(CarouselItem {
             face: if back {
                 faces[index].back.as_ref().unwrap_or(&faces[index].compact)
-            } else if pose.brightness == 256 {
+            } else if prominence == 256 {
                 &faces[index].detail
             } else {
                 &faces[index].compact
             },
-            blend: None,
+            blend: (!back && prominence > 0 && prominence < 256)
+                .then_some((&faces[index].detail, prominence)),
             pose,
         });
         count += 1;
     };
     if n == 1 || frame.phase == crate::launcher_navigation::BrowsePhase::Settled {
         for k in (0..visible).rev() {
-            push((selected + k) % n, slot(k), false);
+            push(
+                (selected + k) % n,
+                slot(k),
+                false,
+                if k == 0 { 256 } else { 0 },
+            );
         }
         return CarouselPlan { items, row: true };
     }
@@ -101,9 +132,9 @@ pub(super) fn build(faces: &[CardFaces], frame: BrowseFrame) -> CarouselPlan<'_>
     let e = if right { k } else { GEOMETRY_ONE - k };
     let mut pose = between(tuck, home, e);
     let turn = if right { raw } else { GEOMETRY_ONE - raw };
-    pose.angle = GEOMETRY_ONE + (TILT - GEOMETRY_ONE) * turn / GEOMETRY_ONE;
+    pose.angle = GEOMETRY_ONE + (tilt - GEOMETRY_ONE) * turn / GEOMETRY_ONE;
     // End card is always furthest back. A short row may use the same face twice.
-    push(end, pose, pose.angle > GEOMETRY_ONE / 2);
+    push(end, pose, pose.angle > GEOMETRY_ONE / 2, 0);
     for rel in (1..visible).rev() {
         let index = if right {
             (selected + rel) % n
@@ -115,7 +146,12 @@ pub(super) fn build(faces: &[CardFaces], frame: BrowseFrame) -> CarouselPlan<'_>
         } else {
             (slot(rel - 1), slot(rel))
         };
-        push(index, between(a, b, k), false);
+        let prominence = if rel == 1 {
+            (256 * if right { k } else { GEOMETRY_ONE - k } / GEOMETRY_ONE) as u32
+        } else {
+            0
+        };
+        push(index, between(a, b, k), false, prominence);
     }
     let out = Pose {
         x: 68 * GEOMETRY_ONE,
@@ -126,7 +162,7 @@ pub(super) fn build(faces: &[CardFaces], frame: BrowseFrame) -> CarouselPlan<'_>
     } else {
         between(out, slot(0), k)
     };
-    push(front, pose, false);
+    push(front, pose, false, 256);
     CarouselPlan { items, row: true }
 }
 

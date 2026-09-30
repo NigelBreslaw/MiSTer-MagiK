@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Hierarchy level change, the "card trick". One continuous motion: the chosen
-//! card eases round to edge-on while the other cards turn and slide in behind
-//! it. At the edge-on moment it snaps round into the next level's card and the
-//! next level's cards flip out from behind it, edge first, all together.
+//! card turns and travels between the two selected slots for the whole 920 ms.
+//! The source gathers until 460 ms; the destination deals after it. Both use
+//! the same native hero pose and the existing projection and reflections.
 //!
 //! The two halves need only their own level. The level being left renders the
 //! gather; the level being entered renders the deal. A consumer can therefore
@@ -20,19 +20,16 @@ use crate::launcher_flip::Pose;
 /// Complete duration of a level change.
 pub const LEVEL_TRICK_MILLIS: u32 = 920;
 /// Every card is edge-on at this moment; the level swaps here.
-pub const LEVEL_TRICK_EDGE_MILLIS: u32 = 400;
+pub const LEVEL_TRICK_EDGE_MILLIS: u32 = 460;
 const EDGE_MILLIS: u32 = LEVEL_TRICK_EDGE_MILLIS;
-/// The chosen card completes its turn quickly after edge-on.
-const SNAP_MILLIS: u32 = 200;
-const DEAL_MILLIS: u32 = 480;
-const DEAL_STAGGER_MILLIS: u32 = 30;
+const DEAL_MILLIS: u32 = 360;
+const DEAL_STAGGER_MILLIS: u32 = 20;
 /// Header and group summary fade out, then the next level's fade in.
 const CHROME_OUT_MILLIS: u32 = 260;
-const CHROME_IN_AT_MILLIS: u32 = EDGE_MILLIS + 60;
+const CHROME_IN_AT_MILLIS: u32 = LEVEL_TRICK_MILLIS * 55 / 100;
 const CHROME_IN_MILLIS: u32 = 360;
 /// The cards gather behind the chosen card at 90% of its size.
 const BEHIND_SCALE: i64 = GEOMETRY_ONE * 9 / 10;
-/// The chosen card lifts by 4% while it turns.
 const LIFT_SCALE: i64 = GEOMETRY_ONE * 4 / 100;
 const EDGE_ON: i64 = GEOMETRY_ONE / 2;
 
@@ -41,7 +38,6 @@ pub enum LevelChange {
     Descend,
     Ascend,
 }
-
 impl LevelChange {
     const fn spin(self) -> i64 {
         match self {
@@ -52,45 +48,61 @@ impl LevelChange {
 }
 
 impl PreparedLauncher {
-    /// First half of a level change, rendered by the level being left: the
-    /// other cards turn and slide in behind `selected` while it eases round
-    /// to edge-on and this level's header and summary fade out. Times at or
-    /// after the edge render the all-edge-on hold frame.
     pub fn render_level_gather(
         &mut self,
         selected: usize,
         change: LevelChange,
         elapsed_millis: u32,
     ) {
+        self.render_level_gather_to(selected, change, elapsed_millis, self.slot_zero());
+    }
+
+    pub fn render_level_gather_to(
+        &mut self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        destination: CardSlot,
+    ) {
         let t = elapsed_millis.min(EDGE_MILLIS);
         if t == 0 {
             self.restore_chrome();
-            self.render_frame(BrowseFrame {
-                selected,
-                target: selected,
-                phase: crate::launcher_navigation::BrowsePhase::Settled,
-                direction: None,
-                progress_millis: 0,
-                duration_millis: 0,
-            });
+            self.render_frame(settled(selected));
             return;
         }
-        let out = ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS));
-        self.fade_level_chrome(GEOMETRY_ONE - out);
+        self.fade_level_chrome(GEOMETRY_ONE - ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS)));
+        let hero = hero_pose(self.slot_zero(), destination, change, t);
         let progress = window(t, 0, EDGE_MILLIS);
         let gather = ease_in_out_cubic(progress);
-        let turn = progress * progress / GEOMETRY_ONE;
+        let mut behind = scaled_pose(hero, BEHIND_SCALE);
+        behind.angle = 0;
+        behind.brightness = 64;
         let faces = Arc::clone(&self.faces);
+        let nested = faces.first().is_some_and(|f| f.slides);
+        let relatives: &[isize] = if nested {
+            &[4, 3, 2, 1]
+        } else {
+            &[2, -2, 1, -1]
+        };
         let mut items = [None; CAROUSEL_CAPACITY];
         let mut count = 0;
-        for relative in [2, -2, 1, -1] {
+        for &relative in relatives {
+            if nested && relative as usize >= faces.len().min(5) {
+                continue;
+            }
             let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
                 continue;
             };
-            let rest = settled_pose(relative);
-            let mut pose = lerp_pose(rest, scaled_centre(BEHIND_SCALE), gather);
+            if t == EDGE_MILLIS {
+                continue;
+            }
+            let rest = self.resting_pose(relative);
+            let mut pose = lerp_pose(rest, behind, gather);
             pose.angle = rest.angle * (GEOMETRY_ONE - gather) / GEOMETRY_ONE
-                + relative.signum() as i64 * EDGE_ON * turn / GEOMETRY_ONE;
+                + relative.signum() as i64 * EDGE_ON * progress * progress
+                    / GEOMETRY_ONE
+                    / GEOMETRY_ONE;
+            pose.brightness = pose.brightness * ((EDGE_MILLIS - t).min(20) * 256 / 20) / 256;
             items[count] = Some(CarouselItem {
                 face: &faces[index].compact,
                 blend: None,
@@ -99,35 +111,30 @@ impl PreparedLauncher {
             count += 1;
         }
         if let Some(card) = faces.get(selected) {
-            let mut pose = scaled_centre(lift(t));
-            pose.angle = change.spin() * EDGE_ON * turn / GEOMETRY_ONE;
             items[count] = Some(CarouselItem {
                 face: &card.detail,
                 blend: None,
-                pose,
+                pose: hero,
             });
         }
         self.draw_trick_plan(&mut CarouselPlan { items, row: false });
     }
 
-    /// Second half of a level change, rendered by the level being entered:
-    /// `selected` snaps round from edge-on and its neighbours flip out from
-    /// behind it while this level's header and summary fade in. Elapsed time
-    /// is measured from the start of the gather; times before the edge render
-    /// the all-edge-on hold frame. At [`LEVEL_TRICK_MILLIS`] the frame equals
-    /// a settled frame of this level.
     pub fn render_level_deal(&mut self, selected: usize, change: LevelChange, elapsed_millis: u32) {
+        self.render_level_deal_from(selected, change, elapsed_millis, self.slot_zero());
+    }
+
+    pub fn render_level_deal_from(
+        &mut self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        source: CardSlot,
+    ) {
         let t = elapsed_millis.clamp(EDGE_MILLIS, LEVEL_TRICK_MILLIS);
         if t == LEVEL_TRICK_MILLIS {
             self.restore_chrome();
-            self.render_frame(BrowseFrame {
-                selected,
-                target: selected,
-                phase: crate::launcher_navigation::BrowsePhase::Settled,
-                direction: None,
-                progress_millis: 0,
-                duration_millis: 0,
-            });
+            self.render_frame(settled(selected));
             return;
         }
         self.fade_level_chrome(ease_out_quart(window(
@@ -135,79 +142,103 @@ impl PreparedLauncher {
             CHROME_IN_AT_MILLIS,
             CHROME_IN_MILLIS,
         )));
+        let hero = hero_pose(source, self.slot_zero(), change, t);
+        let mut behind = scaled_pose(hero, BEHIND_SCALE);
+        behind.angle = 0;
+        behind.brightness = 64;
         let faces = Arc::clone(&self.faces);
+        let nested = faces.first().is_some_and(|f| f.slides);
+        let relatives: &[isize] = if nested {
+            &[4, 3, 2, 1]
+        } else {
+            &[2, -2, 1, -1]
+        };
         let mut items = [None; CAROUSEL_CAPACITY];
         let mut count = 0;
-        for relative in [2, -2, 1, -1] {
+        for &relative in relatives {
+            if nested && relative as usize >= faces.len().min(5) {
+                continue;
+            }
             let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
                 continue;
             };
-            // Nearest cards leave first, right before left.
-            let order = (relative.unsigned_abs() - 1) * 2 + usize::from(relative < 0);
-            let at = EDGE_MILLIS + order as u32 * DEAL_STAGGER_MILLIS;
-            let dealt = ease_out_quart(window(t, at, DEAL_MILLIS));
-            let rest = settled_pose(relative);
-            let mut pose = lerp_pose(scaled_centre(BEHIND_SCALE), rest, dealt);
-            // A generic card emerges showing its MagiK back, 150 degrees round,
-            // and turns face-up on its way out. Cards with artwork have no
-            // back and simply turn in from edge-on.
-            let back = faces[index].back.as_ref();
-            if dealt == 0 && back.is_some() {
-                // Still hidden behind the chosen card: a card showing its back
-                // must not appear during the edge-on hold or before its turn.
+            let order = if nested {
+                relative as usize - 1
+            } else {
+                (relative.unsigned_abs() - 1) * 2 + usize::from(relative < 0)
+            };
+            let dealt = ease_out_quart(window(
+                t,
+                EDGE_MILLIS + order.min(5) as u32 * DEAL_STAGGER_MILLIS,
+                DEAL_MILLIS,
+            ));
+            if dealt == 0 {
                 continue;
             }
-            let start = if back.is_some() {
-                EDGE_ON * 5 / 3
-            } else {
-                EDGE_ON
-            };
+            let rest = self.resting_pose(relative);
+            let mut pose = lerp_pose(behind, rest, dealt);
             pose.angle = rest.angle * dealt / GEOMETRY_ONE
-                - relative.signum() as i64 * start * (GEOMETRY_ONE - dealt) / GEOMETRY_ONE;
-            let face = match back {
-                Some(back) if pose.angle.abs() > EDGE_ON => back,
-                _ => &faces[index].compact,
-            };
+                - relative.signum() as i64 * EDGE_ON * (GEOMETRY_ONE - dealt) / GEOMETRY_ONE;
             items[count] = Some(CarouselItem {
-                face,
+                face: &faces[index].compact,
                 blend: None,
                 pose,
             });
             count += 1;
         }
         if let Some(card) = faces.get(selected) {
-            let snapped = ease_out_quart(window(t, EDGE_MILLIS, SNAP_MILLIS));
-            let mut pose = scaled_centre(lift(t));
-            pose.angle = -change.spin() * EDGE_ON * (GEOMETRY_ONE - snapped) / GEOMETRY_ONE;
             items[count] = Some(CarouselItem {
                 face: &card.detail,
                 blend: None,
-                pose,
+                pose: hero,
             });
         }
         self.draw_trick_plan(&mut CarouselPlan { items, row: false });
     }
 
-    /// Restore this level's complete chrome after an interrupted level change.
+    /// The target breadcrumb swaps at 45% of the timeline while both panels are dim.
+    pub fn render_transition_title_from(&mut self, target: &Self, elapsed_millis: u32) {
+        if self.scene != target.scene || elapsed_millis < LEVEL_TRICK_MILLIS * 45 / 100 {
+            return;
+        }
+        let k = ease_out_quart(window(
+            elapsed_millis,
+            CHROME_IN_AT_MILLIS,
+            CHROME_IN_MILLIS,
+        ));
+        let alpha = 76 + (180 * k / GEOMETRY_ONE) as u32;
+        let width = if self.responsive.is_some() {
+            self.scene.width
+        } else {
+            LOGICAL_WIDTH
+        };
+        let (x0, y0, x1, y1) = self.responsive.map_or((26, 0, 826, 76), |l| l.title_rect());
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let at = y * width + x;
+                self.logical[at] = Rgb565Pixel(scale_rgb565(target.chrome[at].0, alpha));
+            }
+        }
+        self.fit_output();
+    }
+
     pub fn restore_chrome(&mut self) {
         self.logical.copy_from_slice(&self.chrome);
         self.fit_output();
     }
 
     fn draw_trick_plan(&mut self, plan: &mut CarouselPlan<'_>) {
+        // Both halves already use native poses. Mapping again would move the hero at the swap.
         if let Some(layout) = self.responsive {
             layout.clear_carousel(&mut self.logical);
-            layout.map_plan(plan);
             layout.draw_plan(&mut self.logical, plan, &mut self.flip_columns);
             return;
         }
-        for rect in Self::logical_damage() {
-            for y in rect.y0..rect.y1 {
-                self.logical[y * LOGICAL_WIDTH + rect.x0..y * LOGICAL_WIDTH + rect.x1]
-                    .fill(Rgb565Pixel(BACKGROUND));
-            }
+        for y in 120..495 {
+            self.logical[y * LOGICAL_WIDTH + 268..y * LOGICAL_WIDTH + 934]
+                .fill(Rgb565Pixel(BACKGROUND));
         }
-        for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
+        for left in (268..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
             draw_carousel_plan(
                 &mut self.logical,
                 LOGICAL_WIDTH,
@@ -219,9 +250,6 @@ impl PreparedLauncher {
         }
         self.fit_output();
     }
-
-    /// Scale this level's header and group summary. Chrome is text on black,
-    /// so scaling each pixel is an exact fade. Shared chrome is untouched.
     fn fade_level_chrome(&mut self, alpha: i64) {
         let alpha = (alpha * 256 / GEOMETRY_ONE) as u32;
         let width = if self.responsive.is_some() {
@@ -242,14 +270,22 @@ impl PreparedLauncher {
             }
         };
         if let Some(layout) = self.responsive {
-            for (y0, y1) in layout.level_chrome_rows() {
-                fade(0, y0, width, y1);
-            }
+            let (_, title_end) = layout.level_chrome_rows()[0];
+            let (_, _, _, rule_y) = layout.title_rect();
+            fade(0, rule_y + 1, width, title_end);
+            let (y0, y1) = layout.level_chrome_rows()[1];
+            fade(0, y0, width, y1);
         } else {
-            // Header, sidebar, and the carousel's section label.
-            fade(0, 0, LOGICAL_WIDTH, 77);
             fade(0, 77, 265, 500);
             fade(296, 77, LOGICAL_WIDTH, 120);
+        }
+        let title_alpha = 76 + 180 * alpha / 256;
+        let (x0, y0, x1, y1) = self.responsive.map_or((26, 0, 826, 76), |l| l.title_rect());
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let at = y * width + x;
+                self.logical[at] = Rgb565Pixel(scale_rgb565(self.chrome[at].0, title_alpha));
+            }
         }
     }
 }
@@ -273,25 +309,38 @@ fn neighbour(
     }
 }
 
-/// The chosen card lifts slightly through the gather and snap.
-fn lift(t: u32) -> i64 {
-    GEOMETRY_ONE
-        + LIFT_SCALE * sin_half_turn(window(t, 0, EDGE_MILLIS + SNAP_MILLIS)) / GEOMETRY_ONE
+fn settled(selected: usize) -> BrowseFrame {
+    BrowseFrame {
+        selected,
+        target: selected,
+        phase: crate::launcher_navigation::BrowsePhase::Settled,
+        direction: None,
+        progress_millis: 0,
+        duration_millis: 0,
+    }
 }
 
-fn settled_pose(relative: isize) -> Pose {
-    continuous_geometry(relative, relative, 0)
-}
-
-/// The centre card scaled about its own centre.
-fn scaled_centre(scale: i64) -> Pose {
-    let mut pose = settled_pose(0);
+fn scaled_pose(mut pose: Pose, scale: i64) -> Pose {
     let width = pose.width * scale / GEOMETRY_ONE;
     let height = pose.height * scale / GEOMETRY_ONE;
     pose.x += (pose.width - width) / 2;
     pose.top += (pose.height - height) / 2;
     pose.width = width;
     pose.height = height;
+    pose
+}
+
+fn hero_pose(from: CardSlot, to: CardSlot, change: LevelChange, t: u32) -> Pose {
+    let k = ease_in_out_cubic(window(t, 0, LEVEL_TRICK_MILLIS));
+    let scale =
+        GEOMETRY_ONE + LIFT_SCALE * sin_half_turn(window(t, 0, LEVEL_TRICK_MILLIS)) / GEOMETRY_ONE;
+    let mut pose = scaled_pose(lerp_pose(from.pose, to.pose, k), scale);
+    pose.angle = change.spin() * k;
+    pose.clip = (
+        from.pose.clip.0.min(to.pose.clip.0),
+        from.pose.clip.1.max(to.pose.clip.1),
+    );
+    pose.body_clip = pose.clip;
     pose
 }
 
@@ -307,6 +356,7 @@ fn lerp_pose(a: Pose, b: Pose, k: i64) -> Pose {
         width,
         height,
         angle: lerp(a.angle, b.angle),
+        brightness: lerp(i64::from(a.brightness), i64::from(b.brightness)) as u32,
         ..a
     }
 }
@@ -398,6 +448,33 @@ mod tests {
     }
 
     #[test]
+    fn travelling_hero_is_halfway_and_edge_on_at_460_ms_on_native_routes() {
+        for scene in [LauncherScene::new(960, 540), LauncherScene::crt(640, 240)] {
+            let from = scene.slot_zero(false);
+            let to = scene.slot_zero(true);
+            let centre = |p: Pose| p.x + p.width / 2;
+            let mut previous = centre(from.pose);
+            for t in 0..=LEVEL_TRICK_MILLIS {
+                let pose = hero_pose(from, to, LevelChange::Descend, t);
+                assert!(centre(pose) <= previous);
+                assert!(previous - centre(pose) < 2 * GEOMETRY_ONE);
+                previous = centre(pose);
+            }
+            let middle = hero_pose(from, to, LevelChange::Descend, 460);
+            assert_eq!(centre(middle), (centre(from.pose) + centre(to.pose)) / 2);
+            assert_eq!(middle.angle, EDGE_ON);
+            assert_eq!(
+                centre(hero_pose(from, to, LevelChange::Descend, 920)),
+                centre(to.pose)
+            );
+            assert_eq!(
+                hero_pose(to, from, LevelChange::Ascend, 460).angle,
+                -EDGE_ON
+            );
+        }
+    }
+
+    #[test]
     fn trick_starts_on_the_source_and_ends_on_the_destination() {
         for scene in [LauncherScene::new(960, 540), LauncherScene::crt(640, 240)] {
             let from_cards = cards(6);
@@ -433,14 +510,24 @@ mod tests {
                 .max()
                 .unwrap()
         };
-        from.render_level_gather(3, LevelChange::Descend, EDGE_MILLIS);
+        from.render_level_gather_to(3, LevelChange::Descend, EDGE_MILLIS, to.slot_zero());
+        from.render_transition_title_from(&to, EDGE_MILLIS);
         assert!(widest_lit_row(from.pixels()) < 16);
         // The destination can hold here for as long as preparation takes.
         to.render_level_deal(0, LevelChange::Descend, 0);
         assert!(widest_lit_row(to.pixels()) < 16);
-        // Headers and summaries are fully faded at the swap.
-        assert!(from.pixels()[..77 * 960].iter().all(|p| p.0 == 0));
-        assert!(to.pixels()[..77 * 960].iter().all(|p| p.0 == 0));
+        // The target breadcrumb is dim; the clock and rule stay visible.
+        for y in 0..76 {
+            assert!(
+                from.pixels()[y * 960 + 26..y * 960 + 826]
+                    == to.pixels()[y * 960 + 26..y * 960 + 826]
+            );
+            assert!(
+                from.pixels()[y * 960 + 874..y * 960 + 934]
+                    == from.chrome[y * 960 + 874..y * 960 + 934]
+            );
+        }
+        assert!(from.pixels()[76 * 960..77 * 960] == from.chrome[76 * 960..77 * 960]);
     }
 
     #[test]

@@ -18,6 +18,12 @@ const CAROUSEL_CAPACITY: usize = 8;
 use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
 pub use level_trick::{LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LevelChange};
 
+/// A prepared route's selected-card placement, shared by both transition halves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CardSlot {
+    pose: crate::launcher_flip::Pose,
+}
+
 pub const LOGICAL_WIDTH: usize = 960;
 pub const LOGICAL_HEIGHT: usize = 540;
 
@@ -138,6 +144,18 @@ pub struct LauncherScene {
 }
 
 impl LauncherScene {
+    pub fn slot_zero(self, nested: bool) -> CardSlot {
+        let pose = if nested {
+            row::slot(0)
+        } else {
+            continuous_geometry(0, 0, 0)
+        };
+        CardSlot {
+            pose: responsive::Layout::for_level(self, nested)
+                .map_or(pose, |layout| layout.map_pose(pose, nested)),
+        }
+    }
+
     /// Prepare card textures from high-precision source artwork.
     pub fn prepare_initial_with_rgb888_artwork(
         self,
@@ -532,7 +550,11 @@ impl LauncherFramePreparer {
     pub(crate) fn new_direct_tile_buffer(&self) -> PreparedLauncherFrame {
         PreparedLauncherFrame {
             request: None,
-            scratch: (0..CAROUSEL_CAPACITY)
+            scratch: (0..if self.faces.first().is_some_and(|f| f.slides) {
+                CAROUSEL_CAPACITY
+            } else {
+                6
+            })
                 .map(|_| crate::launcher_flip::Scratch::strip())
                 .collect(),
             pixels: Vec::new(),
@@ -562,6 +584,25 @@ struct PreparedCard<'a> {
 }
 
 impl PreparedLauncher {
+    pub fn slot_zero(&self) -> CardSlot {
+        self.scene
+            .slot_zero(self.faces.first().is_some_and(|face| face.slides))
+    }
+
+    fn resting_pose(&self, relative: isize) -> crate::launcher_flip::Pose {
+        let nested = self.faces.first().is_some_and(|face| face.slides);
+        let mut pose = if nested {
+            row::slot(relative as usize)
+        } else {
+            continuous_geometry(relative, relative, 0)
+        };
+        if nested && self.scene.crt {
+            pose.angle = 0;
+        }
+        self.responsive
+            .map_or(pose, |layout| layout.map_pose(pose, nested))
+    }
+
     pub fn carousel_clip(&self) -> (usize, usize) {
         self.frame_preparer().carousel_clip()
     }
@@ -640,7 +681,7 @@ impl PreparedLauncher {
                 && cache.slides == data.level.slides()
                 && cache.artwork_kind == artwork_kind
         });
-        let responsive = responsive::Layout::for_scene(scene);
+        let responsive = responsive::Layout::for_level(scene, data.level.slides());
         let fonts = responsive.map(|layout| layout.fonts(typography));
         let pixel_count = if responsive.is_some() {
             scene.width * scene.height
@@ -761,7 +802,11 @@ impl PreparedLauncher {
                 vec![Rgb565Pixel(BACKGROUND); scene.width * scene.height]
             },
             faces: Arc::new(faces),
-            flip_columns: (0..CAROUSEL_CAPACITY)
+            flip_columns: (0..if data.level.slides() {
+                CAROUSEL_CAPACITY
+            } else {
+                6
+            })
                 .map(|_| {
                     if let Some(layout) = responsive {
                         crate::launcher_flip::Scratch::sized(

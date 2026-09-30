@@ -13,7 +13,7 @@ use crate::launcher_home::{CARD_COUNT, CardLevelSnapshot};
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
 use mister_magik_framebuffer_scenes::launcher::{
-    LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherFaceCache, LauncherFrameRequest,
+    CardSlot, LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherFaceCache, LauncherFrameRequest,
     LauncherScene, LauncherTypography, LevelChange, PreparedLauncher,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
@@ -126,6 +126,9 @@ struct LevelTrick {
     source_level: CardLevelSnapshot,
     source_selected: usize,
     destination_selected: usize,
+    source_slot: CardSlot,
+    destination_slot: CardSlot,
+    edge_waiting: bool,
     started_ms: u64,
     destination: Option<Prepared>,
     /// Set when the destination became the prepared level. A late swap
@@ -442,6 +445,9 @@ impl LauncherCardHomeSession {
         };
         self.trick = Some(LevelTrick {
             change,
+            source_slot: self.prepared.slot_zero(),
+            destination_slot: self.scene.slot_zero(!level.is_root()),
+            edge_waiting: false,
             source_level: std::mem::replace(&mut self.level, level),
             source_selected: self.frame.selected,
             destination_selected: selected,
@@ -523,14 +529,28 @@ impl LauncherCardHomeSession {
             return false;
         };
         let elapsed = self.now_ms.saturating_sub(trick.started_ms);
+        let preparing = trick.deal_delay_ms.is_none();
         let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
-        if trick.deal_delay_ms.is_none()
-            && elapsed >= edge
+        if preparing
+            && elapsed >= u64::from(LEVEL_TRICK_MILLIS * 45 / 100)
+            && elapsed < edge
+            && matches!(self.trick.as_ref().and_then(|t| t.destination.as_ref()), Some(Prepared::Building(id)) if self.preparation.is_ready(*id))
             && let Some(prepared) = self.take_built_destination()
         {
-            self.install_destination(prepared);
-            if let Some(trick) = self.trick.as_mut() {
-                trick.deal_delay_ms = Some(elapsed - edge);
+            self.trick.as_mut().unwrap().destination = Some(Prepared::Built(prepared));
+        }
+        if preparing && elapsed >= edge {
+            if let Some(prepared) = self.take_built_destination() {
+                self.install_destination(prepared);
+                if let Some(trick) = self.trick.as_mut() {
+                    trick.deal_delay_ms = Some(if trick.edge_waiting {
+                        elapsed - edge
+                    } else {
+                        0
+                    });
+                }
+            } else if let Some(trick) = self.trick.as_mut() {
+                trick.edge_waiting = true;
             }
         }
         let Some(trick) = self.trick.as_ref() else {
@@ -538,15 +558,26 @@ impl LauncherCardHomeSession {
         };
         let Some(delay) = trick.deal_delay_ms else {
             let t = elapsed.min(edge) as u32;
-            self.prepared
-                .render_level_gather(trick.source_selected, trick.change, t);
+            self.prepared.render_level_gather_to(
+                trick.source_selected,
+                trick.change,
+                t,
+                trick.destination_slot,
+            );
+            if let Some(Prepared::Built(target)) = trick.destination.as_ref() {
+                self.prepared.render_transition_title_from(target, t);
+            }
             return true;
         };
         let t = elapsed
             .saturating_sub(delay)
             .min(u64::from(LEVEL_TRICK_MILLIS)) as u32;
-        self.prepared
-            .render_level_deal(trick.destination_selected, trick.change, t);
+        self.prepared.render_level_deal_from(
+            trick.destination_selected,
+            trick.change,
+            t,
+            trick.source_slot,
+        );
         if t >= LEVEL_TRICK_MILLIS {
             self.trick = None;
             self.content_generation = self.content_generation.wrapping_add(1).max(1);
@@ -1618,7 +1649,7 @@ mod tests {
             0,
             0.0,
             "21:37",
-            100 + u64::from(LEVEL_TRICK_EDGE_MILLIS),
+            100 + u64::from(LEVEL_TRICK_EDGE_MILLIS) + 17,
             true,
             None,
         );

@@ -792,5 +792,6 @@ Physical captures and Analytics validate scanout, input and performance after
 portable checks pass; host renders do not establish device performance.
 An edge hold is a readiness fallback and must be reported separately from
 920 ms nominal motion. Prefetch/readiness should prevent it in normal use.
-Portrait and non-240p CRT retain supported production geometry until their
-new row geometry is explicitly reviewed.
+Portrait and non-240p CRT retain production font grids, insets and native
+aspect correction. Their row geometry requires review because the prototype
+does not specify those layouts.
