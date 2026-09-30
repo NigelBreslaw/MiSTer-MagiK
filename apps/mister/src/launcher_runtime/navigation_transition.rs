@@ -2192,14 +2192,9 @@ mod tests {
 
     #[test]
     fn cached_settings_cog_matches_direct_pixels_and_reuses_working_buffer() {
-        static COG: std::sync::OnceLock<Vec<SharedRgb565Pixel>> = std::sync::OnceLock::new();
-        let cog = COG.get_or_init(|| {
-            vec![
-                SharedRgb565Pixel(0);
-                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-        });
+        // Exercise the retained RGB888 artwork through both cached and direct
+        // rendering, including the expanding cog rather than a black fixture.
+        let cog = crate::launcher_presentation::settings_cog_artwork();
         let (width, height) = (960, 540);
         let source = (0..width * height)
             .map(|i| Rgb565Pixel((i as u16).wrapping_mul(13)))
