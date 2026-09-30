@@ -1806,6 +1806,118 @@ mod tests {
         }
     }
 
+    /// Lock the existing root projection/lighting/face-swap/reflection result
+    /// before introducing nested layouts. Artwork is the shipped RGB565 art.
+    #[test]
+    fn root_artwork_motion_keeps_approved_raster_contract() {
+        let asset_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/mister/assets/ui/launcher-cards");
+        let artwork: Vec<Vec<Rgb565Pixel>> = [
+            "01_arcade",
+            "02_consoles",
+            "03_computers",
+            "04_handhelds",
+            "05_favourites",
+        ]
+        .iter()
+        .map(|name| {
+            std::fs::read(asset_root.join(format!("{name}.rgb565")))
+                .unwrap()
+                .chunks_exact(2)
+                .map(|p| Rgb565Pixel(u16::from_le_bytes([p[0], p[1]])))
+                .collect()
+        })
+        .collect();
+        let faces: Vec<_> = artwork.iter().map(Vec::as_slice).collect();
+        let scenes = [
+            LauncherScene::new(960, 540),
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(640, 240),
+            LauncherScene::crt(240, 640),
+        ];
+        let mut actual = Vec::new();
+        for scene in scenes {
+            let mut prepared =
+                PreparedLauncher::new(scene, data(), Some(Artwork::Rgb565(&faces)), None);
+            for direction in [BrowseDirection::Right, BrowseDirection::Left] {
+                let selected = if direction == BrowseDirection::Right {
+                    4
+                } else {
+                    0
+                };
+                let target = if direction == BrowseDirection::Right {
+                    0
+                } else {
+                    4
+                };
+                for progress_millis in [0, 16384, 32768, 49152, 65536] {
+                    prepared.render_frame(BrowseFrame {
+                        selected,
+                        target,
+                        direction: Some(direction),
+                        phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                        progress_millis,
+                        duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
+                    });
+                    let hash = prepared
+                        .pixels()
+                        .iter()
+                        .flat_map(|p| p.0.to_le_bytes())
+                        .fold(0xcbf29ce484222325_u64, |h, b| {
+                            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+                        });
+                    actual.push(hash);
+                }
+            }
+        }
+        assert_eq!(
+            actual,
+            vec![
+                0x9bc65a05d5bfaa15,
+                0x863d7a2304b4095c,
+                0x4b007be84d998ed7,
+                0x6151f50f7a008107,
+                0x7b4b9f091e521b81,
+                0x7b4b9f091e521b81,
+                0x67103dbdcf332205,
+                0xead7b8bd3d582bb7,
+                0x147da1b06f37316c,
+                0x9bc65a05d5bfaa15,
+                0xd5a1f3d3a977a48c,
+                0x7a6a71fb99efa886,
+                0x3e5c9d7e031b7040,
+                0xaac36cd62c7c1daa,
+                0xdf51ae4c40ee42d3,
+                0xdf51ae4c40ee42d3,
+                0x7d479f1450fb7d4e,
+                0x533c4078e4da4b0a,
+                0xa2f7d71f24436f4,
+                0xd5a1f3d3a977a48c,
+                0x56a80924eb2483cf,
+                0xdb690473c2061b86,
+                0x468e15835d6eeeee,
+                0xba9024bb5e30265f,
+                0xd7f65fc2b3359e39,
+                0xd7f65fc2b3359e39,
+                0xf1fdb339796ea144,
+                0xe96b9a1d715a1c00,
+                0x911da7ee18ccdc8,
+                0x56a80924eb2483cf,
+                0xd2360ad54799a211,
+                0x1f9964f80818263c,
+                0xa9c717c104f506fd,
+                0xab3aa254f778239a,
+                0xb76f0ad219c910dd,
+                0xb76f0ad219c910dd,
+                0xc8cb9c286582dcdc,
+                0x7fe48ccec64a1eca,
+                0xb8b31879039ae58b,
+                0xd2360ad54799a211
+            ],
+            "Root baseline: {actual:x?}"
+        );
+    }
+
     fn settled_frame(selected: usize) -> BrowseFrame {
         BrowseFrame {
             selected,
