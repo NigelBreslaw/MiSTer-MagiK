@@ -156,7 +156,7 @@ pub struct SystemCollection {
     preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
     launch_plans: Arc<Vec<StructuredLaunchPlan>>,
     rich_indexes: Arc<OnceLock<ArcadeCatalogIndexes>>,
-    prepared_filter_options: Option<Arc<ArcadeSystemFilterOptions>>,
+    filter_options: Arc<OnceLock<Option<ArcadeSystemFilterOptions>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -221,7 +221,6 @@ struct NavPackSystemRows {
     row_pages: Vec<OnceLock<Box<[OnceLock<NavPackRow>]>>>,
     metadata_pages: Vec<OnceLock<Box<[OnceLock<ArcadeGameMetadataKey>]>>>,
     preview_ordinals: OnceLock<Vec<usize>>,
-    filter_options: OnceLock<Result<ArcadeSystemFilterOptions, String>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -280,7 +279,6 @@ impl NavPackSystemRows {
                 .take(page_count)
                 .collect(),
             preview_ordinals: OnceLock::new(),
-            filter_options: OnceLock::new(),
         };
         let viewport_started = std::time::Instant::now();
         for ordinal in 0..expected_count.min(Self::FIRST_VIEWPORT_ROWS) {
@@ -340,35 +338,6 @@ impl NavPackSystemRows {
                 .is_ok_and(|row| row.launch_ref == launch_ref)
         })?;
         self.launch_plan(self.materialize(ordinal).ok()?)
-    }
-
-    fn filter_options(&self) -> Option<&ArcadeSystemFilterOptions> {
-        self.filter_options
-            .get_or_init(|| {
-                let counts = self.pack.filter_counts()?;
-                // Persisted controls retain raw spellings; the drawer has always
-                // used canonical labels, so merge groups which normalize alike.
-                let mut controls = BTreeMap::<String, usize>::new();
-                for (label, count) in counts.controls {
-                    let label = canonical_control_label(label);
-                    if !label.is_empty() {
-                        *controls.entry(label).or_default() += count;
-                    }
-                }
-                Ok(ArcadeSystemFilterOptions {
-                    categories: filter_options_from_counts(counts.categories, String::from),
-                    decades: filter_options_from_counts(counts.decades, |decade| {
-                        format!("{decade}'s")
-                    }),
-                    manufacturers: filter_options_from_counts(counts.manufacturers, String::from),
-                    players: filter_options_from_counts(counts.players, |players| {
-                        player_count_label(players as u8)
-                    }),
-                    controls: filter_options_from_counts(controls, String::from),
-                })
-            })
-            .as_ref()
-            .ok()
     }
 
     fn preview_ordinals(&self) -> &[usize] {
@@ -534,7 +503,9 @@ impl SystemCollection {
         let preview_games_by_system =
             build_system_collection_preview_indexes(&games, &platform_kinds);
         launch_plans.sort_unstable_by(|left, right| left.launch_ref.cmp(&right.launch_ref));
-        let prepared_filter_options = Some(Arc::new(build_system_filter_options(&cold_metadata)));
+        let filter_options = Arc::new(OnceLock::from(Some(build_system_filter_options(
+            &cold_metadata,
+        ))));
         Self {
             system_id,
             games: SystemCollectionRows::Owned(Arc::new(games)),
@@ -543,7 +514,7 @@ impl SystemCollection {
             preview_games_by_system: Arc::new(preview_games_by_system),
             launch_plans: Arc::new(launch_plans),
             rich_indexes: Arc::new(OnceLock::new()),
-            prepared_filter_options,
+            filter_options,
         }
     }
 
@@ -590,7 +561,7 @@ impl SystemCollection {
                 preview_games_by_system: Arc::new(HashMap::new()),
                 launch_plans: Arc::new(Vec::new()),
                 rich_indexes: Arc::new(OnceLock::new()),
-                prepared_filter_options: None,
+                filter_options: Arc::new(OnceLock::new()),
             },
             timing,
         ))
@@ -631,12 +602,15 @@ impl SystemCollection {
     }
 
     fn filter_options(&self) -> &ArcadeSystemFilterOptions {
-        if let Some(options) = &self.prepared_filter_options {
-            return options;
-        }
-        if let SystemCollectionRows::NavPack(rows) = &self.games
-            && let Some(options) = rows.filter_options()
-        {
+        if let Some(options) = self.filter_options.get_or_init(|| match &self.games {
+            SystemCollectionRows::NavPack(rows) => rows
+                .pack
+                .filter_counts()
+                .ok()
+                .map(ArcadeSystemFilterOptions::from),
+            // Owned counts are populated before publication.
+            SystemCollectionRows::Owned(_) => None,
+        }) {
             return options;
         }
         static EMPTY: OnceLock<ArcadeSystemFilterOptions> = OnceLock::new();
@@ -2570,6 +2544,29 @@ fn build_system_filter_options(metadata: &[ArcadeGameMetadataKey]) -> ArcadeSyst
     }
     counts.into()
 }
+impl From<crate::navpack::NavPackFilterCounts<'_>> for ArcadeSystemFilterOptions {
+    fn from(counts: crate::navpack::NavPackFilterCounts<'_>) -> Self {
+        // Persisted controls retain raw spellings; the drawer has always
+        // used canonical labels, so merge groups which normalize alike.
+        let mut controls = BTreeMap::<String, usize>::new();
+        for (label, count) in counts.controls {
+            let label = canonical_control_label(label);
+            if !label.is_empty() {
+                *controls.entry(label).or_default() += count;
+            }
+        }
+        Self {
+            categories: filter_options_from_counts(counts.categories, String::from),
+            decades: filter_options_from_counts(counts.decades, |decade| format!("{decade}'s")),
+            manufacturers: filter_options_from_counts(counts.manufacturers, String::from),
+            players: filter_options_from_counts(counts.players, |players| {
+                player_count_label(players as u8)
+            }),
+            controls: filter_options_from_counts(controls, String::from),
+        }
+    }
+}
+
 impl From<FilterOptionCounts> for ArcadeSystemFilterOptions {
     fn from(counts: FilterOptionCounts) -> Self {
         Self {
@@ -3016,10 +3013,7 @@ mod tests {
                 count: 130
             }]
         );
-        let SystemCollectionRows::NavPack(rows) = &collection.games else {
-            panic!("expected NavPack");
-        };
-        assert!(rows.filter_options.get().unwrap().is_err());
+        assert!(collection.filter_options.get().unwrap().is_none());
         assert!(collection.rich_indexes.get().is_some());
         std::fs::remove_file(path).unwrap();
     }
@@ -3257,6 +3251,34 @@ mod tests {
             updated.launch_target_in_view(updated.system_game_view("c64"), 0),
             Some(updated.launch_target_for_ref("magik-plan:c64:0"))
         );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn filter_option_cache_is_shared_by_clones_and_isolated_for_replacements() {
+        let path = navpack_fixture(130);
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        assert!(collection.filter_options.get().is_none());
+        let snapshot = collection.clone();
+        let options = snapshot.filter_options();
+        assert_eq!(options.categories[0].count, 130);
+        assert!(std::ptr::eq(options, collection.filter_options()));
+        assert!(collection.rich_indexes.get().is_none());
+        let game = collection.game_at(0).unwrap().clone();
+        let replacement = SystemCollection::new("c64", vec![game], vec![], PlatformKind::Computer);
+        assert!(replacement.filter_options.get().is_some());
+        assert_eq!(replacement.filter_options().categories.len(), 0);
+        assert!(replacement.rich_indexes.get().is_none());
+        assert_eq!(collection.filter_options().categories[0].count, 130);
         std::fs::remove_file(path).unwrap();
     }
 
