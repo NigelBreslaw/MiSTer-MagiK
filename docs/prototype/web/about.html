@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>About Mockups</title>
+<style>
+@font-face{font-family:Nocive;src:url(nocive.ttf)}
+@font-face{font-family:Xerxes;src:url(xerxes.ttf)}
+@font-face{font-family:Jersey;src:url(jersey25.ttf)}
+:root{--cream:#eee8d5;--muted:#8f9796;--rule:#303d3f;--violet:#9c86e7;--violet-deep:#735dbd}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#050507;height:100%;overflow:hidden;color:var(--cream)}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+#viewport{width:960px;height:540px;position:relative}
+#stage{position:absolute;left:0;top:0;width:960px;height:540px;background:#000;overflow:hidden;transform-origin:0 0;-webkit-font-smoothing:none;box-shadow:0 0 0 1px #1a1a22}
+.a{position:absolute}
+.h{font-family:Nocive;font-size:16px;line-height:16px;text-transform:uppercase;white-space:nowrap}
+.m{font-family:Xerxes;font-size:16px;line-height:16px;text-transform:uppercase;white-space:nowrap}
+.n{font-family:Jersey;font-size:56px;line-height:1;white-space:nowrap}
+.muted{color:var(--muted)}
+.rule{position:absolute;height:1px;background:var(--rule)}
+.vrule{position:absolute;width:1px;background:var(--rule)}
+.foot{top:516px}
+/* rows: identical to Settings */
+.group{position:absolute;left:308px}
+.row{position:absolute;left:296px;width:638px;height:36px}
+.row .lbl{position:absolute;left:12px;top:11px}
+.row .val{position:absolute;right:14px;top:11px;color:var(--muted)}
+.row .sep{position:absolute;left:12px;right:0;bottom:0;height:1px;background:var(--rule)}
+.row.focus{background:linear-gradient(90deg,#221843 0%,#120d24 60%,rgba(0,0,0,.6) 100%)}
+.row.focus::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--violet)}
+.row.focus .lbl{color:var(--violet)} .row.focus .val{color:var(--cream)}
+.row.focus .sep,.row.last .sep{background:transparent}
+.row.info .lbl{color:#c9c3b3}
+.chev{color:var(--muted)} .row.focus .chev{color:var(--violet)}
+.credit{position:absolute;left:29px;width:220px;line-height:20px;white-space:normal;color:#c9c3b3}
+/* licence text */
+#text{position:absolute;left:296px;top:98px;width:612px;height:390px;overflow:hidden;
+  font:12px/18px ui-monospace,Menlo,monospace;color:#d8d2c2;white-space:pre}
+#text::after{content:"";position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(rgba(0,0,0,0),#000)}
+.track{position:absolute;left:922px;top:98px;width:2px;height:390px;background:#1c1826}
+.thumb{position:absolute;left:921px;width:4px;background:var(--violet)}
+.state{display:none} .state.on{display:block}
+#hint{font:12px/1.5 ui-monospace,Menlo,monospace;color:#8a8a99;text-align:center}
+#hint a{color:#cfc8ea;margin:0 6px}
+</style></head><body>
+<div id="viewport"><div id="stage">
+
+  <!-- shared chrome -->
+  <div class="a h" style="left:26px;top:20px">MISTER MAGIK</div>
+  <div class="a h" style="left:875px;top:22px">17:33</div>
+  <div class="rule" style="left:26px;top:76px;width:909px"></div>
+  <div class="rule" style="left:26px;top:500px;width:909px"></div>
+  <div class="vrule" style="left:265px;top:95px;height:384px"></div>
+
+  <!-- ABOUT -->
+  <div class="state" id="about">
+    <div class="a m muted" style="left:29px;top:101px">ABOUT</div>
+    <div class="a n" style="left:27px;top:132px">0.2.112</div>
+    <div class="a m muted" style="left:29px;top:205px">MISTER MAGIK VERSION</div>
+    <div class="rule" style="left:28px;top:239px;width:213px"></div>
+    <div class="credit m" style="top:258px">AN UNINTUITIVE.COM<br>PRODUCTION, CRAFTED<br>IN FINLAND BY<br>NIGEL BRESLAW</div>
+    <div class="rule" style="left:28px;top:352px;width:213px"></div>
+    <div class="credit m muted" style="top:370px">THANKS TO THE MISTER<br>PROJECT. MADE WITH<br>SLINT: SLINT.DEV</div>
+
+    <div class="group m muted" style="top:101px">SYSTEM</div>
+    <div class="row info" style="top:121px"><span class="lbl h">Build</span><span class="val m">0.2.112 &nbsp;DEV &nbsp;311B35A</span><i class="sep"></i></div>
+    <div class="row info" style="top:157px"><span class="lbl h">Display mode</span><span class="val m">1920X1080 &nbsp;LATCH</span><i class="sep"></i></div>
+    <div class="row info" style="top:193px"><span class="lbl h">Game database</span><span class="val m">V40 &nbsp;26 SEP 2026</span><i class="sep"></i></div>
+    <div class="row info last" style="top:229px"><span class="lbl h">Kernel</span><span class="val m">6.18.38-MISTER</span><i class="sep"></i></div>
+    <div class="group m muted" style="top:283px">LEGAL</div>
+    <div class="row focus last" style="top:303px"><span class="lbl h">Licenses</span><span class="val m">12 &nbsp;<span class="chev">&gt;</span></span><i class="sep"></i></div>
+
+    <div class="a m foot" style="left:30px">A &nbsp;OPEN</div>
+    <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+    <div class="a m foot" style="left:612px">UP DOWN &nbsp;MOVE</div>
+  </div>
+
+  <!-- LICENSES -->
+  <div class="state" id="licenses">
+    <div class="a m muted" style="left:29px;top:101px">ABOUT / LICENSES</div>
+    <div class="a n" style="left:27px;top:132px">12</div>
+    <div class="a m muted" style="left:29px;top:205px">OPEN SOURCE LICENSES</div>
+    <div class="rule" style="left:28px;top:239px;width:213px"></div>
+    <div class="credit m" style="top:258px">SOFTWARE, FONTS AND<br>ARTWORK THAT MISTER<br>MAGIK IS BUILT ON</div>
+    <div id="lic-list"></div>
+    <div class="a m foot" style="left:30px">A &nbsp;READ</div>
+    <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+    <div class="a m foot" style="left:612px">UP DOWN &nbsp;MOVE</div>
+    <div class="a m muted foot" style="left:822px">1 - 10 &nbsp;OF 12</div>
+  </div>
+
+  <!-- LICENCE TEXT -->
+  <div class="state" id="license">
+    <div class="a m muted" style="left:29px;top:101px">LICENSES / MISTER MAGIK</div>
+    <div class="a n" style="left:27px;top:132px">GPL-3.0</div>
+    <div class="a m muted" style="left:29px;top:205px">GNU GPL VERSION 3</div>
+    <div class="rule" style="left:28px;top:239px;width:213px"></div>
+    <div class="credit m" style="top:258px">LINE 1 - 22<br><span class="muted">OF 674</span></div>
+    <div id="text"></div>
+    <div class="track"></div><div class="thumb" style="top:98px;height:13px"></div>
+    <div class="a m foot" style="left:30px">B &nbsp;BACK</div>
+    <div class="a m foot" style="left:612px">UP DOWN &nbsp;SCROLL</div>
+    <div class="a m muted foot" style="left:780px">LEFT RIGHT &nbsp;PAGE</div>
+  </div>
+</div></div>
+<div id="hint"><a href="#about">About</a><a href="#licenses">Licenses</a><a href="#license">Licence text</a></div>
+<script>
+const stage=document.getElementById('stage'), vp=document.getElementById('viewport');
+function fit(){const s=Math.min((innerWidth-24)/960,(innerHeight-60)/540,2);stage.style.transform=`scale(${s})`;vp.style.width=960*s+'px';vp.style.height=540*s+'px';}
+addEventListener('resize',fit); fit();
+
+const LICENSES=[['MiSTer MagiK','GPL-3.0'],['FFmpeg','LGPL-2.1'],['Slint','GPL-3.0'],['Press Start 2P','OFL-1.1'],
+  ['Commercial fonts','LICENSED'],['Jersey 25','OFL-1.1'],['Jersey 15','OFL-1.1'],['Spleen','BSD-2'],
+  ['Terminus','OFL-1.1'],['Rust standard library','MIT'],['zlib','ZLIB'],['libpng','LIBPNG']];
+const list=document.getElementById('lic-list');
+LICENSES.slice(0,10).forEach(([name,kind],i)=>{
+  const e=document.createElement('div'); e.className='row'+(i===0?' focus':'')+(i===9?' last':'');
+  e.style.top=(101+i*36)+'px';
+  e.innerHTML=`<span class="lbl h">${name}</span><span class="val m">${kind} &nbsp;<span class="chev">&gt;</span></span><i class="sep"></i>`;
+  list.append(e);
+});
+document.getElementById('text').textContent=`                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            Preamble
+
+  The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+
+  The licenses for most software and other practical works are designed
+to take away your freedom to share and change the works.  By contrast,
+the GNU General Public License is intended to guarantee your freedom to
+share and change all versions of a program--to make sure it remains free
+software for all its users.  We, the Free Software Foundation, use the
+GNU General Public License for most of our software; it applies also to
+any other work released this way by its authors.  You can apply it to
+your programs, too.
+
+  When we speak of free software, we are referring to freedom, not
+price.`;
+function show(){ const st=location.hash.slice(1)||'about';
+  document.querySelectorAll('.state').forEach(e=>e.classList.toggle('on',e.id===st)); }
+addEventListener('hashchange',show); show();
+</script>
+</body></html>
