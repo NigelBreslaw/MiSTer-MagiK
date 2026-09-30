@@ -17,3 +17,12 @@ ffmpeg -hide_banner -loglevel error -i /tmp/cabinet.png \
 ```
 
 The source PNG remains an external design source and is not committed here.
+
+## Mini source-precision experiment
+
+`cabinet-483x519.rgb888` retains the accepted PNG's 8-bit RGB, with the same
+black clamp and flattening as the production packed asset. Generate it from
+`/tmp/cabinet.png` above with `magick /tmp/cabinet.png -depth 8 RGB:cabinet-483x519.rgb888`.
+The source `arcade-cabinet-302ppm.png` repacks byte-for-byte to the existing
+RGB565 asset. No camera, material or Blender rerender is needed. Mini uses this
+source only with the explicit `rgb888` variant; production defaults stay RGB565.

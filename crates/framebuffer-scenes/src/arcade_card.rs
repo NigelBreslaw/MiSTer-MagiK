@@ -59,6 +59,55 @@ pub fn render_arcade_card_transition_into(
     t_ms: u32,
     output: &mut [Rgb565Pixel],
 ) -> bool {
+    render_with_texture(
+        width,
+        height,
+        launcher,
+        arcade,
+        cabinet,
+        source_card,
+        t_ms,
+        output,
+        None,
+    )
+}
+
+/// Filtered asset experiment sharing the production timeline and composition.
+#[allow(clippy::too_many_arguments)]
+pub fn render_arcade_card_filtered_into(
+    width: usize,
+    height: usize,
+    launcher: &[Rgb565Pixel],
+    arcade: &[Rgb565Pixel],
+    texture: &CabinetTexture,
+    source_card: NavigationTransitionRect,
+    t_ms: u32,
+    output: &mut [Rgb565Pixel],
+) -> bool {
+    render_with_texture(
+        width,
+        height,
+        launcher,
+        arcade,
+        &texture.reference,
+        source_card,
+        t_ms,
+        output,
+        Some(texture),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn render_with_texture(
+    width: usize,
+    height: usize,
+    launcher: &[Rgb565Pixel],
+    arcade: &[Rgb565Pixel],
+    cabinet: &[Rgb565Pixel],
+    source_card: NavigationTransitionRect,
+    t_ms: u32,
+    output: &mut [Rgb565Pixel],
+    filtered: Option<&CabinetTexture>,
+) -> bool {
     let len = width.saturating_mul(height);
     if width == 0
         || height == 0
@@ -80,7 +129,7 @@ pub fn render_arcade_card_transition_into(
         return true;
     }
     if (width, height) == (960, 540) {
-        render_hdmi(launcher, arcade, cabinet, t, output);
+        render_hdmi(launcher, arcade, cabinet, t, output, filtered);
     } else {
         render_crt(width, height, launcher, arcade, source_card, t, output);
     }
@@ -93,6 +142,7 @@ fn render_hdmi(
     cabinet: &[Rgb565Pixel],
     t: u32,
     output: &mut [Rgb565Pixel],
+    filtered: Option<&CabinetTexture>,
 ) {
     const W: usize = 960;
     const H: usize = 540;
@@ -135,12 +185,20 @@ fn render_hdmi(
         .clamp(HDMI_CONTENT_TOP as i64, HDMI_CONTENT_BOTTOM as i64) as usize;
     for y in y0..y1 {
         let source_y = (((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16) >> 16;
-        if !(0..CABINET_HEIGHT as i64).contains(&source_y) {
+        if filtered.is_none() && !(0..CABINET_HEIGHT as i64).contains(&source_y) {
             continue;
         }
         for x in x0..x1 {
             let source_x = (((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16) >> 16;
-            if !(0..CABINET_WIDTH as i64).contains(&source_x) {
+            if filtered.is_none() && !(0..CABINET_WIDTH as i64).contains(&source_x) {
+                continue;
+            }
+            if let Some(texture) = filtered {
+                let sx = ((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16;
+                let sy = ((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16;
+                let sample = texture.sample(sx - (1 << 15), sy - (1 << 15), inverse as u32);
+                output[y * W + x] =
+                    crate::launcher_texture::over_dithered(sample, output[y * W + x], x, y);
                 continue;
             }
             let sampled = cabinet[source_y as usize * CABINET_WIDTH + source_x as usize].0;
@@ -444,5 +502,161 @@ mod tests {
         assert_eq!(LIST_BANDS.first(), Some(&(88, 124)));
         assert_eq!(LIST_BANDS.last(), Some(&(448, 484)));
         assert!(LIST_BANDS.windows(2).all(|bands| bands[0].1 == bands[1].0));
+    }
+}
+
+/// Preparation-only 2D minification pyramid. RGB8 and coverage survive until
+/// destination-space composition. Geometry remains the production 483x519.
+pub struct CabinetTexture {
+    reference: Vec<Rgb565Pixel>,
+    levels: Vec<CabinetLevel>,
+}
+struct CabinetLevel {
+    pixels: Vec<u32>,
+    width: usize,
+    height: usize,
+}
+impl CabinetTexture {
+    pub fn from_rgb565(pixels: &[Rgb565Pixel]) -> Result<Self, String> {
+        if pixels.len() != CABINET_WIDTH * CABINET_HEIGHT {
+            return Err("invalid cabinet geometry".into());
+        }
+        let rgb: Vec<_> = pixels
+            .iter()
+            .flat_map(|p| {
+                let r = p.0 >> 11;
+                let g = (p.0 >> 5) & 63;
+                let b = p.0 & 31;
+                [
+                    ((r << 3) | (r >> 2)) as u8,
+                    ((g << 2) | (g >> 4)) as u8,
+                    ((b << 3) | (b >> 2)) as u8,
+                ]
+            })
+            .collect();
+        Self::from_rgb888(&rgb)
+    }
+    pub fn from_rgb888(rgb: &[u8]) -> Result<Self, String> {
+        if rgb.len() != CABINET_WIDTH * CABINET_HEIGHT * 3 {
+            return Err("invalid RGB888 cabinet geometry".into());
+        }
+        let reference = rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| Rgb565Pixel(rgb565(u16::from(p[0]), u16::from(p[1]), u16::from(p[2]))))
+            .collect();
+        let pixels = rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| {
+                if *p == [0, 0, 0] {
+                    0
+                } else {
+                    u32::from_le_bytes([p[0], p[1], p[2], 255])
+                }
+            })
+            .collect();
+        let mut levels = vec![CabinetLevel {
+            pixels,
+            width: CABINET_WIDTH,
+            height: CABINET_HEIGHT,
+        }];
+        while levels.last().unwrap().width > 1 || levels.last().unwrap().height > 1 {
+            let old = levels.last().unwrap();
+            let width = old.width.div_ceil(2);
+            let height = old.height.div_ceil(2);
+            let mut pixels = Vec::with_capacity(width * height);
+            for y in 0..height {
+                for x in 0..width {
+                    let at = |dx: usize, dy: usize| {
+                        old.pixels[(y * 2 + dy).min(old.height - 1) * old.width
+                            + (x * 2 + dx).min(old.width - 1)]
+                    };
+                    pixels.push(crate::launcher_texture::mix(
+                        crate::launcher_texture::mix(at(0, 0), at(1, 0), 128),
+                        crate::launcher_texture::mix(at(0, 1), at(1, 1), 128),
+                        128,
+                    ));
+                }
+            }
+            levels.push(CabinetLevel {
+                pixels,
+                width,
+                height,
+            });
+        }
+        Ok(Self { reference, levels })
+    }
+    /// Prepare the resting cabinet with the same final quantisation as the
+    /// filtered reveal. Text, game pixels and chrome remain on their native grid.
+    pub fn prepare_destination(&self, destination: &mut [Rgb565Pixel]) -> bool {
+        if destination.len() != 960 * 540 {
+            return false;
+        }
+        for y in HDMI_CONTENT_TOP..HDMI_CONTENT_BOTTOM {
+            for x in HDMI_CABINET_X as usize..960 {
+                if (HDMI_SCREEN.x as usize..(HDMI_SCREEN.x + HDMI_SCREEN.width) as usize)
+                    .contains(&x)
+                    && (HDMI_SCREEN.y as usize..(HDMI_SCREEN.y + HDMI_SCREEN.height) as usize)
+                        .contains(&y)
+                {
+                    continue;
+                }
+                let sx = x - HDMI_CABINET_X as usize;
+                let sy = y - HDMI_CABINET_Y as usize;
+                let p = self.levels[0].pixels[sy * CABINET_WIDTH + sx];
+                destination[y * 960 + x] =
+                    crate::launcher_texture::over_dithered(p, Rgb565Pixel(0), x, y);
+            }
+        }
+        true
+    }
+    pub fn storage_bytes(&self) -> usize {
+        self.reference.capacity() * 2
+            + self
+                .levels
+                .iter()
+                .map(|l| l.pixels.capacity() * 4)
+                .sum::<usize>()
+    }
+    fn sample(&self, x: i64, y: i64, footprint: u32) -> u32 {
+        let level = ((31 - footprint.max(65536).leading_zeros()).saturating_sub(16) as usize)
+            .min(self.levels.len() - 1);
+        let sample = |index: usize| {
+            let l = &self.levels[index];
+            let sx = ((x + (1 << 15)) >> index) - (1 << 15);
+            let sy = ((y + (1 << 15)) >> index) - (1 << 15);
+            let ix = sx.div_euclid(65536);
+            let iy = sy.div_euclid(65536);
+            let at = |dx: i64, dy: i64| {
+                if ix + dx < 0
+                    || iy + dy < 0
+                    || ix + dx >= l.width as i64
+                    || iy + dy >= l.height as i64
+                {
+                    0
+                } else {
+                    l.pixels[(iy + dy) as usize * l.width + (ix + dx) as usize]
+                }
+            };
+            crate::launcher_texture::mix(
+                crate::launcher_texture::mix(at(0, 0), at(1, 0), ((sx & 65535) >> 8) as u32),
+                crate::launcher_texture::mix(at(0, 1), at(1, 1), ((sx & 65535) >> 8) as u32),
+                ((sy & 65535) >> 8) as u32,
+            )
+        };
+        let a = sample(level);
+        if level + 1 == self.levels.len() {
+            a
+        } else {
+            let weight = ((footprint >> level).saturating_sub(65536) >> 8).min(256);
+            if weight == 0 {
+                a
+            } else {
+                crate::launcher_texture::mix(a, sample(level + 1), weight)
+            }
+        }
     }
 }

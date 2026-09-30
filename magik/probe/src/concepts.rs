@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use mister_magik_visual_concepts::{Preset, Scene};
 use std::time::Duration;
+fn configure_card_worker() {
+    use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+    apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+}
 pub struct Concepts {
     pub scene: Option<Scene>,
     pub name: String,
@@ -13,6 +17,7 @@ pub struct Concepts {
     pub advance_next: bool,
     pub stop_at: Option<Duration>,
     pub error: Option<String>,
+    pub preparation_ms: u64,
     width: usize,
     height: usize,
 }
@@ -29,6 +34,7 @@ impl Concepts {
             advance_next: false,
             stop_at: None,
             error: None,
+            preparation_ms: 0,
             width,
             height,
         }
@@ -36,15 +42,37 @@ impl Concepts {
     pub fn select(&mut self, name: &str, preset: Preset) {
         self.stop_at = None;
         self.generation = self.generation.wrapping_add(1);
+        let previous_time = self.scene.as_ref().map(Scene::elapsed);
+        let keep_time =
+            self.name == name && mister_magik_visual_concepts::RENDER_LABS.contains(&name);
         // Release old caches before preparing a replacement.
         self.scene = None;
-        match Scene::new(name, preset, self.width, self.height) {
-            Ok(scene) => {
+        let worker_setup = if mister_magik_visual_concepts::RENDER_LABS.contains(&name) {
+            use mister_magik_catalog::runtime_thread::{
+                RuntimeThreadRole, apply_runtime_thread_policy,
+            };
+            apply_runtime_thread_policy(RuntimeThreadRole::LauncherUi);
+            Some(configure_card_worker as fn())
+        } else {
+            None
+        };
+        let preparation_started = std::time::Instant::now();
+        match Scene::new_with_worker_setup(name, preset, self.width, self.height, worker_setup) {
+            Ok(mut scene) => {
+                self.preparation_ms = preparation_started
+                    .elapsed()
+                    .as_millis()
+                    .min(u128::from(u64::MAX)) as u64;
+                if keep_time && let Some(time) = previous_time {
+                    scene.advance(time);
+                }
                 self.scene = Some(scene);
                 self.advance_next = false;
                 self.name = name.into();
                 self.preset = preset;
-                self.paused = false;
+                if !keep_time {
+                    self.paused = false;
+                }
                 self.dirty = true;
                 self.error = None;
                 if let Some(root) = std::env::var_os("MISTER_MAGIK2_STATE_ROOT") {
@@ -61,6 +89,8 @@ impl Concepts {
     pub fn action(&mut self, action: &str) {
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {
+                "launcher-cards" => (210, 420),
+                "arcade-transition" => (500, 1000),
                 "light-sweep" => (1500, 3000),
                 "pixel-dissolve" => (1300, 3200),
                 "starfield" => (4096, 8192),
@@ -118,6 +148,25 @@ impl Concepts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rendering_variant_switch_preserves_paused_frame() {
+        let mut c = Concepts::new(960, 540);
+        c.select("launcher-cards", Preset::Default);
+        c.action("pause");
+        c.action("step");
+        let before = c.scene.as_ref().unwrap().elapsed();
+        let generation = c.generation;
+        c.select("launcher-cards", Preset::Dithered);
+        assert!(c.paused);
+        assert_eq!(c.scene.as_ref().unwrap().elapsed(), before);
+        assert_ne!(c.generation, generation);
+        c.action("restart");
+        assert!(c.paused);
+        assert_eq!(c.scene.as_ref().unwrap().elapsed(), Duration::ZERO);
+        c.select("arcade-transition", Preset::Rgb888);
+        assert!(!c.paused);
+        assert_eq!(c.scene.as_ref().unwrap().elapsed(), Duration::ZERO);
+    }
     #[test]
     fn pause_step_restart_preserve_an_explicit_timeline() {
         let mut c = Concepts::new(960, 540);

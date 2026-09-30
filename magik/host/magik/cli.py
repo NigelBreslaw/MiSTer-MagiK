@@ -99,11 +99,17 @@ def main() -> int:
     check_command.add_argument("--profile", action="store_true")
     check_command.add_argument("--concept")
     check_command.add_argument(
-        "--preset", choices=("default", "reduced"), default="default"
+        "--preset",
+        choices=("default", "reduced", "dithered", "rgb888", "cached"),
+        default="default",
     )
     concept = subcommands.add_parser("concept", help="interactive Mini RGB565 concept")
     concept.add_argument("effect")
-    concept.add_argument("--preset", choices=("default", "reduced"), default="default")
+    concept.add_argument(
+        "--preset",
+        choices=("default", "reduced", "dithered", "rgb888", "cached"),
+        default="default",
+    )
     check_command.add_argument(
         "--installed-sha256",
         help="Verify and benchmark this running hash without building or deploying",
@@ -131,7 +137,17 @@ def main() -> int:
     )
     clean.add_argument("--apply", action="store_true")
     clean.add_argument("--all-idle", action="store_true")
+    for name in ("build", "deploy", "check", "concept"):
+        subcommands.choices[name].add_argument(
+            "--production-build",
+            action="store_true",
+            help="use Mini's production-matched optimization profile for cadence qualification",
+        )
     arguments = parser.parse_args()
+    if getattr(arguments, "production_build", False):
+        if arguments.app != "mini-magik":
+            parser.error("--production-build requires --app mini-magik")
+        os.environ["MAGIK_MINI_PRODUCTION_BUILD"] = "1"
     if arguments.command == "update":
         from .updates import update
 

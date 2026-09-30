@@ -64,6 +64,10 @@ def _ensure_arm_package(
         ),
         None,
     )
+    if app and app.name == "mini-magik":
+        from .apps import application
+
+        app = application("mini-magik")
     profile = app.profile if app else "release"
     binary = (
         app.binary
@@ -99,6 +103,13 @@ def _ensure_arm_package(
     require_space(repository, 8 * 1024**3, "ARM build")
     name = prepare(repository, runner)
     environment = []
+    if app and app.name == "mini-magik":
+        environment += ["--env", f"MAGIK_MINI_BUILD_PROFILE={profile}"]
+        if profile == "release-device":
+            environment += [
+                "--env",
+                "RUSTFLAGS=-C target-cpu=cortex-a9 -C force-frame-pointers=yes",
+            ]
     if app and app.name == "magik":
         from .ffmpeg import prepare_ffmpeg
 

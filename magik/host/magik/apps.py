@@ -1,6 +1,7 @@
 """Two ordinary consumers of the same build, delivery and observation workflow."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import os
 from pathlib import Path
 
 
@@ -33,7 +34,10 @@ APPLICATIONS = {
 
 
 def application(name: str = "mini-magik") -> Application:
-    return APPLICATIONS[name]
+    app = APPLICATIONS[name]
+    if name == "mini-magik" and os.environ.get("MAGIK_MINI_PRODUCTION_BUILD") == "1":
+        return replace(app, profile="release-device")
+    return app
 
 
 def repository() -> Path:

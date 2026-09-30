@@ -114,3 +114,65 @@ def test_same_name_preset_selection_waits_for_new_generation(monkeypatch):
     invoke.assert_called_once_with(
         invoke.call_args.args[0], "select-light-sweep-reduced"
     )
+
+
+@pytest.mark.parametrize("effect", ["launcher-cards", "arcade-transition"])
+@pytest.mark.parametrize("preset", ["default", "dithered", "rgb888"])
+def test_render_labs_require_production_build_for_qualification(effect, preset):
+    data = sample()
+    data["window"]["context"].update(
+        concept=effect, preset=preset, build_profile="release"
+    )
+    assert not validate(data, "abc", effect, preset)["qualified"]
+    data["window"]["context"]["build_profile"] = "release-device"
+    assert validate(data, "abc", effect, preset)["qualified"]
+    data["window"]["physical_drops"] = 1
+    assert not validate(data, "abc", effect, preset)["qualified"]
+
+
+def test_rendering_presets_are_scoped_to_rendering_labs():
+    from magik.concepts import supported
+
+    assert supported("launcher-cards", "rgb888")
+    assert supported("arcade-transition", "dithered")
+    assert not supported("launcher-cards", "reduced")
+    assert not supported("starfield", "rgb888")
+    assert supported("starfield", "reduced")
+
+
+def test_production_build_is_mini_only(monkeypatch):
+    from magik.apps import application
+
+    monkeypatch.delenv("MAGIK_MINI_PRODUCTION_BUILD", raising=False)
+    assert application("mini-magik").profile == "release"
+    full_profile = application("magik").profile
+    monkeypatch.setenv("MAGIK_MINI_PRODUCTION_BUILD", "1")
+    assert application("mini-magik").profile == "release-device"
+    assert application("magik").profile == full_profile
+
+
+def test_lab_requires_full_window_cadence_and_exact_geometry():
+    data = sample()
+    data["window"]["context"].update(
+        concept="launcher-cards", build_profile="release-device"
+    )
+    for field in (
+        "presentations",
+        "physical_latch_posts",
+        "physical_latch_flips",
+        "presented_vblanks",
+        "owned_vblanks",
+    ):
+        data["window"][field] = 900
+    assert not validate(data, "abc", "launcher-cards", "default")["qualified"]
+    data["window"]["height"] = 600
+    with pytest.raises(ValueError, match="geometry"):
+        validate(data, "abc", "launcher-cards", "default")
+
+
+def test_cached_preset_is_only_available_for_arcade():
+    from magik.concepts import supported
+
+    assert supported("arcade-transition", "cached")
+    assert not supported("launcher-cards", "cached")
+    assert not supported("starfield", "cached")

@@ -2825,6 +2825,7 @@ name = "mister-magik-visual-concepts"
 version = "0.1.0"
 dependencies = [
  "mister-magik-framebuffer-scenes",
+ "png",
 ]
 
 [[package]]

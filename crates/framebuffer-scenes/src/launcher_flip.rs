@@ -61,6 +61,7 @@ pub(super) struct Face {
     pub width: usize,
     pub height: usize,
     reflection_fade_rows: usize,
+    pub(super) dithered: bool,
     pub(super) texture: crate::launcher_texture::Texture,
 }
 
@@ -77,6 +78,7 @@ impl Face {
             height,
             reflection_fade_rows: (height / 4).clamp(2, 64),
             texture,
+            dithered: false,
         }
     }
 
@@ -89,6 +91,7 @@ impl Face {
             height,
             reflection_fade_rows: 64,
             texture,
+            dithered: false,
         }
     }
 }
@@ -550,7 +553,7 @@ fn render(
         let _profile = crate::launcher_profile::span("flip.compose");
         if flat {
             let index = target.index(active_left, active_top);
-            crate::launcher_texture::project_flat(
+            crate::launcher_texture::project_flat_quality(
                 &mut target.pixels[index..],
                 target.pitch,
                 &texels[(active_left - left) * scratch.column_height
@@ -563,6 +566,8 @@ fn render(
                     (flat_zero + active_top as i64 * flat_step) as i32,
                     flat_step as i32,
                 ),
+                face.dithered,
+                (active_left, active_top),
             );
         } else {
             for (x, c) in columns
@@ -579,12 +584,14 @@ fn render(
                 let mut project = |top: usize, bottom: usize| {
                     if top < bottom {
                         let index = target.index(x, top);
-                        crate::launcher_texture::project_card_over_column(
+                        crate::launcher_texture::project_card_over_column_quality(
                             source,
                             &mut target.pixels[index..],
                             target.pitch,
                             bottom - top,
                             (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
+                            face.dithered,
+                            (x, top),
                         );
                     }
                 };

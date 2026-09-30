@@ -213,6 +213,63 @@ pub(super) fn face_cached(
     crate::launcher_flip::Face::new(pixels, width, height)
 }
 
+pub(super) fn face_rgb888(
+    card: &PreparedCard<'_>,
+    detail: bool,
+    typography: Option<LauncherTypography<'_>>,
+) -> crate::launcher_flip::Face {
+    let source = card.rgb888.expect("validated RGB888 source");
+    let linear: [f64; 256] = std::array::from_fn(|i| {
+        let s = i as f64 / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    let encode = |l: f64| -> u8 {
+        let s = if l <= 0.0031308 {
+            l * 12.92
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        };
+        (s * 255.0).round().clamp(0.0, 255.0) as u8
+    };
+    let rgb8: Vec<[u8; 3]> = (0..252)
+        .flat_map(|y| (0..180).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            std::array::from_fn(|c| {
+                let mut sum = 0.0;
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        sum += linear[source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
+                    }
+                }
+                encode(sum / 4.0)
+            })
+        })
+        .collect();
+    let reference: Vec<_> = rgb8
+        .iter()
+        .map(|&[r, g, b]| {
+            Rgb565Pixel((u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | u16::from(b) >> 3)
+        })
+        .collect();
+    let mapped = PreparedCard {
+        id: card.id,
+        name: card.name,
+        games: card.games,
+        colour: card.colour,
+        name_mask: card.name_mask.clone(),
+        games_mask: card.games_mask.clone(),
+        artwork: Some(&reference),
+        rgb888: None,
+    };
+    let mut face = face(&mapped, 180, detail, typography);
+    face.texture.retain_rgb8(&rgb8, &reference);
+    face
+}
+
 pub(super) fn face(
     card: &PreparedCard<'_>,
     width: usize,

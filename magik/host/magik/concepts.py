@@ -19,8 +19,21 @@ EFFECTS = (
     "pixel-dissolve",
     "light-sweep",
     "diagnostic",
+    "launcher-cards",
+    "arcade-transition",
 )
-PRESETS = ("default", "reduced")
+PRESETS = ("default", "reduced", "dithered", "rgb888", "cached")
+RENDER_LABS = ("launcher-cards", "arcade-transition")
+
+
+def supported(effect, preset):
+    if effect == "arcade-transition" and preset == "cached":
+        return True
+    return effect in EFFECTS and preset in (
+        ("default", "dithered", "rgb888")
+        if effect in RENDER_LABS
+        else ("default", "reduced")
+    )
 
 
 _elements = WeakKeyDictionary()
@@ -50,7 +63,7 @@ def action(application, name):
 
 
 def select(application, effect, preset):
-    if effect not in EFFECTS or preset not in PRESETS:
+    if not supported(effect, preset):
         raise ValueError("unsupported concept or preset")
     previous = value(application, "generation")
     action(application, f"select-{effect}-{preset}")
@@ -123,11 +136,20 @@ def validate(metrics, sha256, effect, preset, profile=False):
         and cpu < 150
         and rss <= 128 * 1024 * 1024
     )
+    if effect in RENDER_LABS and (w["width"], w["height"]) != (960, 540):
+        raise ValueError("rendering lab geometry mismatch")
+    fps = n * 1000 / w["elapsed_ms"]
+    if effect in RENDER_LABS:
+        passed = passed and abs(fps - refresh) <= 0.1
+    build_qualified = (
+        effect not in RENDER_LABS or context.get("build_profile") == "release-device"
+    )
     return {
         **w,
         "sha256": sha256,
-        "fps": n * 1000 / w["elapsed_ms"],
-        "qualified": passed and not profile,
+        "fps": fps,
+        "qualified": passed and build_qualified and not profile,
+        "build_qualified": build_qualified,
         "instrumented": profile,
     }
 
@@ -153,6 +175,13 @@ def measure(application, agent, run, effect, preset, profile):
         )
         result = validate(raw, agent.expected_sha256, effect, preset, profile)
         results.append(result)
+        print(
+            f"{effect}/{preset}: repetition={repetition + 1} "
+            f"fps={result['fps']:.3f} cpu={result['process_cpu_percent']:.1f}% "
+            f"drops={result['physical_drops']} render_p99_us={result.get('render_p99_us')} "
+            f"qualified={result['qualified']}",
+            flush=True,
+        )
         append_event(run, {"phase": "concept", "repetition": repetition, **result})
     (run / "concept-results.json").write_text(json.dumps(results, indent=2) + "\n")
     return 0 if profile or all(r["qualified"] for r in results) else 1
@@ -160,6 +189,8 @@ def measure(application, agent, run, effect, preset, profile):
 
 # Device timeline bookmarks, in milliseconds. Captures happen after measurement.
 BOOKMARKS = {
+    "launcher-cards": (210, 420),
+    "arcade-transition": (500, 1000),
     "light-sweep": (1500, 3000),
     "pixel-dissolve": (1300, 3200),
     "starfield": (4096, 8192),
@@ -172,7 +203,14 @@ BOOKMARKS = {
 def review(application, agent, run, effect, preset):
     # Exercise switching and the other preset outside measured windows.
     select(application, "diagnostic", "reduced")
-    select(application, effect, "reduced" if preset == "default" else "default")
+    select(
+        application,
+        effect,
+        ("dithered" if effect in RENDER_LABS else "reduced")
+        if preset == "default"
+        else "default",
+    )
+    action(application, "restart")
     action(application, "pause")
     wait_for(lambda: value(application, "paused") == "true", "pause failed")
     before = int(value(application, "frame"))
@@ -214,7 +252,7 @@ def review(application, agent, run, effect, preset):
 def interactive(application, agent, run, effect, preset):
     select(application, effect, preset)
     print(
-        "Commands: select EFFECT, preset default|reduced, pause, resume, step, restart, capture, quit",
+        "Commands: select EFFECT, preset default|reduced|dithered|rgb888|cached, pause, resume, step, restart, capture, quit",
         flush=True,
     )
     capture_number = 0
@@ -252,7 +290,7 @@ def run_concept(arguments, run: Path):
     from .cli import connect_agent, ensure_application, CHECK_AGENT_CAPABILITIES
 
     effect = arguments.effect if arguments.command == "concept" else arguments.concept
-    if effect not in EFFECTS or arguments.app != "mini-magik":
+    if not supported(effect, arguments.preset) or arguments.app != "mini-magik":
         raise ValueError("select one supported concept with --app mini-magik")
     profile = bool(getattr(arguments, "profile", False))
     profile_id = f"{run.name}-{uuid.uuid4().hex[:8]}" if profile else None

@@ -133,9 +133,34 @@ pub struct LauncherScene {
     pub height: usize,
     crt: bool,
     safe_insets: (usize, usize),
+    quality: CardRenderQuality,
+}
+
+/// Explicit rendering experiments. Production constructors retain Current.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CardRenderQuality {
+    #[default]
+    Current,
+    Dithered,
+    Rgb888,
 }
 
 impl LauncherScene {
+    #[must_use]
+    pub const fn with_render_quality(mut self, quality: CardRenderQuality) -> Self {
+        self.quality = quality;
+        self
+    }
+
+    /// High precision source experiment; no Slint or application dependencies.
+    pub fn prepare_initial_with_rgb888_artwork(
+        self,
+        data: LauncherData<'_>,
+        artwork: &[&[u8]],
+    ) -> InitialLauncher {
+        self.initial(data, Some(Artwork::Rgb888(artwork)), None)
+    }
+
     #[must_use]
     pub const fn new(width: usize, height: usize) -> Self {
         Self {
@@ -143,6 +168,7 @@ impl LauncherScene {
             height,
             crt: false,
             safe_insets: (0, 0),
+            quality: CardRenderQuality::Current,
         }
     }
 
@@ -159,6 +185,7 @@ impl LauncherScene {
             height,
             crt: true,
             safe_insets: (0, 0),
+            quality: CardRenderQuality::Current,
         }
     }
 
@@ -766,7 +793,7 @@ impl PreparedLauncher {
                 };
                 #[cfg(test)]
                 FACE_BAKES.set(FACE_BAKES.get() + 2);
-                Arc::new(
+                let mut faces =
                     if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
                         layout.faces(&card, fonts, &mut bodies, data.level.slides())
                     } else {
@@ -776,8 +803,21 @@ impl PreparedLauncher {
                             back: bodies.back_face(&card),
                             slides: data.level.slides(),
                         }
-                    },
-                )
+                    };
+                if scene.quality == CardRenderQuality::Rgb888
+                    && card.rgb888.is_some()
+                    && responsive.is_none()
+                {
+                    faces.compact = artwork::face_rgb888(&card, false, typography);
+                    faces.detail = artwork::face_rgb888(&card, true, typography);
+                }
+                let dithered = scene.quality != CardRenderQuality::Current;
+                faces.compact.dithered = dithered;
+                faces.detail.dithered = dithered;
+                if let Some(back) = &mut faces.back {
+                    back.dithered = dithered;
+                }
+                Arc::new(faces)
             })
             .collect();
         if let Some(cache) = cache {

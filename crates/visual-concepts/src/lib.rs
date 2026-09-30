@@ -6,10 +6,13 @@ use std::time::Duration;
 mod dissolve;
 mod fixture;
 mod light;
+mod render_lab;
 mod scale;
 mod stars;
 mod tunnel;
 mod waves;
+
+pub const RENDER_LABS: &[&str] = &["launcher-cards", "arcade-transition"];
 
 pub const EFFECTS: &[&str] = &[
     "raster-waves",
@@ -23,18 +26,24 @@ pub const EFFECTS: &[&str] = &[
 pub enum Preset {
     Default,
     Reduced,
+    Dithered,
+    Rgb888,
+    Cached,
 }
 impl Preset {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "default" => Ok(Self::Default),
             "reduced" => Ok(Self::Reduced),
+            "dithered" => Ok(Self::Dithered),
+            "rgb888" => Ok(Self::Rgb888),
+            "cached" => Ok(Self::Cached),
             _ => Err(format!("unknown preset: {value}")),
         }
     }
     pub const fn choose(self, default: usize, reduced: usize) -> usize {
         match self {
-            Self::Default => default,
+            Self::Default | Self::Dithered | Self::Rgb888 | Self::Cached => default,
             Self::Reduced => reduced,
         }
     }
@@ -42,6 +51,9 @@ impl Preset {
         match self {
             Self::Default => "default",
             Self::Reduced => "reduced",
+            Self::Dithered => "dithered",
+            Self::Rgb888 => "rgb888",
+            Self::Cached => "cached",
         }
     }
 }
@@ -59,10 +71,35 @@ pub struct Scene {
 }
 impl Scene {
     pub fn new(name: &str, preset: Preset, width: usize, height: usize) -> Result<Self, String> {
+        Self::new_with_worker_setup(name, preset, width, height, None)
+    }
+    /// The application owns thread placement; portable renderers own only pixels.
+    pub fn new_with_worker_setup(
+        name: &str,
+        preset: Preset,
+        width: usize,
+        height: usize,
+        worker_setup: Option<fn()>,
+    ) -> Result<Self, String> {
         if width == 0 || height == 0 || width > 1366 || height > 768 {
             return Err("unsupported concept geometry".into());
         }
+        if RENDER_LABS.contains(&name) && (width, height) != (960, 540) {
+            return Err("rendering labs require a confirmed 960x540 HDMI render surface".into());
+        }
+        if RENDER_LABS.contains(&name) && preset == Preset::Reduced
+            || !RENDER_LABS.contains(&name)
+                && matches!(preset, Preset::Dithered | Preset::Rgb888 | Preset::Cached)
+        {
+            return Err("preset is not supported by this workload".into());
+        }
+        if preset == Preset::Cached && name != "arcade-transition" {
+            return Err("cached requires arcade-transition".into());
+        }
         let effect: Box<dyn Effect> = match name {
+            "launcher-cards" | "arcade-transition" => {
+                Box::new(render_lab::Lab::new(name, preset, worker_setup)?)
+            }
             "raster-waves" => Box::new(waves::new(preset, width, height)?),
             "texture-tunnel" => Box::new(tunnel::new(preset, width, height)?),
             "starfield" => Box::new(stars::new(preset, width, height)?),

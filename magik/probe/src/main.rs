@@ -158,9 +158,13 @@ mod catalog_sort;
 mod controller_save;
 mod incremental_refresh;
 mod preview_shards;
+mod render_lab;
 mod retained_tiles;
 
 fn main() -> Result<(), String> {
+    if let Some(result) = render_lab::requested() {
+        return result;
+    }
     if let Some(result) = benchmarks::requested() {
         return result;
     }
@@ -341,7 +345,7 @@ fn main() -> Result<(), String> {
                 let scene = c.scene.as_mut().unwrap();
                 let d = scene.render()?;
                 probe.set_concept_frame((scene.elapsed().as_millis().min(i32::MAX as u128)) as i32);
-                session.borrow_mut().metrics.context = serde_json::json!({"concept":c.name,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes()});
+                session.borrow_mut().metrics.context = serde_json::json!({"concept":c.name,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes(),"build_profile":env!("MAGIK_MINI_BUILD_PROFILE"),"preparation_ms":c.preparation_ms});
                 DirtyRectList::from_one(DirtyRect {
                     x0: d.x0,
                     y0: d.y0,

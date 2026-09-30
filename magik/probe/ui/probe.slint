@@ -78,8 +78,8 @@ export component Probe inherits Window {
             accessible-role: button; accessible-label: "concept-" + action;
             accessible-action-default => {root.concept-action(action);}
         }
-        for name in ["raster-waves","texture-tunnel","starfield","pixel-dissolve","light-sweep","diagnostic"] : VerticalLayout {
-            for preset in ["default","reduced"] : Rectangle {
+        for name in ["raster-waves","texture-tunnel","starfield","pixel-dissolve","light-sweep","diagnostic","launcher-cards","arcade-transition"] : VerticalLayout {
+            for preset in ["default","reduced","dithered","rgb888","cached"] : Rectangle {
                 accessible-role: button; accessible-label: "concept-select-" + name + "-" + preset;
                 accessible-action-default => {root.concept-select(name,preset);}
             }
