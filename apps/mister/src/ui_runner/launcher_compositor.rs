@@ -933,6 +933,7 @@ pub(super) struct LauncherPresentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::visual_platform::install_isolated_test_platform;
 
     slint::slint! {
         export component NativeHomeOverlayProbe inherits Window {
@@ -952,20 +953,10 @@ mod tests {
         }
     }
 
-    struct NativeHomeTestPlatform(Rc<MisterSoftwareWindow>);
-
-    impl slint::platform::Platform for NativeHomeTestPlatform {
-        fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-            Ok(self.0.clone())
-        }
-    }
-
     #[test]
     fn custom_home_redraw_preserves_native_cards_without_input() {
         std::thread::spawn(|| {
-            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-            slint::platform::set_platform(Box::new(NativeHomeTestPlatform(window.clone())))
-                .expect("isolated compositor platform");
+            let window = install_isolated_test_platform();
             let overlay = NativeHomeOverlayProbe::new().expect("overlay probe");
             window.set_size(PhysicalSize::new(960, 540));
             overlay.show().expect("show overlay probe");
@@ -1059,9 +1050,7 @@ mod tests {
     #[test]
     fn custom_home_redraw_restores_native_pixels_in_all_orientations() {
         std::thread::spawn(|| {
-            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-            slint::platform::set_platform(Box::new(NativeHomeTestPlatform(window.clone())))
-                .expect("isolated compositor platform");
+            let window = install_isolated_test_platform();
             let overlay = NativeHomeOverlayProbe::new().expect("overlay probe");
             overlay.show().expect("show overlay probe");
             for (width, height) in [
@@ -1136,9 +1125,7 @@ mod tests {
     #[test]
     fn cold_intro_snapshot_and_idle_handoff_keep_the_real_launcher_cards() {
         std::thread::spawn(|| {
-            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-            slint::platform::set_platform(Box::new(NativeHomeTestPlatform(window.clone())))
-                .expect("isolated compositor platform");
+            let window = install_isolated_test_platform();
             let app = slint_ui::launcher::Launcher::new().expect("production launcher");
             app.global::<slint_ui::launcher::MisterUi>()
                 .set_custom_home_base(true);

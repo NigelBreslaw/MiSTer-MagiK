@@ -406,14 +406,27 @@ impl Platform for MisterPlatform {
 }
 
 #[cfg(test)]
-// Slint contexts are thread-local, but event-loop proxies are process-global.
-// Component-only libtests must not claim the proxy from one test thread.
+std::thread_local! {
+    // Slint may share the installed platform across the suite. Select each
+    // fixture's window on its test thread without replacing that platform.
+    static TEST_WINDOW: std::cell::RefCell<Option<Rc<MisterSoftwareWindow>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+// Component-only libtests must not claim Slint's process-global event-loop proxy.
 struct IsolatedTestPlatform(MisterPlatform);
 
 #[cfg(test)]
 impl Platform for IsolatedTestPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-        self.0.create_window_adapter()
+        TEST_WINDOW.with(|window| {
+            window.borrow().as_ref().map_or_else(
+                || self.0.create_window_adapter(),
+                |window| Ok(window.clone() as Rc<dyn WindowAdapter>),
+            )
+        })
     }
 
     fn duration_since_start(&self) -> core::time::Duration {
@@ -422,16 +435,18 @@ impl Platform for IsolatedTestPlatform {
 }
 
 #[cfg(test)]
-pub(crate) fn install_isolated_test_platform() {
+pub(crate) fn install_isolated_test_platform() -> Rc<MisterSoftwareWindow> {
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    TEST_WINDOW.with(|current| *current.borrow_mut() = Some(window.clone()));
     let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
     let result = slint::platform::set_platform(Box::new(IsolatedTestPlatform(
-        MisterPlatform::new(window, fixed_time),
+        MisterPlatform::new(window.clone(), fixed_time),
     )));
     match result {
         Ok(()) | Err(slint::platform::SetPlatformError::AlreadySet) => {}
         Err(error) => panic!("failed to install isolated Slint test platform: {error}"),
     }
+    window
 }
 
 #[cfg(test)]
@@ -497,8 +512,21 @@ mod tests {
     fn isolated_test_platform_supports_distinct_test_threads() {
         for _ in 0..2 {
             std::thread::spawn(|| {
-                install_isolated_test_platform();
-                ReusedRasterProbe::new().expect("test component");
+                // Reinstalling on this same thread necessarily takes AlreadySet.
+                // The new component must still use the newly selected window.
+                let previous = install_isolated_test_platform();
+                for _ in 0..2 {
+                    let window = install_isolated_test_platform();
+                    assert!(!Rc::ptr_eq(&window, &previous));
+                    let probe = ReusedRasterProbe::new().expect("test component");
+                    window.set_size(PhysicalSize::new(64, 48));
+                    probe.show().expect("show test component");
+                    let mut pixels = vec![Rgb565Pixel(0); 64 * 48];
+                    assert!(window.draw_if_needed(|renderer| {
+                        renderer.render(&mut pixels, 64);
+                    }));
+                    assert_ne!(pixels[8 * 64].0, 0, "fixture used a stale window");
+                }
             })
             .join()
             .expect("test platform thread");
