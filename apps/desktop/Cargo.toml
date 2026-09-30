@@ -25,6 +25,9 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "bac
 slint-interpreter = { version = "=1.18.1", optional = true, default-features = false, features = ["compat-1-2", "display-diagnostics"] }
 spin_on = { version = "0.1", optional = true }
 
+[target.'cfg(all(target_endian = "little", any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))'.dependencies]
+fearless_simd = "1.0"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSToolbar", "NSView", "NSWindow", "objc2-core-foundation", "objc2-quartz-core"] }

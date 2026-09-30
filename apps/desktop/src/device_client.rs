@@ -1176,31 +1176,118 @@ fn framebuffer_raw_to_rgba(
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or_else(|| AgentError::Protocol("RGBA image size overflow".to_string()))?;
     let mut rgba = reserved_buffer(rgba_len, "RGBA image")?;
-    for y in 0..height {
-        for x in 0..width {
-            match bpp {
-                16 => {
-                    let i = y * stride + x * 2;
-                    let v = u16::from_le_bytes([raw[i], raw[i + 1]]);
-                    let r5 = (v >> 11) & 0x1f;
-                    let g6 = (v >> 5) & 0x3f;
-                    let b5 = v & 0x1f;
-                    rgba.extend_from_slice(&[
-                        ((r5 << 3) | (r5 >> 2)) as u8,
-                        ((g6 << 2) | (g6 >> 4)) as u8,
-                        ((b5 << 3) | (b5 >> 2)) as u8,
-                        0xff,
-                    ]);
+    match bpp {
+        16 => append_rgb565_frame(&mut rgba, raw, width, height, stride),
+        32 => {
+            for y in 0..height {
+                let row = &raw[y * stride..y * stride + packed_stride];
+                for pixel in row.as_chunks::<4>().0 {
+                    rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 0xff]);
                 }
-                32 => {
-                    let i = y * stride + x * 4;
-                    rgba.extend_from_slice(&[raw[i + 2], raw[i + 1], raw[i], 0xff]);
-                }
-                _ => unreachable!(),
             }
         }
+        _ => unreachable!(),
     }
     Ok(rgba)
+}
+
+fn append_rgb565_frame(rgba: &mut Vec<u8>, raw: &[u8], width: usize, height: usize, stride: usize) {
+    #[cfg(all(
+        target_endian = "little",
+        any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")
+    ))]
+    if width >= 16 {
+        let level = fearless_simd::Level::new();
+        if !level.is_fallback() {
+            // Select a backend once per frame, outside the row and pixel loops.
+            fearless_simd::dispatch!(level, simd => append_rgb565_frame_simd(simd, rgba, raw, width, height, stride));
+            return;
+        }
+    }
+    append_rgb565_frame_scalar(rgba, raw, width, height, stride);
+}
+
+#[cfg(all(
+    target_endian = "little",
+    any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")
+))]
+#[inline(always)]
+fn append_rgb565_frame_simd<S: fearless_simd::Simd>(
+    simd: S,
+    rgba: &mut Vec<u8>,
+    raw: &[u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+) {
+    use fearless_simd::{prelude::*, u8x16, u16x8};
+
+    for y in 0..height {
+        let row = &raw[y * stride..y * stride + width * 2];
+        let (blocks, remainder) = row.as_chunks::<32>();
+        for block in blocks {
+            // Byte loads support unaligned rows; this backend requires a little-endian target.
+            let low: u16x8<S> = u8x16::from_slice(simd, &block[..16]).bitcast();
+            let high: u16x8<S> = u8x16::from_slice(simd, &block[16..]).bitcast();
+            let mut output = [0; 64];
+            for (pixels, output) in [low, high].into_iter().zip(output.as_chunks_mut::<32>().0) {
+                let red = pixels >> 11;
+                let green = (pixels >> 5) & 63;
+                let blue = pixels & 31;
+                let red_green = ((red << 3) | (red >> 2)) | (((green << 2) | (green >> 4)) << 8);
+                let blue_alpha = ((blue << 3) | (blue >> 2)) | 0xff00;
+                let (low, high) = red_green.interleave(blue_alpha);
+                low.to_bytes().store_slice(&mut output[..16]);
+                high.to_bytes().store_slice(&mut output[16..]);
+            }
+            rgba.extend_from_slice(&output);
+        }
+        for pixel in remainder.as_chunks::<2>().0 {
+            rgba.extend_from_slice(&rgb565_to_rgba(*pixel));
+        }
+    }
+}
+
+fn append_rgb565_frame_scalar(
+    rgba: &mut Vec<u8>,
+    raw: &[u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+) {
+    for y in 0..height {
+        let row = &raw[y * stride..y * stride + width * 2];
+        let (blocks, remainder) = row.as_chunks::<32>();
+        for block in blocks {
+            // Append once per block so capacity checks stay outside the pixel loop.
+            let mut output = [0; 64];
+            for (pixel, color) in block
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(output.as_chunks_mut::<4>().0)
+            {
+                *color = rgb565_to_rgba(*pixel);
+            }
+            rgba.extend_from_slice(&output);
+        }
+        for pixel in remainder.as_chunks::<2>().0 {
+            rgba.extend_from_slice(&rgb565_to_rgba(*pixel));
+        }
+    }
+}
+
+fn rgb565_to_rgba(pixel: [u8; 2]) -> [u8; 4] {
+    let value = u16::from_le_bytes(pixel);
+    let red = (value >> 11) & 0x1f;
+    let green = (value >> 5) & 0x3f;
+    let blue = value & 0x1f;
+    [
+        ((red << 3) | (red >> 2)) as u8,
+        ((green << 2) | (green >> 4)) as u8,
+        ((blue << 3) | (blue >> 2)) as u8,
+        0xff,
+    ]
 }
 
 fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
@@ -1400,6 +1487,116 @@ fn parse_native_capture(value: &Value, raw: Vec<u8>) -> Result<FramebufferCaptur
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn framebuffer_rgb565_conversion_preserves_every_color() {
+        let raw: Vec<_> = (0..=u16::MAX).flat_map(u16::to_le_bytes).collect();
+        let expected: Vec<_> = (0..=u16::MAX).flat_map(reference_rgb565_rgba).collect();
+        let rgba = framebuffer_raw_to_rgba(&raw, 65_536, 1, 131_072, 16).unwrap();
+        assert_eq!(rgba, expected);
+        let mut scalar = Vec::new();
+        append_rgb565_frame_scalar(&mut scalar, &raw, 65_536, 1, 131_072);
+        assert_eq!(scalar, expected);
+    }
+
+    #[test]
+    fn framebuffer_rgb565_conversion_handles_row_tails_and_padding() {
+        for offset in 0..16 {
+            for width in 0..=35 {
+                for padding in 0..4 {
+                    let stride = width * 2 + padding;
+                    let height = 3;
+                    let mut storage = vec![0xcd; offset + stride * height + 5];
+                    let mut expected = Vec::new();
+                    for y in 0..height {
+                        for x in 0..width {
+                            let value = ((y * width + x) * 7_919 + 137) as u16;
+                            let index = offset + y * stride + x * 2;
+                            storage[index..index + 2].copy_from_slice(&value.to_le_bytes());
+                            expected.extend_from_slice(&reference_rgb565_rgba(value));
+                        }
+                    }
+                    let rgba = framebuffer_raw_to_rgba(
+                        &storage[offset..],
+                        width as u64,
+                        height as u64,
+                        stride as u64,
+                        16,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        rgba, expected,
+                        "offset={offset}, width={width}, padding={padding}"
+                    );
+                    let mut scalar = Vec::new();
+                    append_rgb565_frame_scalar(
+                        &mut scalar,
+                        &storage[offset..],
+                        width,
+                        height,
+                        stride,
+                    );
+                    assert_eq!(scalar, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn framebuffer_32bit_conversion_preserves_channels_and_skips_padding() {
+        let raw = [
+            1, 2, 3, 0, 4, 5, 6, 7, 0xaa, 0xbb, 8, 9, 10, 11, 12, 13, 14, 15, 0xcc, 0xdd,
+        ];
+        assert_eq!(
+            framebuffer_raw_to_rgba(&raw, 2, 2, 10, 32).unwrap(),
+            [3, 2, 1, 255, 6, 5, 4, 255, 10, 9, 8, 255, 14, 13, 12, 255]
+        );
+    }
+
+    #[test]
+    fn framebuffer_conversion_rejects_invalid_geometry_before_decoding() {
+        for (width, height, stride, bpp, message) in [
+            (1, 1, 2, 24, "unsupported framebuffer bpp"),
+            (2, 1, 2, 16, "smaller than packed row"),
+            (1, 2, 2, 16, "framebuffer raw too short"),
+            (
+                usize::MAX as u64,
+                1,
+                usize::MAX as u64,
+                16,
+                "framebuffer row size overflow",
+            ),
+            (
+                1,
+                usize::MAX as u64,
+                2,
+                16,
+                "framebuffer byte size overflow",
+            ),
+        ] {
+            let error = framebuffer_raw_to_rgba(&[], width, height, stride, bpp).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+        for bpp in [16, 32] {
+            assert!(
+                framebuffer_raw_to_rgba(&[], 0, 0, 0, bpp)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    fn reference_rgb565_rgba(value: u16) -> [u8; 4] {
+        let red = value / 2_048;
+        let green = value / 32 % 64;
+        let blue = value % 32;
+        [
+            (red * 8 + red / 4) as u8,
+            (green * 4 + green / 16) as u8,
+            (blue * 8 + blue / 4) as u8,
+            255,
+        ]
+    }
 
     #[test]
     fn malformed_native_results_are_rejected() {
