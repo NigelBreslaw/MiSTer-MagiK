@@ -9876,6 +9876,26 @@ mod tests {
 
     #[test]
     fn library_purge_and_reboot_fail_busy_before_cleanup() {
+        // Set the lock override only in a child process: other tests and other
+        // worktrees must never contend on this fixture's lease.
+        if std::env::var_os("MAGIK_TEST_LIBRARY_PURGE_CHILD").is_none() {
+            let root = unique_temp_dir("library-purge-lease");
+            let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "launcher::tests::library_purge_and_reboot_fail_busy_before_cleanup",
+                    "--test-threads=1",
+                ])
+                .env("MAGIK_TEST_LIBRARY_PURGE_CHILD", "1")
+                .env(
+                    "MISTER_CATALOG_BUILDER_LOCK",
+                    root.join("catalog-builder.lock"),
+                )
+                .status();
+            let _ = std::fs::remove_dir_all(root);
+            assert!(status.expect("run isolated lock test").success());
+            return;
+        }
         let _lease = mister_magik_catalog::catalog_lease::CatalogMutationLease::acquire_default()
             .expect("hold catalog lease");
         assert!(
