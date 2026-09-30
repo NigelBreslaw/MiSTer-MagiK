@@ -100,14 +100,30 @@ def main() -> int:
     check_command.add_argument("--concept")
     check_command.add_argument(
         "--preset",
-        choices=("default", "reduced", "dithered", "rgb888", "cached"),
+        choices=(
+            "default",
+            "reduced",
+            "dithered",
+            "rgb888",
+            "cached",
+            "cached-fast",
+            "scanline",
+        ),
         default="default",
     )
     concept = subcommands.add_parser("concept", help="interactive Mini RGB565 concept")
     concept.add_argument("effect")
     concept.add_argument(
         "--preset",
-        choices=("default", "reduced", "dithered", "rgb888", "cached"),
+        choices=(
+            "default",
+            "reduced",
+            "dithered",
+            "rgb888",
+            "cached",
+            "cached-fast",
+            "scanline",
+        ),
         default="default",
     )
     check_command.add_argument(

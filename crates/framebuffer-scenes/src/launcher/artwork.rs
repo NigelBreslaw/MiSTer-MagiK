@@ -213,28 +213,42 @@ pub(super) fn face_cached(
     crate::launcher_flip::Face::new(pixels, width, height)
 }
 
+// The input is eight-bit and output thresholds are fixed. Cache these tiny
+// transfer tables instead of calling powf for every reduced colour sample.
+struct SrgbTransfer {
+    decode: [f64; 256],
+    boundaries: [f64; 255],
+}
+fn srgb_transfer() -> &'static SrgbTransfer {
+    static TRANSFER: std::sync::OnceLock<SrgbTransfer> = std::sync::OnceLock::new();
+    TRANSFER.get_or_init(|| {
+        let linear = |s: f64| {
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        SrgbTransfer {
+            decode: std::array::from_fn(|i| linear(i as f64 / 255.0)),
+            boundaries: std::array::from_fn(|i| linear((i as f64 + 0.5) / 255.0)),
+        }
+    })
+}
+impl SrgbTransfer {
+    fn encode(&self, linear: f64) -> u8 {
+        self.boundaries
+            .partition_point(|&boundary| linear >= boundary) as u8
+    }
+}
+
 pub(super) fn face_rgb888(
     card: &PreparedCard<'_>,
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
     let source = card.rgb888.expect("validated RGB888 source");
-    let linear: [f64; 256] = std::array::from_fn(|i| {
-        let s = i as f64 / 255.0;
-        if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    });
-    let encode = |l: f64| -> u8 {
-        let s = if l <= 0.0031308 {
-            l * 12.92
-        } else {
-            1.055 * l.powf(1.0 / 2.4) - 0.055
-        };
-        (s * 255.0).round().clamp(0.0, 255.0) as u8
-    };
+    let transfer = srgb_transfer();
     let rgb8: Vec<[u8; 3]> = (0..252)
         .flat_map(|y| (0..180).map(move |x| (x, y)))
         .map(|(x, y)| {
@@ -242,10 +256,11 @@ pub(super) fn face_rgb888(
                 let mut sum = 0.0;
                 for dy in 0..2 {
                     for dx in 0..2 {
-                        sum += linear[source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
+                        sum += transfer.decode
+                            [source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
                     }
                 }
-                encode(sum / 4.0)
+                transfer.encode(sum / 4.0)
             })
         })
         .collect();
@@ -841,6 +856,49 @@ fn ellipse_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gamma_lookup_matches_reference_for_every_pair_and_real_card_reduction() {
+        let transfer = srgb_transfer();
+        let reference = |l: f64| {
+            let s = if l <= 0.0031308 {
+                l * 12.92
+            } else {
+                1.055 * l.powf(1.0 / 2.4) - 0.055
+            };
+            (s * 255.0).round().clamp(0.0, 255.0) as u8
+        };
+        for a in 0..256 {
+            for b in 0..256 {
+                let value = (transfer.decode[a] + transfer.decode[b]) / 2.0;
+                assert_eq!(transfer.encode(value), reference(value));
+            }
+        }
+        let artwork: [&[u8]; 6] = [
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/01_arcade.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/02_consoles.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/03_computers.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/04_handhelds.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/05_favourites.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/06_settings.rgb888"),
+        ];
+        for source in artwork {
+            for y in 0..252 {
+                for x in 0..180 {
+                    for c in 0..3 {
+                        let mut sum = 0.0;
+                        for dy in 0..2 {
+                            for dx in 0..2 {
+                                sum += transfer.decode
+                                    [source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
+                            }
+                        }
+                        assert_eq!(transfer.encode(sum / 4.0), reference(sum / 4.0));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn reflection_formula_matches_every_baked_curve_entry() {

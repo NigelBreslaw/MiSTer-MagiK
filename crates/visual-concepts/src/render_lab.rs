@@ -4,8 +4,8 @@
 use crate::{Effect, Pixel, Preset, Rect, full};
 use mister_magik_framebuffer_scenes::{
     arcade_card::{
-        CABINET_HEIGHT, CABINET_WIDTH, CabinetTexture, render_arcade_card_filtered_into,
-        render_arcade_card_transition_into,
+        CABINET_HEIGHT, CABINET_WIDTH, CabinetTexture, render_arcade_card_filtered_band_into,
+        render_arcade_card_filtered_into, render_arcade_card_transition_into,
     },
     launcher::{
         CardRenderQuality, LauncherFramePreparer, LauncherFrameRequest, PreparedLauncher,
@@ -14,7 +14,10 @@ use mister_magik_framebuffer_scenes::{
     launcher_navigation::{BrowseDirection, BrowseFrame, BrowsePhase},
     navigation::NavigationTransitionRect,
 };
-use std::{io::Cursor, time::Duration};
+use std::{
+    io::Cursor,
+    time::{Duration, Instant},
+};
 const W: usize = 960;
 const H: usize = 540;
 const CARD: NavigationTransitionRect = NavigationTransitionRect {
@@ -30,7 +33,9 @@ pub(super) struct Lab {
     filtered: Option<CabinetTexture>,
     home: Vec<Pixel>,
     tiles: Option<ParallelTiles>,
+    reveal: Option<ParallelReveal>,
     cache: Vec<Vec<Pixel>>,
+    preparation: Vec<(&'static str, u64)>,
 }
 impl Lab {
     pub(super) fn new(
@@ -41,11 +46,30 @@ impl Lab {
         let quality = match preset {
             Preset::Default => CardRenderQuality::Current,
             Preset::Dithered => CardRenderQuality::Dithered,
-            Preset::Rgb888 | Preset::Cached => CardRenderQuality::Rgb888,
+            Preset::Rgb888 | Preset::Cached | Preset::CachedFast | Preset::Scanline => {
+                CardRenderQuality::Rgb888
+            }
             Preset::Reduced => return Err("reduced is not a rendering comparison".into()),
         };
-        let launcher = crate::fixture::prepare_quality(W, H, quality);
-        let home = launcher.pixels().to_vec();
+        let mut preparation = Vec::new();
+        let mut stage = Instant::now();
+        let (launcher, home, cached_home) = if name == "launcher-cards" {
+            let launcher = crate::fixture::prepare_quality(W, H, quality);
+            let home = launcher.pixels().to_vec();
+            (Some(launcher), home, false)
+        } else {
+            let (home, cached) = crate::fixture::home_quality(quality);
+            (None, home, cached)
+        };
+        preparation.push((
+            if cached_home {
+                "launcher_snapshot"
+            } else {
+                "launcher_fixture_cold"
+            },
+            stage.elapsed().as_millis() as u64,
+        ));
+        stage = Instant::now();
         let bytes = include_bytes!("../../../apps/mister/assets/ui/arcade/cabinet-483x519.rgb565");
         let cabinet = bytes
             .as_chunks::<2>()
@@ -87,45 +111,69 @@ impl Lab {
                     )
                 })
                 .collect();
+            preparation.push(("destination_decode", stage.elapsed().as_millis() as u64));
+            stage = Instant::now();
             let filtered = match preset {
                 Preset::Default => None,
                 Preset::Dithered => Some(CabinetTexture::from_rgb565(&cabinet)?),
-                Preset::Rgb888 | Preset::Cached => Some(CabinetTexture::from_rgb888(
-                    include_bytes!("../../../apps/mister/assets/ui/arcade/cabinet-483x519.rgb888"),
-                )?),
+                Preset::Rgb888 | Preset::Cached | Preset::CachedFast | Preset::Scanline => {
+                    Some(CabinetTexture::from_rgb888(include_bytes!(
+                        "../../../apps/mister/assets/ui/arcade/cabinet-483x519.rgb888"
+                    ))?)
+                }
                 Preset::Reduced => unreachable!(),
             };
+            let filtered = filtered.map(|texture| {
+                if matches!(preset, Preset::Scanline | Preset::CachedFast) {
+                    texture.with_scanlines()
+                } else {
+                    texture
+                }
+            });
             if let Some(texture) = &filtered
                 && !texture.prepare_destination(&mut frame)
             {
                 return Err("resting cabinet preparation failed".into());
             }
+            preparation.push(("cabinet_texture", stage.elapsed().as_millis() as u64));
+            stage = Instant::now();
             (Some(frame), filtered)
         } else {
             (None, None)
         };
         assert_eq!(cabinet.len(), CABINET_WIDTH * CABINET_HEIGHT);
         let tiles = if name == "launcher-cards" {
-            Some(ParallelTiles::new(launcher.frame_preparer(), worker_setup)?)
+            Some(ParallelTiles::new(
+                launcher.as_ref().unwrap().frame_preparer(),
+                worker_setup,
+            )?)
         } else {
             None
         };
-        let launcher = if tiles.is_some() {
-            Some(launcher)
+        let reveal = if matches!(preset, Preset::Scanline | Preset::CachedFast) {
+            Some(ParallelReveal::new(
+                &home,
+                arcade.as_ref().unwrap(),
+                filtered.as_ref().unwrap(),
+                worker_setup,
+            )?)
         } else {
-            drop(launcher);
             None
         };
+        preparation.push(("worker_setup", stage.elapsed().as_millis() as u64));
+        stage = Instant::now();
         let mut lab = Self {
             tiles,
+            reveal,
             launcher,
             arcade,
             cabinet,
             filtered,
             home,
             cache: Vec::new(),
+            preparation,
         };
-        if preset == Preset::Cached {
+        if matches!(preset, Preset::Cached | Preset::CachedFast) {
             // Store only y=77..540; the header is fixed after the first frame.
             // Release the unused carousel first, keeping peak RSS bounded.
             let mut pixels = vec![Pixel(0); W * H];
@@ -135,7 +183,15 @@ impl Lab {
                     .filtered
                     .as_ref()
                     .ok_or("cached reveal requires RGB888 source")?;
-                if !render_arcade_card_filtered_into(
+                if let Some(reveal) = &mut lab.reveal {
+                    reveal.render(
+                        t,
+                        &lab.home,
+                        lab.arcade.as_ref().unwrap(),
+                        texture,
+                        &mut pixels,
+                    )?;
+                } else if !render_arcade_card_filtered_into(
                     W,
                     H,
                     &lab.home,
@@ -149,6 +205,9 @@ impl Lab {
                 }
                 lab.cache.push(pixels[77 * W..].to_vec());
             }
+            lab.preparation
+                .push(("animation_cache", stage.elapsed().as_millis() as u64));
+            lab.reveal = None;
             lab.filtered = None;
             lab.cabinet.clear();
             lab.cabinet.shrink_to_fit();
@@ -156,6 +215,110 @@ impl Lab {
         Ok(lab)
     }
 }
+const REVEAL_SPLIT: usize = 311;
+struct ParallelReveal {
+    max_us: [u64; 3],
+    tile: Option<Vec<Pixel>>,
+    request: Option<std::sync::mpsc::Sender<(u32, Vec<Pixel>)>>,
+    completed: std::sync::mpsc::Receiver<(u32, Vec<Pixel>, u64)>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    storage_bytes: usize,
+}
+impl ParallelReveal {
+    fn new(
+        home: &[Pixel],
+        arcade: &[Pixel],
+        texture: &CabinetTexture,
+        setup: Option<fn()>,
+    ) -> Result<Self, String> {
+        let home = home.to_vec();
+        let arcade = arcade.to_vec();
+        let texture = texture.clone();
+        let tile = vec![Pixel(0); W * H];
+        let storage_bytes = home.capacity() * 2
+            + arcade.capacity() * 2
+            + texture.storage_bytes()
+            + tile.capacity() * 2;
+        let (request, receive) = std::sync::mpsc::channel::<(u32, Vec<Pixel>)>();
+        let (send, completed) = std::sync::mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("mini-arcade-tile".into())
+            .spawn(move || {
+                if let Some(setup) = setup {
+                    setup();
+                }
+                while let Ok((t, mut tile)) = receive.recv() {
+                    let started = Instant::now();
+                    if !render_arcade_card_filtered_band_into(
+                        &home,
+                        &arcade,
+                        &texture,
+                        t,
+                        &mut tile,
+                        (REVEAL_SPLIT, H),
+                    ) {
+                        break;
+                    }
+                    if send
+                        .send((t, tile, started.elapsed().as_micros() as u64))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            max_us: [0; 3],
+            tile: Some(tile),
+            request: Some(request),
+            completed,
+            worker: Some(worker),
+            storage_bytes,
+        })
+    }
+    fn render(
+        &mut self,
+        t: u32,
+        home: &[Pixel],
+        arcade: &[Pixel],
+        texture: &CabinetTexture,
+        out: &mut [Pixel],
+    ) -> Result<(), String> {
+        self.request
+            .as_ref()
+            .ok_or("Arcade worker stopped")?
+            .send((t, self.tile.take().ok_or("missing Arcade tile")?))
+            .map_err(|e| e.to_string())?;
+        let started = Instant::now();
+        if !render_arcade_card_filtered_band_into(home, arcade, texture, t, out, (0, REVEAL_SPLIT))
+        {
+            return Err("invalid Arcade tile".into());
+        }
+        let primary_us = started.elapsed().as_micros() as u64;
+        let waiting = Instant::now();
+        let (completed, tile, secondary_us) = self.completed.recv().map_err(|e| e.to_string())?;
+        let wait_us = waiting.elapsed().as_micros() as u64;
+        self.max_us[0] = self.max_us[0].max(primary_us);
+        self.max_us[1] = self.max_us[1].max(secondary_us);
+        self.max_us[2] = self.max_us[2].max(wait_us);
+        if completed != t {
+            return Err("stale Arcade tile".into());
+        }
+        out[REVEAL_SPLIT * W..].copy_from_slice(&tile[REVEAL_SPLIT * W..]);
+        self.tile = Some(tile);
+        Ok(())
+    }
+}
+impl Drop for ParallelReveal {
+    fn drop(&mut self) {
+        self.request.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 /// Six rightward spins then six leftward spins, with a resting interval after
 /// each spin. A following partial spin unwinds, exercising direction reversal.
 fn browse(ms: u64) -> BrowseFrame {
@@ -230,7 +393,16 @@ impl Effect for Lab {
                 }
                 return Ok(full(W, H));
             }
-            let ok = if let Some(texture) = &self.filtered {
+            let ok = if let Some(reveal) = &mut self.reveal {
+                reveal.render(
+                    t,
+                    &self.home,
+                    arcade,
+                    self.filtered.as_ref().unwrap(),
+                    pixels,
+                )?;
+                true
+            } else if let Some(texture) = &self.filtered {
                 render_arcade_card_filtered_into(W, H, &self.home, arcade, texture, CARD, t, pixels)
             } else {
                 render_arcade_card_transition_into(
@@ -268,8 +440,15 @@ impl Effect for Lab {
             })
         }
     }
+    fn render_stage_max_us(&self) -> [u64; 3] {
+        self.reveal.as_ref().map_or([0; 3], |r| r.max_us)
+    }
+    fn preparation_stages(&self) -> &[(&'static str, u64)] {
+        &self.preparation
+    }
     fn storage_bytes(&self) -> usize {
-        self.tiles.as_ref().map_or(0, |t| t.storage_bytes)
+        self.reveal.as_ref().map_or(0, |r| r.storage_bytes)
+            + self.tiles.as_ref().map_or(0, |t| t.storage_bytes)
             + self
                 .launcher
                 .as_ref()
@@ -450,9 +629,49 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[test]
+    fn scanlines_match_reference_through_mip_changes_edges_and_reverse() {
+        let mut reference = Lab::new("arcade-transition", Preset::Rgb888, None).unwrap();
+        let mut scanline = Lab::new("arcade-transition", Preset::Scanline, None).unwrap();
+        assert!(scanline.cache.is_empty());
+        assert!(scanline.storage_bytes() - reference.storage_bytes() < 6 * 1024 * 1024);
+        let mut expected = vec![Pixel(0); W * H];
+        let mut actual = expected.clone();
+        for ms in [
+            0, 1, 79, 80, 121, 219, 301, 379, 420, 480, 499, 500, 501, 599, 639, 760, 839, 840,
+            919, 999, 1000, 1201, 1700, 2199, 2200,
+        ] {
+            reference
+                .render(Duration::from_millis(ms), &mut expected)
+                .unwrap();
+            scanline
+                .render(Duration::from_millis(ms), &mut actual)
+                .unwrap();
+            assert_eq!(actual, expected, "scanline pose {ms}");
+        }
+    }
+    #[test]
+    fn accelerated_runtime_cache_matches_reference_and_releases_workers() {
+        let mut fast = Lab::new("arcade-transition", Preset::CachedFast, None).unwrap();
+        assert_eq!(fast.cache.len(), 61);
+        assert!(fast.reveal.is_none() && fast.filtered.is_none());
+        assert!(fast.storage_bytes() < 60 * 1024 * 1024);
+        let mut reference = Lab::new("arcade-transition", Preset::Rgb888, None).unwrap();
+        let mut actual = vec![Pixel(0); W * H];
+        let mut expected = actual.clone();
+        for i in [0, 1, 7, 15, 30, 45, 59, 60] {
+            let t = i * 1000 / 60;
+            fast.render(Duration::from_millis(t), &mut actual).unwrap();
+            reference
+                .render(Duration::from_millis(t), &mut expected)
+                .unwrap();
+            assert_eq!(actual, expected, "runtime cached pose {i}");
+        }
+    }
+    #[test]
     fn geometry_and_preset_mismatches_are_rejected() {
         assert!(crate::Scene::new("launcher-cards", Preset::Default, 960, 600).is_err());
         assert!(crate::Scene::new("launcher-cards", Preset::Reduced, W, H).is_err());
         assert!(crate::Scene::new("diagnostic", Preset::Rgb888, W, H).is_err());
+        assert!(crate::Scene::new("launcher-cards", Preset::Scanline, W, H).is_err());
     }
 }

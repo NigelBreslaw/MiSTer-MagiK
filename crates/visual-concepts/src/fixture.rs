@@ -164,6 +164,26 @@ pub(crate) fn prepare_quality(
             .finish()
     }
 }
+// Mini mirrors production's already prepared launcher when entering Arcade.
+// Cache just the resting snapshot, never animation poses or prepared card faces.
+pub(crate) fn home_quality(
+    quality: mister_magik_framebuffer_scenes::launcher::CardRenderQuality,
+) -> (Vec<Pixel>, bool) {
+    use mister_magik_framebuffer_scenes::launcher::CardRenderQuality;
+    static HOME: [std::sync::OnceLock<Vec<Pixel>>; 3] = [const { std::sync::OnceLock::new() }; 3];
+    let index = match quality {
+        CardRenderQuality::Current => 0,
+        CardRenderQuality::Dithered => 1,
+        CardRenderQuality::Rgb888 => 2,
+    };
+    let cached = HOME[index].get().is_some();
+    (
+        HOME[index]
+            .get_or_init(|| prepare_quality(960, 540, quality).pixels().to_vec())
+            .clone(),
+        cached,
+    )
+}
 pub struct Fixture {
     pub width: usize,
     pub height: usize,

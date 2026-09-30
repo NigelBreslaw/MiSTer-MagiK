@@ -4,6 +4,9 @@
 //! Home <-> Arcade launcher-card reveal for HDMI and CRT rasters.
 
 use crate::Rgb565Pixel;
+
+#[path = "cabinet_scanline.rs"]
+mod scanline;
 use crate::card_page::{alpha_of, blend, ease_in_out, ease_out, rounded_span, window_q16};
 use crate::navigation::NavigationTransitionRect;
 
@@ -69,6 +72,7 @@ pub fn render_arcade_card_transition_into(
         t_ms,
         output,
         None,
+        (0, height),
     )
 }
 
@@ -94,6 +98,34 @@ pub fn render_arcade_card_filtered_into(
         t_ms,
         output,
         Some(texture),
+        (0, height),
+    )
+}
+/// Render disjoint HDMI row bands for the live two-worker experiment. Sources
+/// remain immutable; each worker owns its complete output and row scratch.
+#[allow(clippy::too_many_arguments)]
+pub fn render_arcade_card_filtered_band_into(
+    launcher: &[Rgb565Pixel],
+    arcade: &[Rgb565Pixel],
+    texture: &CabinetTexture,
+    t_ms: u32,
+    output: &mut [Rgb565Pixel],
+    rows: (usize, usize),
+) -> bool {
+    if rows.0 > rows.1 || rows.1 > 540 {
+        return false;
+    }
+    render_with_texture(
+        960,
+        540,
+        launcher,
+        arcade,
+        &texture.reference,
+        HDMI_CARD,
+        t_ms,
+        output,
+        Some(texture),
+        rows,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -107,6 +139,7 @@ fn render_with_texture(
     t_ms: u32,
     output: &mut [Rgb565Pixel],
     filtered: Option<&CabinetTexture>,
+    rows: (usize, usize),
 ) -> bool {
     let len = width.saturating_mul(height);
     if width == 0
@@ -121,15 +154,17 @@ fn render_with_texture(
     }
     let t = t_ms.min(ARCADE_CARD_DURATION_MS);
     if t == 0 {
-        output.copy_from_slice(launcher);
+        output[rows.0 * width..rows.1 * width]
+            .copy_from_slice(&launcher[rows.0 * width..rows.1 * width]);
         return true;
     }
     if t == ARCADE_CARD_DURATION_MS {
-        output.copy_from_slice(arcade);
+        output[rows.0 * width..rows.1 * width]
+            .copy_from_slice(&arcade[rows.0 * width..rows.1 * width]);
         return true;
     }
     if (width, height) == (960, 540) {
-        render_hdmi(launcher, arcade, cabinet, t, output, filtered);
+        render_hdmi(launcher, arcade, cabinet, t, output, filtered, rows);
     } else {
         render_crt(width, height, launcher, arcade, source_card, t, output);
     }
@@ -143,28 +178,37 @@ fn render_hdmi(
     t: u32,
     output: &mut [Rgb565Pixel],
     filtered: Option<&CabinetTexture>,
+    rows: (usize, usize),
 ) {
     const W: usize = 960;
     const H: usize = 540;
+    let fast = filtered.is_some_and(|texture| texture.scanlines.is_some());
     let launcher_alpha = 256_u32.saturating_sub(alpha_of(ease_out(window_q16(t, 120, 360))));
     let chrome_alpha = alpha_of(ease_out(window_q16(t, 220, 300)));
-    for (index, pixel) in output.iter_mut().enumerate() {
-        let x = index % W;
-        let y = index / W;
-        if y < HDMI_CONTENT_TOP {
-            *pixel = arcade[index];
-            continue;
+    if !fast || !scanline::base(launcher, arcade, output, launcher_alpha, chrome_alpha, rows) {
+        for (index, pixel) in output
+            .iter_mut()
+            .enumerate()
+            .take(rows.1 * W)
+            .skip(rows.0 * W)
+        {
+            let x = index % W;
+            let y = index / W;
+            if y < HDMI_CONTENT_TOP {
+                *pixel = arcade[index];
+                continue;
+            }
+            let destination_is_subject = (HDMI_CABINET_X as usize..W).contains(&x)
+                && (HDMI_CONTENT_TOP..HDMI_CONTENT_BOTTOM).contains(&y)
+                || (LIST_LEFT..LIST_RIGHT).contains(&x) && (88..484).contains(&y);
+            let chrome = if destination_is_subject {
+                0
+            } else {
+                arcade[index].0
+            };
+            let base = blend(0, launcher[index].0, launcher_alpha);
+            *pixel = Rgb565Pixel(blend(base, chrome, chrome_alpha));
         }
-        let destination_is_subject = (HDMI_CABINET_X as usize..W).contains(&x)
-            && (HDMI_CONTENT_TOP..HDMI_CONTENT_BOTTOM).contains(&y)
-            || (LIST_LEFT..LIST_RIGHT).contains(&x) && (88..484).contains(&y);
-        let chrome = if destination_is_subject {
-            0
-        } else {
-            arcade[index].0
-        };
-        let base = blend(0, launcher[index].0, launcher_alpha);
-        *pixel = Rgb565Pixel(blend(base, chrome, chrome_alpha));
     }
 
     // The cabinet camera shares the card framing. Interpolate from that crop
@@ -180,30 +224,43 @@ fn render_hdmi(
     let inverse = (1_i64 << 32) / scale;
     let x0 = (cabinet_x >> 16).max(0) as usize;
     let x1 = (((cabinet_x + CABINET_WIDTH as i64 * scale) >> 16) + 1).clamp(0, W as i64) as usize;
-    let y0 = (cabinet_y >> 16).clamp(HDMI_CONTENT_TOP as i64, HDMI_CONTENT_BOTTOM as i64) as usize;
+    let y0 = ((cabinet_y >> 16).clamp(HDMI_CONTENT_TOP as i64, HDMI_CONTENT_BOTTOM as i64)
+        as usize)
+        .max(rows.0);
     let y1 = (((cabinet_y + CABINET_HEIGHT as i64 * scale) >> 16) + 1)
         .clamp(HDMI_CONTENT_TOP as i64, HDMI_CONTENT_BOTTOM as i64) as usize;
-    for y in y0..y1 {
-        let source_y = (((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16) >> 16;
-        if filtered.is_none() && !(0..CABINET_HEIGHT as i64).contains(&source_y) {
-            continue;
-        }
-        for x in x0..x1 {
-            let source_x = (((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16) >> 16;
-            if filtered.is_none() && !(0..CABINET_WIDTH as i64).contains(&source_x) {
+    let y1 = y1.min(rows.1);
+    if fast {
+        scanline::render(
+            filtered.unwrap(),
+            output,
+            (x0, x1, y0, y1),
+            (cabinet_x, cabinet_y, inverse),
+        );
+    } else {
+        for y in y0..y1 {
+            let source_y = (((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16) >> 16;
+            if filtered.is_none() && !(0..CABINET_HEIGHT as i64).contains(&source_y) {
                 continue;
             }
-            if let Some(texture) = filtered {
-                let sx = ((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16;
-                let sy = ((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16;
-                let sample = texture.sample(sx - (1 << 15), sy - (1 << 15), inverse as u32);
-                output[y * W + x] =
-                    crate::launcher_texture::over_dithered(sample, output[y * W + x], x, y);
-                continue;
-            }
-            let sampled = cabinet[source_y as usize * CABINET_WIDTH + source_x as usize].0;
-            if sampled != 0 {
-                output[y * W + x] = Rgb565Pixel(sampled);
+            for x in x0..x1 {
+                let source_x =
+                    (((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16) >> 16;
+                if filtered.is_none() && !(0..CABINET_WIDTH as i64).contains(&source_x) {
+                    continue;
+                }
+                if let Some(texture) = filtered {
+                    let sx = ((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16;
+                    let sy = ((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16;
+                    let sample = texture.sample(sx - (1 << 15), sy - (1 << 15), inverse as u32);
+                    output[y * W + x] =
+                        crate::launcher_texture::over_dithered(sample, output[y * W + x], x, y);
+                    continue;
+                }
+                let sampled = cabinet[source_y as usize * CABINET_WIDTH + source_x as usize].0;
+                if sampled != 0 {
+                    output[y * W + x] = Rgb565Pixel(sampled);
+                }
             }
         }
     }
@@ -213,13 +270,13 @@ fn render_hdmi(
         H,
         HDMI_CARD,
         t,
-        HDMI_CONTENT_TOP,
-        HDMI_CONTENT_BOTTOM,
+        HDMI_CONTENT_TOP.max(rows.0),
+        HDMI_CONTENT_BOTTOM.min(rows.1),
         output,
     );
 
     let screen_alpha = alpha_of(ease_out(window_q16(t, 760, 160)));
-    copy_rect_alpha(W, arcade, output, HDMI_SCREEN, screen_alpha, 0);
+    copy_rect_alpha(W, arcade, output, HDMI_SCREEN, screen_alpha, 0, fast, rows);
     for (index, &(top, bottom)) in LIST_BANDS.iter().enumerate() {
         let p = ease_out(window_q16(t, 500 + index as u32 * 22, 280));
         let offset = ((32 * ((1 << 16) - p) + (1 << 15)) >> 16) as usize;
@@ -233,10 +290,12 @@ fn render_hdmi(
             bottom,
             alpha_of(p),
             offset,
+            fast,
+            rows,
         );
     }
     let footer_alpha = alpha_of(ease_out(window_q16(t, 640, 220)));
-    copy_band_alpha(W, arcade, output, 0, W, 500, H, footer_alpha, 0);
+    copy_band_alpha(W, arcade, output, 0, W, 500, H, footer_alpha, 0, fast, rows);
 }
 
 fn render_crt(
@@ -324,6 +383,7 @@ fn draw_outline(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn copy_rect_alpha(
     width: usize,
     source: &[Rgb565Pixel],
@@ -331,6 +391,8 @@ fn copy_rect_alpha(
     rect: NavigationTransitionRect,
     alpha: u32,
     offset: usize,
+    fast: bool,
+    rows: (usize, usize),
 ) {
     copy_band_alpha(
         width,
@@ -342,6 +404,8 @@ fn copy_rect_alpha(
         rect.bottom() as usize,
         alpha,
         offset,
+        fast,
+        rows,
     );
 }
 
@@ -356,11 +420,23 @@ fn copy_band_alpha(
     bottom: usize,
     alpha: u32,
     offset: usize,
+    fast: bool,
+    rows: (usize, usize),
 ) {
     if alpha == 0 {
         return;
     }
-    for y in top..bottom {
+    for y in top.max(rows.0)..bottom.min(rows.1) {
+        let n = right.min(width.saturating_sub(offset)).saturating_sub(left);
+        if fast
+            && scanline::over(
+                &mut destination[y * width + left + offset..y * width + left + offset + n],
+                &source[y * width + left..y * width + left + n],
+                alpha,
+            )
+        {
+            continue;
+        }
         for x in left..right {
             let target_x = x + offset;
             if target_x >= width {
@@ -380,6 +456,59 @@ fn copy_band_alpha(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filtered_bands_preserve_other_rows_and_reject_invalid_ranges() {
+        let texture = CabinetTexture::from_rgb888(&vec![64; CABINET_WIDTH * CABINET_HEIGHT * 3])
+            .unwrap()
+            .with_scanlines();
+        let home = vec![Rgb565Pixel(0x1234); 960 * 540];
+        let arcade = vec![Rgb565Pixel(0xabcd); 960 * 540];
+        let sentinel = Rgb565Pixel(0xbeef);
+        let mut expected = vec![sentinel; 960 * 540];
+        let mut tile = expected.clone();
+        for t in [0, 200, 500, 800, 1000] {
+            assert!(render_arcade_card_filtered_into(
+                960,
+                540,
+                &home,
+                &arcade,
+                &texture,
+                HDMI_CARD,
+                t,
+                &mut expected
+            ));
+            tile.fill(sentinel);
+            assert!(render_arcade_card_filtered_band_into(
+                &home,
+                &arcade,
+                &texture,
+                t,
+                &mut tile,
+                (289, 540)
+            ));
+            assert!(tile[..289 * 960].iter().all(|&p| p == sentinel));
+            assert_eq!(tile[289 * 960..], expected[289 * 960..]);
+        }
+        let before = tile.clone();
+        assert!(!render_arcade_card_filtered_band_into(
+            &home,
+            &arcade,
+            &texture,
+            500,
+            &mut tile,
+            (400, 399)
+        ));
+        assert!(!render_arcade_card_filtered_band_into(
+            &home,
+            &arcade,
+            &texture,
+            500,
+            &mut tile,
+            (540, 541)
+        ));
+        assert_eq!(tile, before);
+    }
 
     #[test]
     fn endpoints_are_exact() {
@@ -507,10 +636,13 @@ mod tests {
 
 /// Preparation-only 2D minification pyramid. RGB8 and coverage survive until
 /// destination-space composition. Geometry remains the production 483x519.
+#[derive(Clone)]
 pub struct CabinetTexture {
     reference: Vec<Rgb565Pixel>,
     levels: Vec<CabinetLevel>,
+    scanlines: Option<Box<std::cell::RefCell<scanline::Scanlines>>>,
 }
+#[derive(Clone)]
 struct CabinetLevel {
     pixels: Vec<u32>,
     width: usize,
@@ -587,7 +719,18 @@ impl CabinetTexture {
                 height,
             });
         }
-        Ok(Self { reference, levels })
+        Ok(Self {
+            reference,
+            levels,
+            scanlines: None,
+        })
+    }
+    /// Opt into bounded row scratch and the live scanline scaler experiment.
+    pub fn with_scanlines(mut self) -> Self {
+        self.scanlines = Some(Box::new(
+            std::cell::RefCell::new(scanline::Scanlines::new()),
+        ));
+        self
     }
     /// Prepare the resting cabinet with the same final quantisation as the
     /// filtered reveal. Text, game pixels and chrome remain on their native grid.
@@ -614,7 +757,10 @@ impl CabinetTexture {
         true
     }
     pub fn storage_bytes(&self) -> usize {
-        self.reference.capacity() * 2
+        self.scanlines
+            .as_ref()
+            .map_or(0, |_| std::mem::size_of::<scanline::Scanlines>())
+            + self.reference.capacity() * 2
             + self
                 .levels
                 .iter()

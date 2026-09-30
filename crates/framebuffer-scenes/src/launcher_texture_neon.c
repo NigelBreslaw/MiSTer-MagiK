@@ -490,39 +490,48 @@ void magik_launcher_raster_row(uint16_t *out, uint8_t *alpha, const uint32_t *a,
 // Experimental final quantisation, after perspective filtering and lighting.
 static const uint32_t image_threshold[4][4] = {
   {8,136,40,168},{200,72,232,104},{56,184,24,152},{248,120,216,88}};
+// Exact ordered rounding collapses to one division: with 0<t<256,
+// remainder*256 > t*255 iff remainder >= t. Thus round(s/255,t)
+// is floor((s+255-t)/255). For this bounded range, division by 255 is
+// (n+1+((n+1)>>8))>>8. All intermediate values fit sixteen bits.
+static inline uint16_t quantise_image_scalar(uint32_t value,uint32_t levels,uint32_t offset) {
+  uint32_t n=value*levels+offset;
+  return (uint16_t)((n+(n>>8))>>8);
+}
+static inline uint16_t pack_dithered_scalar(uint32_t p,size_t x,size_t y) {
+  uint32_t offset=256-image_threshold[y&3][x&3];
+  return (uint16_t)(quantise_image_scalar(p&255,31,offset)<<11 |
+    quantise_image_scalar((p>>8)&255,63,offset)<<5 |
+    quantise_image_scalar((p>>16)&255,31,offset));
+}
+static inline uint16x4_t quantise_image16(uint16x4_t value,uint16_t levels,uint16x4_t offset) {
+  uint16x4_t n=vmla_n_u16(offset,value,levels);
+  return vshr_n_u16(vadd_u16(n,vshr_n_u16(n,8)),8);
+}
+static inline uint16x4_t pack_dithered16(uint32x4_t p,uint16x4_t offset) {
+  const uint32x4_t mask=vdupq_n_u32(255);
+  uint16x4_t r=quantise_image16(vmovn_u32(vandq_u32(p,mask)),31,offset);
+  uint16x4_t g=quantise_image16(vmovn_u32(vandq_u32(vshrq_n_u32(p,8),mask)),63,offset);
+  uint16x4_t b=quantise_image16(vmovn_u32(vandq_u32(vshrq_n_u32(p,16),mask)),31,offset);
+  return vorr_u16(vorr_u16(vshl_n_u16(r,11),vshl_n_u16(g,5)),b);
+}
 static uint16_t dither_pixel(uint32_t p, uint16_t dst, size_t x, size_t y) {
-  uint32_t a = p >> 24;
-  if (!a) return dst;
-  uint32_t channels[3] = {p & 255, (p >> 8) & 255, (p >> 16) & 255};
-  uint32_t bg[3] = {(dst >> 11)*255/31, ((dst >> 5)&63)*255/63, (dst&31)*255/31};
-  uint32_t threshold = image_threshold[y&3][x&3];
-  uint32_t levels[3] = {31,63,31};
-  for (size_t c=0;c<3;++c) {
+  uint32_t a=p>>24;
+  if(!a) return dst;
+  if(a==255) return pack_dithered_scalar(p,x,y);
+  uint32_t channels[3]={p&255,(p>>8)&255,(p>>16)&255};
+  uint32_t bg[3]={(dst>>11)*255/31,((dst>>5)&63)*255/63,(dst&31)*255/31};
+  for(size_t c=0;c<3;++c) {
     uint32_t v=channels[c]+bg[c]*(255-a)/255;
-    if (v>255) v=255;
-    uint32_t scaled=v*levels[c];
-    channels[c]=scaled/255+((scaled%255)*256 > threshold*255);
+    channels[c]=v>255?255:v;
   }
-  return (uint16_t)(channels[0]<<11 | channels[1]<<5 | channels[2]);
+  return pack_dithered_scalar(channels[0]|channels[1]<<8|channels[2]<<16,x,y);
 }
-// Exact division by 255 for 0 <= scaled <= 255*63, without scalar lanes.
-static inline uint32x2_t quantise_image2(uint32x2_t value, uint32_t levels,
-                                      uint32x2_t threshold) {
-  uint32x2_t scaled = vmul_n_u32(value, levels);
-  uint32x2_t biased = vadd_u32(scaled, vdup_n_u32(1));
-  uint32x2_t q = vshr_n_u32(vadd_u32(biased, vshr_n_u32(biased, 8)), 8);
-  uint32x2_t remainder = vsub_u32(scaled, vmul_n_u32(q, 255));
-  uint32x2_t more = vcgt_u32(vshl_n_u32(remainder, 8), vmul_n_u32(threshold, 255));
-  return vadd_u32(q, vand_u32(more, vdup_n_u32(1)));
-}
-static inline uint32x2_t pack_dithered2(uint32x2_t p, size_t x, size_t y) {
-  uint32x2_t threshold = vdup_n_u32(image_threshold[y&3][x&3]);
-  threshold = vset_lane_u32(image_threshold[(y+1)&3][x&3], threshold, 1);
-  uint32x2_t mask = vdup_n_u32(255);
-  uint32x2_t r = quantise_image2(vand_u32(p,mask),31,threshold);
-  uint32x2_t g = quantise_image2(vand_u32(vshr_n_u32(p,8),mask),63,threshold);
-  uint32x2_t b = quantise_image2(vand_u32(vshr_n_u32(p,16),mask),31,threshold);
-  return vorr_u32(vorr_u32(vshl_n_u32(r,11),vshl_n_u32(g,5)),b);
+static inline uint32x2_t pack_dithered2(uint32x2_t p,size_t x,size_t y) {
+  uint16_t offsets[4]={(uint16_t)(256-image_threshold[y&3][x&3]),
+    (uint16_t)(256-image_threshold[(y+1)&3][x&3]),0,0};
+  uint16x4_t packed=pack_dithered16(vcombine_u32(p,vdup_n_u32(0)),vld1_u16(offsets));
+  return vget_low_u32(vmovl_u16(packed));
 }
 void magik_launcher_project_dithered(uint16_t *out,size_t pitch,const uint32_t *src,
     size_t height,size_t rows,int32_t q,int32_t step,size_t x,size_t y0) {
@@ -559,23 +568,10 @@ void magik_launcher_project_dithered(uint16_t *out,size_t pitch,const uint32_t *
 }
 
 // Flat cards use contiguous four-pixel stores, as in the production flat path.
-static inline uint32x4_t quantise_image4(uint32x4_t value, uint32_t levels,
-                                      uint32x4_t threshold) {
-  uint32x4_t scaled = vmulq_n_u32(value, levels);
-  uint32x4_t biased = vaddq_u32(scaled, vdupq_n_u32(1));
-  uint32x4_t q = vshrq_n_u32(vaddq_u32(biased, vshrq_n_u32(biased, 8)), 8);
-  uint32x4_t remainder = vsubq_u32(scaled, vmulq_n_u32(q, 255));
-  uint32x4_t more = vcgtq_u32(vshlq_n_u32(remainder, 8), vmulq_n_u32(threshold, 255));
-  return vaddq_u32(q, vandq_u32(more, vdupq_n_u32(1)));
-}
-static inline uint16x4_t pack_dithered4(uint32x4_t p, size_t x, size_t y) {
-  uint32_t thresholds[4];
-  for (size_t j = 0; j < 4; ++j) thresholds[j] = image_threshold[y & 3][(x + j) & 3];
-  uint32x4_t t = vld1q_u32(thresholds), mask = vdupq_n_u32(255);
-  uint32x4_t r = quantise_image4(vandq_u32(p, mask), 31, t);
-  uint32x4_t g = quantise_image4(vandq_u32(vshrq_n_u32(p, 8), mask), 63, t);
-  uint32x4_t b = quantise_image4(vandq_u32(vshrq_n_u32(p, 16), mask), 31, t);
-  return vmovn_u32(vorrq_u32(vorrq_u32(vshlq_n_u32(r, 11), vshlq_n_u32(g, 5)), b));
+static inline uint16x4_t pack_dithered4(uint32x4_t p,size_t x,size_t y) {
+  uint16_t offsets[4];
+  for(size_t j=0;j<4;++j) offsets[j]=(uint16_t)(256-image_threshold[y&3][(x+j)&3]);
+  return pack_dithered16(p,vld1_u16(offsets));
 }
 void magik_launcher_flat_dithered(uint16_t *out, size_t pitch,
     const uint32_t *src, size_t stride, size_t height, size_t width,
@@ -609,5 +605,60 @@ void magik_launcher_flat_dithered(uint16_t *out, size_t pitch,
       uint32_t b = r + 1 >= 0 && (size_t)(r + 1) < height ? src[x * stride + r + 1] : 0;
       out[y * pitch + x] = dither_pixel(scalar(a, b, w), out[y * pitch + x], x0 + x, y0 + y);
     }
+  }
+}
+
+// Separable cabinet rows. These bounded gathers are per horizontal row, while
+// vertical filtering, mip blending and output use contiguous four-pixel batches.
+typedef struct { int16_t index; uint16_t weight; } cabinet_column;
+static inline uint32x4_t cabinet_mix4(uint32x4_t a,uint32x4_t b,uint32x4_t weight) {
+  uint32x4_t inv=vsubq_u32(vdupq_n_u32(256),weight),mask=vdupq_n_u32(0x00ff00ff);
+  uint32x4_t rb=vandq_u32(vshrq_n_u32(vaddq_u32(vmulq_u32(vandq_u32(a,mask),inv),vmulq_u32(vandq_u32(b,mask),weight)),8),mask);
+  uint32x4_t ga=vandq_u32(vshrq_n_u32(vaddq_u32(vmulq_u32(vandq_u32(vshrq_n_u32(a,8),mask),inv),vmulq_u32(vandq_u32(vshrq_n_u32(b,8),mask),weight)),8),mask);
+  return vorrq_u32(rb,vshlq_n_u32(ga,8));
+}
+static inline uint32_t cabinet_border(const uint32_t *source,size_t width,cabinet_column column) {
+  int32_t ix=column.index;
+  uint32_t a=ix>=0 && (size_t)ix<width ? source[ix]:0;
+  uint32_t b=ix+1>=0 && (size_t)(ix+1)<width ? source[ix+1]:0;
+  return scalar(a,b,column.weight);
+}
+void magik_cabinet_horizontal(uint32_t *out,const uint32_t *source,size_t width,const cabinet_column *columns,size_t n,size_t first,size_t end) {
+  size_t i=0;
+  for(;i<first;++i) out[i]=cabinet_border(source,width,columns[i]);
+  // The monotonic mapping's interior is checked once per frame by Rust.
+  // Load each neighbouring RGBA pair together, then transpose the four pairs.
+  for(;i+3<end;i+=4) {
+    uint16x4x2_t map=vld2_u16((const uint16_t *)(columns+i));
+    const uint32_t *p0=source+vget_lane_u16(map.val[0],0);
+    const uint32_t *p1=source+vget_lane_u16(map.val[0],1);
+    const uint32_t *p2=source+vget_lane_u16(map.val[0],2);
+    const uint32_t *p3=source+vget_lane_u16(map.val[0],3);
+    uint32x2x2_t a=vtrn_u32(vld1_u32(p0),vld1_u32(p1));
+    uint32x2x2_t b=vtrn_u32(vld1_u32(p2),vld1_u32(p3));
+    vst1q_u32(out+i,cabinet_mix4(vcombine_u32(a.val[0],b.val[0]),
+      vcombine_u32(a.val[1],b.val[1]),vmovl_u16(map.val[1])));
+  }
+  for(;i<n;++i) out[i]=cabinet_border(source,width,columns[i]);
+}
+void magik_cabinet_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y) {
+  size_t i=0;
+  for(;i+3<n;i+=4) {
+    uint32x4_t p=blend(vld1q_u32(a+i),vld1q_u32(b+i),wy);
+    if(lod) p=blend(p,blend(vld1q_u32(c+i),vld1q_u32(d+i),wy2),lod);
+    uint32x4_t alpha=vshrq_n_u32(p,24);
+    uint32x2_t maximum=vmax_u32(vget_low_u32(alpha),vget_high_u32(alpha));
+    if(vget_lane_u32(maximum,0)==0 && vget_lane_u32(maximum,1)==0) continue;
+    uint32x2_t m=vmin_u32(vget_low_u32(alpha),vget_high_u32(alpha));
+    if(vget_lane_u32(m,0)==255 && vget_lane_u32(m,1)==255) vst1_u16(out+i,pack_dithered4(p,x+i,y));
+    else {
+      uint32_t pixels[4];vst1q_u32(pixels,p);
+      for(size_t j=0;j<4;++j) out[i+j]=dither_pixel(pixels[j],out[i+j],x+i+j,y);
+    }
+  }
+  for(;i<n;++i) {
+    uint32_t p=scalar(a[i],b[i],wy);
+    if(lod) p=scalar(p,scalar(c[i],d[i],wy2),lod);
+    out[i]=dither_pixel(p,out[i],x+i,y);
   }
 }

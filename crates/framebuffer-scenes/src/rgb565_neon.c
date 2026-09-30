@@ -249,3 +249,28 @@ void mister_magik_rgb565_blend_black(
             : blend1(source, 0, clamped_alpha);
     }
 }
+
+// In-place spans for the opt-in live Arcade compositor. Weights and rounding
+// match card_page::blend, including the second fade over transparent subjects.
+void mister_magik_arcade_over(uint16_t *out,const uint16_t *source,size_t n,uint16_t alpha) {
+    size_t i=0;
+    for(;i+7<n;i+=8) vst1q_u16(out+i,blend8(vld1q_u16(out+i),vld1q_u16(source+i),alpha));
+    for(;i<n;++i) out[i]=blend1(out[i],source[i],alpha);
+}
+void mister_magik_arcade_base(uint16_t *out,const uint16_t *home,const uint16_t *arcade,uint16_t a,uint16_t b,size_t y0,size_t y1) {
+    const size_t cuts[5]={0,26,488,490,960};
+    const uint16x8_t black=vdupq_n_u16(0);
+    for(size_t y=y0;y<y1;++y) {
+        for(size_t span=0;span<4;++span) {
+            int subject=(y>=77 && y<500 && span==3) || (y>=88 && y<484 && span==1);
+            size_t i=y*960+cuts[span],end=y*960+cuts[span+1];
+            if(y<77) { for(;i<end;++i) out[i]=arcade[i];continue; }
+            for(;i+7<end;i+=8) {
+                uint16x8_t base=blend8(black,vld1q_u16(home+i),a);
+                uint16x8_t chrome=subject?black:vld1q_u16(arcade+i);
+                vst1q_u16(out+i,blend8(base,chrome,b));
+            }
+            for(;i<end;++i) out[i]=blend1(blend1(0,home[i],a),subject?0:arcade[i],b);
+        }
+    }
+}

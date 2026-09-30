@@ -34,6 +34,21 @@ mod tests {
         }
     }
     #[test]
+    fn collapsed_ordered_rounding_is_exact_for_every_channel_and_phase() {
+        for levels in [31, 63] {
+            for value in 0..=255 {
+                for phase in 0..16 {
+                    let threshold = phase * 16 + 8;
+                    let scaled = value * levels;
+                    let expected = scaled / 255 + u32::from((scaled % 255) * 256 > threshold * 255);
+                    let n = scaled + 256 - threshold;
+                    assert_eq!((n + (n >> 8)) >> 8, expected);
+                    assert!(n + (n >> 8) <= u16::MAX as u32);
+                }
+            }
+        }
+    }
+    #[test]
     fn endpoints_and_spatial_average_are_preserved() {
         for y in 0..4 {
             for x in 0..4 {

@@ -170,9 +170,10 @@ def test_lab_requires_full_window_cadence_and_exact_geometry():
         validate(data, "abc", "launcher-cards", "default")
 
 
-def test_cached_preset_is_only_available_for_arcade():
+@pytest.mark.parametrize("preset", ["cached", "cached-fast", "scanline"])
+def test_arcade_specific_presets_are_only_available_for_arcade(preset):
     from magik.concepts import supported
 
-    assert supported("arcade-transition", "cached")
-    assert not supported("launcher-cards", "cached")
-    assert not supported("starfield", "cached")
+    assert supported("arcade-transition", preset)
+    assert not supported("launcher-cards", preset)
+    assert not supported("starfield", preset)

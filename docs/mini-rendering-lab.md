@@ -157,3 +157,111 @@ The carousel's remaining work is final-conversion cost and presentation scheduli
 Its failed Mini candidates are not evidence that banding is unavoidable at 60 Hz.
 The cached reveal supplies the concrete memory/preparation tradeoff to assess
 before attempting a production change.
+
+## Live scanline follow-up, 2026-09-30
+
+`scanline` is an Arcade-only live renderer using the same RGB888 source,
+premultiplied mipmaps, bilinear/trilinear filtering, timeline and destination-space
+RGB565 quantisation as `rgb888`. It does not cache animation frames. Rust prepares
+coordinates and source bounds once per frame and reuses two horizontal rows per
+mip level. The ARM kernels batch adjacent texel pairs, vertical interpolation,
+colour conversion, and RGB565 background/list composition. Two persistent workers
+split the changing content at y=311 through Mini's existing CPU1/CPU0 policy.
+Each owns its output and roughly 11.4 KiB of row scratch; the helper owns cloned
+immutable source buffers. Shutdown closes the request channel and joins the worker.
+
+The original exact ordered quantiser simplifies without changing a pixel. For
+scaled channel value `s` and Bayer threshold `0<t<256`, the reference test
+`remainder*256 > t*255` is equivalent to `remainder >= t`. Consequently the
+quantised value is `floor((s+255-t)/255)`. With `n=s+256-t`, the bounded calculation
+`(n+(n>>8))>>8` is exact and fits sixteen-bit intermediates. The NEON path now
+uses that identity rather than the original quotient/remainder/comparison sequence.
+The exploratory 8 KiB lookup table was removed. This same quantiser serves the
+opt-in launcher quality paths; production quality defaults remain unchanged.
+A small shared sRGB transfer table also replaces per-sample gamma powers during
+RGB888 card reduction. It matches the old encoding for every tested input pair
+and all reductions of the six real card images, but does not remove the remaining
+cost of preparing the complete launcher fixture.
+
+The live follow-up improved Arcade from 11.381 FPS to 50.267 / 50.233 FPS.
+It still failed strict 60 Hz: 292 / 293 repeated vblanks in two 30-second windows.
+Render averages were 10.60 / 10.62 ms, with p99 17.38 / 17.43 ms, before transfer
+and presentation. CPU was 142.7 / 142.8%. The context's `arcade_tile_max_us` array
+contains per-scene maxima for primary rendering, secondary rendering and waiting;
+these include the lead-in and are attribution, not window percentiles.
+
+## Accelerated runtime cache
+
+`cached-fast` uses the live two-worker renderer to generate the existing 61-pose
+cache on the device. It uses no build-time animation assets and adds no image
+files to the binary. Its retained changing band and reverse playback are identical
+to `cached`. The worker, duplicate sources and mip scratch are released after
+preparation. This remains a cache of the fixed complete Mini screen composition,
+including static fixture labels, counts, clock and game pixels; it is not a
+qualified production policy for live data.
+
+Mini now retains one resting launcher snapshot per quality (at most 3 MiB), so
+switching Arcade experiments does not regenerate all six launcher faces. The
+existing `context.preparation_ms` remains the complete scene-construction timer;
+`preparation_stages_ms` makes this reuse explicit. It measures preparation rather
+than input-to-first-latched-frame latency. Fully cold fixture creation is still
+reported, and no loading or first-presentation guarantee is inferred from it.
+
+| Final workload | Physical FPS, two windows | Repeated vblanks | Cadence qualification |
+| --- | --- | --- | --- |
+| Arcade, live scanline | 50.267 / 50.233 | 292 / 293 | failed |
+| Arcade, accelerated runtime cache | 60.000 / 60.000 | 0 / 0 | passed |
+| Launcher cards, shared exact quantiser and RGB888 | 30.949 / 31.667 | 872 / 850 | failed |
+
+For `cached-fast`, total cold scene preparation was 2999 ms: 2011 ms creating
+the launcher fixture, 32 ms decoding the destination, 23 ms preparing the cabinet,
+13 ms preparing the worker, and 912 ms generating frames. With the launcher snapshot
+already available, total preparation was **984 ms**: 3 ms snapshot copy, 32 ms
+destination decode, 22 ms cabinet preparation, 13 ms worker setup and 908 ms frame
+generation, plus small remaining overhead. This is just under the user's one-second
+preparation budget for this asset and has little margin. Production would need to
+supply the already prepared launcher rather than regenerate this fixture, and
+measure complete entry latency with the actual graphics and live screen data.
+
+Both cached-fast windows presented 1800 unique frames with zero latch drops or
+rejections. Playback averaged 1.83 / 1.79 ms, p99 2.12 / 2.08 ms; CPU was about
+100.2%, peak RSS 83,804,160 bytes (79.9 MiB), scene storage 57,336,960 bytes.
+The live path retained 10,425,694 scene bytes; its process also owns the bounded
+fixture snapshot cache. These scene counters do not replace measured process RSS.
+
+The shared quantiser reduced RGB888 carousel rendering to 17.20 / 16.90 ms on
+average, p99 19.37 / 19.09 ms. It still misses the deadline after presentation
+costs. This is not evidence that consistent dithering is impossible at 60 Hz;
+its projection/filtering and scheduling remain separate work.
+
+Portable checks cover band canaries and invalid bounds, mip boundaries, edges,
+reverse travel, worker completion and cache/reference equality. FPGA-latched
+960x540 midpoint captures for live and cached variants match the scalar reference
+pixel-for-pixel. Focused library/Mini clippy, renderer tests, Mini controls and
+host preset checks passed. ARM builds use the production-matched profile. An
+exploratory all-target clippy run also exposed pre-existing test-module placement
+lints in `arcade_card.rs` and `launcher_texture.rs`; the focused library checks
+pass, and those unrelated layout changes were left alone.
+
+Final evidence under ignored `build/magik-results/`:
+
+- `20260930T111717Z-73de9e0f40d5`: final live scanline measurement and captures.
+- `20260930T112453Z-57254650c912`: cached-fast measurement, preparation attribution
+  and captures; artifact SHA256
+  `9ea5b14ae0feb86e97e04ae38c0d7d84a707677bdd1334a05cbb45a4883214c6`.
+- `20260930T112728Z-fe51318544ec`: final RGB888 launcher-card measurement.
+- `20260930T111354Z-b78ab4c52fc1`: separate instrumented tile-cost profile.
+
+To try either Arcade variant after the normal launcher is restored:
+
+```sh
+scripts/magik concept arcade-transition --preset scanline --production-build
+# At concept>, switch to the accelerated cache:
+preset cached-fast
+```
+
+The first cold Mini selection still creates the fixture. Switching to cached-fast
+then reuses its launcher snapshot. `quit` closes the test session and restores
+persistent Mini under the native session contract; run `scripts/magik stop` to
+return to the Dev launcher. No production default, firmware, display mode or
+full-application deployment was changed by this follow-up.

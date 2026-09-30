@@ -29,6 +29,8 @@ pub enum Preset {
     Dithered,
     Rgb888,
     Cached,
+    CachedFast,
+    Scanline,
 }
 impl Preset {
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -38,12 +40,19 @@ impl Preset {
             "dithered" => Ok(Self::Dithered),
             "rgb888" => Ok(Self::Rgb888),
             "cached" => Ok(Self::Cached),
+            "cached-fast" => Ok(Self::CachedFast),
+            "scanline" => Ok(Self::Scanline),
             _ => Err(format!("unknown preset: {value}")),
         }
     }
     pub const fn choose(self, default: usize, reduced: usize) -> usize {
         match self {
-            Self::Default | Self::Dithered | Self::Rgb888 | Self::Cached => default,
+            Self::Default
+            | Self::Dithered
+            | Self::Rgb888
+            | Self::Cached
+            | Self::CachedFast
+            | Self::Scanline => default,
             Self::Reduced => reduced,
         }
     }
@@ -54,12 +63,20 @@ impl Preset {
             Self::Dithered => "dithered",
             Self::Rgb888 => "rgb888",
             Self::Cached => "cached",
+            Self::CachedFast => "cached-fast",
+            Self::Scanline => "scanline",
         }
     }
 }
 trait Effect {
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String>;
     fn storage_bytes(&self) -> usize;
+    fn render_stage_max_us(&self) -> [u64; 3] {
+        [0; 3]
+    }
+    fn preparation_stages(&self) -> &[(&'static str, u64)] {
+        &[]
+    }
 }
 pub struct Scene {
     effect: Box<dyn Effect>,
@@ -89,12 +106,23 @@ impl Scene {
         }
         if RENDER_LABS.contains(&name) && preset == Preset::Reduced
             || !RENDER_LABS.contains(&name)
-                && matches!(preset, Preset::Dithered | Preset::Rgb888 | Preset::Cached)
+                && matches!(
+                    preset,
+                    Preset::Dithered
+                        | Preset::Rgb888
+                        | Preset::Cached
+                        | Preset::CachedFast
+                        | Preset::Scanline
+                )
         {
             return Err("preset is not supported by this workload".into());
         }
-        if preset == Preset::Cached && name != "arcade-transition" {
-            return Err("cached requires arcade-transition".into());
+        if matches!(
+            preset,
+            Preset::Cached | Preset::CachedFast | Preset::Scanline
+        ) && name != "arcade-transition"
+        {
+            return Err("cached, cached-fast and scanline require arcade-transition".into());
         }
         let effect: Box<dyn Effect> = match name {
             "launcher-cards" | "arcade-transition" => {
@@ -139,6 +167,12 @@ impl Scene {
     }
     pub fn elapsed(&self) -> Duration {
         self.elapsed
+    }
+    pub fn render_stage_max_us(&self) -> [u64; 3] {
+        self.effect.render_stage_max_us()
+    }
+    pub fn preparation_stages(&self) -> &[(&'static str, u64)] {
+        self.effect.preparation_stages()
     }
     pub fn storage_bytes(&self) -> usize {
         self.pixels.capacity() * 2 + self.effect.storage_bytes()
