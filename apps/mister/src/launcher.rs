@@ -1405,8 +1405,7 @@ impl LauncherNav {
     }
 
     fn restore_home_card_scroll(&mut self) {
-        // The root always cycles; a nested level cycles once it has enough
-        // cards to fill the carousel without repeating one.
+        // Root and nested levels cycle; a single-card level stays still.
         self.home_card_scroll.set_wraps(
             self.current_menu_id() == ROOT_MENU_ID
                 || self.home_navigation_count()
@@ -7156,7 +7155,7 @@ mod tests {
     }
 
     #[test]
-    fn small_nested_levels_hold_to_browse_and_stop_at_the_last_card() {
+    fn small_nested_levels_cycle_while_held() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..4)
@@ -7167,7 +7166,7 @@ mod tests {
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_menu("menu:consoles:other"));
         let count = nav.current_menu_count();
-        assert_eq!(count, 4, "a small level does not cycle");
+        assert_eq!(count, 4);
         let held_right = pad_with(|pad| pad.dpad_right = true);
         let start = Instant::now();
         let mut previous = nav.home_card_visual_index();
@@ -7178,15 +7177,15 @@ mod tests {
                 &catalog,
             );
             let visual = nav.home_card_visual_index();
-            // A linear level never wraps back to the first card.
+            // Integrated position stays continuous while identity wraps.
             assert!(
                 visual >= previous - 0.001,
                 "frame {frame}: {visual} < {previous}"
             );
-            assert!(visual <= (count - 1) as f32 + 0.001);
+            assert!(nav.selected < count);
             previous = visual;
         }
-        assert_eq!(nav.selected, count - 1);
+        assert!(previous > count as f32);
         for frame in 0..120 {
             nav.handle_input(
                 &PadState::default(),
@@ -7194,12 +7193,14 @@ mod tests {
                 &catalog,
             );
         }
-        assert_eq!(nav.selected, count - 1);
-        assert!((nav.home_card_visual_index() - (count - 1) as f32).abs() < 0.001);
+        assert_eq!(
+            nav.home_card_visual_index().round() as i64 % count as i64,
+            nav.selected as i64
+        );
     }
 
     #[test]
-    fn small_nested_levels_step_one_card_per_tap_and_ignore_left_at_the_first() {
+    fn small_nested_levels_step_one_card_per_tap_and_wrap_in_both_directions() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..4)
@@ -7220,14 +7221,15 @@ mod tests {
             }
         };
         tap(&mut nav, pad_with(|pad| pad.dpad_left = true));
+        assert_eq!(nav.selected, 3);
+        tap(&mut nav, pad_with(|pad| pad.dpad_right = true));
         assert_eq!(nav.selected, 0);
-        assert!(nav.home_card_visual_index().abs() < 0.001);
         for step in 1..=3 {
             tap(&mut nav, pad_with(|pad| pad.dpad_right = true));
             assert_eq!(nav.selected, step);
             let visual = nav.home_card_visual_index();
             assert!(
-                (visual - step as f32).abs() < 0.001,
+                (visual.round() as i64).rem_euclid(4) == step as i64,
                 "step {step}: visual {visual}"
             );
         }

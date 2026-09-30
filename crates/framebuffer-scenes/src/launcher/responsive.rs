@@ -425,6 +425,26 @@ impl Layout {
             x.signum() * mapped
         };
         for item in plan.items.iter_mut().flatten() {
+            if plan.row {
+                let old = item.pose;
+                let width = old.width * self.card_w as i64 / 180;
+                let height = old.height * self.card_h as i64 / 252;
+                item.pose.x = self.margin_x as i64 * GEOMETRY_ONE
+                    + (old.x - 292 * GEOMETRY_ONE) * self.card_w as i64 / 180;
+                item.pose.top = self.centre_y as i64 * GEOMETRY_ONE - height / 2;
+                item.pose.width = width;
+                item.pose.height = height;
+                if self.crt {
+                    item.pose.angle =
+                        (old.angle - row::TILT).max(0) * GEOMETRY_ONE / (GEOMETRY_ONE - row::TILT);
+                    // Native CRT darkening has its own depth profile.
+                    item.pose.brightness = row::crt_brightness(old.brightness);
+                }
+                item.pose.clip = clip;
+                item.pose.body_clip = clip;
+                item.pose.vertical_clip = (self.top, self.bottom, self.bottom);
+                continue;
+            }
             let old = item.pose;
             let centre = self.width as i64 * GEOMETRY_ONE / 2
                 + offset(old.x + old.width / 2 - 610 * GEOMETRY_ONE);

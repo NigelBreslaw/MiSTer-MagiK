@@ -63,13 +63,25 @@ impl PreparedLauncher {
         elapsed_millis: u32,
     ) {
         let t = elapsed_millis.min(EDGE_MILLIS);
+        if t == 0 {
+            self.restore_chrome();
+            self.render_frame(BrowseFrame {
+                selected,
+                target: selected,
+                phase: crate::launcher_navigation::BrowsePhase::Settled,
+                direction: None,
+                progress_millis: 0,
+                duration_millis: 0,
+            });
+            return;
+        }
         let out = ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS));
         self.fade_level_chrome(GEOMETRY_ONE - out);
         let progress = window(t, 0, EDGE_MILLIS);
         let gather = ease_in_out_cubic(progress);
         let turn = progress * progress / GEOMETRY_ONE;
         let faces = Arc::clone(&self.faces);
-        let mut items = [None; 6];
+        let mut items = [None; CAROUSEL_CAPACITY];
         let mut count = 0;
         for relative in [2, -2, 1, -1] {
             let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
@@ -95,7 +107,7 @@ impl PreparedLauncher {
                 pose,
             });
         }
-        self.draw_trick_plan(&mut CarouselPlan { items });
+        self.draw_trick_plan(&mut CarouselPlan { items, row: false });
     }
 
     /// Second half of a level change, rendered by the level being entered:
@@ -106,13 +118,25 @@ impl PreparedLauncher {
     /// a settled frame of this level.
     pub fn render_level_deal(&mut self, selected: usize, change: LevelChange, elapsed_millis: u32) {
         let t = elapsed_millis.clamp(EDGE_MILLIS, LEVEL_TRICK_MILLIS);
+        if t == LEVEL_TRICK_MILLIS {
+            self.restore_chrome();
+            self.render_frame(BrowseFrame {
+                selected,
+                target: selected,
+                phase: crate::launcher_navigation::BrowsePhase::Settled,
+                direction: None,
+                progress_millis: 0,
+                duration_millis: 0,
+            });
+            return;
+        }
         self.fade_level_chrome(ease_out_quart(window(
             t,
             CHROME_IN_AT_MILLIS,
             CHROME_IN_MILLIS,
         )));
         let faces = Arc::clone(&self.faces);
-        let mut items = [None; 6];
+        let mut items = [None; CAROUSEL_CAPACITY];
         let mut count = 0;
         for relative in [2, -2, 1, -1] {
             let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
@@ -161,7 +185,7 @@ impl PreparedLauncher {
                 pose,
             });
         }
-        self.draw_trick_plan(&mut CarouselPlan { items });
+        self.draw_trick_plan(&mut CarouselPlan { items, row: false });
     }
 
     /// Restore this level's complete chrome after an interrupted level change.

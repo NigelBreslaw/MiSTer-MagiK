@@ -12,6 +12,7 @@ use std::{
 };
 
 pub const CAROUSEL_SPLIT: usize = 629;
+#[cfg(test)]
 const CAROUSEL_LEFT: usize = 296;
 const CAROUSEL_RIGHT: usize = 934;
 /// Neither band may shrink below this; a pose change cannot strand one core.
@@ -21,13 +22,18 @@ const SPLIT_ALIGNMENT: usize = 8;
 /// Move the band boundary a quarter of the way to where both bands would
 /// finish together. Each band's measured cost is spread evenly across its
 /// columns; carousel poses change little between consecutive frames.
+#[cfg(test)]
 fn balanced_split(split: usize, primary_us: u64, secondary_us: u64) -> usize {
+    balanced_split_from(CAROUSEL_LEFT, split, primary_us, secondary_us)
+}
+
+fn balanced_split_from(left: usize, split: usize, primary_us: u64, secondary_us: u64) -> usize {
     if primary_us == 0 || secondary_us == 0 {
         return split;
     }
-    let primary_rate = primary_us as f64 / (split - CAROUSEL_LEFT) as f64;
+    let primary_rate = primary_us as f64 / (split - left) as f64;
     let secondary_rate = secondary_us as f64 / (CAROUSEL_RIGHT - split) as f64;
-    let ideal = (primary_rate * CAROUSEL_LEFT as f64 + secondary_rate * CAROUSEL_RIGHT as f64)
+    let ideal = (primary_rate * left as f64 + secondary_rate * CAROUSEL_RIGHT as f64)
         / (primary_rate + secondary_rate);
     let error = ideal - split as f64;
     if error.abs() < SPLIT_ALIGNMENT as f64 {
@@ -41,7 +47,7 @@ fn balanced_split(split: usize, primary_us: u64, secondary_us: u64) -> usize {
         .copysign(error);
     let aligned =
         ((split as f64 + step) / SPLIT_ALIGNMENT as f64).round() as usize * SPLIT_ALIGNMENT;
-    aligned.clamp(CAROUSEL_LEFT + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND)
+    aligned.clamp(left + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND)
 }
 /// Optional cumulative per-thread clocks in microseconds, supplied by the
 /// application that owns the OS.
@@ -187,7 +193,8 @@ impl ParallelLauncherRenderer {
         destination: &mut [Rgb565Pixel],
     ) -> Result<ParallelFrameTiming, String> {
         let started = Instant::now();
-        let split = self.split;
+        let left = preparer.carousel_clip().0;
+        let split = self.split.clamp(left + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND);
         self.requests
             .as_ref()
             .ok_or("card renderer stopped")?
@@ -205,7 +212,7 @@ impl ParallelLauncherRenderer {
             request,
             &mut self.primary,
             destination,
-            (CAROUSEL_LEFT, split),
+            (left, split),
         );
         let (primary_cpu_us, primary_run_delay_us) = ThreadSample::now(self.clocks).since(sample);
         let primary_us = micros(primary_started);
@@ -226,7 +233,8 @@ impl ParallelLauncherRenderer {
         self.helper = Some(completed.buffer);
         // Balance what each band adds to the critical path, including the
         // helper's wake-up; the primary band runs on the presenting thread.
-        self.split = balanced_split(
+        self.split = balanced_split_from(
+            left,
             split,
             primary_us,
             completed.wall_us + completed.start_delay_us,

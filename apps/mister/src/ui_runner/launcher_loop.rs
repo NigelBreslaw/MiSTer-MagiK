@@ -111,6 +111,12 @@ const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
     },
 ];
 
+fn card_direct_tile_damage(left: usize) -> [DirtyRect; 2] {
+    let mut damage = CARD_DIRECT_TILE_DAMAGE;
+    damage[0].x0 = left;
+    damage
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CardDirectEligibility {
     custom_home_active: bool,
@@ -10244,7 +10250,7 @@ pub(super) fn run_launcher_loop(
                 display_session,
                 cached,
                 [cached, cached],
-                CARD_DIRECT_TILE_DAMAGE,
+                card_direct_tile_damage(session.carousel_clip().0),
                 mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
                     session.content_generation(),
                     request.generation,

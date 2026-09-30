@@ -13,6 +13,8 @@ use std::sync::Arc;
 mod artwork;
 mod level_trick;
 mod responsive;
+mod row;
+const CAROUSEL_CAPACITY: usize = 8;
 use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
 pub use level_trick::{LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LevelChange};
 
@@ -72,12 +74,12 @@ pub struct NestedLevel<'a> {
     pub accent: u16,
 }
 
-/// A nested level cycles like the root once it has enough cards to fill the
-/// carousel without showing any card twice; smaller levels stop at their ends.
-pub const CYCLIC_LEVEL_MIN_CARDS: usize = 5;
+/// Two or more nested cards cycle. During a step, the same prepared face may
+/// be drawn in the leaving-front and entering-end roles.
+pub const CYCLIC_LEVEL_MIN_CARDS: usize = 2;
 
 impl LauncherLevel<'_> {
-    /// The root always cycles; a nested level cycles when it is large enough.
+    /// The root always cycles; nested levels cycle from two cards.
     #[must_use]
     pub const fn cyclic(&self) -> bool {
         match self {
@@ -455,6 +457,13 @@ pub struct LauncherFramePreparer {
 }
 
 impl LauncherFramePreparer {
+    pub fn carousel_clip(&self) -> (usize, usize) {
+        if self.faces.first().is_some_and(|face| face.slides) {
+            (268, 934)
+        } else {
+            (296, 934)
+        }
+    }
     pub fn render_tile(
         &self,
         request: LauncherFrameRequest,
@@ -492,7 +501,7 @@ impl LauncherFramePreparer {
         pixels: &mut [Rgb565Pixel],
         clip: (usize, usize),
     ) {
-        assert!(clip.0 >= 296 && clip.0 <= clip.1 && clip.1 <= 934);
+        assert!(clip.0 >= self.carousel_clip().0 && clip.0 <= clip.1 && clip.1 <= 934);
         for y in 120..495 {
             pixels[y * 960 + clip.0..y * 960 + clip.1].fill(Rgb565Pixel(0));
         }
@@ -523,7 +532,7 @@ impl LauncherFramePreparer {
     pub(crate) fn new_direct_tile_buffer(&self) -> PreparedLauncherFrame {
         PreparedLauncherFrame {
             request: None,
-            scratch: (0..6)
+            scratch: (0..CAROUSEL_CAPACITY)
                 .map(|_| crate::launcher_flip::Scratch::strip())
                 .collect(),
             pixels: Vec::new(),
@@ -553,6 +562,9 @@ struct PreparedCard<'a> {
 }
 
 impl PreparedLauncher {
+    pub fn carousel_clip(&self) -> (usize, usize) {
+        self.frame_preparer().carousel_clip()
+    }
     /// Refresh only static chrome. Callers must rebuild for changed card data,
     /// artwork, output geometry, or typography. Faces and scratch stay resident.
     pub fn refresh_chrome(
@@ -749,7 +761,7 @@ impl PreparedLauncher {
                 vec![Rgb565Pixel(BACKGROUND); scene.width * scene.height]
             },
             faces: Arc::new(faces),
-            flip_columns: (0..6)
+            flip_columns: (0..CAROUSEL_CAPACITY)
                 .map(|_| {
                     if let Some(layout) = responsive {
                         crate::launcher_flip::Scratch::sized(
@@ -798,7 +810,7 @@ impl PreparedLauncher {
         let clear_profile = crate::launcher_profile::span("scene.clear");
         // All animation, including projected edges and reflections, is clipped
         // to this region. Keep static chrome resident between frames.
-        for rect in Self::logical_damage() {
+        for rect in self.logical_damage_for_level() {
             for y in rect.y0..rect.y1 {
                 let range = y * LOGICAL_WIDTH + rect.x0..y * LOGICAL_WIDTH + rect.x1;
                 // The damage region contains only the pure-black background in
@@ -813,7 +825,7 @@ impl PreparedLauncher {
             return;
         }
         let plan = build_carousel_plan(&self.faces, frame, self.cyclic);
-        for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
+        for left in (self.carousel_clip().0..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
             draw_carousel_plan(
                 &mut self.logical,
                 LOGICAL_WIDTH,
@@ -851,6 +863,12 @@ impl PreparedLauncher {
         }
     }
 
+    fn logical_damage_for_level(&self) -> [crate::Rgb565Rect; 1] {
+        let mut damage = Self::logical_damage();
+        damage[0].x0 = self.carousel_clip().0;
+        damage
+    }
+
     const fn logical_damage() -> [crate::Rgb565Rect; 1] {
         [crate::Rgb565Rect {
             x0: 296,
@@ -864,7 +882,9 @@ impl PreparedLauncher {
     /// At other output sizes, fitting still invalidates the complete surface.
     pub fn damage(&self) -> [crate::Rgb565Rect; 1] {
         if self.scene.width == LOGICAL_WIDTH && self.scene.height == LOGICAL_HEIGHT {
-            Self::logical_damage()
+            let mut damage = Self::logical_damage();
+            damage[0].x0 = self.carousel_clip().0;
+            damage
         } else {
             [crate::Rgb565Rect {
                 x0: 0,
@@ -1188,6 +1208,7 @@ fn continuous_geometry(
         height,
         angle: slot_angle(relative)
             + (slot_angle(destination) - slot_angle(relative)) * progress / GEOMETRY_ONE,
+        brightness: 256,
         clip: (296, 934),
         body_clip: (296, 934),
         vertical_clip: (120, 438, 495),
@@ -1228,7 +1249,8 @@ struct CarouselItem<'a> {
 }
 
 struct CarouselPlan<'a> {
-    items: [Option<CarouselItem<'a>>; 6],
+    row: bool,
+    items: [Option<CarouselItem<'a>>; CAROUSEL_CAPACITY],
 }
 
 fn build_carousel_plan<'a>(
@@ -1247,6 +1269,9 @@ fn build_carousel_plan<'a>(
         motion.phase = crate::launcher_navigation::BrowsePhase::Settled;
     }
     let settled = motion.phase == crate::launcher_navigation::BrowsePhase::Settled;
+    if faces.first().is_some_and(|face| face.slides) {
+        return row::build(faces, motion);
+    }
     let selected = motion.selected % faces.len();
     let progress = if settled {
         0
@@ -1268,7 +1293,7 @@ fn build_carousel_plan<'a>(
     } else {
         &[-3, 2, -2, 1, -1, 0]
     };
-    let mut items = [None; 6];
+    let mut items = [None; CAROUSEL_CAPACITY];
     for (slot, relative) in relatives.iter().enumerate() {
         let position = selected as isize + *relative;
         if !cyclic && (position < 0 || position >= faces.len() as isize) {
@@ -1355,7 +1380,7 @@ fn build_carousel_plan<'a>(
         };
         items[slot] = Some(CarouselItem { face, blend, pose });
     }
-    CarouselPlan { items }
+    CarouselPlan { items, row: false }
 }
 
 fn draw_carousel_plan(
@@ -1378,7 +1403,7 @@ fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
     clip: (usize, usize),
 ) {
     let mut covered = crate::launcher_flip::BodyOcclusion::new(clip);
-    let mut occlusion = [covered; 6];
+    let mut occlusion = [covered; CAROUSEL_CAPACITY];
     if CULL_SOURCE {
         // Prepare front to back so only proven-opaque foreground spans
         // can remove source filtering from the cards behind them.
@@ -1386,7 +1411,8 @@ fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
             occlusion[slot] = covered;
             let Some(item) = item else { continue };
             let mut pose = item.pose;
-            pose.clip = clip;
+            pose.clip = (pose.clip.0.max(clip.0), pose.clip.1.min(clip.1));
+            if pose.clip.0 >= pose.clip.1 { continue; }
             pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
             pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
             crate::launcher_flip::prepare_target(
@@ -1414,7 +1440,8 @@ fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
             occlusion[slot] = covered;
             let Some(item) = item else { continue };
             let mut pose = item.pose;
-            pose.clip = clip;
+            pose.clip = (pose.clip.0.max(clip.0), pose.clip.1.min(clip.1));
+            if pose.clip.0 >= pose.clip.1 { continue; }
             pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
             pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
             crate::launcher_flip::add_opaque_coverage(
@@ -1428,7 +1455,10 @@ fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
     for (slot, item) in plan.items.iter().enumerate() {
         let Some(item) = item else { continue };
         let mut pose = item.pose;
-        pose.clip = clip;
+        pose.clip = (pose.clip.0.max(clip.0), pose.clip.1.min(clip.1));
+        if pose.clip.0 >= pose.clip.1 {
+            continue;
+        }
         pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
         pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
         crate::launcher_flip::draw_occluded_target(
@@ -1455,7 +1485,10 @@ fn draw_carousel_reflections(
     for (slot, item) in plan.items.iter().enumerate() {
         let Some(item) = item else { continue };
         let mut pose = item.pose;
-        pose.clip = clip;
+        pose.clip = (pose.clip.0.max(clip.0), pose.clip.1.min(clip.1));
+        if pose.clip.0 >= pose.clip.1 {
+            continue;
+        }
         pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
         pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
         crate::launcher_flip::draw_target(
@@ -2506,7 +2539,7 @@ mod tests {
                     true,
                 );
                 let mut reflections = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
-                let mut reflection_scratch: Vec<_> = (0..6)
+                let mut reflection_scratch: Vec<_> = (0..CAROUSEL_CAPACITY)
                     .map(|_| crate::launcher_flip::Scratch::strip())
                     .collect();
                 for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
@@ -2525,11 +2558,12 @@ mod tests {
                         continue;
                     }
                     let mut without = CarouselPlan {
+                        row: moving.row,
                         items: moving.items,
                     };
                     without.items[slot] = None;
                     let mut without_pixels = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
-                    let mut without_scratch: Vec<_> = (0..6)
+                    let mut without_scratch: Vec<_> = (0..CAROUSEL_CAPACITY)
                         .map(|_| crate::launcher_flip::Scratch::strip())
                         .collect();
                     for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {

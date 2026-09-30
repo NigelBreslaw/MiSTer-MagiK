@@ -601,6 +601,10 @@ impl LauncherCardHomeSession {
         self.prepared.pixels()
     }
 
+    pub(super) fn carousel_clip(&self) -> (usize, usize) {
+        self.prepared.carousel_clip()
+    }
+
     pub(super) fn scene_ready(&self, scene: LauncherScene) -> bool {
         self.scene == scene
     }
@@ -631,7 +635,7 @@ impl LauncherCardHomeSession {
             && self.scene == LauncherScene::new(960, 540)
             && self.compositor_content_generation == Some(self.content_generation))
         .then_some(DirtyRect {
-            x0: 296,
+            x0: self.prepared.carousel_clip().0,
             y0: 120,
             x1: 934,
             y1: 495,

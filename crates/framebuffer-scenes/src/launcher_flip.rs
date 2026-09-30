@@ -109,6 +109,8 @@ pub(super) struct Pose {
     pub height: i64,
     // pi radians = 65536; signed angle permits the preferred reverse mapping.
     pub angle: i64,
+    /// Extra depth dimming, Q8; 256 preserves the existing root lighting.
+    pub brightness: u32,
     pub clip: (usize, usize),
     pub body_clip: (usize, usize),
     /// Top, exclusive body bottom, exclusive reflection bottom.
@@ -387,7 +389,7 @@ fn render(
     };
     let projected_face_width = pose.width * cosine.abs() / ONE;
     let spine_weight = ((20 * ONE - projected_face_width) * 256 / (16 * ONE)).clamp(0, 256) as u32;
-    let light = diffuse_light(cosine);
+    let light = diffuse_light(cosine) * pose.brightness / 256;
     let half = pose.width / 2;
     let centre_x = pose.x + half;
     let centre_y = pose.top + pose.height / 2;
@@ -953,6 +955,7 @@ mod tests {
                 width: 180 * ONE - phase * ONE / 16,
                 height: (180 * ONE - phase * ONE / 16) * 7 / 5,
                 angle: 0,
+                brightness: 256,
                 clip: (296, 934),
                 body_clip: (296, 934),
                 vertical_clip: (120, 438, 495),
@@ -994,6 +997,7 @@ mod tests {
                     width: 160 * ONE,
                     height: height as i64 * ONE,
                     angle: 0,
+                    brightness: 256,
                     clip: (296, 934),
                     body_clip: (296, 934),
                     vertical_clip: (120, 438, 495),
@@ -1033,6 +1037,7 @@ mod tests {
                 width: 180 * ONE,
                 height: 252 * ONE,
                 angle: 0,
+                brightness: 256,
                 clip: (296, 934),
                 body_clip: (296, 934),
                 vertical_clip: (120, 438, 495),
@@ -1077,6 +1082,7 @@ mod tests {
                 width: 188 * ONE,
                 height: 268 * ONE,
                 angle,
+                brightness: 256,
                 clip: (296, 934),
                 body_clip: (296, 934),
                 vertical_clip: (120, 438, 495),
@@ -1163,6 +1169,7 @@ mod tests {
                 width: 180 * ONE,
                 height: 252 * ONE,
                 angle,
+                brightness: 256,
                 clip: (296, 934),
                 body_clip: (296, 934),
                 vertical_clip: (120, 438, 495),
@@ -1206,6 +1213,7 @@ mod tests {
                     width: 188 * ONE,
                     height: 268 * ONE,
                     angle: -9000,
+                    brightness: 256,
                     clip,
                     body_clip: clip,
                     vertical_clip: (120, 438, 495),
