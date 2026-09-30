@@ -44,7 +44,15 @@ CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
 }
 WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
-CHECK_SCENARIOS = ("smoke", "motion", "motion-rollover", "motion-fallback", "idle")
+CHECK_SCENARIOS = (
+    "smoke",
+    "motion",
+    "motion-rollover",
+    "motion-held",
+    "motion-fallback",
+    "idle",
+    "journeys",
+)
 
 
 def agent_binary_path() -> Path:
@@ -96,14 +104,36 @@ def main() -> int:
     check_command.add_argument(
         "scenario", choices=CHECK_SCENARIOS + ("concept",), nargs="?", default="smoke"
     )
-    check_command.add_argument("--profile", action="store_true")
+    profiles = check_command.add_mutually_exclusive_group()
+    profiles.add_argument("--profile", action="store_true")
+    profiles.add_argument(
+        "--profile-preparation",
+        action="store_true",
+        help="profile cold Mini rendering-lab preparation instead of animation",
+    )
+    profiles.add_argument(
+        "--bench-preparation",
+        action="store_true",
+        help="benchmark cold Mini preparation and first confirmed presentation only",
+    )
     check_command.add_argument("--concept")
     check_command.add_argument(
-        "--preset", choices=("default", "reduced"), default="default"
+        "--quick",
+        action="store_true",
+        help="one short Mini window with focused captures (held cards: 8 s; otherwise: 10 s)",
+    )
+    check_command.add_argument(
+        "--preset",
+        choices=("default", "reduced"),
+        default="default",
     )
     concept = subcommands.add_parser("concept", help="interactive Mini RGB565 concept")
     concept.add_argument("effect")
-    concept.add_argument("--preset", choices=("default", "reduced"), default="default")
+    concept.add_argument(
+        "--preset",
+        choices=("default", "reduced"),
+        default="default",
+    )
     check_command.add_argument(
         "--installed-sha256",
         help="Verify and benchmark this running hash without building or deploying",
@@ -131,7 +161,40 @@ def main() -> int:
     )
     clean.add_argument("--apply", action="store_true")
     clean.add_argument("--all-idle", action="store_true")
+    for name in ("build", "deploy", "check", "concept"):
+        subcommands.choices[name].add_argument(
+            "--production-build",
+            action="store_true",
+            help="use Mini's production-matched optimization profile for cadence qualification",
+        )
     arguments = parser.parse_args()
+    if (
+        getattr(arguments, "profile_preparation", False)
+        or getattr(arguments, "bench_preparation", False)
+    ) and not (
+        arguments.scenario == "concept"
+        and arguments.app == "mini-magik"
+        and arguments.concept
+        in {
+            "launcher-cards",
+            "launcher-cards-held",
+            "arcade-transition",
+            "settings-transition",
+        }
+    ):
+        parser.error("preparation measurements require a Mini rendering-lab concept")
+    if getattr(arguments, "quick", False) and not (
+        arguments.scenario == "concept"
+        and arguments.app == "mini-magik"
+        and not arguments.profile
+        and not arguments.profile_preparation
+        and not arguments.bench_preparation
+    ):
+        parser.error("--quick requires an unprofiled Mini concept measurement")
+    if getattr(arguments, "production_build", False):
+        if arguments.app != "mini-magik":
+            parser.error("--production-build requires --app mini-magik")
+        os.environ["MAGIK_MINI_PRODUCTION_BUILD"] = "1"
     if arguments.command == "update":
         from .updates import update
 
@@ -381,7 +444,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     ]
     if arguments.profile:
         measurements = (
-            {"idle", "motion", "motion-rollover"}
+            {"idle", "motion", "motion-rollover", "motion-held"}
             if arguments.app == "magik"
             else {"motion"}
         )

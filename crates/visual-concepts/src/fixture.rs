@@ -9,14 +9,6 @@ use mister_magik_framebuffer_scenes::{
         PreparedLauncher,
     },
 };
-const ART: [&[u8]; 6] = [
-    include_bytes!("../../../apps/mister/assets/ui/launcher-cards/01_arcade.rgb565"),
-    include_bytes!("../../../apps/mister/assets/ui/launcher-cards/02_consoles.rgb565"),
-    include_bytes!("../../../apps/mister/assets/ui/launcher-cards/03_computers.rgb565"),
-    include_bytes!("../../../apps/mister/assets/ui/launcher-cards/04_handhelds.rgb565"),
-    include_bytes!("../../../apps/mister/assets/ui/launcher-cards/05_favourites.rgb565"),
-    include_bytes!("../../../apps/mister/assets/ui/launcher-cards/06_settings.rgb565"),
-];
 fn font(scale: usize) -> BitmapFont {
     let source = include_str!("../../../apps/mister/assets/fonts/spleen/spleen-6x12.bdf");
     let mut glyphs = Vec::new();
@@ -69,7 +61,10 @@ fn font(scale: usize) -> BitmapFont {
         glyphs,
     }
 }
-fn prepare(width: usize, height: usize) -> PreparedLauncher {
+pub(crate) fn prepare(width: usize, height: usize) -> PreparedLauncher {
+    prepare_selected(width, height, 0)
+}
+pub(crate) fn prepare_selected(width: usize, height: usize, selected: usize) -> PreparedLauncher {
     let cards = [
         LauncherCard {
             id: LauncherCardId::Arcade,
@@ -108,37 +103,46 @@ fn prepare(width: usize, height: usize) -> PreparedLauncher {
             colour: rgb(150, 60, 220).0,
         },
     ];
-    let art = ART.map(|bytes| {
-        bytes
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|p| Pixel(u16::from_le_bytes([p[0], p[1]])))
-            .collect::<Vec<_>>()
-    });
-    let refs = art.each_ref().map(|a| a.as_slice());
     let small = font(1);
     let large = font(2);
-    LauncherScene::new(width, height)
-        .prepare_initial_with_artwork_and_typography(
-            LauncherData {
-                cards: &cards,
-                selected: 0,
-                library_games: 35216,
-                collections: 77,
-                favourites: 42,
-                clock: "12:35",
-                level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
-            },
-            &refs,
-            LauncherTypography {
-                heading: &small,
-                number: &large,
-                metadata: &small,
-                fallback: &small,
-            },
-        )
+    let scene = LauncherScene::new(width, height);
+    let data = LauncherData {
+        cards: &cards,
+        selected,
+        library_games: 35216,
+        collections: 77,
+        favourites: 42,
+        clock: "12:35",
+        level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
+    };
+    let typography = LauncherTypography {
+        heading: &small,
+        number: &large,
+        metadata: &small,
+        fallback: &small,
+    };
+    const ART888: [&[u8]; 6] = [
+        include_bytes!("../../../apps/mister/assets/ui/launcher-cards/01_arcade.rgb888"),
+        include_bytes!("../../../apps/mister/assets/ui/launcher-cards/02_consoles.rgb888"),
+        include_bytes!("../../../apps/mister/assets/ui/launcher-cards/03_computers.rgb888"),
+        include_bytes!("../../../apps/mister/assets/ui/launcher-cards/04_handhelds.rgb888"),
+        include_bytes!("../../../apps/mister/assets/ui/launcher-cards/05_favourites.rgb888"),
+        include_bytes!("../../../apps/mister/assets/ui/launcher-cards/06_settings.rgb888"),
+    ];
+    scene
+        .prepare_initial_with_rgb888_artwork_and_typography(data, &ART888, typography)
         .finish()
+}
+// Mini mirrors production's already prepared launcher when entering Arcade.
+// Cache just the resting snapshot, never animation poses or prepared card faces.
+pub(crate) fn home_prepared() -> (Vec<Pixel>, bool) {
+    static HOME: std::sync::OnceLock<Vec<Pixel>> = std::sync::OnceLock::new();
+    let cached = HOME.get().is_some();
+    (
+        HOME.get_or_init(|| prepare(960, 540).pixels().to_vec())
+            .clone(),
+        cached,
+    )
 }
 pub struct Fixture {
     pub width: usize,

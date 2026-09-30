@@ -13,9 +13,11 @@ pub mod arcade_card;
 pub mod bitmap_text;
 mod card_page;
 pub mod dithered_gradient;
+pub mod dithered_image;
 pub mod launcher;
 mod launcher_flip;
 pub mod launcher_navigation;
+pub mod launcher_parallel;
 #[cfg(feature = "launcher-profile")]
 pub mod launcher_profile;
 mod launcher_texture;

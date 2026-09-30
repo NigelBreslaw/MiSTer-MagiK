@@ -4,6 +4,7 @@
 #include <arm_neon.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 static inline void transpose4(uint16x4_t rows[4], uint16x4_t columns[4]) {
     const uint16x4x2_t t0 = vtrn_u16(rows[0], rows[1]);
@@ -247,5 +248,47 @@ void mister_magik_rgb565_blend_black(
         destination[index] = fade_in
             ? blend1(0, source, clamped_alpha)
             : blend1(source, 0, clamped_alpha);
+    }
+}
+
+// In-place spans for the opt-in live Arcade compositor. Weights and rounding
+// match card_page::blend, including the second fade over transparent subjects.
+void mister_magik_arcade_over(uint16_t *out,const uint16_t *source,size_t n,uint16_t alpha) {
+    if(!alpha) return;
+    if(alpha==32) {memcpy(out,source,n*sizeof(*out));return;}
+    size_t i=0;
+    for(;i+7<n;i+=8) vst1q_u16(out+i,blend8(vld1q_u16(out+i),vld1q_u16(source+i),alpha));
+    for(;i<n;++i) out[i]=blend1(out[i],source[i],alpha);
+}
+void mister_magik_arcade_base(uint16_t *out,const uint16_t *home,const uint16_t *arcade,uint16_t a,uint16_t b,size_t y0,size_t y1) {
+    const size_t cuts[5]={0,26,488,490,960};
+    const uint16x8_t black=vdupq_n_u16(0);
+    for(size_t y=y0;y<y1;++y) {
+        if(y<77) {memcpy(out+y*960,arcade+y*960,960*sizeof(*out));continue;}
+        for(size_t span=0;span<4;++span) {
+            int subject=(y>=77 && y<500 && span==3) || (y>=88 && y<484 && span==1);
+            size_t i=y*960+cuts[span],end=y*960+cuts[span+1];
+            // Endpoint weights replace the earlier stage completely. Dispatch
+            // once per span, avoiding unused Home loads and per-vector branches.
+            if(b==32) {
+                if(subject) memset(out+i,0,(end-i)*sizeof(*out));
+                else memcpy(out+i,arcade+i,(end-i)*sizeof(*out));
+            } else if(a==0) {
+                if(subject || b==0) {memset(out+i,0,(end-i)*sizeof(*out));continue;}
+                for(;i+7<end;i+=8) vst1q_u16(out+i,blend8(black,vld1q_u16(arcade+i),b));
+                for(;i<end;++i) out[i]=blend1(0,arcade[i],b);
+            } else if(b==0) {
+                if(a==32) {memcpy(out+i,home+i,(end-i)*sizeof(*out));continue;}
+                for(;i+7<end;i+=8) vst1q_u16(out+i,blend8(black,vld1q_u16(home+i),a));
+                for(;i<end;++i) out[i]=blend1(0,home[i],a);
+            } else {
+                for(;i+7<end;i+=8) {
+                    uint16x8_t base=blend8(black,vld1q_u16(home+i),a);
+                    uint16x8_t chrome=subject?black:vld1q_u16(arcade+i);
+                    vst1q_u16(out+i,blend8(base,chrome,b));
+                }
+                for(;i<end;++i) out[i]=blend1(blend1(0,home[i],a),subject?0:arcade[i],b);
+            }
+        }
     }
 }

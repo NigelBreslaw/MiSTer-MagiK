@@ -1,5 +1,49 @@
 //! Counters and device-clock windows. Rendering and latch waiting are distinct.
 use serde_json::{Value, json};
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameWorkTiming {
+    pub producer_us: u64,
+    pub primary_us: u64,
+    pub secondary_us: u64,
+    pub wait_us: u64,
+    pub helper_start_delay_us: u64,
+    pub completion_delivery_us: u64,
+    pub merge_us: u64,
+    pub primary_cpu_us: Option<u64>,
+    pub secondary_cpu_us: Option<u64>,
+}
+impl FrameWorkTiming {
+    fn json(self) -> Value {
+        json!({"producer_us":self.producer_us,"primary_us":self.primary_us,"secondary_us":self.secondary_us,
+            "wait_us":self.wait_us,"helper_start_delay_us":self.helper_start_delay_us,
+            "completion_delivery_us":self.completion_delivery_us,"merge_us":self.merge_us,
+            "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us})
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DroppedFrameRecord {
+    pub reason: &'static str,
+    pub dropped_frames: u64,
+    pub source_generation: u64,
+    pub source_age_us: u64,
+    pub owned_refresh_observed: Option<u32>,
+    pub active_sequence: Option<u16>,
+    pub ui_render_us: u64,
+    pub work: Option<FrameWorkTiming>,
+}
+
+impl DroppedFrameRecord {
+    fn json(self) -> Value {
+        json!({"reason":self.reason,"dropped_frames":self.dropped_frames,
+            "source_generation":self.source_generation,"source_age_us":self.source_age_us,
+
+            "owned_refresh_observed":self.owned_refresh_observed,"active_sequence":self.active_sequence,
+            "ui_render_us":self.ui_render_us,"work":self.work.map(FrameWorkTiming::json)})
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct Counters {
     pub owned_vblanks: u64,
@@ -13,24 +57,17 @@ pub struct Counters {
     pub flips: u64,
     pub drops: u64,
     pub rejections: u64,
-    pub card_submitted: u64,
-    pub card_completed: u64,
-    pub card_superseded: u64,
-    pub card_stale: u64,
-    pub card_unique_presentations: u64,
-    pub card_redisplayed_presentations: u64,
-    pub card_target_vblank_misses: u64,
-    pub card_target_vblank_repeats: u64,
-    pub card_target_vblank_skips: u64,
+    pub card_rendered_frames: u64,
+    pub card_delivered_frames: u64,
+    pub card_dropped_frames: u64,
     pub card_synchronous_presentations: u64,
+    pub card_continuous_presentations: u64,
     pub card_producer_total_us: u64,
     pub card_primary_tile_us: u64,
     pub card_secondary_tile_us: u64,
     pub card_secondary_wait_us: u64,
     pub card_hidden_copy_us: u64,
     pub card_source_age_us: u64,
-    pub card_face_rebuilds: u64,
-    pub card_worker_restarts: u64,
     pub card_chrome_refreshes: u64,
     pub card_prepare_us: u64,
     pub card_fallback_copies: u64,
@@ -39,6 +76,7 @@ pub struct Counters {
 #[derive(Default)]
 pub struct PresentationMetrics {
     pub frame_timings_us: Vec<[u64; 3]>,
+    pub work_timings: Vec<FrameWorkTiming>,
     pub peak_rss_bytes: Option<u64>,
     pub process_cpu_us: Option<u64>,
     pub window_cpu_start_us: Option<u64>,
@@ -54,33 +92,17 @@ pub struct PresentationMetrics {
     pub error: Option<String>,
     pub last_card_source_timestamp_us: u64,
     pub last_card_source_generation: u64,
-    pub last_card_target_vblank: u64,
-    pub last_card_actual_vblank: u64,
+    pub dropped_frame_records: Vec<DroppedFrameRecord>,
 }
 impl PresentationMetrics {
-    pub fn note_card_target_vblank(&mut self, target_vblank: u64, actual_vblank: u64) {
-        if target_vblank == 0 {
-            return;
+    /// Reserve on begin; drop records perform no allocation or serialisation.
+    pub fn record_dropped_frame(&mut self, record: DroppedFrameRecord) {
+        if self.window_start.is_some()
+            && self.window.is_none()
+            && self.dropped_frame_records.len() < 64
+        {
+            self.dropped_frame_records.push(record);
         }
-        if actual_vblank != target_vblank {
-            self.counters.card_target_vblank_misses =
-                self.counters.card_target_vblank_misses.saturating_add(1);
-        }
-        if self.last_card_target_vblank != 0 {
-            if target_vblank == self.last_card_target_vblank {
-                self.counters.card_target_vblank_repeats =
-                    self.counters.card_target_vblank_repeats.saturating_add(1);
-            } else if target_vblank > self.last_card_target_vblank.saturating_add(1) {
-                self.counters.card_target_vblank_skips =
-                    self.counters.card_target_vblank_skips.saturating_add(
-                        target_vblank
-                            .saturating_sub(self.last_card_target_vblank)
-                            .saturating_sub(1),
-                    );
-            }
-        }
-        self.last_card_target_vblank = target_vblank;
-        self.last_card_actual_vblank = actual_vblank;
     }
 
     pub fn finish_window(&mut self, end_ms: u64, width: usize, height: usize, instrumented: bool) {
@@ -90,35 +112,29 @@ impl PresentationMetrics {
             .process_cpu_us
             .zip(self.window_cpu_start_us)
             .map(|(end, start)| end.saturating_sub(start));
-        // Schema compatibility: direct tiles have no intermediate composition.
-        // These constants describe the path; they are not measured counters.
         self.window = Some(
             json!({"start_ms":start_ms,"end_ms":end_ms,"elapsed_ms":end_ms-start_ms,
             "width":width,"height":height,"instrumented":instrumented,
             "forced_clock_changes":self.forced_clock_changes,
-            "card_face_rebuilds":c.card_face_rebuilds-baseline.card_face_rebuilds,
-            "card_worker_restarts":c.card_worker_restarts-baseline.card_worker_restarts,
             "card_chrome_refreshes":c.card_chrome_refreshes-baseline.card_chrome_refreshes,
             "card_prepare_us":c.card_prepare_us-baseline.card_prepare_us,
             "card_prepare_max_us":self.card_prepare_max_us,
             "presentations":c.presentations-baseline.presentations,"render_us_total":c.render_us-baseline.render_us,
             "render_to_present_us_total":c.render_to_present_us-baseline.render_to_present_us,
             "physical_latch_posts":c.posts-baseline.posts,"physical_latch_flips":c.flips-baseline.flips,
-            "physical_drops":c.drops-baseline.drops,"latch_rejections":c.rejections-baseline.rejections,
-            "card_submitted":c.card_submitted-baseline.card_submitted,
-            "card_completed":c.card_completed-baseline.card_completed,
-            "card_superseded":c.card_superseded-baseline.card_superseded,
-            "card_stale":c.card_stale-baseline.card_stale,
-            "card_unique_presentations":c.card_unique_presentations-baseline.card_unique_presentations,
-            "card_redisplayed_presentations":c.card_redisplayed_presentations-baseline.card_redisplayed_presentations,
+            "dropped_frames":(c.drops-baseline.drops)+(c.card_dropped_frames-baseline.card_dropped_frames),
+            "owned_refresh_dropped_frames":c.drops-baseline.drops,"latch_rejections":c.rejections-baseline.rejections,
+
+            "card_rendered_frames":c.card_rendered_frames-baseline.card_rendered_frames,
+
+            "card_delivered_frames":c.card_delivered_frames-baseline.card_delivered_frames,
+
             "card_synchronous_presentations":c.card_synchronous_presentations-baseline.card_synchronous_presentations,
+            "card_continuous_presentations":c.card_continuous_presentations-baseline.card_continuous_presentations,
             "card_producer_total_us":c.card_producer_total_us-baseline.card_producer_total_us,
             "card_primary_tile_us":c.card_primary_tile_us-baseline.card_primary_tile_us,
             "card_secondary_tile_us":c.card_secondary_tile_us-baseline.card_secondary_tile_us,
             "card_secondary_wait_us":c.card_secondary_wait_us-baseline.card_secondary_wait_us,
-            "card_composition_us":0,
-            "card_composition_calls":0,
-            "card_composition_bytes":0,
             "card_hidden_copy_us":c.card_hidden_copy_us-baseline.card_hidden_copy_us,
             "card_source_age_us":c.card_source_age_us-baseline.card_source_age_us,
             "last_card_source_timestamp_us":self.last_card_source_timestamp_us,
@@ -126,20 +142,6 @@ impl PresentationMetrics {
             "evidence_error":self.error,"drop_baseline_available":self.last_physical_drop_count.is_some()}),
         );
         let window = self.window.as_mut().unwrap();
-        window["card_target_vblank_misses"] = json!(
-            c.card_target_vblank_misses
-                .saturating_sub(baseline.card_target_vblank_misses)
-        );
-        window["card_target_vblank_repeats"] = json!(
-            c.card_target_vblank_repeats
-                .saturating_sub(baseline.card_target_vblank_repeats)
-        );
-        window["card_target_vblank_skips"] = json!(
-            c.card_target_vblank_skips
-                .saturating_sub(baseline.card_target_vblank_skips)
-        );
-        window["last_card_target_vblank"] = json!(self.last_card_target_vblank);
-        window["last_card_actual_vblank"] = json!(self.last_card_actual_vblank);
         window["process_cpu_us"] = json!(cpu_us);
         for (index, name) in ["render", "transfer", "frame_to_present"]
             .into_iter()
@@ -160,6 +162,51 @@ impl PresentationMetrics {
             }
         }
 
+        window["dropped_frame_records"] = json!(
+            self.dropped_frame_records
+                .iter()
+                .copied()
+                .map(DroppedFrameRecord::json)
+                .collect::<Vec<_>>()
+        );
+        for (index, name) in [
+            "producer",
+            "primary",
+            "secondary",
+            "helper_wait",
+            "helper_start_delay",
+            "completion_delivery",
+            "merge",
+            "primary_cpu",
+            "secondary_cpu",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut samples = self
+                .work_timings
+                .iter()
+                .filter_map(|t| match index {
+                    0 => Some(t.producer_us),
+                    1 => Some(t.primary_us),
+                    2 => Some(t.secondary_us),
+                    3 => Some(t.wait_us),
+                    4 => Some(t.helper_start_delay_us),
+                    5 => Some(t.completion_delivery_us),
+                    6 => Some(t.merge_us),
+                    7 => t.primary_cpu_us,
+                    _ => t.secondary_cpu_us,
+                })
+                .collect::<Vec<_>>();
+            samples.sort_unstable();
+            if !samples.is_empty() {
+                window[format!("{name}_average_us")] =
+                    json!(samples.iter().sum::<u64>() as f64 / samples.len() as f64);
+                window[format!("{name}_p99_us")] =
+                    json!(samples[(samples.len() * 99 / 100).min(samples.len() - 1)]);
+                window[format!("{name}_max_us")] = json!(samples.last());
+            }
+        }
         window["context"] = self.context.clone();
         window["peak_rss_bytes"] = json!(self.peak_rss_bytes);
         window["latch_drops"] = json!(c.latch_drops - baseline.latch_drops);
@@ -183,25 +230,22 @@ impl PresentationMetrics {
             "presentations":self.counters.presentations,"last_render_us":self.last_render_us,
             "render_us_total":self.counters.render_us,"render_to_present_us_total":self.counters.render_to_present_us,
             "physical_latch_posts":self.counters.posts,"physical_latch_flips":self.counters.flips,
-            "physical_drops":self.counters.drops,"latch_rejections":self.counters.rejections,
-            "card_submitted":self.counters.card_submitted,"card_completed":self.counters.card_completed,
-            "card_superseded":self.counters.card_superseded,"card_stale":self.counters.card_stale,
-            "card_unique_presentations":self.counters.card_unique_presentations,
-            "card_redisplayed_presentations":self.counters.card_redisplayed_presentations,
-            "card_target_vblank_misses":self.counters.card_target_vblank_misses,
-            "card_target_vblank_repeats":self.counters.card_target_vblank_repeats,
-            "card_target_vblank_skips":self.counters.card_target_vblank_skips,
+            "dropped_frames":self.counters.drops+self.counters.card_dropped_frames,"latch_rejections":self.counters.rejections,
+            "card_rendered_frames":self.counters.card_rendered_frames,
+
+            "card_delivered_frames":self.counters.card_delivered_frames,
+            "card_dropped_frames":self.counters.card_dropped_frames,
+
             "card_producer_total_us":self.counters.card_producer_total_us,
             "card_primary_tile_us":self.counters.card_primary_tile_us,
             "card_secondary_tile_us":self.counters.card_secondary_tile_us,
             "card_secondary_wait_us":self.counters.card_secondary_wait_us,
-            "card_composition_us":0,
             "card_hidden_copy_us":self.counters.card_hidden_copy_us,
             "card_source_age_us":self.counters.card_source_age_us,
             "last_card_source_timestamp_us":self.last_card_source_timestamp_us,
             "last_card_source_generation":self.last_card_source_generation,
-            "last_card_target_vblank":self.last_card_target_vblank,
-            "last_card_actual_vblank":self.last_card_actual_vblank,
+
+
             "motion_started_ms":self.motion_started_ms,"window":self.window,"evidence_error":self.error})
     }
 }
@@ -239,23 +283,23 @@ mod tests {
         metrics.finish_window(7000, 960, 540, false);
         let window = metrics.window.unwrap();
         assert_eq!(window["presentations"], 300);
-        assert_eq!(window["physical_drops"], 1);
+        assert_eq!(window["dropped_frames"], 1);
         assert_eq!(window["latch_rejections"], 1);
         assert_eq!(window["elapsed_ms"], 5000);
     }
 
     #[test]
-    fn card_window_separates_unique_redisplayed_producer_and_copy_work() {
+    fn card_window_reports_delivered_dropped_and_producer_work() {
         let mut metrics = PresentationMetrics::default();
         metrics.counters.presentations = 10;
-        metrics.counters.card_unique_presentations = 7;
-        metrics.counters.card_redisplayed_presentations = 3;
+        metrics.counters.card_delivered_frames = 7;
+        metrics.counters.card_dropped_frames = 3;
         metrics.counters.card_producer_total_us = 700;
         metrics.counters.card_hidden_copy_us = 90;
         metrics.window_start = Some((1_000, metrics.counters.clone()));
         metrics.counters.presentations += 300;
-        metrics.counters.card_unique_presentations += 240;
-        metrics.counters.card_redisplayed_presentations += 60;
+        metrics.counters.card_delivered_frames += 240;
+        metrics.counters.card_dropped_frames += 60;
         metrics.counters.card_producer_total_us += 24_000;
         metrics.counters.card_hidden_copy_us += 2_700;
         metrics.last_card_source_timestamp_us = 5_990_000;
@@ -263,36 +307,42 @@ mod tests {
 
         metrics.finish_window(6_000, 960, 540, true);
         let window = metrics.window.unwrap();
-        assert_eq!(window["card_unique_presentations"], 240);
-        assert_eq!(window["card_redisplayed_presentations"], 60);
+        assert_eq!(window["card_delivered_frames"], 240);
+        assert_eq!(window["dropped_frames"], 60);
         assert_eq!(
-            window["card_unique_presentations"].as_u64().unwrap()
-                + window["card_redisplayed_presentations"].as_u64().unwrap(),
+            window["card_delivered_frames"].as_u64().unwrap()
+                + window["dropped_frames"].as_u64().unwrap(),
             window["presentations"].as_u64().unwrap()
         );
         assert_eq!(window["card_producer_total_us"], 24_000);
         assert_eq!(window["card_hidden_copy_us"], 2_700);
         assert_eq!(window["last_card_source_generation"], 42);
-        for key in [
-            "card_composition_us",
-            "card_composition_calls",
-            "card_composition_bytes",
-        ] {
-            assert_eq!(window[key], 0);
-        }
     }
 
     #[test]
-    fn card_target_vblank_evidence_counts_misses_repeats_and_skips() {
+    fn dropped_frames_cover_distinct_failed_refreshes_and_bound_evidence() {
         let mut metrics = PresentationMetrics::default();
-        metrics.note_card_target_vblank(10, 10);
-        metrics.note_card_target_vblank(10, 11);
-        metrics.note_card_target_vblank(13, 13);
-
-        assert_eq!(metrics.counters.card_target_vblank_misses, 1);
-        assert_eq!(metrics.counters.card_target_vblank_repeats, 1);
-        assert_eq!(metrics.counters.card_target_vblank_skips, 2);
-        assert_eq!(metrics.last_card_target_vblank, 13);
-        assert_eq!(metrics.last_card_actual_vblank, 13);
+        metrics.window_start = Some((0, Counters::default()));
+        metrics.dropped_frame_records.reserve(64);
+        metrics.counters.card_dropped_frames = 60;
+        metrics.counters.drops = 5;
+        for _ in 0..100 {
+            metrics.record_dropped_frame(DroppedFrameRecord {
+                reason: "producer not complete at readiness check",
+                dropped_frames: 1,
+                ..Default::default()
+            });
+        }
+        assert_eq!(metrics.dropped_frame_records.len(), 64);
+        metrics.finish_window(1_000, 960, 540, false);
+        let window = metrics.window.unwrap();
+        assert_eq!(window["dropped_frames"], 65);
+        assert_eq!(window["owned_refresh_dropped_frames"], 5);
+        assert_eq!(
+            window["dropped_frame_records"].as_array().unwrap().len(),
+            64
+        );
+        assert!(window.get("physical_drops").is_none());
+        assert!(window.get("card_redisplayed_presentations").is_none());
     }
 }

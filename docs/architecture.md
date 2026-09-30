@@ -935,7 +935,9 @@ title/count pixel-exact. Moving/receding cards still use the shared filtered
 projection, flip, occlusion and reflection renderer. Chrome remains resident;
 no fonts, artwork or frame buffers are allocated during browsing. Route changes
 rebuild the faces and invalidate the previous compositor generation. The
-960×540 render-ahead/direct-slot path remains exclusive to HDMI landscape.
+960×540 synchronous two-tile path remains exclusive to HDMI landscape. One
+persistent helper renders the second band of the current pose; complete frames
+are copied to the hidden slot before publication. Mini uses the same engine.
 
 For an offline review using production artwork and fonts, run
 `scripts/cargo run --manifest-path apps/mister/Cargo.toml --example launcher_layout_review -- /tmp/launcher-review`.

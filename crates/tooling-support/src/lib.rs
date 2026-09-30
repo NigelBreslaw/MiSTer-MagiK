@@ -5,7 +5,7 @@ mod preview;
 mod profile;
 use measurement::PresentationMetrics;
 use preview::PreviewProducer;
-use profile::CpuProfile;
+pub use profile::CpuProfile;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::{
     path::PathBuf,
@@ -25,6 +25,8 @@ pub struct Session {
     measurement_duration_ms: Option<u64>,
     clock_advanced: bool,
     force_card_fallback: bool,
+    carousel_hold_requested: bool,
+    carousel_hold_active: bool,
 }
 impl Session {
     pub fn from_environment() -> Option<Self> {
@@ -42,12 +44,18 @@ impl Session {
             measurement_duration_ms: None,
             clock_advanced: false,
             force_card_fallback: false,
+            carousel_hold_requested: false,
+            carousel_hold_active: false,
         })
     }
     pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
         self.measurement_duration_ms = milliseconds;
     }
     pub fn begin(&mut self) {
+        self.metrics.dropped_frame_records.clear();
+        self.metrics.dropped_frame_records.reserve(64);
+        self.metrics.work_timings.clear();
+        self.metrics.work_timings.reserve(3601);
         self.metrics.frame_timings_us.clear();
         self.metrics.frame_timings_us.reserve(3601);
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);
@@ -81,6 +89,19 @@ impl Session {
     pub fn card_fallback_forced(&self) -> bool {
         self.force_card_fallback
     }
+    /// Emit one logical press, then release on completion or explicit cancellation.
+    /// A failed host cannot extend the hold beyond this bounded device window.
+    pub fn carousel_hold_change(&mut self) -> Option<bool> {
+        let requested = self.carousel_hold_requested
+            && self.metrics.motion_started_ms.is_some()
+            && self.metrics.window.is_none();
+        if requested == self.carousel_hold_active {
+            return None;
+        }
+        self.carousel_hold_active = requested;
+        Some(requested)
+    }
+
     /// Device-clock warmup and measurement boundaries, independent of host polling.
     pub fn tick(&mut self, width: usize, height: usize) -> Result<bool, String> {
         if self.last_request.elapsed() >= Duration::from_millis(100) {
@@ -90,14 +111,24 @@ impl Session {
                 let value: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&request).map_err(|e| e.to_string())?)
                         .unwrap_or_default();
-                self.clock_mode = match value["launcher_clock"].as_str() {
-                    Some("fixed") => Some(false),
-                    Some("rollover") => Some(true),
-                    _ => None,
-                };
-                self.force_card_fallback = value["launcher_fallback"].as_bool().unwrap_or(false);
+                if value["launcher_hold"] == "release" {
+                    self.carousel_hold_requested = false;
+                } else {
+                    self.carousel_hold_requested =
+                        value["launcher_hold"].as_bool().unwrap_or(false);
+                    self.clock_mode = match value["launcher_clock"].as_str() {
+                        Some("fixed") => Some(false),
+                        Some("rollover") => Some(true),
+                        _ => None,
+                    };
+                    self.force_card_fallback =
+                        value["launcher_fallback"].as_bool().unwrap_or(false);
+                    self.measurement_duration_ms = value["duration_ms"]
+                        .as_u64()
+                        .filter(|duration| (1_000..=30_000).contains(duration));
+                    self.begin();
+                }
                 std::fs::remove_file(request).map_err(|e| e.to_string())?;
-                self.begin();
             }
         }
         let now = self.start.elapsed().as_millis() as u64;
@@ -185,6 +216,8 @@ mod tests {
             measurement_duration_ms: None,
             clock_advanced: false,
             force_card_fallback: false,
+            carousel_hold_requested: false,
+            carousel_hold_active: false,
         };
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());
@@ -219,6 +252,39 @@ mod tests {
         session.metrics.window_start = Some((0, session.metrics.counters.clone()));
         assert_eq!(session.launcher_clock(), Some("12:34"));
         assert_eq!(session.metrics.forced_clock_changes, 0);
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"launcher_hold":true,"duration_ms":8000}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert_eq!(session.measurement_duration_ms, Some(8000));
+        assert_eq!(session.carousel_hold_change(), Some(true));
+        assert_eq!(session.carousel_hold_change(), None);
+        session.start -= Duration::from_secs(3);
+        session.tick(16, 8).unwrap();
+        session.start -= Duration::from_secs(5);
+        assert!(!session.tick(16, 8).unwrap());
+        assert_eq!(session.carousel_hold_change(), None);
+        session.start -= Duration::from_secs(3);
+        assert!(session.tick(16, 8).unwrap());
+        assert_eq!(session.carousel_hold_change(), Some(false));
+        assert_eq!(session.metrics.window.as_ref().unwrap()["elapsed_ms"], 8000);
+
+        session.carousel_hold_requested = true;
+        session.begin();
+        assert_eq!(session.carousel_hold_change(), Some(true));
+        let started = session.metrics.motion_started_ms;
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"launcher_hold":"release"}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert_eq!(session.carousel_hold_change(), Some(false));
+        assert_eq!(session.metrics.motion_started_ms, started);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -45,28 +45,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         favourites: 1,
         collections: 77,
     });
-    let assets = [
-        "01_arcade",
-        "02_consoles",
-        "03_computers",
-        "04_handhelds",
-        "05_favourites",
-        "06_settings",
-    ]
-    .map(|name| {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("assets/ui/launcher-cards/{name}.rgb565"));
-        std::fs::read(path).map(|bytes| {
-            bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|p| Rgb565Pixel(u16::from_le_bytes(*p)))
-                .collect::<Vec<_>>()
-        })
-    });
-    let assets = assets.into_iter().collect::<Result<Vec<_>, _>>()?;
-    let artwork: Vec<_> = assets.iter().map(Vec::as_slice).collect();
     let rgb_assets = [
         "01_arcade",
         "02_consoles",
@@ -105,15 +83,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clock: "07:28",
             level: mister_magik_framebuffer_scenes::launcher::LauncherLevel::Root,
         };
-        let mut prepared = if scene.uses_responsive_layout() {
-            scene
-                .prepare_initial_with_rgb888_artwork_and_typography(data, &rgb_artwork, fonts)
-                .finish()
-        } else {
-            scene
-                .prepare_initial_with_artwork_and_typography(data, &artwork, fonts)
-                .finish()
-        };
+        let mut prepared = scene
+            .prepare_initial_with_rgb888_artwork_and_typography(data, &rgb_artwork, fonts)
+            .finish();
         for (state, selected, progress) in [
             ("arcade", 0, 0),
             ("computers", 2, 0),

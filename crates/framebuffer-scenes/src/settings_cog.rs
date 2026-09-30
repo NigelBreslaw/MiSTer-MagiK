@@ -11,22 +11,23 @@
 //!
 //! The renderer is a pure function of time: `t = 0` is exactly the launcher
 //! frame and `t = SETTINGS_COG_DURATION_MS` is exactly the Settings frame.
-//! Reverse playback evaluates the same timeline backwards.
+//! Reverse playback evaluates the same timeline backwards. RGB888 source colour
+//! and coverage survive filtered scaling until final destination-space dithering.
 
 use crate::Rgb565Pixel;
 #[cfg(test)]
 use crate::card_page::lerp_rgb565;
-use crate::card_page::{alpha_of, blend, ease_in_out, ease_out, rounded_span, window_q16};
+use crate::card_page::{
+    alpha_of, blend, blend_row, ease_in_out, ease_out, rounded_span, window_q16,
+};
 
 pub const SETTINGS_COG_WIDTH: usize = 960;
 pub const SETTINGS_COG_HEIGHT: usize = 540;
 pub const SETTINGS_COG_DURATION_MS: u32 = 1_000;
 
-/// The backdrop asset: 412x374 RGB565, see apps/mister/assets/ui/settings.
+/// The backdrop source: 412x374 RGB888, see apps/mister/assets/ui/settings.
 pub const COG_ASSET_WIDTH: usize = 412;
 pub const COG_ASSET_HEIGHT: usize = 374;
-
-const MAX_FRAME_WIDTH: usize = SETTINGS_COG_WIDTH;
 
 // Selected (centre) card of the landscape launcher: slot centre 610, half
 // width 90, vertical centre 284 (crates/framebuffer-scenes/src/launcher.rs).
@@ -215,7 +216,7 @@ impl SettingsCogLayout {
             cog_rest_y: COG_REST_Y,
             cog_rest_w: COG_ASSET_WIDTH as i32,
             cog_rest_h: COG_ASSET_HEIGHT as i32,
-            cog_rest_alpha: 256,
+            cog_rest_alpha: 128,
             content_top: CONTENT_TOP,
             content_bottom: CONTENT_BOTTOM,
             footer_top: FOOTER_TOP,
@@ -336,14 +337,56 @@ fn zoom_q16_to(p: i64, maximum: i64) -> i64 {
     ((maximum as f64 / 65536.0).powf(progress) * 65536.0).round() as i64
 }
 
-/// Nearest RGB565 sample for the moving cog. The exact endpoint bypasses this
-/// path and copies the native asset rows directly.
-#[inline]
-fn sample_cog(cog: &[Rgb565Pixel], x: i32, y: i32) -> u16 {
-    if x < 0 || y < 0 || x >= COG_ASSET_WIDTH as i32 || y >= COG_ASSET_HEIGHT as i32 {
-        0
-    } else {
-        cog[y as usize * COG_ASSET_WIDTH + x as usize].0
+/// Immutable colour/mip data; the renderer owns its sampling scratch.
+#[derive(Clone, Debug)]
+pub struct CogArtwork(crate::arcade_card::CabinetArtwork);
+impl CogArtwork {
+    pub fn from_rgb888(rgb: &[u8]) -> Result<Self, String> {
+        Ok(CogTexture::from_rgb888(rgb)?.artwork())
+    }
+}
+#[derive(Clone, Debug)]
+pub struct CogTexture(crate::arcade_card::CabinetTexture);
+impl CogTexture {
+    pub fn from_rgb888(rgb: &[u8]) -> Result<Self, String> {
+        Ok(Self(crate::arcade_card::CabinetTexture::from_rgb888_sized(
+            COG_ASSET_WIDTH,
+            COG_ASSET_HEIGHT,
+            rgb,
+        )?))
+    }
+    pub fn from_artwork(artwork: &CogArtwork) -> Self {
+        Self(crate::arcade_card::CabinetTexture::from_artwork(&artwork.0))
+    }
+    pub fn storage_bytes(&self) -> usize {
+        self.0.storage_bytes()
+    }
+    pub fn prepare_destination(&self, destination: &mut [Rgb565Pixel]) -> bool {
+        if destination.len() != SETTINGS_COG_WIDTH * SETTINGS_COG_HEIGHT {
+            return false;
+        }
+        let pixels = self.destination_pixels();
+        for y in 0..COG_ASSET_HEIGHT {
+            for x in 0..COG_ASSET_WIDTH {
+                let dx = COG_REST_X + x as i32;
+                let dy = COG_REST_Y + y as i32;
+                if dx >= 0
+                    && dx < SETTINGS_COG_WIDTH as i32
+                    && dy >= CONTENT_TOP as i32
+                    && dy < CONTENT_BOTTOM as i32
+                {
+                    destination[dy as usize * SETTINGS_COG_WIDTH + dx as usize] =
+                        pixels[y * COG_ASSET_WIDTH + x];
+                }
+            }
+        }
+        true
+    }
+    pub fn artwork(&self) -> CogArtwork {
+        CogArtwork(self.0.artwork())
+    }
+    pub fn destination_pixels(&self) -> Vec<Rgb565Pixel> {
+        self.0.pixels_at(COG_REST_X, COG_REST_Y, 128)
     }
 }
 
@@ -356,7 +399,7 @@ fn sample_cog(cog: &[Rgb565Pixel], x: i32, y: i32) -> u16 {
 pub fn render_settings_cog_transition_into(
     launcher: &[Rgb565Pixel],
     settings: &[Rgb565Pixel],
-    cog: &[Rgb565Pixel],
+    cog: &CogTexture,
     t_ms: u32,
     output: &mut [Rgb565Pixel],
 ) -> bool {
@@ -382,7 +425,7 @@ pub fn render_settings_cog_transition_for_dimensions_into(
     height: usize,
     launcher: &[Rgb565Pixel],
     settings: &[Rgb565Pixel],
-    cog: &[Rgb565Pixel],
+    cog: &CogTexture,
     t_ms: u32,
     output: &mut [Rgb565Pixel],
 ) -> bool {
@@ -390,11 +433,7 @@ pub fn render_settings_cog_transition_for_dimensions_into(
         return false;
     };
     let frame_len = width.saturating_mul(height);
-    if launcher.len() != frame_len
-        || settings.len() != frame_len
-        || output.len() != frame_len
-        || cog.len() != COG_ASSET_WIDTH * COG_ASSET_HEIGHT
-    {
+    if launcher.len() != frame_len || settings.len() != frame_len || output.len() != frame_len {
         return false;
     }
     let t = t_ms.min(SETTINGS_COG_DURATION_MS);
@@ -449,79 +488,74 @@ pub fn render_settings_cog_transition_for_dimensions_into(
         c0_y,
         (i64::from(layout.cog_rest_h) << 16) / COG_ASSET_HEIGHT as i64,
     );
-    let cog_alpha = lerp(256 << 16, i64::from(layout.cog_rest_alpha) << 16) >> 16;
-    let cog_at_native_rest =
-        cog_p >= 1 << 16 && cog_sx == 1 << 16 && cog_sy == 1 << 16 && cog_alpha >= 256;
+    let cog_alpha = (256 << 16)
+        + ((((i64::from(layout.cog_rest_alpha) - 256) << 16) * window_q16(t, 380, 320)) >> 16);
+    let cog_alpha = cog_alpha >> 16;
     let inv_sx = (1i64 << 32) / cog_sx.max(1);
     let inv_sy = (1i64 << 32) / cog_sy.max(1);
-    let inv_z = (1i64 << 32) / z.max(1); // Q16 reciprocal
+    // Register the fading native card with the cog camera, rather than the
+    // independently expanding outline. Otherwise reverse playback shows two
+    // displaced cog silhouettes during the card/artwork crossfade.
+    let face_x = cog_x - (i64::from(ASSET_CROP_X * 2 - RENDER_CARD_X_Q1) * cog_sx) / 2;
+    let face_y = cog_y - (i64::from(ASSET_CROP_Y * 2 - RENDER_CARD_Y_Q1) * cog_sy) / 2;
+    let face_inverse_x = (c0_x << 16) / cog_sx.max(1);
+    let face_inverse_y = (c0_y << 16) / cog_sy.max(1);
     let cog_x0 = (cog_x >> 16).max(0) as usize;
     let cog_x1 =
         (((cog_x + COG_ASSET_WIDTH as i64 * cog_sx) >> 16) + 1).clamp(0, w as i64) as usize;
     let cog_y0 = (cog_y >> 16).max(0) as usize;
     let cog_y1 = (((cog_y + COG_ASSET_HEIGHT as i64 * cog_sy) >> 16) + 1)
         .clamp(0, layout.height as i64) as usize;
-    let mut cog_source_x = [0_i16; MAX_FRAME_WIDTH];
-    if !cog_at_native_rest {
-        let mut u = (((((cog_x0 as i64) << 16) + (1 << 15) - cog_x) * inv_sx) >> 16) - (1 << 15);
-        for source_x in cog_source_x.iter_mut().take(cog_x1).skip(cog_x0) {
-            *source_x = ((u + (1 << 15)) >> 16) as i16;
-            u += inv_sx;
-        }
-    }
-
-    // Begin with the still launcher. Header and rule pixels come from the
-    // destination because they are identical in production; keeping this
-    // explicit also preserves the pure renderer's endpoint contract.
-    output.copy_from_slice(launcher);
+    // Copy only the Home pixels that remain visible, instead of copying and
+    // immediately clearing the entire covered window. Keep each clip span once.
     output[..layout.content_top * w].copy_from_slice(&settings[..layout.content_top * w]);
     output[layout.content_bottom * w..layout.footer_top * w]
         .copy_from_slice(&settings[layout.content_bottom * w..layout.footer_top * w]);
-    if t >= 860 {
-        output[layout.footer_top * w..].copy_from_slice(&settings[layout.footer_top * w..]);
+    let footer = if t >= 860 { settings } else { launcher };
+    output[layout.footer_top * w..].copy_from_slice(&footer[layout.footer_top * w..]);
+    let mut spans = [None; 640];
+    for (y, span) in spans
+        .iter_mut()
+        .enumerate()
+        .take(layout.content_bottom)
+        .skip(layout.content_top)
+    {
+        *span = rounded_span(y as i32, win_x, win_y, win_w, win_h, win_r, w);
+        let row = y * w;
+        if let Some((left, right)) = *span {
+            output[row..row + left].copy_from_slice(&launcher[row..row + left]);
+            output[row + left..row + right].fill(Rgb565Pixel(0));
+            output[row + right..row + w].copy_from_slice(&launcher[row + right..row + w]);
+        } else {
+            output[row..row + w].copy_from_slice(&launcher[row..row + w]);
+        }
     }
-
-    for y in layout.content_top..layout.content_bottom {
+    cog.0.render_clipped(
+        w,
+        output,
+        (cog_x0, cog_x1, cog_y0, cog_y1),
+        (cog_x, cog_y, inv_sx, inv_sy),
+        cog_alpha as u32,
+        |y| spans[y].unwrap_or((w, w)),
+    );
+    for (y, &span) in spans
+        .iter()
+        .enumerate()
+        .take(layout.content_bottom)
+        .skip(layout.content_top)
+    {
         let row = y * w;
         let out = &mut output[row..row + w];
-        let span = rounded_span(y as i32, win_x, win_y, win_w, win_h, win_r, w);
         let (in0, in1) = span.unwrap_or((w, w));
 
-        // Inside the window: black, then the cog, then the fading card face.
-        if span.is_some() {
-            out[in0..in1].fill(Rgb565Pixel(0));
-        }
-        if span.is_some() && y >= cog_y0 && y < cog_y1 {
-            let (x0, x1) = (cog_x0.max(in0), cog_x1.min(in1));
-            if cog_at_native_rest {
-                let v = y as i32 - layout.cog_rest_y;
-                if (0..COG_ASSET_HEIGHT as i32).contains(&v) {
-                    let cog_row =
-                        &cog[v as usize * COG_ASSET_WIDTH..(v as usize + 1) * COG_ASSET_WIDTH];
-                    let source_x = (x0 as i32 - layout.cog_rest_x).max(0) as usize;
-                    let len = (x1 - x0).min(COG_ASSET_WIDTH.saturating_sub(source_x));
-                    if len > 0 {
-                        out[x0..x0 + len].copy_from_slice(&cog_row[source_x..source_x + len]);
-                    }
-                }
-            } else {
-                let v = (((((y as i64) << 16) + (1 << 15) - cog_y) * inv_sy) >> 16) - (1 << 15);
-                let source_y = ((v + (1 << 15)) >> 16) as i32;
-                for x in x0..x1 {
-                    let sampled = sample_cog(cog, i32::from(cog_source_x[x]), source_y);
-                    out[x] = Rgb565Pixel(blend(out[x].0, sampled, cog_alpha as u32));
-                }
-            }
-        }
         if span.is_some() && face_alpha > 0 {
-            // The launcher's own card pixels, scaled with the window.
-            let sy = card_cy as i64
-                + ((((((y as i64) << 16) + (1 << 15)) - (i64::from(card_cy) << 16)) * inv_z) >> 32);
+            // Native label/frame pixels share the cog's camera transform.
+            let sy = i64::from(layout.card_y)
+                + ((((((y as i64) << 16) + (1 << 15) - face_y) * face_inverse_y) >> 16) >> 16);
             if (layout.card_y as i64..(layout.card_y + layout.card_h) as i64).contains(&sy) {
                 let face_row = sy as usize * w;
-                let mut sx_q16 = (i64::from(card_cx) << 16)
-                    + (((((in0 as i64) << 16) + (1 << 15) - (i64::from(card_cx) << 16)) * inv_z)
-                        >> 16);
+                let mut sx_q16 = (i64::from(layout.card_x) << 16)
+                    + (((((in0 as i64) << 16) + (1 << 15) - face_x) * face_inverse_x) >> 16);
                 for pixel in out.iter_mut().take(in1).skip(in0) {
                     let sx = sx_q16 >> 16;
                     if (layout.card_x as i64..(layout.card_x + layout.card_w) as i64).contains(&sx)
@@ -532,7 +566,7 @@ pub fn render_settings_cog_transition_for_dimensions_into(
                             face_alpha,
                         ));
                     }
-                    sx_q16 += inv_z;
+                    sx_q16 += face_inverse_x;
                 }
             }
         }
@@ -568,32 +602,18 @@ pub fn render_settings_cog_transition_for_dimensions_into(
             continue;
         }
         let offset = ((i64::from(layout.band_travel) * ((1 << 16) - k) + (1 << 15)) >> 16) as usize;
+        let len =
+            (layout.list_right - layout.list_left).min(w.saturating_sub(layout.list_left + offset));
         for y in top..bottom {
             let row = y * w;
-            if alpha >= 256 {
-                let len = (layout.list_right - layout.list_left)
-                    .min(w.saturating_sub(layout.list_left + offset));
-                if len > 0 {
-                    output[row + layout.list_left + offset..row + layout.list_left + offset + len]
-                        .copy_from_slice(
-                            &settings[row + layout.list_left..row + layout.list_left + len],
-                        );
-                }
-                continue;
-            }
-            for x in layout.list_left..layout.list_right {
-                let destination = x + offset;
-                if destination >= w {
-                    break;
-                }
-                output[row + destination] = Rgb565Pixel(blend(
-                    output[row + destination].0,
-                    settings[row + x].0,
-                    alpha,
-                ));
-            }
+            blend_row(
+                &mut output[row + layout.list_left + offset..row + layout.list_left + offset + len],
+                &settings[row + layout.list_left..row + layout.list_left + len],
+                alpha,
+            );
         }
     }
+
     true
 }
 
@@ -605,10 +625,13 @@ mod tests {
         vec![Rgb565Pixel(value); SETTINGS_COG_WIDTH * SETTINGS_COG_HEIGHT]
     }
 
-    fn patterned_cog() -> Vec<Rgb565Pixel> {
-        (0..COG_ASSET_WIDTH * COG_ASSET_HEIGHT)
-            .map(|i| Rgb565Pixel(((i * 2654435761) >> 7) as u16 | 0x0821))
-            .collect()
+    fn patterned_cog() -> CogTexture {
+        CogTexture::from_rgb888(
+            &(0..COG_ASSET_WIDTH * COG_ASSET_HEIGHT * 3)
+                .map(|i| ((i * 2654435761) >> 7) as u8)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -618,6 +641,53 @@ mod tests {
         assert_eq!(lerp_rgb565(0x0000, 0xffff, 16), 0x7bef);
     }
 
+    #[test]
+    fn native_card_and_filtered_cog_remain_one_registered_shape_during_handoff() {
+        let mut rgb = vec![0; COG_ASSET_WIDTH * COG_ASSET_HEIGHT * 3];
+        for y in 187..199 {
+            for x in 199..211 {
+                rgb[(y * COG_ASSET_WIDTH + x) * 3..(y * COG_ASSET_WIDTH + x) * 3 + 3].fill(255);
+            }
+        }
+        let texture = CogTexture::from_rgb888(&rgb).unwrap();
+        let mut launcher = frame(0);
+        // The same camera landmark on the native 180x252 card.
+        for y in 259..264 {
+            for x in 656..661 {
+                launcher[y * SETTINGS_COG_WIDTH + x] = Rgb565Pixel(0xffff);
+            }
+        }
+        let destination = frame(0);
+        let mut pixels = frame(0);
+        for t in [120, 180, 239] {
+            assert!(render_settings_cog_transition_into(
+                &launcher,
+                &destination,
+                &texture,
+                t,
+                &mut pixels
+            ));
+            let mut xs = Vec::new();
+            for x in 600..700 {
+                if (230..280).any(|y| {
+                    let p = pixels[y * SETTINGS_COG_WIDTH + x].0;
+                    let (r, g, b) = (
+                        u32::from(p >> 11),
+                        u32::from((p >> 5) & 63),
+                        u32::from(p & 31),
+                    );
+                    g > 0 && g * 31 * 10 >= r * 63 * 9 && g * 31 * 10 >= b * 63 * 9
+                }) {
+                    xs.push(x);
+                }
+            }
+            assert!(!xs.is_empty());
+            assert!(
+                xs.windows(2).all(|p| p[1] == p[0] + 1),
+                "displaced camera landmarks at {t}: {xs:?}"
+            );
+        }
+    }
     #[test]
     fn endpoints_are_exactly_the_two_screens() {
         let (launcher, settings, cog) = (frame(0x1234), frame(0x4321), patterned_cog());
@@ -645,6 +715,7 @@ mod tests {
         // A Settings frame that is black except the resting cog.
         let mut settings = frame(0);
         let cog = patterned_cog();
+        let resting = cog.destination_pixels();
         for v in 0..COG_ASSET_HEIGHT {
             for u in 0..COG_ASSET_WIDTH {
                 let (x, y) = (u as i32 + COG_REST_X, v as i32 + COG_REST_Y);
@@ -652,7 +723,7 @@ mod tests {
                     && (CONTENT_TOP as i32..CONTENT_BOTTOM as i32).contains(&y)
                 {
                     settings[y as usize * SETTINGS_COG_WIDTH + x as usize] =
-                        cog[v * COG_ASSET_WIDTH + u];
+                        resting[v * COG_ASSET_WIDTH + u];
                 }
             }
         }
@@ -679,7 +750,8 @@ mod tests {
     fn launcher_stays_unchanged_outside_the_expanding_card() {
         let launcher = frame(0x7bef);
         let settings = frame(0);
-        let cog = vec![Rgb565Pixel(0); COG_ASSET_WIDTH * COG_ASSET_HEIGHT];
+        let cog =
+            CogTexture::from_rgb888(&vec![0; COG_ASSET_WIDTH * COG_ASSET_HEIGHT * 3]).unwrap();
         let mut output = frame(0);
 
         assert!(render_settings_cog_transition_into(
@@ -711,7 +783,8 @@ mod tests {
         let mut settings = frame(0);
         // Mark one pixel at the left edge of the first row band.
         settings[130 * SETTINGS_COG_WIDTH + LIST_LEFT] = Rgb565Pixel(0xffff);
-        let cog = vec![Rgb565Pixel(0); COG_ASSET_WIDTH * COG_ASSET_HEIGHT];
+        let cog =
+            CogTexture::from_rgb888(&vec![0; COG_ASSET_WIDTH * COG_ASSET_HEIGHT * 3]).unwrap();
         let mut output = frame(0);
         assert!(render_settings_cog_transition_into(
             &launcher,
@@ -731,7 +804,8 @@ mod tests {
         let launcher = frame(0);
         let mut settings = frame(0);
         settings[390 * SETTINGS_COG_WIDTH + LIST_LEFT] = Rgb565Pixel(0xffff);
-        let cog = vec![Rgb565Pixel(0); COG_ASSET_WIDTH * COG_ASSET_HEIGHT];
+        let cog =
+            CogTexture::from_rgb888(&vec![0; COG_ASSET_WIDTH * COG_ASSET_HEIGHT * 3]).unwrap();
         let mut output = frame(0);
 
         assert!(render_settings_cog_transition_into(

@@ -6,10 +6,18 @@ use std::time::Duration;
 mod dissolve;
 mod fixture;
 mod light;
+mod render_lab;
 mod scale;
 mod stars;
 mod tunnel;
 mod waves;
+
+pub const RENDER_LABS: &[&str] = &[
+    "launcher-cards",
+    "launcher-cards-held",
+    "arcade-transition",
+    "settings-transition",
+];
 
 pub const EFFECTS: &[&str] = &[
     "raster-waves",
@@ -46,8 +54,18 @@ impl Preset {
     }
 }
 trait Effect {
+    fn reset(&mut self) {}
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String>;
     fn storage_bytes(&self) -> usize;
+    fn render_stage_last_us(&self) -> [u64; 3] {
+        [0; 3]
+    }
+    fn render_stage_max_us(&self) -> [u64; 3] {
+        [0; 3]
+    }
+    fn preparation_stages(&self) -> &[(&'static str, u64)] {
+        &[]
+    }
 }
 pub struct Scene {
     effect: Box<dyn Effect>,
@@ -59,10 +77,30 @@ pub struct Scene {
 }
 impl Scene {
     pub fn new(name: &str, preset: Preset, width: usize, height: usize) -> Result<Self, String> {
+        Self::new_with_worker_setup(name, preset, width, height, None)
+    }
+    /// The application owns thread placement; portable renderers own only pixels.
+    pub fn new_with_worker_setup(
+        name: &str,
+        preset: Preset,
+        width: usize,
+        height: usize,
+        worker_setup: Option<fn()>,
+    ) -> Result<Self, String> {
         if width == 0 || height == 0 || width > 1366 || height > 768 {
             return Err("unsupported concept geometry".into());
         }
+        if RENDER_LABS.contains(&name) && (width, height) != (960, 540) {
+            return Err("rendering labs require a confirmed 960x540 HDMI render surface".into());
+        }
+        if RENDER_LABS.contains(&name) && preset == Preset::Reduced {
+            return Err("preset is not supported by this workload".into());
+        }
         let effect: Box<dyn Effect> = match name {
+            "launcher-cards"
+            | "launcher-cards-held"
+            | "arcade-transition"
+            | "settings-transition" => Box::new(render_lab::Lab::new(name, preset, worker_setup)?),
             "raster-waves" => Box::new(waves::new(preset, width, height)?),
             "texture-tunnel" => Box::new(tunnel::new(preset, width, height)?),
             "starfield" => Box::new(stars::new(preset, width, height)?),
@@ -84,6 +122,7 @@ impl Scene {
         self.elapsed += interval;
     }
     pub fn reset(&mut self) {
+        self.effect.reset();
         self.pixels.fill(Pixel(0));
         self.elapsed = Duration::ZERO;
         self.first = true;
@@ -102,6 +141,15 @@ impl Scene {
     }
     pub fn elapsed(&self) -> Duration {
         self.elapsed
+    }
+    pub fn render_stage_last_us(&self) -> [u64; 3] {
+        self.effect.render_stage_last_us()
+    }
+    pub fn render_stage_max_us(&self) -> [u64; 3] {
+        self.effect.render_stage_max_us()
+    }
+    pub fn preparation_stages(&self) -> &[(&'static str, u64)] {
+        self.effect.preparation_stages()
     }
     pub fn storage_bytes(&self) -> usize {
         self.pixels.capacity() * 2 + self.effect.storage_bytes()

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from magik.client import NativeAgent
+from magik.client import AgentError, NativeAgent
 from magik.testing import one_element, screenshot
 
 
@@ -85,7 +86,7 @@ def validate_window(
         "render_to_present_us_total",
         "physical_latch_posts",
         "physical_latch_flips",
-        "physical_drops",
+        "dropped_frames",
         "latch_rejections",
     )
     if not all(type(value.get(name)) is int and value[name] >= 0 for name in names):
@@ -103,7 +104,7 @@ def validate_window(
         value["presentations"] == 0
         or value["physical_latch_posts"] != value["presentations"]
         or value["physical_latch_flips"] != value["presentations"]
-        or value["physical_drops"]
+        or value["dropped_frames"]
         or value["latch_rejections"]
     ):
         raise AssertionError(
@@ -207,18 +208,60 @@ def _open_settings_card(application):
         time.sleep(1)  # Allow the carousel's spring to settle before retrying.
     else:
         raise AssertionError("Settings card was not selectable within 12 attempts")
+    activated_at = time.monotonic()
     _press_key(application, "\n")  # Slint Key.Return
+    return activated_at
 
 
-def launcher_navigation(application, screenshot_path):
+def launcher_navigation(application, screenshot_path, agent=None):
     """One bounded UI journey; response times include host RPC and polling."""
     started = time.monotonic()
-    _open_settings_card(application)
+    activated_at = _open_settings_card(application)
+    transition_observed = False
+    opening_capture = None
+    capture_attempted = False
+    opening_capture_unavailable = None
+
+    def settled():
+        nonlocal \
+            transition_observed, \
+            opening_capture, \
+            capture_attempted, \
+            opening_capture_unavailable
+        element = _settings_element(application)
+        if element is None:
+            return False
+        if element.accessible_description == "Transitioning":
+            transition_observed = True
+            if agent is not None and not capture_attempted:
+                capture_attempted = True
+                # One functional capture outside any cadence measurement. Allow
+                # the first source frame to advance into the card/cog handoff.
+                time.sleep(0.12)
+                from magik.capture import capture_png
+
+                try:
+                    fields, pixels = agent.capture_framebuffer()
+                except AgentError as error:
+                    if not str(error).startswith("capture-frame-changed:"):
+                        raise
+                    opening_capture_unavailable = (
+                        "scanout changed during animation; no retry"
+                    )
+                else:
+                    png, metadata = capture_png(fields, pixels, "raw")
+                    path = screenshot_path.with_name("settings-opening-native.png")
+                    path.write_bytes(png)
+                    path.with_suffix(".json").write_text(
+                        json.dumps(metadata, indent=2) + "\n"
+                    )
+                    opening_capture = path.name
+        return element.accessible_description == "Ready"
+
     try:
-        _wait(
-            lambda: _settings_ready(application), "Settings transition did not settle"
-        )
+        _wait(settled, "Settings transition did not settle")
         opened_ms = round((time.monotonic() - started) * 1000, 2)
+        activation_to_ready_ms = round((time.monotonic() - activated_at) * 1000, 2)
         screenshot(application, screenshot_path)
     finally:
         # Return without changing a setting, including after screenshot failure.
@@ -229,6 +272,10 @@ def launcher_navigation(application, screenshot_path):
     return {
         "workload": "home-settings-home",
         "open_response_ms": opened_ms,
+        "activation_to_ready_ms": activation_to_ready_ms,
+        "transition_observed": transition_observed,
+        "opening_capture": opening_capture,
+        "opening_capture_unavailable": opening_capture_unavailable,
         "back_response_ms": round((time.monotonic() - returned) * 1000, 2),
         "timing_source": "host RPC and accessibility polling; not frame latency",
         "screenshot": screenshot_path.name,
@@ -273,6 +320,7 @@ def launcher_motion(
     instrumented: bool = False,
     align_rollover: bool = False,
     force_fallback: bool = False,
+    held_direction: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ):
     """Measure continuous card-carousel navigation on the real launcher."""
@@ -281,23 +329,39 @@ def launcher_motion(
     _press_key(application, "\uf729")  # Slint Key.Home
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
 
+    if held_direction:
+        # Home preserves an in-progress card spring. A new press can be rejected
+        # until it settles; keep this pause outside the measured hold window.
+        sleep(1)
     previous = agent.metrics().get("window")
     agent._successful(
         "measure",
         {
             "launcher_clock": "rollover" if align_rollover else "fixed",
             "launcher_fallback": force_fallback,
+            "duration_ms": 8_000 if held_direction else 5_000,
+            "launcher_hold": held_direction,
         },
     )
-    seconds = 10 if instrumented else 5
+    seconds = 10 if instrumented else (8 if held_direction else 5)
     interval_seconds = 0.25
     deadline = time.monotonic() + 2 + seconds + 0.4
     input_events = 0
-    while time.monotonic() < deadline:
-        direction = "\uf703" if (input_events // 5) % 2 == 0 else "\uf702"
-        _press_key(application, direction)
-        input_events += 1
-        sleep(interval_seconds)
+    if held_direction:
+        # The device feeds a bounded press/release through the real input router.
+        # The development keyboard bridge emits taps, so it cannot sustain holds.
+        try:
+            input_events += 1
+            sleep(2 + seconds + 0.4)
+        finally:
+            agent._successful("measure", {"launcher_hold": "release"})
+            input_events += 1
+    else:
+        while time.monotonic() < deadline:
+            direction = "\uf703" if (input_events // 5) % 2 == 0 else "\uf702"
+            _press_key(application, direction)
+            input_events += 1
+            sleep(interval_seconds)
 
     metrics = agent.metrics()
     if metrics.get("sha256") != agent.expected_sha256:
@@ -320,14 +384,13 @@ def launcher_motion(
             "measurement did not observe the requested synthetic clock change"
         )
     if instrumented:
-        unique = window.get("card_unique_presentations", 0)
-        redisplayed = window.get("card_redisplayed_presentations", 0)
-        if (
-            unique + redisplayed + window.get("card_synchronous_presentations", 0)
-            != window["presentations"]
-        ):
+        unique = window.get("card_delivered_frames", 0)
+        dropped = window.get("dropped_frames", 0)
+        if unique + dropped + window.get("card_synchronous_presentations", 0) != window[
+            "presentations"
+        ] + window.get("owned_refresh_dropped_frames", 0):
             raise AssertionError(
-                "card unique and redisplayed counts do not cover physical presentations"
+                "delivered and dropped frame counts do not cover animation refreshes"
             )
         if window.get("card_producer_total_us", 0) <= 0:
             raise AssertionError("instrumented card motion recorded no producer work")
@@ -335,21 +398,21 @@ def launcher_motion(
             raise AssertionError(
                 "instrumented card motion recorded no hidden-slot copy work"
             )
-        for name in (
-            "card_target_vblank_misses",
-            "card_target_vblank_repeats",
-            "card_target_vblank_skips",
-            "last_card_target_vblank",
-            "last_card_actual_vblank",
-        ):
-            if type(window.get(name)) is not int or window[name] < 0:
-                raise AssertionError(f"instrumented card motion has no {name} evidence")
+    if (
+        held_direction
+        and window.get("card_continuous_presentations") != window["presentations"]
+    ):
+        raise AssertionError(
+            "held carousel did not remain in continuous motion for the whole window"
+        )
     if force_fallback and window.get("card_fallback_copies", 0) == 0:
         raise AssertionError("forced fallback did not execute")
     return {
         **window,
         "workload": (
-            "launcher-card-motion-rollover"
+            "launcher-card-motion-held"
+            if held_direction
+            else "launcher-card-motion-rollover"
             if align_rollover
             else "launcher-card-motion"
         ),
@@ -357,7 +420,9 @@ def launcher_motion(
         "pid": metrics.get("pid"),
         "warmup_seconds": 2,
         "input_events": input_events,
-        "input_interval_ms": int(interval_seconds * 1000),
+        "input_interval_ms": None if held_direction else int(interval_seconds * 1000),
+        "held_direction": "right" if held_direction else None,
+        "held_measurement_ms": seconds * 1000 if held_direction else 0,
     }
 
 
@@ -400,9 +465,18 @@ def _selected_labels(application):
     ]
 
 
+def _menu_ready(application):
+    if _settings_open(application):
+        return _settings_ready(application)
+    if _exists(application, "Collections"):
+        return one_element(application, "Collections").accessible_description == "Ready"
+    return False
+
+
 def _focus_label(application, label, key, limit):
     """Move through a bounded menu, observing each acknowledged focus change."""
     for _ in range(limit):
+        _wait(lambda: _menu_ready(application), "menu transition did not settle")
         before = _selected_labels(application)
         if label in before:
             return

@@ -129,3 +129,38 @@ two unprofiled repetitions report each size separately. The native benchmark
 restores the Dev launcher and never launches a core or modifies the installed
 catalog. This measures the capsule's second-pass lookup mechanism; full capsule
 encoding, cold metadata handling and Main handoff are outside its timing window.
+
+## Carousel motion
+
+`scripts/magik check motion` keeps three five-second tap/reversal windows and
+adds one eight-second uninterrupted right hold. Each window excludes two seconds
+of warmup. The hold waits for the preceding card spring before pressing, sends
+one press and one release, and requires continuous navigation for every measured
+presentation. Release is guaranteed when the measurement fails.
+
+Run only that case with `scripts/magik check motion-held`. Add `--profile` for a
+separate ten-second sampled diagnostic. `--installed-sha256 HASH` skips building
+and delivery when that exact Dev application is already running.
+
+Compare Mini's original storyboard with its sustained default-speed workload:
+
+```sh
+scripts/magik check concept --app mini-magik --concept launcher-cards --production-build --quick
+scripts/magik check concept --app mini-magik --concept launcher-cards-held --production-build --quick
+```
+
+The held Mini case measures eight seconds of continuous seven-card-per-second
+motion, feeding position directly to the shared renderer without pausing or
+restarting a spring at each card boundary. Its quick check retains focused
+captures after measurement. The original storyboard remains available. These
+fixtures isolate rendering; they do not exercise production input or nested
+menu transitions.
+
+Production motion windows report `dropped_frames`: every missing fresh animation
+frame, including a repeated moving carousel generation. Settled idle frames are
+excluded. Confirmed display activations and generation accounting cover distinct
+refreshes; software target observations are not added again. Bounded records
+include worker execution and delivery costs, with a specific budget-overrun cause
+when measured and an explicit unknown cause otherwise. CPU sampling is disabled;
+thread CPU clocks remain available. A run measures performance and does not claim
+zero drops merely because its scenario checks passed.

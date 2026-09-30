@@ -62,6 +62,7 @@ def test_setting_restores_original_after_capture_failure(
 
 def test_focus_accepts_target_on_last_allowed_step(actions, monkeypatch):
     state = {"focus": "first"}
+    monkeypatch.setattr(actions, "_menu_ready", lambda _: True)
     monkeypatch.setattr(actions, "_selected_labels", lambda _: [state["focus"]])
     monkeypatch.setattr(actions, "_press_key", lambda *_: state.update(focus="target"))
     actions._focus_label(object(), "target", "down", 1)

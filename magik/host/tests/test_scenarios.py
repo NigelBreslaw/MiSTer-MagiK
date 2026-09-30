@@ -21,7 +21,7 @@ def window():
         "render_to_present_us_total": 5000000,
         "physical_latch_posts": 300,
         "physical_latch_flips": 300,
-        "physical_drops": 0,
+        "dropped_frames": 0,
         "latch_rejections": 0,
         "drop_baseline_available": True,
         "instrumented": False,
@@ -38,7 +38,7 @@ def test_device_window_is_validated():
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("physical_drops", 1),
+        ("dropped_frames", 1),
         ("latch_rejections", 1),
         ("drop_baseline_available", False),
         ("evidence_error", "unavailable"),
@@ -93,6 +93,45 @@ def test_idle_cannot_reuse_a_previous_completed_window(monkeypatch):
         actions.launcher_idle(SimpleNamespace(first_window=object()), agent)
 
 
+def test_navigation_retains_transition_when_live_capture_changes(monkeypatch, tmp_path):
+    state = {"open": False, "reads": 0, "captures": 0}
+
+    class Element:
+        @property
+        def accessible_description(self):
+            state["reads"] += 1
+            return "Transitioning" if state["reads"] == 1 else "Ready"
+
+    class Agent:
+        def capture_framebuffer(self):
+            state["captures"] += 1
+            raise actions.AgentError(
+                "capture-frame-changed: scanout changed during capture"
+            )
+
+    def open_settings(_):
+        state["open"] = True
+        return actions.time.monotonic()
+
+    monkeypatch.setattr(actions, "_open_settings_card", open_settings)
+    monkeypatch.setattr(
+        actions, "_settings_element", lambda _: Element() if state["open"] else None
+    )
+    monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(actions, "_press_key", lambda *_: state.update(open=False))
+    monkeypatch.setattr(actions, "screenshot", lambda *_: None)
+    monkeypatch.setattr(actions.time, "sleep", lambda _: None)
+    result = actions.launcher_navigation(
+        object(), tmp_path / "settings.png", agent=Agent()
+    )
+    assert result["transition_observed"]
+    assert (
+        result["opening_capture_unavailable"]
+        == "scanout changed during animation; no retry"
+    )
+    assert state["captures"] == 1 and not state["open"]
+
+
 def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_path):
     state = {"open": False}
     keys = []
@@ -110,7 +149,20 @@ def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_pa
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
     monkeypatch.setattr(actions, "_settings_ready", lambda _: state["open"])
-    monkeypatch.setattr(actions, "_open_settings_card", lambda app: press(app, "\n"))
+    monkeypatch.setattr(
+        actions,
+        "_settings_element",
+        lambda _: (
+            type("Settings", (), {"accessible_description": "Ready"})()
+            if state["open"]
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        actions,
+        "_open_settings_card",
+        lambda app: (press(app, "\n"), actions.time.monotonic())[1],
+    )
     monkeypatch.setattr(actions, "screenshot", capture)
     with pytest.raises(RuntimeError, match="capture failed"):
         actions.launcher_navigation(object(), tmp_path / "settings.png")
@@ -180,3 +232,96 @@ def test_settings_button_is_not_mistaken_for_the_open_screen():
         )
     )
     assert actions._settings_open(app)
+
+
+def test_menu_focus_waits_for_navigation_ownership_to_end(monkeypatch):
+    from types import SimpleNamespace
+
+    selected = ["Settings"]
+    collection = SimpleNamespace(accessible_description="Transitioning")
+    checks = 0
+    keys = []
+
+    def one(_, label):
+        assert label == "Collections"
+        return collection
+
+    def wait(predicate, _):
+        nonlocal checks
+        assert not predicate()
+        checks += 1
+        collection.accessible_description = "Ready"
+        assert predicate()
+
+    def press(_, key):
+        assert collection.accessible_description == "Ready"
+        keys.append(key)
+        selected[:] = ["Arcade"]
+
+    monkeypatch.setattr(actions, "_settings_open", lambda _: False)
+    monkeypatch.setattr(actions, "_exists", lambda _, label: label == "Collections")
+    monkeypatch.setattr(actions, "one_element", one)
+    monkeypatch.setattr(actions, "_selected_labels", lambda _: list(selected))
+    monkeypatch.setattr(actions, "_press_key", press)
+
+    def wait_all(predicate, message):
+        if "transition" in message and collection.accessible_description != "Ready":
+            wait(predicate, message)
+        else:
+            assert predicate()
+
+    monkeypatch.setattr(actions, "_wait", wait_all)
+    actions._focus_label(object(), "Arcade", "right", 2)
+    assert checks == 1 and keys == ["right"]
+
+
+@pytest.mark.parametrize("fail_sleep", [False, True])
+def test_held_carousel_requests_a_bounded_hold_and_always_releases(
+    monkeypatch, fail_sleep
+):
+    from types import SimpleNamespace
+
+    events = []
+    request = []
+    sleeps = []
+    evidence = {
+        **window(),
+        "elapsed_ms": 8000,
+        "end_ms": 10000,
+        "presentations": 480,
+        "card_continuous_presentations": 480,
+        "forced_clock_changes": 0,
+    }
+    replies = iter([{"window": None}, {"sha256": "app", "window": evidence}])
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=lambda: next(replies),
+        _successful=lambda op, fields: request.append((op, fields)),
+    )
+    application = SimpleNamespace(
+        first_window=SimpleNamespace(dispatch_event=events.append)
+    )
+    monkeypatch.setattr(actions, "_press_key", lambda *_: None)
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if fail_sleep and seconds > 1:
+            raise RuntimeError("measurement interrupted")
+
+    if fail_sleep:
+        with pytest.raises(RuntimeError, match="measurement interrupted"):
+            actions.launcher_motion(
+                application, agent, held_direction=True, sleep=sleep
+            )
+    else:
+        result = actions.launcher_motion(
+            application, agent, held_direction=True, sleep=sleep
+        )
+        assert result["held_measurement_ms"] == 8000
+        assert result["input_events"] == 2
+    assert events == []
+    assert request[0][1]["launcher_hold"] is True
+    assert request[1] == ("measure", {"launcher_hold": "release"})
+    assert request[0][1]["duration_ms"] == 8000
+    assert sleeps == [1, 10.4]

@@ -94,7 +94,7 @@ def test_smoke(application_session):
     app, agent, run, _ = application_session
     result = launcher_smoke(app, run / "smoke.png", agent.expected_sha256)
     result["paths"] = validate_development_paths(agent.metrics().get("context"))
-    result["navigation"] = launcher_navigation(app, run / "settings.png")
+    result["navigation"] = launcher_navigation(app, run / "settings.png", agent=agent)
     append_event(run, {"phase": "smoke", "outcome": "passed", **result})
 
 
@@ -108,13 +108,29 @@ def test_idle(application_session, repetition):
     )
 
 
-@pytest.mark.parametrize("repetition", range(3))
+@pytest.mark.parametrize("repetition", [0, 1, 2, "held-eight-seconds"])
 def test_motion(application_session, repetition):
     app, agent, run, _ = application_session
-    result = launcher_motion(app, agent)
+    result = launcher_motion(app, agent, held_direction=isinstance(repetition, str))
     append_event(
         run,
         {"phase": "motion", "outcome": "measured", "repetition": repetition, **result},
+    )
+
+
+def test_motion_held(application_session):
+    app, agent, run, _ = application_session
+    result = launcher_motion(app, agent, held_direction=True)
+    append_event(run, {"phase": "motion", "outcome": "measured", **result})
+
+
+@pytest.mark.magik_profile
+def test_motion_held_profile(application_session):
+    app, agent, run, profile_id = application_session
+    result = launcher_motion(app, agent, instrumented=True, held_direction=True)
+    append_event(
+        run,
+        {"phase": "motion", "outcome": "measured", "profile_id": profile_id, **result},
     )
 
 
@@ -196,8 +212,8 @@ def _journeys(application_session, repetition, selected=None):
 
 @pytest.mark.parametrize("journey", ["catalog", "setting"])
 @pytest.mark.parametrize("repetition", range(2))
-def test_journeys(application_session, repetition, journey):
-    _journeys(application_session, repetition, journey)
+def test_journeys(journey_application_session, repetition, journey):
+    _journeys(journey_application_session, repetition, journey)
 
 
 @pytest.mark.magik_profile

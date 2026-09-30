@@ -136,6 +136,15 @@ pub struct LauncherScene {
 }
 
 impl LauncherScene {
+    /// Prepare card textures from high-precision source artwork.
+    pub fn prepare_initial_with_rgb888_artwork(
+        self,
+        data: LauncherData<'_>,
+        artwork: &[&[u8]],
+    ) -> InitialLauncher {
+        self.initial(data, Some(Artwork::Rgb888(artwork)), None)
+    }
+
     #[must_use]
     pub const fn new(width: usize, height: usize) -> Self {
         Self {
@@ -249,6 +258,8 @@ impl LauncherScene {
         typography: Option<LauncherTypography<'_>>,
     ) -> InitialLauncher {
         let mut prepared = PreparedLauncher::new(self, data, artwork, typography);
+        #[cfg(feature = "launcher-profile")]
+        let _initial_render = crate::launcher_profile::span("prepare.initial_render");
         prepared.render_frame(BrowseFrame {
             selected: data.selected,
             target: data.selected,
@@ -418,23 +429,17 @@ pub struct PreparedLauncherFrame {
     request: Option<LauncherFrameRequest>,
     scratch: Vec<crate::launcher_flip::Scratch>,
     pixels: Vec<Rgb565Pixel>,
-    blocked: Vec<Rgb565Pixel>,
-    clip: (usize, usize),
 }
 
 impl PreparedLauncherFrame {
     pub fn pixels(&self) -> &[Rgb565Pixel] {
         &self.pixels
     }
-    pub fn clip(&self) -> (usize, usize) {
-        self.clip
-    }
     pub fn request(&self) -> Option<LauncherFrameRequest> {
         self.request
     }
     pub fn storage_bytes(&self) -> usize {
         self.pixels.capacity() * 2
-            + self.blocked.capacity() * 2
             + self
                 .scratch
                 .iter()
@@ -460,11 +465,9 @@ impl LauncherFramePreparer {
             request: rendered_request,
             scratch,
             pixels,
-            clip: rendered_clip,
             ..
         } = buffer;
         *rendered_request = Some(request);
-        *rendered_clip = clip;
         self.render_tile_pixels(request, scratch, pixels, clip);
     }
 
@@ -476,92 +479,10 @@ impl LauncherFramePreparer {
         buffer: &mut PreparedLauncherFrame,
         destination: &mut [Rgb565Pixel],
         clip: (usize, usize),
-        retain_pixels: bool,
     ) {
         assert!(destination.len() >= 960 * 540);
         buffer.request = Some(request);
-        buffer.clip = clip;
         self.render_tile_pixels(request, &mut buffer.scratch, destination, clip);
-        if retain_pixels {
-            for y in 120..495 {
-                buffer.pixels[y * 960 + clip.0..y * 960 + clip.1]
-                    .copy_from_slice(&destination[y * 960 + clip.0..y * 960 + clip.1]);
-            }
-        }
-    }
-
-    /// Compose each screen strip in cached memory, then publish it to the
-    /// write-combined scanout mapping with contiguous row stores.
-    pub fn render_tile_blocked_into(
-        &self,
-        request: LauncherFrameRequest,
-        buffer: &mut PreparedLauncherFrame,
-        destination: &mut [Rgb565Pixel],
-        clip: (usize, usize),
-        retain_pixels: bool,
-    ) {
-        const TOP: usize = 120;
-        const BOTTOM: usize = 495;
-        assert!(destination.len() >= LOGICAL_WIDTH * LOGICAL_HEIGHT);
-        assert!(clip.0 >= 296 && clip.0 <= clip.1 && clip.1 <= 934);
-        buffer.request = Some(request);
-        buffer.clip = clip;
-        self.render_tile_blocked_pixels(
-            request,
-            &mut buffer.scratch,
-            &mut buffer.blocked,
-            destination,
-            clip,
-        );
-        if retain_pixels {
-            for y in TOP..BOTTOM {
-                buffer.pixels[y * LOGICAL_WIDTH + clip.0..y * LOGICAL_WIDTH + clip.1]
-                    .copy_from_slice(
-                        &destination[y * LOGICAL_WIDTH + clip.0..y * LOGICAL_WIDTH + clip.1],
-                    );
-            }
-        }
-    }
-
-    fn render_tile_blocked_pixels(
-        &self,
-        request: LauncherFrameRequest,
-        scratch: &mut [crate::launcher_flip::Scratch],
-        blocked: &mut [Rgb565Pixel],
-        destination: &mut [Rgb565Pixel],
-        clip: (usize, usize),
-    ) {
-        const TOP: usize = 120;
-        const BOTTOM: usize = 495;
-        if !self.faces.is_empty() {
-            let plan = build_carousel_plan(&self.faces, request.frame, self.cyclic);
-            let width = crate::launcher_flip::STRIP_WIDTH;
-            for left in (clip.0..clip.1).step_by(width) {
-                let right = (left + width).min(clip.1);
-                let block_width = right - left;
-                let block_len = block_width * (BOTTOM - TOP);
-                let block = &mut blocked[..block_len];
-                block.fill(Rgb565Pixel(BACKGROUND));
-                draw_carousel_plan(
-                    block,
-                    block_width,
-                    (left, TOP),
-                    &plan,
-                    scratch,
-                    (left, right),
-                );
-                for y in TOP..BOTTOM {
-                    let source = (y - TOP) * block_width;
-                    destination[y * LOGICAL_WIDTH + left..y * LOGICAL_WIDTH + right]
-                        .copy_from_slice(&block[source..source + block_width]);
-                }
-            }
-        } else {
-            for y in TOP..BOTTOM {
-                destination[y * LOGICAL_WIDTH + clip.0..y * LOGICAL_WIDTH + clip.1]
-                    .fill(Rgb565Pixel(BACKGROUND));
-            }
-        }
     }
 
     fn render_tile_pixels(
@@ -594,14 +515,18 @@ impl LauncherFramePreparer {
     }
     /// Compact scratch for `render_tile` only, not whole-card preparation.
     pub fn new_tile_buffer(&self) -> PreparedLauncherFrame {
+        let mut buffer = self.new_direct_tile_buffer();
+        buffer.pixels = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        buffer
+    }
+
+    pub(crate) fn new_direct_tile_buffer(&self) -> PreparedLauncherFrame {
         PreparedLauncherFrame {
             request: None,
             scratch: (0..6)
                 .map(|_| crate::launcher_flip::Scratch::strip())
                 .collect(),
-            pixels: vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT],
-            blocked: vec![Rgb565Pixel(BACKGROUND); crate::launcher_flip::STRIP_WIDTH * (495 - 120)],
-            clip: (296, 934),
+            pixels: Vec::new(),
         }
     }
 }
@@ -644,21 +569,6 @@ impl PreparedLauncher {
         self.fit_output();
     }
 
-    pub fn compose_tiles(&mut self, left: &PreparedLauncherFrame, right: &PreparedLauncherFrame) {
-        assert_eq!(left.request, right.request);
-        assert_eq!(left.clip.0, 296);
-        assert_eq!(left.clip.1, right.clip.0);
-        assert_eq!(right.clip.1, 934);
-        let split = left.clip.1;
-        left.request.expect("rendered tile");
-        for y in 120..495 {
-            self.logical[y * 960 + 296..y * 960 + split]
-                .copy_from_slice(&left.pixels[y * 960 + 296..y * 960 + split]);
-            self.logical[y * 960 + split..y * 960 + 934]
-                .copy_from_slice(&right.pixels[y * 960 + split..y * 960 + 934]);
-        }
-        self.fit_output();
-    }
     pub fn frame_preparer(&self) -> LauncherFramePreparer {
         LauncherFramePreparer {
             faces: self.faces.clone(),
@@ -704,6 +614,8 @@ impl PreparedLauncher {
         cache: Option<&mut LauncherFaceCache>,
         asset_generation: u64,
     ) -> Self {
+        #[cfg(feature = "launcher-profile")]
+        let _preparation = crate::launcher_profile::span("prepare.launcher_constructor");
         let keys: Vec<_> = data.cards.iter().map(CardFaceKey::from).collect();
         let artwork_kind = match artwork {
             None => 0,
@@ -723,18 +635,32 @@ impl PreparedLauncher {
         } else {
             LOGICAL_WIDTH * LOGICAL_HEIGHT
         };
+        #[cfg(feature = "launcher-profile")]
+        let chrome_span = crate::launcher_profile::span("prepare.chrome");
         let mut chrome = vec![Rgb565Pixel(BACKGROUND); pixel_count];
         if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
             layout.chrome(&mut chrome, data, fonts);
         } else {
             render_logical(&mut chrome, data, typography);
         }
+        #[cfg(feature = "launcher-profile")]
+        drop(chrome_span);
         let mut bodies = artwork::BodyCache::default();
         let faces: Vec<_> = data
             .cards
             .iter()
             .enumerate()
             .map(|(index, card)| {
+                #[cfg(feature = "launcher-profile")]
+                let _card = crate::launcher_profile::span(match index {
+                    0 => "prepare.card0",
+                    1 => "prepare.card1",
+                    2 => "prepare.card2",
+                    3 => "prepare.card3",
+                    4 => "prepare.card4",
+                    5 => "prepare.card5",
+                    _ => "prepare.card_other",
+                });
                 if let Some(cache) = reusable
                     && cache.keys.get(index) == Some(&keys[index])
                 {
@@ -766,7 +692,19 @@ impl PreparedLauncher {
                 };
                 #[cfg(test)]
                 FACE_BAKES.set(FACE_BAKES.get() + 2);
-                Arc::new(
+                let mut faces = if card.rgb888.is_some() && responsive.is_none() {
+                    #[cfg(feature = "launcher-profile")]
+                    let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
+                    let [compact, detail] = artwork::faces_rgb888(&card, typography);
+                    CardFaces {
+                        compact,
+                        detail,
+                        back: None,
+                        slides: data.level.slides(),
+                    }
+                } else {
+                    #[cfg(feature = "launcher-profile")]
+                    let _faces = crate::launcher_profile::span("prepare.initial_faces");
                     if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
                         layout.faces(&card, fonts, &mut bodies, data.level.slides())
                     } else {
@@ -776,8 +714,15 @@ impl PreparedLauncher {
                             back: bodies.back_face(&card),
                             slides: data.level.slides(),
                         }
-                    },
-                )
+                    }
+                };
+                let dithered = responsive.is_none();
+                faces.compact.dithered = dithered;
+                faces.detail.dithered = dithered;
+                if let Some(back) = &mut faces.back {
+                    back.dithered = dithered;
+                }
+                Arc::new(faces)
             })
             .collect();
         if let Some(cache) = cache {
@@ -788,6 +733,8 @@ impl PreparedLauncher {
             cache.keys = keys;
             cache.faces = faces.clone();
         }
+        #[cfg(feature = "launcher-profile")]
+        let _buffers = crate::launcher_profile::span("prepare.retained_buffers");
         Self {
             scene,
             responsive,
@@ -816,6 +763,17 @@ impl PreparedLauncher {
                 })
                 .collect(),
         }
+    }
+
+    pub fn render_parallel_frame(
+        &mut self,
+        renderer: &mut crate::launcher_parallel::ParallelLauncherRenderer,
+        request: LauncherFrameRequest,
+    ) -> Result<crate::launcher_parallel::ParallelFrameTiming, String> {
+        if self.scene != LauncherScene::new(960, 540) {
+            return Err("parallel cards require native geometry".into());
+        }
+        renderer.render(&self.frame_preparer(), request, &mut self.logical)
     }
 
     pub fn render_into(&mut self, frame: BrowseFrame, output: &mut [Rgb565Pixel]) {
@@ -1408,17 +1366,64 @@ fn draw_carousel_plan(
     scratch: &mut [crate::launcher_flip::Scratch],
     clip: (usize, usize),
 ) {
-    draw_carousel_reflections(pixels, pitch, origin, plan, scratch, clip);
+    draw_carousel_plan_prepared::<true>(pixels, pitch, origin, plan, scratch, clip);
+}
+
+fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
+    pixels: &mut [Rgb565Pixel],
+    pitch: usize,
+    origin: (usize, usize),
+    plan: &CarouselPlan<'_>,
+    scratch: &mut [crate::launcher_flip::Scratch],
+    clip: (usize, usize),
+) {
     let mut covered = crate::launcher_flip::BodyOcclusion::new(clip);
     let mut occlusion = [covered; 6];
-    for (slot, item) in plan.items.iter().enumerate().rev() {
-        occlusion[slot] = covered;
-        let Some(item) = item else { continue };
-        let mut pose = item.pose;
-        pose.clip = clip;
-        pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
-        pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
-        crate::launcher_flip::add_opaque_coverage(item.face, pose, &scratch[slot], &mut covered);
+    if CULL_SOURCE {
+        // Prepare front to back so only proven-opaque foreground spans
+        // can remove source filtering from the cards behind them.
+        for (slot, item) in plan.items.iter().enumerate().rev() {
+            occlusion[slot] = covered;
+            let Some(item) = item else { continue };
+            let mut pose = item.pose;
+            pose.clip = clip;
+            pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
+            pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
+            crate::launcher_flip::prepare_target(
+                pixels,
+                pitch,
+                origin,
+                item.face,
+                pose,
+                &mut scratch[slot],
+                item.blend,
+                &covered,
+            );
+            crate::launcher_flip::add_opaque_coverage(
+                item.face,
+                pose,
+                &scratch[slot],
+                &mut covered,
+            );
+        }
+    }
+    draw_carousel_reflections(pixels, pitch, origin, plan, scratch, clip);
+    if !CULL_SOURCE {
+        // Reference path prepares every column before applying body occlusion.
+        for (slot, item) in plan.items.iter().enumerate().rev() {
+            occlusion[slot] = covered;
+            let Some(item) = item else { continue };
+            let mut pose = item.pose;
+            pose.clip = clip;
+            pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
+            pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
+            crate::launcher_flip::add_opaque_coverage(
+                item.face,
+                pose,
+                &scratch[slot],
+                &mut covered,
+            );
+        }
     }
     for (slot, item) in plan.items.iter().enumerate() {
         let Some(item) = item else { continue };
@@ -1809,6 +1814,59 @@ mod tests {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
+        }
+    }
+
+    #[test]
+    fn culled_source_preparation_matches_full_columns_through_motion_and_reversal() {
+        let prepared = LauncherScene::new(960, 540).prepare(data());
+        let mut culled_scratch: Vec<_> = (0..6)
+            .map(|_| crate::launcher_flip::Scratch::strip())
+            .collect();
+        let mut full_scratch: Vec<_> = (0..6)
+            .map(|_| crate::launcher_flip::Scratch::strip())
+            .collect();
+        for direction in [BrowseDirection::Right, BrowseDirection::Left] {
+            for (selected, target) in [(0, 1), (4, 0)] {
+                for progress in [0, 1, 30, 89, 91, 140, 179, 180, 140, 91, 30] {
+                    let frame = BrowseFrame {
+                        selected,
+                        target,
+                        phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                        direction: Some(direction),
+                        progress_millis: progress,
+                        duration_millis: 180,
+                    };
+                    let plan = build_carousel_plan(&prepared.faces, frame, true);
+                    // Keep the scratch alive between poses: newly uncovered
+                    // source rows must be prepared after a reversal or wrap.
+                    for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
+                        let right = (left + crate::launcher_flip::STRIP_WIDTH).min(934);
+                        let mut culled = vec![Rgb565Pixel(BACKGROUND); (right - left) * 375];
+                        let mut full = culled.clone();
+                        draw_carousel_plan_prepared::<true>(
+                            &mut culled,
+                            right - left,
+                            (left, 120),
+                            &plan,
+                            &mut culled_scratch,
+                            (left, right),
+                        );
+                        draw_carousel_plan_prepared::<false>(
+                            &mut full,
+                            right - left,
+                            (left, 120),
+                            &plan,
+                            &mut full_scratch,
+                            (left, right),
+                        );
+                        assert!(
+                            culled == full,
+                            "pixel mismatch: {direction:?} {selected}->{target} progress={progress} strip={left}"
+                        );
+                    }
+                }
+            }
         }
     }
 

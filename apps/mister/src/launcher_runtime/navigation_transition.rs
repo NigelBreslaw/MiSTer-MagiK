@@ -24,7 +24,7 @@ use std::time::Instant;
 pub struct SettingsCogRenderInput {
     pub launcher: std::sync::Arc<Vec<SharedRgb565Pixel>>,
     pub settings: std::sync::Arc<Vec<SharedRgb565Pixel>>,
-    pub cog: &'static [SharedRgb565Pixel],
+    pub cog: &'static mister_magik_framebuffer_scenes::settings_cog::CogArtwork,
     pub t_ms: u32,
     pub direction: NavigationTransitionDirection,
 }
@@ -609,10 +609,20 @@ impl NavigationTransitionRuntime {
         direction: NavigationTransitionDirection,
         geometry: NavigationTransitionGeometry,
         source: &[Rgb565Pixel],
-        cabinet: &'static [SharedRgb565Pixel],
+        cabinet: &mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
-        self.buffers.set_arcade_cabinet_asset(cabinet);
+        if !self.enabled || self.is_active() {
+            return Ok(false);
+        }
+        fn configure_arcade_worker() {
+            use mister_magik_catalog::runtime_thread::{
+                RuntimeThreadRole, apply_runtime_thread_policy,
+            };
+            apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+        }
+        self.buffers
+            .set_arcade_cabinet_asset(cabinet, Some(configure_arcade_worker));
         let mut request = NavigationTransitionRequest::arcade_card(direction, geometry);
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
@@ -691,7 +701,7 @@ impl NavigationTransitionRuntime {
         width: usize,
         height: usize,
         source: &[Rgb565Pixel],
-        cog: &'static [SharedRgb565Pixel],
+        cog: &'static mister_magik_framebuffer_scenes::settings_cog::CogArtwork,
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
         self.buffers.set_settings_cog_asset(cog);
@@ -933,6 +943,7 @@ impl NavigationTransitionRuntime {
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
         let request = self.request();
         let completion = self.controller.complete()?;
+        self.buffers.retire_arcade_renderer();
         if request.is_some_and(|request| {
             request.is_super_scaler()
                 && matches!(
@@ -1115,6 +1126,80 @@ fn shared_rgb565_as_slint(pixels: &[SharedRgb565Pixel]) -> &[Rgb565Pixel] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_arcade_reveal_preserves_reversal_cancellation_and_new_snapshots() {
+        use mister_magik_framebuffer_scenes::arcade_card::{
+            CABINET_HEIGHT, CABINET_WIDTH, CabinetTexture,
+        };
+        let texture =
+            CabinetTexture::from_rgb888(&vec![100; CABINET_WIDTH * CABINET_HEIGHT * 3]).unwrap();
+        let artwork = texture.artwork();
+        let home = vec![Rgb565Pixel(0x1234); 960 * 540];
+        let mut arcade = vec![SharedRgb565Pixel(0x5a6d); 960 * 540];
+        texture.prepare_destination(&mut arcade);
+        let arcade = shared_rgb565_as_slint(&arcade);
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        assert!(
+            runtime
+                .begin_arcade_card(
+                    NavigationTransitionDirection::Forward,
+                    NavigationTransitionGeometry::default(),
+                    &home,
+                    &artwork,
+                    0
+                )
+                .unwrap()
+        );
+        assert_eq!(runtime.render().unwrap(), home);
+        runtime.capture_destination(arcade, 1).unwrap();
+        runtime.tick(500_001);
+        runtime.render().unwrap();
+        assert!(runtime.request_reverse(500_002));
+        runtime.tick(1_100_003);
+        runtime.render().unwrap();
+        assert_eq!(
+            runtime.complete().unwrap().endpoint,
+            NavigationTransitionEndpoint::Source
+        );
+        assert!(
+            runtime
+                .begin_arcade_card(
+                    NavigationTransitionDirection::Reverse,
+                    NavigationTransitionGeometry::default(),
+                    arcade,
+                    &artwork,
+                    2_000_000
+                )
+                .unwrap()
+        );
+        assert_eq!(runtime.render().unwrap(), arcade);
+        runtime.capture_destination(&home, 2_000_001).unwrap();
+        runtime.tick(2_700_001);
+        runtime.render().unwrap();
+        runtime.cancel_for_exclusive_view();
+        assert!(runtime.complete().is_some());
+        let updated_home = vec![Rgb565Pixel(0x6be7); 960 * 540];
+        assert!(
+            runtime
+                .begin_arcade_card(
+                    NavigationTransitionDirection::Forward,
+                    NavigationTransitionGeometry::default(),
+                    &updated_home,
+                    &artwork,
+                    3_000_000
+                )
+                .unwrap()
+        );
+        assert_eq!(runtime.render().unwrap(), updated_home);
+        runtime.capture_destination(arcade, 3_000_001).unwrap();
+        runtime.tick(4_100_001);
+        assert_eq!(runtime.render().unwrap(), arcade);
+        assert_eq!(
+            runtime.complete().unwrap().endpoint,
+            NavigationTransitionEndpoint::Destination
+        );
+    }
 
     #[test]
     fn crt_navigation_geometry_stays_inside_every_supported_frame_shape() {
@@ -1959,14 +2044,13 @@ mod tests {
         assert_eq!(runtime.request().unwrap().duration_us, 520_000);
 
         let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
-        let cog = Box::leak(
-            vec![
-                SharedRgb565Pixel(0);
+        let cog =
+            Box::leak(Box::new(
+                mister_magik_framebuffer_scenes::settings_cog::CogArtwork::from_rgb888(&vec![0;
                 mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT * 3])
+                .unwrap(),
+            ));
         runtime
             .begin_settings_cog_physical(
                 NavigationTransitionDirection::Forward,
@@ -2010,6 +2094,50 @@ mod tests {
             (runtime.buffers.width(), runtime.buffers.height()),
             (16, 12)
         );
+    }
+
+    #[test]
+    fn cold_first_settings_cog_capture_keeps_the_complete_animation_after_readiness() {
+        use mister_magik_framebuffer_scenes::settings_cog::{
+            COG_ASSET_HEIGHT, COG_ASSET_WIDTH, CogArtwork,
+        };
+        let cog = Box::leak(Box::new(
+            CogArtwork::from_rgb888(&vec![0; COG_ASSET_WIDTH * COG_ASSET_HEIGHT * 3]).unwrap(),
+        ));
+        let source = vec![Rgb565Pixel(0x1111); 960 * 540];
+        let destination = vec![Rgb565Pixel(0x2222); 960 * 540];
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        for (requested_at, ready_at) in [(0, 1_500_000), (4_000_000, 4_010_000)] {
+            assert!(
+                runtime
+                    .begin_settings_cog_physical(
+                        NavigationTransitionDirection::Forward,
+                        960,
+                        540,
+                        &source,
+                        cog,
+                        requested_at
+                    )
+                    .unwrap()
+            );
+            assert_eq!(
+                runtime.tick(ready_at).phase,
+                NavigationTransitionPhase::Capture
+            );
+            runtime.capture_destination(&destination, ready_at).unwrap();
+            let first = runtime.tick(ready_at);
+            assert_eq!(first.progress_q16, 0);
+            assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
+            assert_eq!(runtime.render().unwrap(), source);
+            let moving = runtime.tick(ready_at + 16_667);
+            assert!(moving.progress_q16 > 0 && moving.progress_q16 < PROGRESS_MAX);
+            runtime.tick(ready_at + 1_000_000);
+            assert_eq!(runtime.render().unwrap(), destination);
+            assert_eq!(
+                runtime.complete().unwrap().endpoint,
+                NavigationTransitionEndpoint::Destination
+            );
+        }
     }
 
     #[test]
@@ -2064,14 +2192,9 @@ mod tests {
 
     #[test]
     fn cached_settings_cog_matches_direct_pixels_and_reuses_working_buffer() {
-        static COG: std::sync::OnceLock<Vec<SharedRgb565Pixel>> = std::sync::OnceLock::new();
-        let cog = COG.get_or_init(|| {
-            vec![
-                SharedRgb565Pixel(0);
-                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-        });
+        // Exercise the retained RGB888 artwork through both cached and direct
+        // rendering, including the expanding cog rather than a black fixture.
+        let cog = crate::launcher_presentation::settings_cog_artwork();
         let (width, height) = (960, 540);
         let source = (0..width * height)
             .map(|i| Rgb565Pixel((i as u16).wrapping_mul(13)))
@@ -2119,14 +2242,13 @@ mod tests {
         let mut runtime = NavigationTransitionRuntime::new(8, 6, true);
         let live_settings = vec![Rgb565Pixel(0x2222); 8 * 6];
         let launcher = vec![Rgb565Pixel(0x1111); 8 * 6];
-        let cog = Box::leak(
-            vec![
-                SharedRgb565Pixel(0);
+        let cog =
+            Box::leak(Box::new(
+                mister_magik_framebuffer_scenes::settings_cog::CogArtwork::from_rgb888(&vec![0;
                 mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT * 3])
+                .unwrap(),
+            ));
 
         assert!(
             runtime

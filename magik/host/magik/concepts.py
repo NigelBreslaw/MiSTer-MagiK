@@ -19,8 +19,27 @@ EFFECTS = (
     "pixel-dissolve",
     "light-sweep",
     "diagnostic",
+    "launcher-cards",
+    "launcher-cards-held",
+    "arcade-transition",
+    "settings-transition",
 )
-PRESETS = ("default", "reduced")
+PRESETS = (
+    "default",
+    "reduced",
+)
+RENDER_LABS = (
+    "launcher-cards",
+    "launcher-cards-held",
+    "arcade-transition",
+    "settings-transition",
+)
+
+
+def supported(effect, preset):
+    return effect in EFFECTS and preset in (
+        ("default",) if effect in RENDER_LABS else ("default", "reduced")
+    )
 
 
 _elements = WeakKeyDictionary()
@@ -50,7 +69,7 @@ def action(application, name):
 
 
 def select(application, effect, preset):
-    if effect not in EFFECTS or preset not in PRESETS:
+    if not supported(effect, preset):
         raise ValueError("unsupported concept or preset")
     previous = value(application, "generation")
     action(application, f"select-{effect}-{preset}")
@@ -70,13 +89,17 @@ def capture(agent, destination):
     destination.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
-def validate(metrics, sha256, effect, preset, profile=False):
+def validate(metrics, sha256, effect, preset, profile=False, *, quick=False):
     if metrics.get("sha256") != sha256:
         raise ValueError("concept artifact identity mismatch")
     w = metrics.get("window")
     if not isinstance(w, dict):
         raise ValueError("missing concept measurement window")
-    duration = 10_000 if profile else 30_000
+    duration = 30_000
+    if profile:
+        duration = 10_000
+    elif quick:
+        duration = 8_000 if effect == "launcher-cards-held" else 10_000
     if (
         w.get("instrumented") is not profile
         or not duration <= w.get("elapsed_ms", 0) <= duration + 1000
@@ -114,7 +137,7 @@ def validate(metrics, sha256, effect, preset, profile=False):
         )
     )
     clean = all(
-        w.get(k) == 0 for k in ("physical_drops", "latch_drops", "latch_rejections")
+        w.get(k) == 0 for k in ("dropped_frames", "latch_drops", "latch_rejections")
     )
     passed = (
         cadence
@@ -123,26 +146,48 @@ def validate(metrics, sha256, effect, preset, profile=False):
         and cpu < 150
         and rss <= 128 * 1024 * 1024
     )
+    if effect in RENDER_LABS and (w["width"], w["height"]) != (960, 540):
+        raise ValueError("rendering lab geometry mismatch")
+    fps = n * 1000 / w["elapsed_ms"]
+    if effect in RENDER_LABS:
+        passed = passed and abs(fps - refresh) <= 0.1
+    phase_ms = context.get("animation_elapsed_ms")
+    motion_started = metrics.get("motion_started_ms")
+    motion_qualified = effect not in RENDER_LABS or (
+        context.get("animation_clock") == "monotonic"
+        and type(phase_ms) is int
+        and type(motion_started) is int
+        and abs(phase_ms - (w["end_ms"] - motion_started)) <= 100
+    )
+    build_qualified = (
+        effect not in RENDER_LABS or context.get("build_profile") == "release-device"
+    )
     return {
         **w,
         "sha256": sha256,
-        "fps": n * 1000 / w["elapsed_ms"],
-        "qualified": passed and not profile,
+        "fps": fps,
+        "qualified": passed and build_qualified and motion_qualified and not profile,
+        "motion_qualified": motion_qualified,
+        "build_qualified": build_qualified,
         "instrumented": profile,
     }
 
 
-def measure(application, agent, run, effect, preset, profile):
+def measure(application, agent, run, effect, preset, profile, *, quick=False):
     results = []
-    for repetition in range(1 if profile else 2):
+    for repetition in range(1 if profile or quick else 2):
         select(application, effect, preset)
-        action(application, "measure")
+        held_quick = quick and effect == "launcher-cards-held"
+        action(
+            application,
+            "measure-eight" if held_quick else "measure-short" if quick else "measure",
+        )
         wait_for(
             lambda: value(application, "measuring") == "true",
             "measurement did not start",
         )
         # No bridge polling, captures or streaming during the device-clock window.
-        time.sleep(12.3 if profile else 32.3)
+        time.sleep(10.3 if held_quick else 12.3 if profile or quick else 32.3)
         wait_for(
             lambda: value(application, "measuring") == "false",
             "measurement did not finish",
@@ -151,8 +196,17 @@ def measure(application, agent, run, effect, preset, profile):
         (run / f"concept-{repetition}-raw.json").write_text(
             json.dumps(raw, indent=2) + "\n"
         )
-        result = validate(raw, agent.expected_sha256, effect, preset, profile)
+        result = validate(
+            raw, agent.expected_sha256, effect, preset, profile, quick=quick
+        )
         results.append(result)
+        print(
+            f"{effect}/{preset}: repetition={repetition + 1} "
+            f"fps={result['fps']:.3f} cpu={result['process_cpu_percent']:.1f}% "
+            f"drops={result['dropped_frames']} render_p99_us={result.get('render_p99_us')} "
+            f"qualified={result['qualified']}",
+            flush=True,
+        )
         append_event(run, {"phase": "concept", "repetition": repetition, **result})
     (run / "concept-results.json").write_text(json.dumps(results, indent=2) + "\n")
     return 0 if profile or all(r["qualified"] for r in results) else 1
@@ -160,6 +214,10 @@ def measure(application, agent, run, effect, preset, profile):
 
 # Device timeline bookmarks, in milliseconds. Captures happen after measurement.
 BOOKMARKS = {
+    "launcher-cards": (210, 420),
+    "launcher-cards-held": (71, 143),
+    "arcade-transition": (500, 1000),
+    "settings-transition": (500, 1000),
     "light-sweep": (1500, 3000),
     "pixel-dissolve": (1300, 3200),
     "starfield": (4096, 8192),
@@ -169,28 +227,38 @@ BOOKMARKS = {
 }
 
 
-def review(application, agent, run, effect, preset):
-    # Exercise switching and the other preset outside measured windows.
-    select(application, "diagnostic", "reduced")
-    select(application, effect, "reduced" if preset == "default" else "default")
-    action(application, "pause")
-    wait_for(lambda: value(application, "paused") == "true", "pause failed")
-    before = int(value(application, "frame"))
-    time.sleep(0.1)
-    if int(value(application, "frame")) != before:
-        raise RuntimeError("paused concept advanced")
-    action(application, "step")
-    wait_for(lambda: int(value(application, "frame")) != before, "step failed")
-    if int(value(application, "frame")) - before not in (16, 17):
-        raise RuntimeError("step must advance exactly one nominal interval")
-    action(application, "restart")
-    wait_for(lambda: value(application, "frame") == "0", "restart failed")
-    select(application, effect, preset)
+def review(application, agent, run, effect, preset, *, quick=False):
+    if not quick:
+        # Exercise switching and controls outside measured windows.
+        select(application, "diagnostic", "reduced")
+        select(
+            application,
+            effect,
+            "reduced"
+            if effect not in RENDER_LABS and preset == "default"
+            else "default",
+        )
+        action(application, "restart")
+        action(application, "pause")
+        wait_for(lambda: value(application, "paused") == "true", "pause failed")
+        before = int(value(application, "frame"))
+        time.sleep(0.1)
+        if int(value(application, "frame")) != before:
+            raise RuntimeError("paused concept advanced")
+        action(application, "step")
+        wait_for(lambda: int(value(application, "frame")) != before, "step failed")
+        if int(value(application, "frame")) - before not in (16, 17):
+            raise RuntimeError("step must advance exactly one nominal interval")
+        action(application, "restart")
+        wait_for(lambda: value(application, "frame") == "0", "restart failed")
+        select(application, effect, preset)
     bookmarks = [
         ("initial", 0),
         ("midpoint", BOOKMARKS[effect][0]),
         ("boundary", BOOKMARKS[effect][1]),
     ]
+    if quick and effect == "settings-transition":
+        bookmarks = [("handoff", 180), ("return-handoff", 2020), ("boundary", 1000)]
     for label, target in bookmarks:
         action(application, "capture-" + label)
         wait_for(
@@ -248,13 +316,93 @@ def interactive(application, agent, run, effect, preset):
             print("Unknown command or arguments", flush=True)
 
 
+def verify_installed(fields, sha256):
+    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+        raise ValueError(
+            "installed SHA-256 must be 64 lowercase hexadecimal characters"
+        )
+    if not (
+        fields.get("running")
+        and fields.get("ready")
+        and fields.get("artifact") == "mini-magik"
+        and fields.get("running_sha256") == sha256
+    ):
+        raise ValueError(
+            "running development artifact does not match requested SHA-256"
+        )
+
+
+def profile_preparation(application, agent, run, effect, preset, *, sampled=True):
+    action(application, "profile-preparation" if sampled else "bench-preparation")
+    select(application, effect, preset)
+    generation = int(value(application, "generation"))
+    samples = []
+
+    def completed():
+        raw = agent.metrics()
+        context = raw.get("context") or {}
+        preparation_complete = (
+            (context.get("preparation_profile") or {}).get("complete")
+            if sampled
+            else context.get("preparation_benchmark")
+        )
+        if (
+            preparation_complete
+            and context.get("startup")
+            and context.get("concept_generation") == generation
+        ):
+            samples.append(raw)
+            return True
+        return False
+
+    wait_for(completed, "preparation profile was not published", timeout=30)
+    raw = samples[0]
+    context = raw["context"]
+    if raw.get("sha256") != agent.expected_sha256 or (
+        context.get("concept"),
+        context.get("preset"),
+        context.get("build_profile"),
+    ) != (effect, preset, "release-device"):
+        raise ValueError("preparation profile identity or build mismatch")
+    if (
+        raw.get("evidence_error", "missing") is not None
+        or raw.get("latch_rejections") != 0
+        or any(
+            type(raw.get(key)) is not int or raw[key] < 1
+            for key in ("presentations", "physical_latch_posts", "physical_latch_flips")
+        )
+    ):
+        raise ValueError("startup measurement lacks valid first-presentation evidence")
+    (run / "preparation-raw.json").write_text(json.dumps(raw, indent=2) + "\n")
+    append_event(
+        run,
+        {
+            "phase": "preparation-profile" if sampled else "preparation-benchmark",
+            "context": context,
+        },
+    )
+    if not sampled:
+        capture(agent, run / "startup.png")
+    print(
+        f"{effect}/{preset}: cold preparation={context['preparation_ms']}ms "
+        f"first confirmed present={context['startup']['preparation_to_first_confirmed_present_us']}us "
+        f"({'instrumented' if sampled else 'uninstrumented'})",
+        flush=True,
+    )
+    return 0
+
+
 def run_concept(arguments, run: Path):
     from .cli import connect_agent, ensure_application, CHECK_AGENT_CAPABILITIES
 
     effect = arguments.effect if arguments.command == "concept" else arguments.concept
-    if effect not in EFFECTS or arguments.app != "mini-magik":
+    if not supported(effect, arguments.preset) or arguments.app != "mini-magik":
         raise ValueError("select one supported concept with --app mini-magik")
-    profile = bool(getattr(arguments, "profile", False))
+    preparation_profile = bool(getattr(arguments, "profile_preparation", False))
+    preparation = preparation_profile or bool(
+        getattr(arguments, "bench_preparation", False)
+    )
+    profile = bool(getattr(arguments, "profile", False)) or preparation_profile
     profile_id = f"{run.name}-{uuid.uuid4().hex[:8]}" if profile else None
     agent, status = connect_agent(
         run,
@@ -265,22 +413,56 @@ def run_concept(arguments, run: Path):
             "capture-framebuffer",
             "device-control-v1",
             "artifacts-v1",
+            "lifecycle-v1",
         },
     )
     # Main's confirmed mode must be checked before taking display ownership.
     display = agent.device_operation("display-status").get("reply", "")
     if "active=hdmi-" not in display or "pending=none" not in display:
         raise ValueError("concept qualification requires a confirmed HDMI mode")
-    ensure_application(agent, status, run, "mini-magik")
+    installed = getattr(arguments, "installed_sha256", None)
+    if installed:
+        verify_installed(status.fields, installed)
+        agent.artifact = "mini-magik"
+        agent.expected_sha256 = installed
+        append_event(run, {"phase": "artifact", "sha256": installed, "installed": True})
+    else:
+        ensure_application(agent, status, run, "mini-magik")
     try:
         with fresh_session(
             agent, profile_id=profile_id, concept_session=True
         ) as application:
             if arguments.command == "concept":
                 return interactive(application, agent, run, effect, arguments.preset)
-            result = measure(application, agent, run, effect, arguments.preset, profile)
-            if not profile:
-                review(application, agent, run, effect, arguments.preset)
+            result = (
+                profile_preparation(
+                    application,
+                    agent,
+                    run,
+                    effect,
+                    arguments.preset,
+                    sampled=preparation_profile,
+                )
+                if preparation
+                else measure(
+                    application,
+                    agent,
+                    run,
+                    effect,
+                    arguments.preset,
+                    profile,
+                    quick=getattr(arguments, "quick", False),
+                )
+            )
+            if not profile and not preparation:
+                review(
+                    application,
+                    agent,
+                    run,
+                    effect,
+                    arguments.preset,
+                    quick=getattr(arguments, "quick", False),
+                )
         if profile_id is not None:
             for name in ("profile.json", "profile.folded", "flamegraph.svg"):
                 (run / name).write_bytes(agent.read_profile_artifact(profile_id, name))
@@ -295,3 +477,9 @@ def run_concept(arguments, run: Path):
     except Exception as error:
         append_event(run, {"phase": "concept-error", "error": str(error)})
         raise
+    finally:
+        if preparation:
+            # End a startup-only experiment when its first frame is complete.
+            # Avoid leaving a restored Mini storyboard running after this command.
+            stopped = agent.stop()
+            append_event(run, {"phase": "preparation-stop", "result": stopped})

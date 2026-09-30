@@ -447,32 +447,99 @@ const SETTINGS_FOCUS_STOPS: [HorizontalGradientStop; 3] = [
     HorizontalGradientStop::percent(100, Rgb8Color::new(0, 0, 0)),
 ];
 
-/// Settings backdrop: 412x374 little-endian RGB565, dithered once at its
-/// displayed size and always presented 1:1. See `assets/ui/settings/README.md`.
-/// Decoded once; shared by the Settings screen and the card zoom.
+fn prepared_cog() -> &'static (
+    mister_magik_framebuffer_scenes::settings_cog::CogArtwork,
+    Vec<Rgb565Pixel>,
+) {
+    static COG: std::sync::OnceLock<(
+        mister_magik_framebuffer_scenes::settings_cog::CogArtwork,
+        Vec<Rgb565Pixel>,
+    )> = std::sync::OnceLock::new();
+    COG.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("settings-artwork".into())
+            .spawn(|| {
+                use mister_magik_catalog::runtime_thread::{
+                    RuntimeThreadRole, apply_runtime_thread_policy,
+                };
+                apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+                let texture =
+                    mister_magik_framebuffer_scenes::settings_cog::CogTexture::from_rgb888(
+                        include_bytes!("../assets/ui/settings/cog-backdrop-412x374.rgb888"),
+                    )
+                    .expect("embedded cog geometry");
+                (texture.artwork(), texture.destination_pixels())
+            })
+            .expect("start cog preparation")
+            .join()
+            .expect("prepare cog artwork")
+    })
+}
+pub fn warm_settings_cog() -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("settings-artwork-warm".into())
+        .spawn(|| {
+            let _ = prepared_cog();
+        })
+        .expect("warm cog artwork")
+}
+pub fn settings_cog_artwork() -> &'static mister_magik_framebuffer_scenes::settings_cog::CogArtwork
+{
+    &prepared_cog().0
+}
+/// Resting artwork has the moving cog's final destination-space quantisation.
 pub fn settings_cog_backdrop_rgb565() -> &'static [Rgb565Pixel] {
-    static PIXELS: std::sync::OnceLock<Vec<Rgb565Pixel>> = std::sync::OnceLock::new();
-    PIXELS.get_or_init(|| {
-        include_bytes!("../assets/ui/settings/cog-backdrop-412x374.rgb565")
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|packed| Rgb565Pixel(u16::from_le_bytes(*packed)))
-            .collect()
+    &prepared_cog().1
+}
+
+fn prepared_cabinet() -> &'static (
+    mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
+    Vec<Rgb565Pixel>,
+) {
+    static CABINET: std::sync::OnceLock<(
+        mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
+        Vec<Rgb565Pixel>,
+    )> = std::sync::OnceLock::new();
+    CABINET.get_or_init(|| {
+        // All texture/cache computation stays off the UI thread. Production
+        // warms this while the first launcher faces are being prepared.
+        std::thread::Builder::new()
+            .name("arcade-artwork".into())
+            .spawn(|| {
+                use mister_magik_catalog::runtime_thread::{
+                    RuntimeThreadRole, apply_runtime_thread_policy,
+                };
+                apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+                let texture =
+                    mister_magik_framebuffer_scenes::arcade_card::CabinetTexture::from_rgb888(
+                        include_bytes!("../assets/ui/arcade/cabinet-483x519.rgb888"),
+                    )
+                    .expect("embedded cabinet geometry");
+                (texture.artwork(), texture.destination_pixels())
+            })
+            .expect("start cabinet preparation")
+            .join()
+            .expect("prepare cabinet artwork")
     })
 }
 
-/// Front-on Arcade cabinet, packed at its exact HDMI destination size.
+pub fn warm_arcade_cabinet() -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("arcade-artwork-warm".into())
+        .spawn(|| {
+            let _ = prepared_cabinet();
+        })
+        .expect("warm cabinet artwork")
+}
+
+pub fn arcade_cabinet_artwork()
+-> &'static mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork {
+    &prepared_cabinet().0
+}
+
+/// Resting artwork uses the moving cabinet's destination-space quantisation.
 pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
-    static PIXELS: std::sync::OnceLock<Vec<Rgb565Pixel>> = std::sync::OnceLock::new();
-    PIXELS.get_or_init(|| {
-        include_bytes!("../assets/ui/arcade/cabinet-483x519.rgb565")
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|packed| Rgb565Pixel(u16::from_le_bytes(*packed)))
-            .collect()
-    })
+    &prepared_cabinet().1
 }
 
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565

@@ -49,6 +49,15 @@ pub fn enable() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Preparation attribution without configuring hardware counters.
+pub fn enable_wall_time() {
+    ENABLED.store(true, Ordering::Relaxed);
+}
+
+pub fn disable() {
+    ENABLED.store(false, Ordering::Relaxed);
+}
+
 pub struct Span {
     label: &'static str,
     started: Instant,

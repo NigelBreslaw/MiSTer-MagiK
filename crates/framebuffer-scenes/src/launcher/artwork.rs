@@ -213,12 +213,144 @@ pub(super) fn face_cached(
     crate::launcher_flip::Face::new(pixels, width, height)
 }
 
+// The input is eight-bit and output thresholds are fixed. Cache these tiny
+// transfer tables instead of calling powf for every reduced colour sample.
+struct SrgbTransfer {
+    decode: [f64; 256],
+    boundaries: [f64; 255],
+}
+fn srgb_transfer() -> &'static SrgbTransfer {
+    static TRANSFER: std::sync::OnceLock<SrgbTransfer> = std::sync::OnceLock::new();
+    TRANSFER.get_or_init(|| {
+        let linear = |s: f64| {
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        SrgbTransfer {
+            decode: std::array::from_fn(|i| linear(i as f64 / 255.0)),
+            boundaries: std::array::from_fn(|i| linear((i as f64 + 0.5) / 255.0)),
+        }
+    })
+}
+impl SrgbTransfer {
+    fn encode(&self, linear: f64) -> u8 {
+        self.boundaries
+            .partition_point(|&boundary| linear >= boundary) as u8
+    }
+}
+
+pub(super) fn faces_rgb888(
+    card: &PreparedCard<'_>,
+    typography: Option<LauncherTypography<'_>>,
+) -> [crate::launcher_flip::Face; 2] {
+    #[cfg(feature = "launcher-profile")]
+    let reduction = crate::launcher_profile::span("prepare.rgb888_linear_reduction");
+    let source = card.rgb888.expect("validated RGB888 source");
+    let transfer = srgb_transfer();
+    let rgb8: Vec<[u8; 3]> = (0..252)
+        .flat_map(|y| (0..180).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            std::array::from_fn(|c| {
+                let mut sum = 0.0;
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        sum += transfer.decode
+                            [source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
+                    }
+                }
+                transfer.encode(sum / 4.0)
+            })
+        })
+        .collect();
+    #[cfg(feature = "launcher-profile")]
+    drop(reduction);
+    let reference: Vec<_> = rgb8
+        .iter()
+        .map(|&[r, g, b]| {
+            Rgb565Pixel((u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | u16::from(b) >> 3)
+        })
+        .collect();
+    let mapped = PreparedCard {
+        id: card.id,
+        name: card.name,
+        games: card.games,
+        colour: card.colour,
+        name_mask: card.name_mask.clone(),
+        games_mask: card.games_mask.clone(),
+        artwork: Some(&reference),
+        rgb888: None,
+    };
+    std::array::from_fn(|index| {
+        #[cfg(feature = "launcher-profile")]
+        let _face = crate::launcher_profile::span("prepare.rgb888_face");
+        let mut face = face(&mapped, 180, index == 1, typography);
+        face.texture.retain_rgb8(&rgb8, &reference);
+        face
+    })
+}
+
+// Independent single-face reference for exact startup pixel/mipmap parity.
+#[cfg(test)]
+fn reference_face_rgb888(
+    card: &PreparedCard<'_>,
+    detail: bool,
+    typography: Option<LauncherTypography<'_>>,
+) -> crate::launcher_flip::Face {
+    #[cfg(feature = "launcher-profile")]
+    let _rgb888 = crate::launcher_profile::span("prepare.rgb888_face");
+    #[cfg(feature = "launcher-profile")]
+    let reduction = crate::launcher_profile::span("prepare.rgb888_linear_reduction");
+    let source = card.rgb888.expect("validated RGB888 source");
+    let transfer = srgb_transfer();
+    let rgb8: Vec<[u8; 3]> = (0..252)
+        .flat_map(|y| (0..180).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            std::array::from_fn(|c| {
+                let mut sum = 0.0;
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        sum += transfer.decode
+                            [source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
+                    }
+                }
+                transfer.encode(sum / 4.0)
+            })
+        })
+        .collect();
+    #[cfg(feature = "launcher-profile")]
+    drop(reduction);
+    let reference: Vec<_> = rgb8
+        .iter()
+        .map(|&[r, g, b]| {
+            Rgb565Pixel((u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | u16::from(b) >> 3)
+        })
+        .collect();
+    let mapped = PreparedCard {
+        id: card.id,
+        name: card.name,
+        games: card.games,
+        colour: card.colour,
+        name_mask: card.name_mask.clone(),
+        games_mask: card.games_mask.clone(),
+        artwork: Some(&reference),
+        rgb888: None,
+    };
+    let mut face = face(&mapped, 180, detail, typography);
+    face.texture.retain_rgb8(&rgb8, &reference);
+    face
+}
+
 pub(super) fn face(
     card: &PreparedCard<'_>,
     width: usize,
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
+    #[cfg(feature = "launcher-profile")]
+    let _face = crate::launcher_profile::span("prepare.face");
     crate::launcher_flip::Face::new(
         surface(card, width, detail, typography, true),
         width,
@@ -233,6 +365,8 @@ pub(super) fn surface(
     typography: Option<LauncherTypography<'_>>,
     labels: bool,
 ) -> Vec<Rgb565Pixel> {
+    #[cfg(feature = "launcher-profile")]
+    let _surface = crate::launcher_profile::span("prepare.surface");
     let height = card_height(width);
     let mut canvas = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
     let icon = category_icon(card.id);
@@ -249,6 +383,8 @@ pub(super) fn surface(
     };
     let trim = card.colour;
     let ink = CREAM;
+    #[cfg(feature = "launcher-profile")]
+    let surface_pixels = crate::launcher_profile::span("prepare.surface_pixels");
     for y in 0..height {
         for x in 0..width {
             if !rounded_contains(x, y, width, height) {
@@ -264,6 +400,8 @@ pub(super) fn surface(
             canvas[y * LOGICAL_WIDTH + x] = Rgb565Pixel(colour);
         }
     }
+    #[cfg(feature = "launcher-profile")]
+    drop(surface_pixels);
     // Approved photographic artwork replaces the generated category symbol.
     // Keep the old fallback for tests and consumers which do not supply art.
     if card.artwork.is_none() {
@@ -466,6 +604,31 @@ fn inside_inset(x: usize, y: usize, width: usize, height: usize, inset: usize) -
 }
 
 fn framed_surface(
+    card: &PreparedCard<'_>,
+    base: u16,
+    trim: u16,
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+) -> u16 {
+    // With artwork, all sixteen samples inside the innermost frame read
+    // this same source pixel. Keep a conservative pair of rectangular bands:
+    // each is wholly inside the inset-8 rounded rectangle, including sample
+    // offsets 1..7. Corners and every frame boundary retain the sampled path.
+    let edge_x = x.min(width - 1 - x);
+    let edge_y = y.min(height - 1 - y);
+    if edge_x >= 8
+        && edge_y >= 8
+        && (edge_x >= 12 || edge_y >= 12)
+        && let Some(pixels) = card.artwork
+    {
+        return pixels[y * width + x].0;
+    }
+    sampled_framed_surface(card, base, trim, width, height, x, y)
+}
+
+fn sampled_framed_surface(
     card: &PreparedCard<'_>,
     base: u16,
     trim: u16,
@@ -784,6 +947,122 @@ fn ellipse_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artwork_interior_matches_subpixel_reference_at_every_pixel() {
+        for width in [24, 36, 72, 180] {
+            let height = card_height(width);
+            let pixels: Vec<_> = (0..width * height)
+                .map(
+                    |i| Rgb565Pixel((i as u32).wrapping_mul(1103515245).wrapping_add(12345) as u16),
+                )
+                .collect();
+            let mut card = test_card(0xb79a);
+            card.artwork = Some(&pixels);
+            for y in 0..height {
+                for x in 0..width {
+                    assert_eq!(
+                        framed_surface(&card, 0x8395, card.colour, width, height, x, y),
+                        sampled_framed_surface(&card, 0x8395, card.colour, width, height, x, y),
+                        "frame/silhouette must retain exact samples: {width} {x},{y}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_rgb888_preparation_preserves_faces_and_every_mip() {
+        use crate::bitmap_text::BitmapGlyph;
+        let font = BitmapFont {
+            ascent: 7,
+            descent: 0,
+            glyphs: (32..127)
+                .map(|c| BitmapGlyph {
+                    code_point: char::from_u32(c).unwrap(),
+                    left: 0,
+                    top: 7,
+                    width: 5,
+                    height: 7,
+                    advance: 6,
+                    alpha: (0..35)
+                        .map(|i| if (i + c).is_multiple_of(3) { 128 } else { 255 })
+                        .collect(),
+                })
+                .collect(),
+        };
+        let fonts = LauncherTypography {
+            heading: &font,
+            number: &font,
+            metadata: &font,
+            fallback: &font,
+        };
+        let artwork: [&[u8]; 6] = [
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/01_arcade.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/02_consoles.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/03_computers.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/04_handhelds.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/05_favourites.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/06_settings.rgb888"),
+        ];
+        for source in artwork {
+            let mut card = test_card(0xa472);
+            card.rgb888 = Some(source);
+            for typography in [None, Some(fonts)] {
+                for (index, actual) in faces_rgb888(&card, typography).into_iter().enumerate() {
+                    let expected = reference_face_rgb888(&card, index == 1, typography);
+                    assert_eq!(actual.pixels, expected.pixels);
+                    assert!(
+                        actual.texture == expected.texture,
+                        "RGBA source precision and all mip levels must match"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gamma_lookup_matches_reference_for_every_pair_and_real_card_reduction() {
+        let transfer = srgb_transfer();
+        let reference = |l: f64| {
+            let s = if l <= 0.0031308 {
+                l * 12.92
+            } else {
+                1.055 * l.powf(1.0 / 2.4) - 0.055
+            };
+            (s * 255.0).round().clamp(0.0, 255.0) as u8
+        };
+        for a in 0..256 {
+            for b in 0..256 {
+                let value = (transfer.decode[a] + transfer.decode[b]) / 2.0;
+                assert_eq!(transfer.encode(value), reference(value));
+            }
+        }
+        let artwork: [&[u8]; 6] = [
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/01_arcade.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/02_consoles.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/03_computers.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/04_handhelds.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/05_favourites.rgb888"),
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/06_settings.rgb888"),
+        ];
+        for source in artwork {
+            for y in 0..252 {
+                for x in 0..180 {
+                    for c in 0..3 {
+                        let mut sum = 0.0;
+                        for dy in 0..2 {
+                            for dx in 0..2 {
+                                sum += transfer.decode
+                                    [source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
+                            }
+                        }
+                        assert_eq!(transfer.encode(sum / 4.0), reference(sum / 4.0));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn reflection_formula_matches_every_baked_curve_entry() {

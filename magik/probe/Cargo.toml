@@ -26,7 +26,7 @@ slint = { version = "=1.18.1", default-features = false, features = ["compat-1-2
 [dependencies]
 mister-magik-controller-registry={path="../../crates/controller-registry",features=["io-probe"]}
 mister-magik-catalog = { path = "../../crates/catalog", features = ["builder", "io-test-metrics"] }
-mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes" }
+mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes", features = ["launcher-profile"] }
 serde_json = "1"
 mister-magik-core = { path = "../../crates/magik-core" }
 mister-magik-visual-concepts = { path = "../../crates/visual-concepts" }
@@ -44,3 +44,12 @@ lto = false
 codegen-units = 16
 incremental = true
 strip = "debuginfo"
+
+# Match the full application's optimization settings for isolated qualification.
+[profile.release-device]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 32
+incremental = false
+panic = "abort"
