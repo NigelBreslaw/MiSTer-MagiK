@@ -75,13 +75,7 @@ pub struct ControllerPersistence {
 }
 impl ControllerPersistence {
     pub fn start(db: &ControllerDb) -> io::Result<Self> {
-        Self::start_with_waker(db, || {})
-    }
-    pub fn start_with_waker(
-        db: &ControllerDb,
-        wake_ui: impl Fn() + Send + Sync + 'static,
-    ) -> io::Result<Self> {
-        Self::start_with_initializer(db, || {}, wake_ui)
+        Self::start_with_initializer(db, || {}, || {})
     }
     /// Run owner setup on the writer before processing any accepted changes.
     /// The portable registry leaves scheduling policy to its application owner.
