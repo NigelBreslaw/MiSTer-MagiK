@@ -74,11 +74,11 @@ export component Probe inherits Window {
         Text { accessible-role: text; accessible-label: "concept-frame"; accessible-value: "" + root.concept-frame; }
         Text { accessible-role: text; accessible-label: "concept-paused"; accessible-value: root.concept-paused ? "true" : "false"; }
         Text { accessible-role: text; accessible-label: "concept-measuring"; accessible-value: root.concept-measuring ? "true" : "false"; }
-        for action in ["pause","resume","step","restart","measure","measure-short","profile-preparation","bench-preparation","capture-initial","capture-midpoint","capture-boundary","capture-handoff","capture-return-handoff"] : Rectangle {
+        for action in ["pause","resume","step","restart","measure","measure-short","measure-eight","profile-preparation","bench-preparation","capture-initial","capture-midpoint","capture-boundary","capture-handoff","capture-return-handoff"] : Rectangle {
             accessible-role: button; accessible-label: "concept-" + action;
             accessible-action-default => {root.concept-action(action);}
         }
-        for name in ["raster-waves","texture-tunnel","starfield","pixel-dissolve","light-sweep","diagnostic","launcher-cards","arcade-transition","settings-transition"] : VerticalLayout {
+        for name in ["raster-waves","texture-tunnel","starfield","pixel-dissolve","light-sweep","diagnostic","launcher-cards","launcher-cards-held","arcade-transition","settings-transition"] : VerticalLayout {
             for preset in ["default","reduced","rgb888","scanline"] : Rectangle {
                 accessible-role: button; accessible-label: "concept-select-" + name + "-" + preset;
                 accessible-action-default => {root.concept-select(name,preset);}

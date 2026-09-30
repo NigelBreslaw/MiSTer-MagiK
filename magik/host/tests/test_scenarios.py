@@ -273,3 +273,55 @@ def test_menu_focus_waits_for_navigation_ownership_to_end(monkeypatch):
     monkeypatch.setattr(actions, "_wait", wait_all)
     actions._focus_label(object(), "Arcade", "right", 2)
     assert checks == 1 and keys == ["right"]
+
+
+@pytest.mark.parametrize("fail_sleep", [False, True])
+def test_held_carousel_requests_a_bounded_hold_and_always_releases(
+    monkeypatch, fail_sleep
+):
+    from types import SimpleNamespace
+
+    events = []
+    request = []
+    sleeps = []
+    evidence = {
+        **window(),
+        "elapsed_ms": 8000,
+        "end_ms": 10000,
+        "presentations": 480,
+        "card_continuous_presentations": 480,
+        "forced_clock_changes": 0,
+    }
+    replies = iter([{"window": None}, {"sha256": "app", "window": evidence}])
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=lambda: next(replies),
+        _successful=lambda op, fields: request.append((op, fields)),
+    )
+    application = SimpleNamespace(
+        first_window=SimpleNamespace(dispatch_event=events.append)
+    )
+    monkeypatch.setattr(actions, "_press_key", lambda *_: None)
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if fail_sleep and seconds > 1:
+            raise RuntimeError("measurement interrupted")
+
+    if fail_sleep:
+        with pytest.raises(RuntimeError, match="measurement interrupted"):
+            actions.launcher_motion(
+                application, agent, held_direction=True, sleep=sleep
+            )
+    else:
+        result = actions.launcher_motion(
+            application, agent, held_direction=True, sleep=sleep
+        )
+        assert result["held_measurement_ms"] == 8000
+        assert result["input_events"] == 2
+    assert events == []
+    assert request[0][1]["launcher_hold"] is True
+    assert request[1] == ("measure", {"launcher_hold": "release"})
+    assert request[0][1]["duration_ms"] == 8000
+    assert sleeps == [1, 10.4]

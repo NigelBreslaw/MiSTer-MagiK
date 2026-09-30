@@ -48,6 +48,7 @@ CHECK_SCENARIOS = (
     "smoke",
     "motion",
     "motion-rollover",
+    "motion-held",
     "motion-fallback",
     "idle",
     "journeys",
@@ -119,7 +120,7 @@ def main() -> int:
     check_command.add_argument(
         "--quick",
         action="store_true",
-        help="one 10-second Mini concept window with focused captures",
+        help="one short Mini window with focused captures (held cards: 8 s; otherwise: 10 s)",
     )
     check_command.add_argument(
         "--preset",
@@ -184,7 +185,12 @@ def main() -> int:
         arguments.scenario == "concept"
         and arguments.app == "mini-magik"
         and arguments.concept
-        in {"launcher-cards", "arcade-transition", "settings-transition"}
+        in {
+            "launcher-cards",
+            "launcher-cards-held",
+            "arcade-transition",
+            "settings-transition",
+        }
     ):
         parser.error("preparation measurements require a Mini rendering-lab concept")
     if getattr(arguments, "quick", False) and not (
@@ -448,7 +454,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     ]
     if arguments.profile:
         measurements = (
-            {"idle", "motion", "motion-rollover"}
+            {"idle", "motion", "motion-rollover", "motion-held"}
             if arguments.app == "magik"
             else {"motion"}
         )

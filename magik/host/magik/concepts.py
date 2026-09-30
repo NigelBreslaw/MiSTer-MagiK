@@ -20,6 +20,7 @@ EFFECTS = (
     "light-sweep",
     "diagnostic",
     "launcher-cards",
+    "launcher-cards-held",
     "arcade-transition",
     "settings-transition",
 )
@@ -29,7 +30,12 @@ PRESETS = (
     "rgb888",
     "scanline",
 )
-RENDER_LABS = ("launcher-cards", "arcade-transition", "settings-transition")
+RENDER_LABS = (
+    "launcher-cards",
+    "launcher-cards-held",
+    "arcade-transition",
+    "settings-transition",
+)
 
 
 def supported(effect, preset):
@@ -93,7 +99,11 @@ def validate(metrics, sha256, effect, preset, profile=False, *, quick=False):
     w = metrics.get("window")
     if not isinstance(w, dict):
         raise ValueError("missing concept measurement window")
-    duration = 10_000 if profile or quick else 30_000
+    duration = 30_000
+    if profile:
+        duration = 10_000
+    elif quick:
+        duration = 8_000 if effect == "launcher-cards-held" else 10_000
     if (
         w.get("instrumented") is not profile
         or not duration <= w.get("elapsed_ms", 0) <= duration + 1000
@@ -171,13 +181,17 @@ def measure(application, agent, run, effect, preset, profile, *, quick=False):
     results = []
     for repetition in range(1 if profile or quick else 2):
         select(application, effect, preset)
-        action(application, "measure-short" if quick else "measure")
+        held_quick = quick and effect == "launcher-cards-held"
+        action(
+            application,
+            "measure-eight" if held_quick else "measure-short" if quick else "measure",
+        )
         wait_for(
             lambda: value(application, "measuring") == "true",
             "measurement did not start",
         )
         # No bridge polling, captures or streaming during the device-clock window.
-        time.sleep(12.3 if profile or quick else 32.3)
+        time.sleep(10.3 if held_quick else 12.3 if profile or quick else 32.3)
         wait_for(
             lambda: value(application, "measuring") == "false",
             "measurement did not finish",
@@ -205,6 +219,7 @@ def measure(application, agent, run, effect, preset, profile, *, quick=False):
 # Device timeline bookmarks, in milliseconds. Captures happen after measurement.
 BOOKMARKS = {
     "launcher-cards": (210, 420),
+    "launcher-cards-held": (71, 143),
     "arcade-transition": (500, 1000),
     "settings-transition": (500, 1000),
     "light-sweep": (1500, 3000),

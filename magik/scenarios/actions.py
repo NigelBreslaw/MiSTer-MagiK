@@ -320,6 +320,7 @@ def launcher_motion(
     instrumented: bool = False,
     align_rollover: bool = False,
     force_fallback: bool = False,
+    held_direction: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ):
     """Measure continuous card-carousel navigation on the real launcher."""
@@ -328,23 +329,39 @@ def launcher_motion(
     _press_key(application, "\uf729")  # Slint Key.Home
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
 
+    if held_direction:
+        # Home preserves an in-progress card spring. A new press can be rejected
+        # until it settles; keep this pause outside the measured hold window.
+        sleep(1)
     previous = agent.metrics().get("window")
     agent._successful(
         "measure",
         {
             "launcher_clock": "rollover" if align_rollover else "fixed",
             "launcher_fallback": force_fallback,
+            "duration_ms": 8_000 if held_direction else 5_000,
+            "launcher_hold": held_direction,
         },
     )
-    seconds = 10 if instrumented else 5
+    seconds = 10 if instrumented else (8 if held_direction else 5)
     interval_seconds = 0.25
     deadline = time.monotonic() + 2 + seconds + 0.4
     input_events = 0
-    while time.monotonic() < deadline:
-        direction = "\uf703" if (input_events // 5) % 2 == 0 else "\uf702"
-        _press_key(application, direction)
-        input_events += 1
-        sleep(interval_seconds)
+    if held_direction:
+        # The device feeds a bounded press/release through the real input router.
+        # The development keyboard bridge emits taps, so it cannot sustain holds.
+        try:
+            input_events += 1
+            sleep(2 + seconds + 0.4)
+        finally:
+            agent._successful("measure", {"launcher_hold": "release"})
+            input_events += 1
+    else:
+        while time.monotonic() < deadline:
+            direction = "\uf703" if (input_events // 5) % 2 == 0 else "\uf702"
+            _press_key(application, direction)
+            input_events += 1
+            sleep(interval_seconds)
 
     metrics = agent.metrics()
     if metrics.get("sha256") != agent.expected_sha256:
@@ -391,12 +408,21 @@ def launcher_motion(
         ):
             if type(window.get(name)) is not int or window[name] < 0:
                 raise AssertionError(f"instrumented card motion has no {name} evidence")
+    if (
+        held_direction
+        and window.get("card_continuous_presentations") != window["presentations"]
+    ):
+        raise AssertionError(
+            "held carousel did not remain in continuous motion for the whole window"
+        )
     if force_fallback and window.get("card_fallback_copies", 0) == 0:
         raise AssertionError("forced fallback did not execute")
     return {
         **window,
         "workload": (
-            "launcher-card-motion-rollover"
+            "launcher-card-motion-held"
+            if held_direction
+            else "launcher-card-motion-rollover"
             if align_rollover
             else "launcher-card-motion"
         ),
@@ -404,7 +430,9 @@ def launcher_motion(
         "pid": metrics.get("pid"),
         "warmup_seconds": 2,
         "input_events": input_events,
-        "input_interval_ms": int(interval_seconds * 1000),
+        "input_interval_ms": None if held_direction else int(interval_seconds * 1000),
+        "held_direction": "right" if held_direction else None,
+        "held_measurement_ms": seconds * 1000 if held_direction else 0,
     }
 
 

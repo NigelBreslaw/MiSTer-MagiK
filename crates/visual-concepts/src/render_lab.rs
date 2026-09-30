@@ -19,6 +19,7 @@ const W: usize = 960;
 const H: usize = 540;
 pub(super) struct Lab {
     first_frame: bool,
+    held_navigation: bool,
     launcher: Option<PreparedLauncher>,
     home: Vec<Pixel>,
     tiles: Option<ParallelTiles>,
@@ -39,7 +40,7 @@ impl Lab {
         }
         let mut preparation = Vec::new();
         let stage = Instant::now();
-        let (launcher, home, cached) = if name == "launcher-cards" {
+        let (launcher, home, cached) = if matches!(name, "launcher-cards" | "launcher-cards-held") {
             let launcher = crate::fixture::prepare(W, H);
             let home = launcher.pixels().to_vec();
             (Some(launcher), home, false)
@@ -112,6 +113,7 @@ impl Lab {
         }
         Ok(Self {
             first_frame: true,
+            held_navigation: name == "launcher-cards-held",
             launcher,
             home,
             tiles,
@@ -159,6 +161,23 @@ fn reveal_time(ms: u64) -> u32 {
         2200_u64.saturating_sub(phase)
     }) as u32
 }
+// Root carousel default cruise speed: 360 px/s * 0.7 / 36 px per card.
+// Feed position units directly, avoiding a spring restart at every card boundary.
+fn browse_held(ms: u64) -> BrowseFrame {
+    use mister_magik_framebuffer_scenes::launcher_navigation::SPRING_POSITION_UNITS;
+    let position = (u128::from(ms) * 7 * u128::from(SPRING_POSITION_UNITS) / 1000)
+        % (6 * u128::from(SPRING_POSITION_UNITS));
+    let selected = (position / u128::from(SPRING_POSITION_UNITS)) as usize;
+    BrowseFrame {
+        selected,
+        target: (selected + 1) % 6,
+        phase: BrowsePhase::Flipping,
+        direction: Some(BrowseDirection::Right),
+        progress_millis: (position % u128::from(SPRING_POSITION_UNITS)) as u32,
+        duration_millis: SPRING_POSITION_UNITS,
+    }
+}
+
 fn browse(ms: u64) -> BrowseFrame {
     let t = ms % 8040;
     if t >= 7200 {
@@ -240,7 +259,11 @@ impl Effect for Lab {
             }
             self.tiles.as_mut().unwrap().render(
                 LauncherFrameRequest {
-                    frame: browse(ms),
+                    frame: if self.held_navigation {
+                        browse_held(ms)
+                    } else {
+                        browse(ms)
+                    },
                     timestamp_us: ms * 1000,
                     generation: ms,
                 },
@@ -385,6 +408,25 @@ impl Drop for ParallelTiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn held_cards_keep_flipping_across_slot_and_wrap_boundaries() {
+        use mister_magik_framebuffer_scenes::launcher_navigation::SPRING_POSITION_UNITS;
+        for ms in 0..8_000 {
+            let frame = browse_held(ms);
+            assert_eq!(frame.phase, BrowsePhase::Flipping);
+            assert_eq!(frame.direction, Some(BrowseDirection::Right));
+            assert_eq!(frame.duration_millis, SPRING_POSITION_UNITS);
+            assert_eq!(frame.target, (frame.selected + 1) % 6);
+        }
+        assert_eq!(browse_held(1_000).selected, 1);
+        assert_eq!(browse_held(6_000).selected, 0);
+        let before = browse_held(142);
+        let after = browse_held(143);
+        assert_eq!((before.selected, after.selected), (0, 1));
+        assert!(before.progress_millis > SPRING_POSITION_UNITS * 99 / 100);
+        assert!(after.progress_millis < SPRING_POSITION_UNITS / 100);
+    }
+
     #[test]
     fn parallel_tiles_match_complete_production_frames() {
         let mut lab = Lab::new("launcher-cards", Preset::Default, None).unwrap();

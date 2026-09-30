@@ -6308,7 +6308,13 @@ pub(super) fn run_launcher_loop(
     #[cfg(feature = "tooling")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
     #[cfg(feature = "tooling")]
+    let mut tooling_carousel_release: Option<crate::input_event::InputEvent> = None;
+    #[cfg(feature = "tooling")]
     let card_profile_measurement_enabled = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
+    // Count repeated artwork in ordinary measurement sessions too. A confirmed
+    // 60 Hz post does not imply a fresh carousel pose; CPU sampling is separate.
+    #[cfg(feature = "tooling")]
+    let card_presentation_measurement_enabled = tooling.is_some();
     #[cfg(feature = "tooling")]
     if let Some(session) = tooling.as_mut() {
         let paths = launcher_config.device_paths();
@@ -7605,6 +7611,38 @@ pub(super) fn run_launcher_loop(
                         .min(u64::MAX as u128) as u64,
                 ) {
                     incoming_input_events.push_back(event);
+                }
+            }
+            #[cfg(feature = "tooling")]
+            if let Some(held) = tooling
+                .as_mut()
+                .and_then(|session| session.carousel_hold_change())
+            {
+                ui_action_sequence = ui_action_sequence.saturating_add(1);
+                let captured_at_us = frame_now
+                    .saturating_duration_since(start)
+                    .as_micros()
+                    .min(u64::MAX as u128) as u64;
+                if held {
+                    let [mut pressed, _] =
+                        LauncherUiAction::Navigate(slint_ui::launcher::NavigationDirection::Right)
+                            .input_pulse(ui_action_sequence, captured_at_us)
+                            .unwrap();
+                    pressed.source = crate::input_event::InputSourceId {
+                        kind: crate::input_event::InputSourceKind::Automation,
+                        instance: 0x43415244,
+                    };
+                    pressed.source_epoch = crate::input_event::SourceEpoch(1);
+                    let released = crate::input_event::InputEvent {
+                        phase: crate::input_event::InputPhase::Released,
+                        ..pressed
+                    };
+                    incoming_input_events.push_back(pressed);
+                    tooling_carousel_release = Some(released);
+                } else if let Some(mut released) = tooling_carousel_release.take() {
+                    released.sequence = ui_action_sequence;
+                    released.captured_at_us = captured_at_us;
+                    incoming_input_events.push_back(released);
                 }
             }
             for event in incoming_input_events.iter().copied() {
@@ -10133,7 +10171,7 @@ pub(super) fn run_launcher_loop(
                         frame_production_trace.render_wall_us = frame.producer_total_us();
                         frame_production_completed_at = Some(Instant::now());
                         #[cfg(feature = "tooling")]
-                        if card_profile_measurement_enabled {
+                        if card_presentation_measurement_enabled {
                             card_direct_measurement = Some((
                                 copy.copy_us,
                                 request.render.timestamp_us,
@@ -10183,7 +10221,7 @@ pub(super) fn run_launcher_loop(
                         frame_production_trace.render_wall_us = 0;
                         frame_production_completed_at = Some(Instant::now());
                         #[cfg(feature = "tooling")]
-                        if card_profile_measurement_enabled {
+                        if card_presentation_measurement_enabled {
                             card_direct_measurement = Some((
                                 copy.copy_us,
                                 request.render.timestamp_us,
@@ -12604,8 +12642,11 @@ pub(super) fn run_launcher_loop(
                             metrics.counters.card_stale =
                                 metrics.counters.card_stale.saturating_add(delta.stale);
                         }
-                    } else if card_profile_measurement_enabled {
+                    } else if card_presentation_measurement_enabled {
                         metrics.counters.card_synchronous_presentations += 1;
+                    }
+                    if nav.home_horizontal_repeat_active() {
+                        metrics.counters.card_continuous_presentations += 1;
                     }
                     match f.read_magik_presentation_telemetry() {
                         Ok(telemetry) => {

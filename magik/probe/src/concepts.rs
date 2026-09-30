@@ -189,6 +189,7 @@ impl Concepts {
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {
                 "launcher-cards" => (210, 420),
+                "launcher-cards-held" => (71, 143),
                 "arcade-transition" | "settings-transition" => (500, 1000),
                 "light-sweep" => (1500, 3000),
                 "pixel-dissolve" => (1300, 3200),
@@ -224,7 +225,7 @@ impl Concepts {
         match action {
             "pause" => self.paused = true,
             "resume" => self.paused = false,
-            "restart" | "measure" | "measure-short" => {
+            "restart" | "measure" | "measure-short" | "measure-eight" => {
                 if let Some(s) = &mut self.scene {
                     s.reset();
                     self.advance_next = false;
@@ -234,7 +235,9 @@ impl Concepts {
                     self.paused = false;
                 }
                 self.measure = action.starts_with("measure");
-                self.measure_duration_ms = if action == "measure-short" {
+                self.measure_duration_ms = if action == "measure-eight" {
+                    8_000
+                } else if action == "measure-short" {
                     10_000
                 } else {
                     30_000
