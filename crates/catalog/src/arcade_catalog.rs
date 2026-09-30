@@ -156,6 +156,7 @@ pub struct SystemCollection {
     preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
     launch_plans: Arc<Vec<StructuredLaunchPlan>>,
     rich_indexes: Arc<OnceLock<ArcadeCatalogIndexes>>,
+    prepared_filter_options: Option<Arc<ArcadeSystemFilterOptions>>,
 }
 
 #[derive(Clone, Debug)]
@@ -220,6 +221,7 @@ struct NavPackSystemRows {
     row_pages: Vec<OnceLock<Box<[OnceLock<NavPackRow>]>>>,
     metadata_pages: Vec<OnceLock<Box<[OnceLock<ArcadeGameMetadataKey>]>>>,
     preview_ordinals: OnceLock<Vec<usize>>,
+    filter_options: OnceLock<Result<ArcadeSystemFilterOptions, String>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -273,6 +275,7 @@ impl NavPackSystemRows {
                 .take(page_count)
                 .collect(),
             preview_ordinals: OnceLock::new(),
+            filter_options: OnceLock::new(),
         };
         let viewport_started = std::time::Instant::now();
         for ordinal in 0..expected_count.min(Self::FIRST_VIEWPORT_ROWS) {
@@ -328,6 +331,54 @@ impl NavPackSystemRows {
                 .is_ok_and(|row| row.launch_ref == launch_ref)
         })?;
         self.launch_plan(self.materialize(ordinal).ok()?)
+    }
+
+    fn filter_options(&self) -> Option<&ArcadeSystemFilterOptions> {
+        self.filter_options
+            .get_or_init(|| {
+                let counts = self.pack.filter_counts()?;
+                let options = |groups: Vec<(&str, usize)>| {
+                    groups
+                        .into_iter()
+                        .map(|(label, count)| ArcadeFilterOption {
+                            label: label.to_owned(),
+                            count,
+                        })
+                        .collect()
+                };
+                // Persisted controls retain raw spellings; the drawer has always
+                // used canonical labels, so merge groups which normalize alike.
+                let mut controls = BTreeMap::<String, usize>::new();
+                for (label, count) in counts.controls {
+                    let label = canonical_control_label(label);
+                    if !label.is_empty() {
+                        *controls.entry(label).or_default() += count;
+                    }
+                }
+                Ok(ArcadeSystemFilterOptions {
+                    categories: options(counts.categories),
+                    decades: counts
+                        .decades
+                        .into_iter()
+                        .map(|(decade, count)| ArcadeFilterOption {
+                            label: format!("{decade}'s"),
+                            count,
+                        })
+                        .collect(),
+                    manufacturers: options(counts.manufacturers),
+                    players: counts
+                        .players
+                        .into_iter()
+                        .map(|(players, count)| ArcadeFilterOption {
+                            label: player_count_label(players as u8),
+                            count,
+                        })
+                        .collect(),
+                    controls: string_filter_options_from_counts(controls),
+                })
+            })
+            .as_ref()
+            .ok()
     }
 
     fn preview_ordinals(&self) -> &[usize] {
@@ -493,6 +544,7 @@ impl SystemCollection {
         let preview_games_by_system =
             build_system_collection_preview_indexes(&games, &platform_kinds);
         launch_plans.sort_unstable_by(|left, right| left.launch_ref.cmp(&right.launch_ref));
+        let prepared_filter_options = Some(Arc::new(build_system_filter_options(&cold_metadata)));
         Self {
             system_id,
             games: SystemCollectionRows::Owned(Arc::new(games)),
@@ -501,6 +553,7 @@ impl SystemCollection {
             preview_games_by_system: Arc::new(preview_games_by_system),
             launch_plans: Arc::new(launch_plans),
             rich_indexes: Arc::new(OnceLock::new()),
+            prepared_filter_options,
         }
     }
 
@@ -547,6 +600,7 @@ impl SystemCollection {
                 preview_games_by_system: Arc::new(HashMap::new()),
                 launch_plans: Arc::new(Vec::new()),
                 rich_indexes: Arc::new(OnceLock::new()),
+                prepared_filter_options: None,
             },
             timing,
         ))
@@ -587,6 +641,14 @@ impl SystemCollection {
     }
 
     fn filter_options(&self) -> &ArcadeSystemFilterOptions {
+        if let Some(options) = &self.prepared_filter_options {
+            return options;
+        }
+        if let SystemCollectionRows::NavPack(rows) = &self.games
+            && let Some(options) = rows.filter_options()
+        {
+            return options;
+        }
         static EMPTY: OnceLock<ArcadeSystemFilterOptions> = OnceLock::new();
         self.rich_indexes()
             .filter_options_by_system
@@ -1896,32 +1958,7 @@ fn build_arcade_catalog_indexes(
 
     let filter_options_by_system = filter_counts_by_system
         .into_iter()
-        .map(|(system_id, counts)| {
-            (
-                system_id,
-                ArcadeSystemFilterOptions {
-                    categories: string_filter_options_from_counts(counts.categories),
-                    decades: counts
-                        .decades
-                        .into_iter()
-                        .map(|(decade, count)| ArcadeFilterOption {
-                            label: format!("{decade}'s"),
-                            count,
-                        })
-                        .collect(),
-                    manufacturers: string_filter_options_from_counts(counts.manufacturers),
-                    players: counts
-                        .players
-                        .into_iter()
-                        .map(|(players, count)| ArcadeFilterOption {
-                            label: player_count_label(players),
-                            count,
-                        })
-                        .collect(),
-                    controls: string_filter_options_from_counts(counts.controls),
-                },
-            )
-        })
+        .map(|(system_id, counts)| (system_id, counts.into()))
         .collect();
     let launch_plans_by_ref = launch_plans
         .into_iter()
@@ -2472,6 +2509,59 @@ struct FilterOptionCounts {
     controls: BTreeMap<String, usize>,
 }
 
+fn build_system_filter_options(metadata: &[ArcadeGameMetadataKey]) -> ArcadeSystemFilterOptions {
+    let mut counts = FilterOptionCounts::default();
+    for row in metadata {
+        let category = row.category.trim();
+        if !category.is_empty() {
+            *counts.categories.entry(category.to_owned()).or_default() += 1;
+        }
+        if let Some(year) = row.year {
+            *counts.decades.entry((year / 10) * 10).or_default() += 1;
+        }
+        let manufacturer = row.manufacturer.trim();
+        if !manufacturer.is_empty() {
+            *counts
+                .manufacturers
+                .entry(manufacturer.to_owned())
+                .or_default() += 1;
+        }
+        if let Some(players) = row.players {
+            *counts.players.entry(players).or_default() += 1;
+        }
+        let control = canonical_control_label(&row.control);
+        if !control.is_empty() {
+            *counts.controls.entry(control).or_default() += 1;
+        }
+    }
+    counts.into()
+}
+impl From<FilterOptionCounts> for ArcadeSystemFilterOptions {
+    fn from(counts: FilterOptionCounts) -> Self {
+        Self {
+            categories: string_filter_options_from_counts(counts.categories),
+            decades: counts
+                .decades
+                .into_iter()
+                .map(|(decade, count)| ArcadeFilterOption {
+                    label: format!("{decade}'s"),
+                    count,
+                })
+                .collect(),
+            manufacturers: string_filter_options_from_counts(counts.manufacturers),
+            players: counts
+                .players
+                .into_iter()
+                .map(|(players, count)| ArcadeFilterOption {
+                    label: player_count_label(players),
+                    count,
+                })
+                .collect(),
+            controls: string_filter_options_from_counts(counts.controls),
+        }
+    }
+}
+
 fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<ArcadeFilterOption> {
     counts
         .into_iter()
@@ -2751,6 +2841,195 @@ mod tests {
             "/games/129.d64"
         );
         assert_eq!(collection.games.iter().count(), 130);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn navpack_drawer_counts_do_not_materialize_rows_or_build_rich_indexes() {
+        for count in [999, 4096] {
+            let path = navpack_fixture(count);
+            let (collection, _) = SystemCollection::open_navpack(
+                "c64",
+                &path,
+                std::fs::metadata(&path).unwrap().len(),
+                7,
+                count,
+                PlatformKind::Computer,
+            )
+            .unwrap();
+            let SystemCollectionRows::NavPack(rows) = &collection.games else {
+                panic!("expected NavPack");
+            };
+            let options = collection.filter_options().clone();
+            eprintln!(
+                "drawer_count={count} resident_rows={} rich_indexes={}",
+                rows.resident_rows(),
+                collection.rich_indexes.get().is_some()
+            );
+            assert_eq!(rows.resident_rows(), NavPackSystemRows::FIRST_VIEWPORT_ROWS);
+            assert!(collection.rich_indexes.get().is_none());
+            assert_eq!(
+                options.categories,
+                vec![ArcadeFilterOption {
+                    label: "Action".into(),
+                    count
+                }]
+            );
+            assert_eq!(
+                options.manufacturers,
+                vec![ArcadeFilterOption {
+                    label: "Fixture".into(),
+                    count
+                }]
+            );
+            assert_eq!(
+                options.controls,
+                vec![ArcadeFilterOption {
+                    label: "Joystick".into(),
+                    count
+                }]
+            );
+            assert_eq!(
+                options.decades,
+                vec![ArcadeFilterOption {
+                    label: "1980's".into(),
+                    count
+                }]
+            );
+            assert_eq!(collection.filter_options().categories, options.categories);
+            let reference = &collection.rich_indexes().filter_options_by_system["c64"];
+            assert_eq!(options.categories, reference.categories);
+            assert_eq!(options.manufacturers, reference.manufacturers);
+            assert_eq!(options.controls, reference.controls);
+            assert_eq!(options.players, reference.players);
+            assert_eq!(options.decades, reference.decades);
+            assert_eq!(
+                collection
+                    .filtered_game_indexes(&ArcadeFilter::Category("Action".into()))
+                    .len(),
+                count
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn navpack_drawer_counts_merge_control_aliases_and_preserve_empty_metadata() {
+        let path = navpack_fixture(3);
+        let games = ["joy", "joystick", ""]
+            .into_iter()
+            .enumerate()
+            .map(|(i, control)| crate::system_shard::SystemGame {
+                stable_key: format!("c64:{i}"),
+                title: format!("Game {i}"),
+                launch_ref: format!("/games/{i}.d64"),
+                control: control.into(),
+                manufacturer: " Maker ".into(),
+                category: " Action ".into(),
+                players: Some(i as u8),
+                year: (i != 0).then_some(1991),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let indexes = crate::system_shard::build_navigation_indexes(&games).unwrap();
+        std::fs::write(
+            &path,
+            crate::navpack::encode("c64", 7, &games, &indexes).unwrap(),
+        )
+        .unwrap();
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            3,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let options = collection.filter_options().clone();
+        assert!(collection.rich_indexes.get().is_none());
+        assert_eq!(
+            options.controls,
+            vec![ArcadeFilterOption {
+                label: "Joystick".into(),
+                count: 2
+            }]
+        );
+        let reference = &collection.rich_indexes().filter_options_by_system["c64"];
+        assert_eq!(options.controls, reference.controls);
+        assert_eq!(options.categories, reference.categories);
+        assert_eq!(options.manufacturers, reference.manufacturers);
+        assert_eq!(options.decades, reference.decades);
+        assert_eq!(options.players, reference.players);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn navpack_drawer_counts_fall_back_when_persisted_postings_are_invalid() {
+        let path = navpack_fixture(130);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let offset = u64::from_le_bytes(bytes[104..112].try_into().unwrap()) as usize;
+        bytes[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        let (collection, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            bytes.len() as u64,
+            7,
+            130,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        assert_eq!(
+            collection.filter_options().categories,
+            vec![ArcadeFilterOption {
+                label: "Action".into(),
+                count: 130
+            }]
+        );
+        let SystemCollectionRows::NavPack(rows) = &collection.games else {
+            panic!("expected NavPack");
+        };
+        assert!(rows.filter_options.get().unwrap().is_err());
+        assert!(collection.rich_indexes.get().is_some());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn owned_drawer_counts_are_prepared_before_publication_without_rich_indexes() {
+        let path = navpack_fixture(999);
+        let (mapped, _) = SystemCollection::open_navpack(
+            "c64",
+            &path,
+            std::fs::metadata(&path).unwrap().len(),
+            7,
+            999,
+            PlatformKind::Computer,
+        )
+        .unwrap();
+        let hot = mapped.games.iter().cloned().collect::<Vec<_>>();
+        let cold = (0..999)
+            .map(|i| mapped.metadata_at(i).unwrap().clone())
+            .collect::<Vec<_>>();
+        let collection = SystemCollection::new_with_metadata(
+            "c64",
+            hot,
+            cold,
+            mapped.all_launch_plans(),
+            PlatformKind::Computer,
+        );
+        let options = collection.filter_options().clone();
+        assert!(collection.rich_indexes.get().is_none());
+        let reference = &collection.rich_indexes().filter_options_by_system["c64"];
+        assert_eq!(options.categories, reference.categories);
+        assert_eq!(options.manufacturers, reference.manufacturers);
+        assert_eq!(options.controls, reference.controls);
+        assert_eq!(options.players, reference.players);
+        assert_eq!(options.decades, reference.decades);
         std::fs::remove_file(path).unwrap();
     }
 

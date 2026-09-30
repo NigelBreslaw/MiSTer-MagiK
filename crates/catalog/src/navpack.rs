@@ -64,10 +64,21 @@ pub struct MappedNavPack {
     rows_offset: usize,
     cold_offset: usize,
     launch_offset: usize,
+    index_offset: usize,
+    index_bytes: usize,
     strings_offset: usize,
     strings_bytes: usize,
     prelude_offset: usize,
     prelude_bytes: usize,
+}
+
+/// Borrowed labels and checked posting lengths; no row/metadata decoding.
+pub(crate) struct NavPackFilterCounts<'a> {
+    pub categories: Vec<(&'a str, usize)>,
+    pub decades: Vec<(u32, usize)>,
+    pub manufacturers: Vec<(&'a str, usize)>,
+    pub players: Vec<(u32, usize)>,
+    pub controls: Vec<(&'a str, usize)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -147,6 +158,8 @@ impl MappedNavPack {
                 rows_offset: header.rows_offset,
                 cold_offset: header.cold_offset,
                 launch_offset: header.launch_offset,
+                index_offset: header.index_offset,
+                index_bytes: header.index_bytes,
                 strings_offset: header.strings_offset,
                 strings_bytes: header.strings_bytes,
                 prelude_offset: header.prelude_offset,
@@ -241,6 +254,35 @@ impl MappedNavPack {
         })
     }
 
+    pub(crate) fn filter_counts(&self) -> Result<NavPackFilterCounts<'_>, String> {
+        let end = self
+            .index_offset
+            .checked_add(self.index_bytes)
+            .ok_or("NavPack index end overflow")?;
+        let mut bytes = self
+            .mapping
+            .get(self.index_offset..end)
+            .ok_or("NavPack index section is out of bounds")?;
+        for _ in 0..3 {
+            take_ordinals(&mut bytes, self.identity.games)?;
+        }
+        let categories = read_string_counts(&mut bytes, self.strings(), self.identity.games)?;
+        let decades = read_numeric_counts(&mut bytes, u16::MAX as u32, self.identity.games)?;
+        let manufacturers = read_string_counts(&mut bytes, self.strings(), self.identity.games)?;
+        let players = read_numeric_counts(&mut bytes, u8::MAX as u32, self.identity.games)?;
+        let controls = read_string_counts(&mut bytes, self.strings(), self.identity.games)?;
+        if !bytes.is_empty() {
+            return Err("NavPack index section has trailing bytes".into());
+        }
+        Ok(NavPackFilterCounts {
+            categories,
+            decades,
+            manufacturers,
+            players,
+            controls,
+        })
+    }
+
     fn strings(&self) -> &[u8] {
         &self.mapping[self.strings_offset..self.strings_offset + self.strings_bytes]
     }
@@ -251,6 +293,8 @@ struct CheckedHeader {
     rows_offset: usize,
     cold_offset: usize,
     launch_offset: usize,
+    index_offset: usize,
+    index_bytes: usize,
     strings_offset: usize,
     strings_bytes: usize,
     prelude_offset: usize,
@@ -687,6 +731,8 @@ fn validate_header(
         rows_offset: sections[0].0,
         cold_offset: sections[1].0,
         launch_offset: sections[2].0,
+        index_offset: sections[3].0,
+        index_bytes: sections[3].1,
         strings_offset: sections[4].0,
         strings_bytes: sections[4].1,
         prelude_offset,
@@ -840,6 +886,47 @@ fn encode_u8_postings(output: &mut Vec<u8>, groups: &[(u8, Vec<u32>)]) -> Result
         encode_ordinals(output, ordinals)?;
     }
     Ok(())
+}
+
+fn read_string_counts<'a>(
+    bytes: &mut &[u8],
+    strings: &'a [u8],
+    games: usize,
+) -> Result<Vec<(&'a str, usize)>, String> {
+    let count = take_u32(bytes)?;
+    let mut groups = Vec::new();
+    for _ in 0..count {
+        let label = read_string(strings, (take_u32(bytes)?, take_u32(bytes)?))?;
+        let entries = read_u32(bytes, 0)? as usize;
+        take_ordinals(bytes, games)?;
+        if groups
+            .last()
+            .is_some_and(|(previous, _)| *previous >= label)
+        {
+            return Err("NavPack string postings are not strictly ordered".into());
+        }
+        groups.push((label, entries));
+    }
+    Ok(groups)
+}
+
+fn read_numeric_counts(
+    bytes: &mut &[u8],
+    maximum: u32,
+    games: usize,
+) -> Result<Vec<(u32, usize)>, String> {
+    let count = take_u32(bytes)?;
+    let mut groups = Vec::new();
+    for _ in 0..count {
+        let key = take_u32(bytes)?;
+        if key > maximum || groups.last().is_some_and(|(previous, _)| *previous >= key) {
+            return Err("NavPack numeric postings have invalid or unordered keys".into());
+        }
+        let entries = read_u32(bytes, 0)? as usize;
+        take_ordinals(bytes, games)?;
+        groups.push((key, entries));
+    }
+    Ok(groups)
 }
 
 fn validate_indexes(mut bytes: &[u8], strings: &[u8], games: usize) -> Result<(), String> {
