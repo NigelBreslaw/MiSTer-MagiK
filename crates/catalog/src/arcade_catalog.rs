@@ -346,15 +346,6 @@ impl NavPackSystemRows {
         self.filter_options
             .get_or_init(|| {
                 let counts = self.pack.filter_counts()?;
-                let options = |groups: Vec<(&str, usize)>| {
-                    groups
-                        .into_iter()
-                        .map(|(label, count)| ArcadeFilterOption {
-                            label: label.to_owned(),
-                            count,
-                        })
-                        .collect()
-                };
                 // Persisted controls retain raw spellings; the drawer has always
                 // used canonical labels, so merge groups which normalize alike.
                 let mut controls = BTreeMap::<String, usize>::new();
@@ -365,25 +356,15 @@ impl NavPackSystemRows {
                     }
                 }
                 Ok(ArcadeSystemFilterOptions {
-                    categories: options(counts.categories),
-                    decades: counts
-                        .decades
-                        .into_iter()
-                        .map(|(decade, count)| ArcadeFilterOption {
-                            label: format!("{decade}'s"),
-                            count,
-                        })
-                        .collect(),
-                    manufacturers: options(counts.manufacturers),
-                    players: counts
-                        .players
-                        .into_iter()
-                        .map(|(players, count)| ArcadeFilterOption {
-                            label: player_count_label(players as u8),
-                            count,
-                        })
-                        .collect(),
-                    controls: string_filter_options_from_counts(controls),
+                    categories: filter_options_from_counts(counts.categories, String::from),
+                    decades: filter_options_from_counts(counts.decades, |decade| {
+                        format!("{decade}'s")
+                    }),
+                    manufacturers: filter_options_from_counts(counts.manufacturers, String::from),
+                    players: filter_options_from_counts(counts.players, |players| {
+                        player_count_label(players as u8)
+                    }),
+                    controls: filter_options_from_counts(controls, String::from),
                 })
             })
             .as_ref()
@@ -2592,33 +2573,25 @@ fn build_system_filter_options(metadata: &[ArcadeGameMetadataKey]) -> ArcadeSyst
 impl From<FilterOptionCounts> for ArcadeSystemFilterOptions {
     fn from(counts: FilterOptionCounts) -> Self {
         Self {
-            categories: string_filter_options_from_counts(counts.categories),
-            decades: counts
-                .decades
-                .into_iter()
-                .map(|(decade, count)| ArcadeFilterOption {
-                    label: format!("{decade}'s"),
-                    count,
-                })
-                .collect(),
-            manufacturers: string_filter_options_from_counts(counts.manufacturers),
-            players: counts
-                .players
-                .into_iter()
-                .map(|(players, count)| ArcadeFilterOption {
-                    label: player_count_label(players),
-                    count,
-                })
-                .collect(),
-            controls: string_filter_options_from_counts(counts.controls),
+            categories: filter_options_from_counts(counts.categories, String::from),
+            decades: filter_options_from_counts(counts.decades, |decade| format!("{decade}'s")),
+            manufacturers: filter_options_from_counts(counts.manufacturers, String::from),
+            players: filter_options_from_counts(counts.players, player_count_label),
+            controls: filter_options_from_counts(counts.controls, String::from),
         }
     }
 }
 
-fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<ArcadeFilterOption> {
+fn filter_options_from_counts<T>(
+    counts: impl IntoIterator<Item = (T, usize)>,
+    label: impl Fn(T) -> String,
+) -> Vec<ArcadeFilterOption> {
     counts
         .into_iter()
-        .map(|(label, count)| ArcadeFilterOption { label, count })
+        .map(|(value, count)| ArcadeFilterOption {
+            label: label(value),
+            count,
+        })
         .collect()
 }
 
