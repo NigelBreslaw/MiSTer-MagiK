@@ -90,3 +90,26 @@ or changes input ownership.
 
 The report includes Main's manifest revision and running binary hash match, plus
 before/after thread scheduling snapshots. This operation never changes scheduling.
+
+## Controller setup persistence
+
+Registration, claiming an existing controller and finishing setup update the
+in-memory registry immediately after the change is accepted. Controller setup
+shows current values while saving remains pending; it reports a saved revision
+only after the writer has completed serialization, file synchronization, atomic
+replacement and directory synchronization. A failure remains visible while
+navigation continues. Reopening setup and confirming explicitly retries the
+latest state; failures never arm automatic retries.
+
+One portable owner serializes writes. Input actions capture one changed entry;
+claiming a list item also resolves the existing stable label ordering without
+copying the other entries' fields. The pending queue coalesces edits by logical
+controller id and is bounded to 64 ids and 256 KiB of captured entry storage,
+plus fixed table bookkeeping. A full queue rejects a change before mutating the
+input-side registry. Sightings propagate to the owner's state without adding
+new automatic saves. An older completion cannot mark a newer revision saved.
+
+Completion wakes the launcher without creating an input edge or changing held
+state. Ordinary owner destruction does not join the writer on an input action.
+The launcher waits up to two seconds for accepted saves after its input loop
+ends and reports incomplete shutdown; a timeout never implies durability.

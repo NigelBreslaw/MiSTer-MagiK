@@ -124,6 +124,8 @@ pub struct PadPool {
     merged: PadState,
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
+    controller_persistence: mister_magik_controller_registry::ControllerPersistence,
+    controller_submit_error: Option<String>,
     last_rescan: Instant,
     device_discovery: Option<DeviceDiscovery>,
     input_hub: Option<InputHub>,
@@ -166,6 +168,9 @@ impl PadPool {
             })
             .collect();
         crate::ui_errln!("input proxy: navigation owned by input hub protocol v2");
+        let input_hub = Some(InputHub::start());
+        let controller_persistence =
+            Self::start_controller_persistence(&mut db, input_hub.as_ref())?;
         Ok(Self {
             pads,
             keyboards,
@@ -174,13 +179,71 @@ impl PadPool {
             merged: PadState::default(),
             active_idx: 0,
             db,
+            controller_persistence,
+            controller_submit_error: None,
             last_rescan: Instant::now(),
             device_discovery: Some(DeviceDiscovery::start()?),
-            input_hub: Some(InputHub::start()),
+            input_hub,
             next_device_generation,
         })
     }
 
+    fn start_controller_persistence(
+        db: &mut crate::controller_db::ControllerDb,
+        hub: Option<&InputHub>,
+    ) -> io::Result<mister_magik_controller_registry::ControllerPersistence> {
+        let wake = hub.map(InputHub::observation_probe);
+        let owner = mister_magik_controller_registry::ControllerPersistence::start_with_waker(
+            &db.inner,
+            move || {
+                if let Some(wake) = &wake {
+                    wake.wake_external();
+                }
+            },
+        )?;
+        db.observe_saves(owner.observer());
+        Ok(owner)
+    }
+    fn accept_controller_submission(&mut self, result: io::Result<u64>) -> io::Result<()> {
+        match result {
+            Ok(_) => {
+                self.controller_submit_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.controller_submit_error = Some(error.to_string());
+                Err(error)
+            }
+        }
+    }
+    pub fn controller_save_status(&self) -> mister_magik_controller_registry::SaveStatus {
+        self.controller_persistence.status()
+    }
+    pub fn take_controller_save_completion(
+        &self,
+    ) -> Option<mister_magik_controller_registry::SaveCompletion> {
+        self.controller_persistence.take_completion()
+    }
+    pub fn controller_save_notice(&self) -> Option<&'static str> {
+        if self.controller_submit_error.is_some() {
+            Some("Controller change could not be accepted. Open controller setup and try again.")
+        } else if self.controller_persistence.status().is_failed() {
+            Some(
+                "Controller changes could not be saved. Open controller setup and confirm to retry.",
+            )
+        } else if self.controller_persistence.status().is_pending() {
+            Some("Saving controller changes...")
+        } else {
+            None
+        }
+    }
+    pub fn retry_controller_save(&mut self) -> io::Result<()> {
+        let result = self.controller_persistence.retry();
+        self.accept_controller_submission(result)
+    }
+    pub fn shutdown_controller_saves(&mut self, timeout: Duration) -> io::Result<()> {
+        self.controller_persistence.shutdown(timeout)
+    }
     pub fn db(&self) -> &crate::controller_db::ControllerDb {
         &self.db
     }
@@ -305,9 +368,10 @@ impl PadPool {
             .get(idx)
             .map(|pad| pad.info.clone())
             .ok_or_else(|| pad_index_error(idx))?;
-        let entry = crate::controller_db::ControllerDb::default_entry(&info);
-        self.db.upsert(&info, entry);
-        self.db.save()?;
+        let result = self
+            .controller_persistence
+            .register_new(&mut self.db.inner, &info);
+        self.accept_controller_submission(result)?;
         if let Some(pad) = self.pads.get_mut(idx) {
             pad.refresh_profile();
         }
@@ -326,12 +390,10 @@ impl PadPool {
             .get(idx)
             .map(|pad| pad.info.clone())
             .ok_or_else(|| pad_index_error(idx))?;
-        let items = self.db.list_entries();
-        let item = items.get(list_index).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "list index out of range")
-        })?;
-        self.db.claim_existing(&info, &item.id)?;
-        self.db.save()?;
+        let result =
+            self.controller_persistence
+                .claim_existing(&mut self.db.inner, &info, list_index);
+        self.accept_controller_submission(result)?;
         if let Some(pad) = self.pads.get_mut(idx) {
             pad.refresh_profile();
         }
@@ -351,8 +413,10 @@ impl PadPool {
             .get(idx)
             .map(|pad| pad.info.clone())
             .ok_or_else(|| pad_index_error(idx))?;
-        self.db.finish_setup(&info, label, kind);
-        self.db.save()?;
+        let result =
+            self.controller_persistence
+                .finish_setup(&mut self.db.inner, &info, label, kind);
+        self.accept_controller_submission(result)?;
         Ok(())
     }
 
@@ -527,7 +591,13 @@ impl PadPool {
                 Ok(mut reader) => {
                     reader.assign_device(self.next_device_generation);
                     self.next_device_generation += 1;
-                    self.db.note_sighting(reader.info());
+                    if let Err(error) = self
+                        .controller_persistence
+                        .note_sighting(&mut self.db.inner, reader.info())
+                    {
+                        self.controller_submit_error = Some(error.to_string());
+                        crate::ui_errln!("controller sighting could not be queued: {error}");
+                    }
                     self.pads.push(reader);
                     crate::ui_errln!("pad: hotplug added {path} ({} device(s))", self.pads.len());
                     changed = true;
@@ -586,6 +656,9 @@ impl PadPool {
 
     #[cfg(test)]
     pub fn from_test_states(states: Vec<PadState>) -> Self {
+        let mut db = crate::controller_db::ControllerDb::load();
+        let controller_persistence =
+            Self::start_controller_persistence(&mut db, None).expect("controller test writer");
         let mut pool = Self {
             pads: states
                 .into_iter()
@@ -610,7 +683,9 @@ impl PadPool {
             user_activity: false,
             merged: PadState::default(),
             active_idx: 0,
-            db: crate::controller_db::ControllerDb::load(),
+            db,
+            controller_persistence,
+            controller_submit_error: None,
             last_rescan: Instant::now(),
             device_discovery: None,
             input_hub: None,
@@ -1600,6 +1675,9 @@ mod tests {
     }
 
     fn empty_pool() -> PadPool {
+        let mut db = crate::controller_db::ControllerDb::load();
+        let controller_persistence =
+            PadPool::start_controller_persistence(&mut db, None).expect("controller test writer");
         PadPool {
             pads: Vec::new(),
             keyboards: Vec::new(),
@@ -1607,7 +1685,9 @@ mod tests {
             user_activity: false,
             merged: PadState::default(),
             active_idx: 0,
-            db: crate::controller_db::ControllerDb::load(),
+            db,
+            controller_persistence,
+            controller_submit_error: None,
             last_rescan: Instant::now(),
             device_discovery: None,
             input_hub: None,
@@ -1961,5 +2041,92 @@ mod tests {
             .expect_err("short event should disconnect");
 
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+}
+
+#[cfg(test)]
+mod controller_persistence_gate_tests {
+    use super::*;
+    use mister_magik_controller_registry::probe::{SavePhase, SaveProbe};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    #[test]
+    fn controller_setup_save_gate_probe() {
+        let mut observations = Vec::new();
+        for action in 0..3 {
+            let path = std::env::temp_dir().join(format!(
+                "magik-controller-pad-probe-{action}-{}-{}.json",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let mut pool = PadPool::from_test_states(vec![PadState::default()]);
+            pool.db = crate::controller_db::ControllerDb::load_from(&path.to_string_lossy());
+            pool.pads[0].info.vendor_id = "1234".into();
+            pool.pads[0].info.product_id = "5678".into();
+            pool.pads[0].info.usb_port = "fixture-port".into();
+            let info = pool.pads[0].info.clone();
+            let mut entry = crate::controller_db::ControllerDb::default_entry(&info);
+            entry.label = "Previous label".into();
+            pool.db.upsert(&info, entry);
+            pool.db.save().unwrap();
+            let gate = Arc::new((Mutex::new(false), Condvar::new()));
+            let worker_gate = gate.clone();
+            let (entered_tx, entered_rx) = mpsc::channel();
+            pool.db.set_save_probe(SaveProbe::new(move |phase| {
+                if matches!(phase, SavePhase::Started) {
+                    let _ = entered_tx.send(std::thread::current().id());
+                    let (lock, cv) = &*worker_gate;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = cv.wait(released).unwrap();
+                    }
+                }
+            }));
+            pool.controller_persistence =
+                PadPool::start_controller_persistence(&mut pool.db, None).unwrap();
+            let device = pool.pads[0].device.clone().unwrap();
+            let (ack_tx, ack_rx) = mpsc::channel();
+            let thread = std::thread::spawn(move || {
+                let caller = std::thread::current().id();
+                let result = match action {
+                    0 => pool.register_new(&device),
+                    1 => pool.claim_existing(&device, 0),
+                    _ => pool.finish_setup(
+                        &device,
+                        "Final label".into(),
+                        crate::controller_db::ControllerKind::Arcade,
+                    ),
+                };
+                assert!(pool.db.is_persistence_pending());
+                pool.pads[0].state.dpad_down = true;
+                pool.rebuild_merged_state();
+                assert!(pool.merged.dpad_down);
+                ack_tx.send(caller).unwrap();
+                result.unwrap();
+                pool
+            });
+            let writer = entered_rx.recv_timeout(Duration::from_secs(2));
+            let acknowledged =
+                writer.is_ok() && ack_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+            let (lock, cv) = &*gate;
+            *lock.lock().unwrap() = true;
+            cv.notify_all();
+            let mut pool = thread.join().unwrap();
+            writer.unwrap();
+            pool.shutdown_controller_saves(Duration::from_secs(2))
+                .unwrap();
+            assert!(!pool.db.is_persistence_pending());
+            // Candidate-only flush is intentionally a method on PadPool; the
+            // parent has already returned from the synchronous save here.
+            eprintln!(
+                "controller_gate_probe action={action} navigation_before_release={acknowledged}"
+            );
+            observations.push(acknowledged);
+            drop(pool);
+            std::fs::remove_file(path).unwrap();
+        }
+        assert_eq!(observations, vec![true, true, true]);
     }
 }

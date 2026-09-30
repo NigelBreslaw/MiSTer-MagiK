@@ -157,3 +157,22 @@ mod tests {
         assert_eq!(c.live, 0);
     }
 }
+
+/// Consumer-only matched accounting; excludes reporter allocations and restores
+/// a previous observation when unwinding.
+pub(super) fn observe_allocations<R>(f: impl FnOnce() -> R) -> (R, serde_json::Value) {
+    struct Restore(Option<Counts>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            COUNTS.set(self.0);
+        }
+    }
+    let restore = Restore(COUNTS.replace(Some(Counts::default())));
+    let result = f();
+    let counts = COUNTS.get().unwrap();
+    drop(restore);
+    (
+        result,
+        serde_json::json!({"allocations":counts.allocations,"allocated_bytes":counts.allocated,"peak_temporary_bytes":counts.peak,"final_observed_bytes":counts.live}),
+    )
+}

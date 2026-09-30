@@ -1,0 +1,20 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name="mister-magik-controller-registry"
+version="0.1.0"
+edition="2024"
+rust-version="1.97.1"
+license="GPL-3.0-or-later"
+description="Portable controller registry and serialized persistence owner"
+[lints.rust]
+warnings="deny"
+[lints.clippy]
+all="deny"
+[dependencies]
+mister-magik-core={path="../magik-core"}
+serde={version="1",features=["derive"]}
+serde_json="1"
+[features]
+default=[]
+io-probe=[]

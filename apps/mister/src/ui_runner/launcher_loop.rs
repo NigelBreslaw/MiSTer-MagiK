@@ -7566,13 +7566,32 @@ pub(super) fn run_launcher_loop(
                     }
                 }
             }
+            if let Some(completion) = pad.take_controller_save_completion() {
+                match completion.result {
+                    Ok(()) => crate::ui_errln!(
+                        "controller setup: persisted registry revision {}",
+                        completion.revision
+                    ),
+                    Err(error) => crate::ui_errln!(
+                        "controller setup: revision {} save failed: {error}",
+                        completion.revision
+                    ),
+                }
+                full_bridge_dirty = true;
+            }
+            let controller_save_notice = pad.controller_save_notice();
             let input_notice = input_fault_notice.or_else(|| {
                 setup_disconnect_notice.then_some(
                     "Controller disconnected. Press a button after reconnecting to restart setup.",
                 )
             });
             let input = app.global::<slint_ui::launcher::InputView>();
-            input.set_fault_notice(input_notice.unwrap_or_default().into());
+            input.set_fault_notice(
+                input_notice
+                    .or(controller_save_notice)
+                    .unwrap_or_default()
+                    .into(),
+            );
             input.set_input_availability(if input_notice.is_some() {
                 slint_ui::launcher::InputAvailability::Unavailable
             } else {
@@ -7769,16 +7788,22 @@ pub(super) fn run_launcher_loop(
                             SetupAction::SaveFinish { label, kind } => {
                                 if let Err(e) = pad.finish_setup(&target_device, label, kind) {
                                     crate::ui_errln!("controller setup: save: {e}");
-                                } else if let Some(info) = pad.info_for_device(&target_device) {
+                                } else {
                                     crate::ui_errln!(
-                                        "controller setup: saved \"{}\" ({})",
-                                        pad.db().display_label(info),
-                                        kind.as_str()
+                                        "controller setup: queued registry revision {}",
+                                        pad.controller_save_status().requested
                                     );
                                 }
                                 setup.advance_to_next_pad(&pad);
                             }
                             SetupAction::Done => {
+                                if pad.controller_save_status().is_failed()
+                                    && let Err(error) = pad.retry_controller_save()
+                                {
+                                    crate::ui_errln!(
+                                        "controller setup: retry could not be queued: {error}"
+                                    );
+                                }
                                 setup.advance_to_next_pad(&pad);
                             }
                         }
@@ -13012,6 +13037,11 @@ pub(super) fn run_launcher_loop(
     );
     if let Err(e) = cpu_profile::finish(cpu.take()) {
         crate::ui_errln!("{e}");
+    }
+    // Input processing has ended. Finish accepted writes without making a
+    // setup action or normal frame wait for filesystem I/O.
+    if let Err(error) = pad.shutdown_controller_saves(Duration::from_secs(2)) {
+        crate::ui_errln!("controller setup: shutdown save incomplete: {error}");
     }
 }
 

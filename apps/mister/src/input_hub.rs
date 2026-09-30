@@ -202,6 +202,16 @@ impl InputObservationProbe {
         InputObservation(state.wake_generation)
     }
 
+    /// Wake an idle launcher for a background completion. This records no
+    /// input edge and does not advance the input capture clock or held state.
+    pub fn wake_external(&self) {
+        self.mailbox
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .note_change();
+        self.mailbox.wake.notify_all();
+    }
     #[must_use]
     pub fn changed_since(&self, observation: InputObservation) -> bool {
         self.observe() != observation
@@ -798,6 +808,18 @@ mod tests {
         hub.mailbox.wake.notify_all();
     }
 
+    #[test]
+    fn external_completion_wakes_without_input_edges_or_capture_time() {
+        let hub = test_hub();
+        let before = hub.drain();
+        let probe = hub.observation_probe();
+        probe.wake_external();
+        let after = hub.drain();
+        assert_ne!(before.observation, after.observation);
+        assert!(after.batch.events.is_empty());
+        assert!(after.publications.is_empty());
+        assert_eq!(before.batch, after.batch);
+    }
     #[test]
     fn proxy_keys_map_to_logical_actions() {
         assert_eq!(logical_action_for_key(KEY_DOWN), Some(LogicalAction::Down));

@@ -152,7 +152,12 @@ impl SetupNav {
                 info.usb_port
             ),
             SetupPhase::PickExisting => format!(
-                "Choose which saved controller is plugged in at {}",
+                "Choose which {} controller is plugged in at {}",
+                if db.is_persistence_pending() {
+                    "registered"
+                } else {
+                    "saved"
+                },
                 info.usb_port
             ),
             SetupPhase::Configure => String::new(),
@@ -268,8 +273,13 @@ impl SetupNav {
         ];
 
         if let Some(entry) = db.get(info) {
-            rows.push(("Saved label".into(), entry.label.clone()));
-            rows.push(("Saved type".into(), entry.kind.as_str().into()));
+            let prefix = if db.is_persistence_pending() {
+                "Current"
+            } else {
+                "Saved"
+            };
+            rows.push((format!("{prefix} label"), entry.label.clone()));
+            rows.push((format!("{prefix} type"), entry.kind.as_str().into()));
             rows.push((
                 "Setup complete".into(),
                 if entry.setup_complete { "yes" } else { "no" }.into(),
@@ -664,6 +674,50 @@ mod tests {
         assert!(rows.contains(&("Serial".to_string(), "(none)".to_string())));
         assert!(rows.contains(&("Saved label".to_string(), "Arcade Pad".to_string())));
         assert!(rows.contains(&("Setup complete".to_string(), "yes".to_string())));
+    }
+
+    #[test]
+    fn pending_registry_values_become_saved_only_after_writer_acknowledges() {
+        use mister_magik_controller_registry::{
+            ControllerPersistence,
+            probe::{SavePhase, SaveProbe},
+        };
+        use std::sync::{Arc, Condvar, Mutex, mpsc};
+        use std::time::Duration;
+        let mut db = empty_db("pending-caption");
+        let info = pad_info("1-1.4");
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let writer_gate = gate.clone();
+        let (started, observed) = mpsc::channel();
+        db.set_save_probe(SaveProbe::new(move |phase| {
+            if matches!(phase, SavePhase::Started) {
+                let _ = started.send(());
+                let (lock, wake) = &*writer_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            }
+        }));
+        let mut owner = ControllerPersistence::start(&db.inner).unwrap();
+        db.observe_saves(owner.observer());
+        owner.register_new(&mut db.inner, &info).unwrap();
+        let began = observed.recv_timeout(Duration::from_secs(2)).is_ok();
+        let pending = SetupNav::configure_fields(&info, "/dev/input/js0", &db);
+        let mut nav = SetupNav::new();
+        nav.phase = SetupPhase::PickExisting;
+        let pending_subtitle = nav.subtitle(&info, &db);
+        // Release before assertions so fixture failures never strand a writer.
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        let saved = SetupNav::configure_fields(&info, "/dev/input/js0", &db);
+        assert!(began);
+        assert!(pending.iter().any(|(label, _)| label == "Current label"));
+        assert!(!pending.iter().any(|(label, _)| label == "Saved label"));
+        assert!(pending_subtitle.contains("registered controller"));
+        assert!(saved.iter().any(|(label, _)| label == "Saved label"));
+        assert!(nav.subtitle(&info, &db).contains("saved controller"));
     }
 
     #[test]

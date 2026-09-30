@@ -86,6 +86,13 @@ fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[2] != "--mode" {
         return Err("expected --bench WORKLOAD --mode MODE".into());
     }
+    if args[1] == "controller-save" {
+        if args[3] != "timing" {
+            return Err("controller-save supports timing mode".into());
+        }
+        println!("{}", crate::controller_save::run()?);
+        return Ok(());
+    }
     if args[1] == "incremental-refresh" {
         if args[3] != "timing" {
             return Err("incremental-refresh supports timing mode".into());
