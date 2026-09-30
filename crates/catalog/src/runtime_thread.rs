@@ -19,6 +19,7 @@ pub enum RuntimeThreadRole {
     LauncherCardRendererSecondary,
     InputReader,
     InputDiscovery,
+    ControllerPersistence,
     CatalogWorker,
     CatalogShardPublisher,
     SystemEntryPrepare,
@@ -53,6 +54,7 @@ impl RuntimeThreadRole {
             Self::LauncherCardRendererSecondary => "launcher-card-renderer-secondary",
             Self::InputReader => "input-reader",
             Self::InputDiscovery => "input-discovery",
+            Self::ControllerPersistence => "controller-persistence",
             Self::CatalogWorker => "catalog-worker",
             Self::CatalogShardPublisher => "catalog-shard-publisher",
             Self::SystemEntryPrepare => "system-entry-prepare",
@@ -101,7 +103,9 @@ impl RuntimeThreadRole {
             Self::InputReader => RuntimeThreadPolicy::new(-15, ThreadAffinity::Cpu1),
             // Raw hotplug discovery walks /dev and sysfs. It is never part of
             // navigation capture, so keep it away from the launcher/input CPU.
-            Self::InputDiscovery => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
+            Self::InputDiscovery | Self::ControllerPersistence => {
+                RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
+            }
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             Self::CatalogShardPublisher => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu1),
             Self::SystemEntryPrepare => RuntimeThreadPolicy::new(0, ThreadAffinity::Cpu0),
@@ -769,6 +773,11 @@ mod tests {
             ),
             (RuntimeThreadRole::InputReader, -15, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::InputDiscovery, 10, ThreadAffinity::Cpu0),
+            (
+                RuntimeThreadRole::ControllerPersistence,
+                10,
+                ThreadAffinity::Cpu0,
+            ),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::CatalogShardPublisher,
