@@ -28,6 +28,28 @@ pub(crate) fn record_read() {
     READ_ATTEMPTS.set(READ_ATTEMPTS.get() + 1);
 }
 
+pub fn source_walks() -> u64 {
+    SOURCE_WALKS.get()
+}
+pub fn watch_tree_walks() -> u64 {
+    WATCH_TREE_WALKS.get()
+}
+pub fn watch_reuses() -> u64 {
+    WATCH_REUSES.get()
+}
+#[cfg(feature = "builder")]
+pub(crate) fn record_source_walk() {
+    SOURCE_WALKS.set(SOURCE_WALKS.get() + 1);
+}
+#[cfg(feature = "builder")]
+pub(crate) fn record_watch_tree_walk() {
+    WATCH_TREE_WALKS.set(WATCH_TREE_WALKS.get() + 1);
+}
+#[cfg(feature = "builder")]
+pub(crate) fn record_watch_reuse() {
+    WATCH_REUSES.set(WATCH_REUSES.get() + 1);
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -67,26 +89,4 @@ mod tests {
         assert_eq!(child, 0);
         std::fs::remove_dir_all(root).unwrap();
     }
-}
-
-pub fn source_walks() -> u64 {
-    SOURCE_WALKS.get()
-}
-pub fn watch_tree_walks() -> u64 {
-    WATCH_TREE_WALKS.get()
-}
-pub fn watch_reuses() -> u64 {
-    WATCH_REUSES.get()
-}
-#[cfg(feature = "builder")]
-pub(crate) fn record_source_walk() {
-    SOURCE_WALKS.set(SOURCE_WALKS.get() + 1);
-}
-#[cfg(feature = "builder")]
-pub(crate) fn record_watch_tree_walk() {
-    WATCH_TREE_WALKS.set(WATCH_TREE_WALKS.get() + 1);
-}
-#[cfg(feature = "builder")]
-pub(crate) fn record_watch_reuse() {
-    WATCH_REUSES.set(WATCH_REUSES.get() + 1);
 }
