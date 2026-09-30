@@ -11202,7 +11202,16 @@ pub(super) fn run_launcher_loop(
                                     false
                                 }
                             } else {
-                                navigation_transition.render_into(pixels).is_ok()
+                                // The cog blends by reading its output. Keep those
+                                // reads in the existing cached working buffer, then
+                                // write linearly into the granted scanout mapping.
+                                navigation_transition.render().is_ok_and(|frame| {
+                                    if pixels.len() != frame.len() {
+                                        return false;
+                                    }
+                                    pixels.copy_from_slice(frame);
+                                    true
+                                })
                             };
                             direct_render_timing = Some((started, Instant::now(), start_phase_us));
                             rendered

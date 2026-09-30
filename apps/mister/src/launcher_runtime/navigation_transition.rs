@@ -2063,6 +2063,58 @@ mod tests {
     }
 
     #[test]
+    fn cached_settings_cog_matches_direct_pixels_and_reuses_working_buffer() {
+        static COG: std::sync::OnceLock<Vec<SharedRgb565Pixel>> = std::sync::OnceLock::new();
+        let cog = COG.get_or_init(|| {
+            vec![
+                SharedRgb565Pixel(0);
+                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+            ]
+        });
+        let (width, height) = (960, 540);
+        let source = (0..width * height)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(13)))
+            .collect::<Vec<_>>();
+        let destination = (0..width * height)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(29)))
+            .collect::<Vec<_>>();
+        for direction in [
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionDirection::Reverse,
+        ] {
+            let mut runtime = NavigationTransitionRuntime::new(width, height, true);
+            runtime
+                .begin_settings_cog_physical(direction, width, height, &source, cog, 0)
+                .unwrap();
+            // Deferred preparation must preserve the exact source as well.
+            let mut output = vec![Rgb565Pixel(0); width * height];
+            runtime.render_into(&mut output).unwrap();
+            assert!(
+                runtime
+                    .render()
+                    .unwrap()
+                    .iter()
+                    .zip(&output)
+                    .all(|(a, b)| a.0 == b.0)
+            );
+            runtime.capture_destination(&destination, 1).unwrap();
+            let working = runtime.render().unwrap().as_ptr();
+            for elapsed in [0, 140_000, 360_000, 590_000, 820_000, 1_500_000] {
+                runtime.tick(1 + elapsed);
+                runtime.render_into(&mut output).unwrap();
+                let cached = runtime.render().unwrap();
+                assert_eq!(cached.as_ptr(), working);
+                assert!(
+                    cached.iter().zip(&output).all(|(a, b)| a.0 == b.0),
+                    "{direction:?} at {elapsed}"
+                );
+            }
+            assert!(runtime.complete().is_some());
+        }
+    }
+
+    #[test]
     fn reverse_settings_cog_uses_live_settings_as_its_settings_pixels() {
         let mut runtime = NavigationTransitionRuntime::new(8, 6, true);
         let live_settings = vec![Rgb565Pixel(0x2222); 8 * 6];
