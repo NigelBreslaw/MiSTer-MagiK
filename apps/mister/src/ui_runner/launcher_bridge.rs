@@ -597,6 +597,21 @@ fn sync_launcher_confirm_bridge(
             );
             set_bridge_string_if_changed!(bridge, get_confirm_label, set_confirm_label, "Retry");
         }
+    } else if nav.confirm_action == Some(launcher::ConfirmAction::LibraryUpdateFailed)
+        && let Some(error) = nav.library_reset_error.as_deref()
+    {
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirmation_title,
+            set_confirmation_title,
+            "Database reset failed"
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirmation_message,
+            set_confirmation_message,
+            error
+        );
     } else if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolutionError)
         && let Some(error) = nav.display_error.as_deref()
     {

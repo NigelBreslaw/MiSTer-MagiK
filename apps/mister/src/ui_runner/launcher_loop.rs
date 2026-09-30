@@ -43,6 +43,49 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
+const LIBRARY_RESET_REBOOT_TIMEOUT: Duration = Duration::from_secs(15);
+
+enum LibraryResetState {
+    Idle,
+    Deleting(std::sync::mpsc::Receiver<Result<launcher::PurgeLibraryDataOutcome, String>>),
+    RebootRequested { deadline: Instant },
+}
+
+impl LibraryResetState {
+    /// True while ordinary launcher work must remain paused.
+    fn poll(&mut self, now: Instant) -> Result<bool, String> {
+        let error = match self {
+            Self::Idle => return Ok(false),
+            Self::RebootRequested { deadline } => {
+                if now < *deadline {
+                    return Ok(true);
+                }
+                "Database deleted, but MiSTer did not reboot. Restart MiSTer manually.".to_string()
+            }
+            Self::Deleting(worker) => match worker.try_recv() {
+                Ok(Ok(outcome)) => {
+                    crate::ui_logln!(
+                        "library_reset_reboot_requested catalog_removed={} screenshot_removed={}",
+                        outcome.catalog_artifacts_removed,
+                        outcome.screenshot_artifacts_removed
+                    );
+                    *self = Self::RebootRequested {
+                        deadline: now + LIBRARY_RESET_REBOOT_TIMEOUT,
+                    };
+                    return Ok(true);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(true),
+                Ok(Err(error)) => error,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    "Database reset worker stopped unexpectedly".to_string()
+                }
+            },
+        };
+        *self = Self::Idle;
+        Err(error)
+    }
+}
+
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(1_000);
@@ -443,7 +486,7 @@ fn launcher_input_focus(
             1,
             DirectionalPolicy::MenuRepeat,
         )
-    } else if modal {
+    } else if modal && !nav.refresh_hold_owns_input() {
         (
             InputContextKind::LauncherModal,
             1,
@@ -5442,6 +5485,8 @@ pub(super) fn run_launcher_loop(
         input_observation_probe.clone(),
     );
     let mut loading_title = String::new();
+    let mut library_reset = LibraryResetState::Idle;
+    let mut library_reset_bridge_dirty = false;
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
     let mut launcher_bench_next_step: Instant;
@@ -6316,6 +6361,20 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
+        match library_reset.poll(loop_start) {
+            Ok(true) => {
+                let _pace = pacer.wait();
+                continue 'launcher;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                crate::ui_errln!("library reset failed: {error}");
+                loading_title.clear();
+                nav.show_library_reset_error(error);
+                library_reset_bridge_dirty = true;
+                request_launcher_redraw!();
+            }
+        }
         let slint_timer_dispatch_started = Instant::now();
         let gui_timer_dispatch_pmu = gui_profiling.span("gui.timer-dispatch");
         let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
@@ -6358,7 +6417,8 @@ pub(super) fn run_launcher_loop(
             background_work_allowed = false;
         }
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
-            || std::mem::take(&mut modal_input_test_bridge_sync_pending);
+            || std::mem::take(&mut modal_input_test_bridge_sync_pending)
+            || std::mem::take(&mut library_reset_bridge_dirty);
         if startup_intro.is_none() {
             #[cfg(test)]
             if startup_intro_catalog_shells_pending || startup_intro_catalog_ui_replay.is_some() {
@@ -8406,14 +8466,35 @@ pub(super) fn run_launcher_loop(
                                         request_launcher_redraw!();
                                         continue 'launcher;
                                     }
-                                    LauncherAction::Restart => {
+                                    LauncherAction::Restart | LauncherAction::PurgeLibraryData => {
+                                        let resetting =
+                                            event.action == LauncherAction::PurgeLibraryData;
                                         if ui_test_fixture {
                                             crate::ui_logln!(
-                                                "ui_test_effect_blocked effect=restart"
+                                                "ui_test_effect_blocked effect={}",
+                                                if resetting {
+                                                    "purge_library_data"
+                                                } else {
+                                                    "restart"
+                                                }
                                             );
                                             continue 'launcher;
                                         }
-                                        loading_title = "Shutting down…".to_string();
+                                        if resetting
+                                            && (!scheduler.catalog_worker_available()
+                                                || scheduler.media_worker_running())
+                                        {
+                                            nav.show_library_reset_error("Catalog or screenshot work is still running. Wait for it to finish, then hold A for 7 seconds again.".into());
+                                            library_reset_bridge_dirty = true;
+                                            request_launcher_redraw!();
+                                            continue 'launcher;
+                                        }
+                                        loading_title = if resetting {
+                                            "Deleting database and screenshot packs…"
+                                        } else {
+                                            "Shutting down…"
+                                        }
+                                        .to_string();
                                         sync_bridge_launcher(
                                             &app,
                                             &pad,
@@ -8441,6 +8522,30 @@ pub(super) fn run_launcher_loop(
                                             0,
                                             ui.render_h(),
                                         );
+                                        if resetting {
+                                            let (sender, receiver) = std::sync::mpsc::channel();
+                                            match std::thread::Builder::new()
+                                                .name("library-reset".into())
+                                                .spawn(move || {
+                                                    let _ = sender.send(
+                                                        launcher::purge_library_data_and_reboot(),
+                                                    );
+                                                }) {
+                                                Ok(_) => {
+                                                    library_reset =
+                                                        LibraryResetState::Deleting(receiver)
+                                                }
+                                                Err(error) => {
+                                                    loading_title.clear();
+                                                    nav.show_library_reset_error(format!(
+                                                        "Could not start database reset: {error}"
+                                                    ));
+                                                    library_reset_bridge_dirty = true;
+                                                    request_launcher_redraw!();
+                                                }
+                                            }
+                                            continue 'launcher;
+                                        }
                                         std::thread::sleep(Duration::from_millis(250));
                                         match launcher::reboot_mister() {
                                             Ok(()) => continue 'launcher,
@@ -16219,6 +16324,112 @@ mod tests {
             );
         }
         assert_eq!(nav.selected, 1);
+    }
+
+    #[test]
+    fn library_reset_reboot_wait_expires_and_resumes_input_without_retrying() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut reset = LibraryResetState::Deleting(receiver);
+        let now = Instant::now();
+        assert_eq!(reset.poll(now), Ok(true));
+        sender
+            .send(Ok(launcher::PurgeLibraryDataOutcome::default()))
+            .unwrap();
+        assert_eq!(reset.poll(now), Ok(true));
+        assert!(matches!(reset, LibraryResetState::RebootRequested { .. }));
+        assert_eq!(
+            reset.poll(now + LIBRARY_RESET_REBOOT_TIMEOUT - Duration::from_millis(1)),
+            Ok(true)
+        );
+
+        let error = reset
+            .poll(now + LIBRARY_RESET_REBOOT_TIMEOUT)
+            .expect_err("missing reboot must time out");
+        assert!(error.contains("MiSTer did not reboot"));
+        assert!(matches!(reset, LibraryResetState::Idle));
+        assert_eq!(reset.poll(now + LIBRARY_RESET_REBOOT_TIMEOUT), Ok(false));
+
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.show_library_reset_error(error);
+        let press = normalized_test_press(LogicalAction::Activate);
+        assert!(
+            nav.handle_action_with_navigation_intents(&press, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    fn library_reset_worker_failure_and_disconnect_resume_launcher() {
+        for disconnect in [false, true] {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let mut reset = LibraryResetState::Deleting(receiver);
+            if !disconnect {
+                sender.send(Err("delete failed".into())).unwrap();
+            }
+            drop(sender);
+            let error = reset.poll(Instant::now()).expect_err("failed worker");
+            assert_eq!(
+                error,
+                if disconnect {
+                    "Database reset worker stopped unexpectedly"
+                } else {
+                    "delete failed"
+                }
+            );
+            assert!(matches!(reset, LibraryResetState::Idle));
+            assert_eq!(reset.poll(Instant::now()), Ok(false));
+        }
+    }
+
+    #[test]
+    fn refresh_hold_keeps_initial_press_capture_through_confirmation() {
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 6;
+        let initial_focus = launcher_screen_input_focus(&nav);
+        let mut router = InputRouter::new(initial_focus);
+        let now = Instant::now();
+        let mut press = normalized_test_press(LogicalAction::Activate);
+        press.source.kind = InputSourceKind::MainProxy;
+        let InputOutcome::Dispatch { event, .. } = router.route_event(press, initial_focus, now)
+        else {
+            panic!("refresh press should dispatch");
+        };
+        assert!(
+            nav.handle_action_with_navigation_intents(&event, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(
+            nav.confirm_action,
+            Some(launcher::ConfirmAction::RefreshDatabase)
+        );
+        assert_eq!(nav.confirm_selected, 0);
+
+        let focus = launcher_input_focus(true, false, false, false, true, false, &nav);
+        router.set_focus(focus);
+        assert_eq!(focus, initial_focus);
+        let held = PadState {
+            btn_a: router.action_held(LogicalAction::Activate),
+            ..PadState::default()
+        };
+        assert!(held.btn_a);
+        assert!(
+            nav.handle_held_tick_with_navigation_intents(
+                &held,
+                now + Duration::from_millis(6999),
+                &catalog
+            )
+            .is_none()
+        );
+        let reset = nav
+            .handle_held_tick_with_navigation_intents(&held, now + Duration::from_secs(7), &catalog)
+            .expect("continuous initial press should reset");
+        assert_eq!(reset.action, LauncherAction::PurgeLibraryData);
+        assert_eq!(nav.confirm_action, None);
     }
 
     #[test]

@@ -594,41 +594,6 @@ pub fn build_fresh_catalog_with_presentation_progress(
     })
 }
 
-pub fn remove_default_catalog_artifacts() -> Result<usize, String> {
-    let paths = crate::device_layout::CatalogPaths::capture_process();
-    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
-        .map_err(|error| error.to_string())?;
-    remove_catalog_artifacts_with_lease(paths.sharded_catalog_dir(), &lease)
-}
-
-pub fn remove_catalog_artifacts(catalog_root: &Path) -> Result<usize, String> {
-    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
-        .map_err(|error| error.to_string())?;
-    remove_catalog_artifacts_with_lease(catalog_root, &lease)
-}
-
-fn remove_catalog_artifacts_with_lease(
-    catalog_root: &Path,
-    _lease: &crate::catalog_lease::CatalogMutationLease,
-) -> Result<usize, String> {
-    if catalog_root.file_name().and_then(|name| name.to_str()) != Some("catalog-fast-v1") {
-        return Err(format!(
-            "refusing to remove unexpected catalog path {}",
-            catalog_root.display()
-        ));
-    }
-    if !catalog_root.exists() {
-        return Ok(0);
-    }
-    let entries = walkdir::WalkDir::new(catalog_root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .count();
-    fs::remove_dir_all(catalog_root)
-        .map_err(|error| format!("remove catalog {}: {error}", catalog_root.display()))?;
-    Ok(entries)
-}
-
 impl FastRefreshManifest {
     pub fn new(
         generation: u64,
@@ -3920,23 +3885,6 @@ mod tests {
     }
 
     #[test]
-    fn catalog_purge_fails_busy_without_deleting_artifacts() {
-        let root = crate::test_support::unique_temp_dir("catalog-purge-lease");
-        let catalog = root.join("catalog-fast-v1");
-        fs::create_dir_all(&catalog).unwrap();
-        fs::write(catalog.join("manifest-a.bin"), b"active").unwrap();
-        let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().unwrap();
-
-        let error = remove_catalog_artifacts(&catalog).expect_err("purge must respect held lease");
-
-        assert!(error.contains("busy"));
-        assert!(catalog.join("manifest-a.bin").exists());
-        drop(lease);
-        assert_eq!(remove_catalog_artifacts(&catalog).unwrap(), 2);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn watch_snapshot_rejects_pathological_directory_depth() {
         let root = crate::test_support::unique_temp_dir("fast-watch-depth");
         let mut current = root.clone();
@@ -3989,9 +3937,7 @@ mod tests {
     fn serial_artifact_phase_has_no_concurrent_worker_implementation() {
         let source = include_str!("fast_catalog_refresh.rs");
         let phase_start = source.find("fn build_serial_tmpfs_artifacts").unwrap();
-        let phase_end = source
-            .find("pub fn remove_default_catalog_artifacts")
-            .unwrap();
+        let phase_end = source.find("impl FastRefreshManifest {").unwrap();
         let phase = &source[phase_start..phase_end];
         let forbidden_thread = ["std::", "thread::"].concat();
         let forbidden_channel = ["sync_", "channel"].concat();

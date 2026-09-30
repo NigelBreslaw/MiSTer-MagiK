@@ -180,6 +180,20 @@ reloads the registry only after successful manifest publication. Returning from
 a launched core therefore restores into the same catalog architecture rather
 than another builder's artifacts.
 
+Holding A on **Refresh Database** for seven uninterrupted seconds deletes the
+active catalog (including NavPacks, search databases, refresh snapshots, and
+staging), retired database files and sidecars, catalog build temporaries and
+diagnostics, and all screenshot packs, indexes, partial downloads, and media
+state. It then flushes storage and requests one supervised reboot through Main.
+The reset gesture is hidden: Settings keeps its normal refresh text, and a short
+press opens the usual incremental-refresh confirmation immediately. Continuing
+the same press through that confirmation for seven seconds resets the data.
+Moving away, losing controller input, or cancelling interrupts the hold. A reset
+is refused while catalog or screenshot work is active; cleanup or reboot failure
+is shown in a dialog. If MiSTer is still running 15 seconds after the reboot
+request, the launcher resumes and asks for a manual restart. Games, source
+metadata, settings, favourites, and recent history are retained. The next boot builds a fresh catalog.
+
 ## Screenshot packs
 
 Screenshot packs are media, not catalog authority. Rows store a deterministic
