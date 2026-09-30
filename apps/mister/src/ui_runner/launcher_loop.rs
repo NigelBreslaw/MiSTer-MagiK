@@ -10475,6 +10475,7 @@ pub(super) fn run_launcher_loop(
                     && custom_home_scene_ready
                     && ($full_slint_raster
                         || custom_home_needs_render
+                        || window.redraw_pending()
                         || launcher_card_home.as_ref().is_some_and(
                             super::launcher_card_home::LauncherCardHomeSession::compositor_stale,
                         ))

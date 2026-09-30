@@ -462,6 +462,17 @@ matrix selects for Slint, presenter, layout, preview, composition, scene, and
 baseline changes. It is host-rendered semantic and RGB565 composition evidence;
 physical HDMI or CRT visibility remains an attended device claim.
 
+The native Home card image is the background of Slint's overlay composition.
+A transparent Slint Window still clears dirty RGB565 pixels to black, so Home
+renders overlay lines with premultiplied alpha and blends them over the native
+card pixels. The line buffer is allocated with the frame target and reused.
+Native damage invalidates the corresponding Slint region, including unchanged
+dialogs. One composition pass restores the native background and blends overlays;
+every Slint redraw includes static Home cards.
+The first-run particle morph captures this same composed frame, and its final
+handoff restores it. These rules keep a redraw or display-owner handoff from
+publishing a blank Home until navigation changes the card state.
+
 Normal launcher rendering is governed by a small composition controller. The
 cached RGB565 frame is the complete base in every state; Rust direct-blitted
 layers are legal only on HDMI while the controller is in `MixedArcade`. CRT
