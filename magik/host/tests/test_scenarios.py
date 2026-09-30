@@ -21,7 +21,7 @@ def window():
         "render_to_present_us_total": 5000000,
         "physical_latch_posts": 300,
         "physical_latch_flips": 300,
-        "physical_drops": 0,
+        "dropped_frames": 0,
         "latch_rejections": 0,
         "drop_baseline_available": True,
         "instrumented": False,
@@ -38,7 +38,7 @@ def test_device_window_is_validated():
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("physical_drops", 1),
+        ("dropped_frames", 1),
         ("latch_rejections", 1),
         ("drop_baseline_available", False),
         ("evidence_error", "unavailable"),

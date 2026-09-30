@@ -77,7 +77,7 @@ def validate_result(value, *, workload, mode, sha256):
             visual.get("presentations")
         ):
             raise ValueError("incomplete visual result")
-        if visual.get("rejections") != 0 or visual.get("physical_drops") != 0:
+        if visual.get("rejections") != 0 or visual.get("dropped_frames") != 0:
             raise ValueError("visual presentation failed")
     elif value.get("visual") is not None:
         raise ValueError("presentation data in kernel benchmark")

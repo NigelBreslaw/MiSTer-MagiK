@@ -107,6 +107,8 @@ struct PipelineState {
     free: Vec<TilePair>,
     content_generation: u64,
     counters: CardPipelineCounters,
+    in_flight: Option<CardFrameRequest>,
+    last_poll_reason: &'static str,
     shutdown: bool,
     #[cfg(test)]
     hold_completion: bool,
@@ -160,6 +162,8 @@ impl LauncherCardRenderAhead {
                     .collect(),
                 content_generation: 0,
                 counters: CardPipelineCounters::default(),
+                in_flight: None,
+                last_poll_reason: "not_polled",
                 shutdown: false,
                 #[cfg(test)]
                 hold_completion: false,
@@ -201,12 +205,28 @@ impl LauncherCardRenderAhead {
         maximum_age_us: u64,
     ) -> Option<RenderedCardFrame> {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        let frame = state.ready.take()?;
+        let Some(frame) = state.ready.take() else {
+            state.last_poll_reason = if state.in_flight.is_some() {
+                "producer_not_complete_at_ui_check"
+            } else if state.free.is_empty() {
+                "no_free_render_output_at_ui_check"
+            } else {
+                "no_completed_request_at_ui_check"
+            };
+            return None;
+        };
         let request = frame.request;
         let stale = request.content_generation != content_generation
             || request.navigation_generation != navigation_generation
             || now_us.saturating_sub(request.render.timestamp_us) > maximum_age_us;
         if stale {
+            state.last_poll_reason = if request.content_generation != content_generation {
+                "completed_content_invalidated"
+            } else if request.navigation_generation != navigation_generation {
+                "completed_navigation_invalidated"
+            } else {
+                "completed_frame_age_rejected"
+            };
             if self.measure_metrics {
                 state.counters.stale = state.counters.stale.saturating_add(1);
             }
@@ -214,6 +234,7 @@ impl LauncherCardRenderAhead {
             self.shared.wake.notify_one();
             None
         } else {
+            state.last_poll_reason = "ready_frame_accepted";
             Some(frame)
         }
     }
@@ -286,6 +307,23 @@ impl LauncherCardRenderAhead {
             .counters
     }
 
+    #[cfg(feature = "tooling")]
+    pub(super) fn dropped_frame_evidence(
+        &self,
+    ) -> mister_magik_tooling_support::measurement::PipelineDropEvidence {
+        let state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        mister_magik_tooling_support::measurement::PipelineDropEvidence {
+            decision: state.last_poll_reason,
+            free_outputs: state.free.len(),
+            in_flight_generation: state.in_flight.map(|request| request.render.generation),
+            pending_generation: state.pending.map(|request| request.render.generation),
+            completed_generation: state
+                .ready
+                .as_ref()
+                .map(|frame| frame.request.render.generation),
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn worker_identity(&self) -> std::thread::ThreadId {
         self.coordinator.as_ref().unwrap().thread().id()
@@ -344,6 +382,7 @@ fn run_coordinator(
             }
             let request = state.pending.take().expect("pending request checked");
             let output = state.free.pop().expect("free frame checked");
+            state.in_flight = Some(request);
             (request, output)
         };
         let total_started = measure_timing.then(Instant::now);
@@ -369,6 +408,7 @@ fn run_coordinator(
         let producer_total_us = elapsed_us(total_started);
 
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.in_flight = None;
         if measure_timing {
             state.counters.completed = state.counters.completed.saturating_add(1);
             state.counters.producer_total_us += producer_total_us;

@@ -86,7 +86,7 @@ def validate_window(
         "render_to_present_us_total",
         "physical_latch_posts",
         "physical_latch_flips",
-        "physical_drops",
+        "dropped_frames",
         "latch_rejections",
     )
     if not all(type(value.get(name)) is int and value[name] >= 0 for name in names):
@@ -104,7 +104,7 @@ def validate_window(
         value["presentations"] == 0
         or value["physical_latch_posts"] != value["presentations"]
         or value["physical_latch_flips"] != value["presentations"]
-        or value["physical_drops"]
+        or value["dropped_frames"]
         or value["latch_rejections"]
     ):
         raise AssertionError(
@@ -384,14 +384,13 @@ def launcher_motion(
             "measurement did not observe the requested synthetic clock change"
         )
     if instrumented:
-        unique = window.get("card_unique_presentations", 0)
-        redisplayed = window.get("card_redisplayed_presentations", 0)
-        if (
-            unique + redisplayed + window.get("card_synchronous_presentations", 0)
-            != window["presentations"]
-        ):
+        unique = window.get("card_delivered_frames", 0)
+        dropped = window.get("dropped_frames", 0)
+        if unique + dropped + window.get("card_synchronous_presentations", 0) != window[
+            "presentations"
+        ] + window.get("owned_refresh_dropped_frames", 0):
             raise AssertionError(
-                "card unique and redisplayed counts do not cover physical presentations"
+                "delivered and dropped frame counts do not cover animation refreshes"
             )
         if window.get("card_producer_total_us", 0) <= 0:
             raise AssertionError("instrumented card motion recorded no producer work")
@@ -400,11 +399,11 @@ def launcher_motion(
                 "instrumented card motion recorded no hidden-slot copy work"
             )
         for name in (
-            "card_target_vblank_misses",
-            "card_target_vblank_repeats",
-            "card_target_vblank_skips",
-            "last_card_target_vblank",
-            "last_card_actual_vblank",
+            "card_target_pacer_tick_misses",
+            "card_target_pacer_tick_repeats",
+            "card_target_pacer_tick_skips",
+            "last_card_target_pacer_tick",
+            "last_card_actual_pacer_tick",
         ):
             if type(window.get(name)) is not int or window[name] < 0:
                 raise AssertionError(f"instrumented card motion has no {name} evidence")

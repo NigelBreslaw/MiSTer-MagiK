@@ -213,7 +213,7 @@ impl LauncherCardHomeSession {
             retired_pipeline_counters: CardPipelineCounters::default(),
             #[cfg(feature = "tooling")]
             reported_pipeline_counters: CardPipelineCounters::default(),
-            measure_preparation: std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
+            measure_preparation: std::env::var_os("MISTER_MAGIK2_STATE_ROOT").is_some(),
             preparation_measurement: None,
         })
     }
@@ -708,6 +708,15 @@ impl LauncherCardHomeSession {
         }
         self.content_dirty = false;
         self.compositor_stale = true;
+    }
+
+    #[cfg(feature = "tooling")]
+    pub(super) fn dropped_frame_evidence(
+        &self,
+    ) -> Option<mister_magik_tooling_support::measurement::PipelineDropEvidence> {
+        self.render_ahead
+            .as_ref()
+            .map(|pipeline| pipeline.dropped_frame_evidence())
     }
 
     pub(super) fn presented_render_ahead(&self) -> Option<&RenderedCardFrame> {

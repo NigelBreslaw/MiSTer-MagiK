@@ -5,8 +5,9 @@ Keep cache creation, network work, and blocking persistence off the UI path.
 Isolate benchmark policy from production defaults.
 
 A full Slint present invalidates direct Arcade layers: repaint them in the same
-frame while Arcade remains active. Only a validated protocol-v5
-`repeated_vblank_count` delta may populate `dropped_frames`; latch rejection is
+frame while Arcade remains active. Count a missing fresh animation pose and a validated protocol-v5
+refresh repeat as `dropped_frames`, once per affected refresh. Exclude intentional
+idle/settled reuse. Keep causal evidence and uncertainty; latch rejection is
 a separate gate. Test actual event/state sequences, not helper predicates alone.
 
 For unresolved ordering, read the matching `docs/architecture.md` section:

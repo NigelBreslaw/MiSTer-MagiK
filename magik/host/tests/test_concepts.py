@@ -29,7 +29,7 @@ def sample():
             physical_latch_flips=1800,
             presented_vblanks=1800,
             owned_vblanks=1800,
-            physical_drops=0,
+            dropped_frames=0,
             latch_drops=0,
             latch_rejections=0,
         ),
@@ -51,7 +51,7 @@ def test_short_window_requires_explicit_duration_and_preserves_drop_gate():
     assert validate(data, "abc", "diagnostic", "default", quick=True)["qualified"]
     with pytest.raises(ValueError, match="boundaries"):
         validate(data, "abc", "diagnostic", "default")
-    w["physical_drops"] = 1
+    w["dropped_frames"] = 1
     assert not validate(data, "abc", "diagnostic", "default", quick=True)["qualified"]
 
 
@@ -62,7 +62,7 @@ def test_valid_window():
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("physical_drops", 1),
+        ("dropped_frames", 1),
         ("latch_drops", 1),
         ("process_cpu_percent", 150),
         ("peak_rss_bytes", 134217729),
@@ -154,7 +154,7 @@ def test_render_labs_require_production_build_for_qualification(effect, preset):
     assert not validate(data, "abc", effect, preset)["qualified"]
     data["window"]["context"]["build_profile"] = "release-device"
     assert validate(data, "abc", effect, preset)["qualified"]
-    data["window"]["physical_drops"] = 1
+    data["window"]["dropped_frames"] = 1
     assert not validate(data, "abc", effect, preset)["qualified"]
 
 

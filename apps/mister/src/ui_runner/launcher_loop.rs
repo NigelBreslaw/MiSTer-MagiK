@@ -6309,8 +6309,6 @@ pub(super) fn run_launcher_loop(
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
     #[cfg(feature = "tooling")]
     let mut tooling_carousel_release: Option<crate::input_event::InputEvent> = None;
-    #[cfg(feature = "tooling")]
-    let card_profile_measurement_enabled = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
     // Count repeated artwork in ordinary measurement sessions too. A confirmed
     // 60 Hz post does not imply a fresh carousel pose; CPU sampling is separate.
     #[cfg(feature = "tooling")]
@@ -6328,7 +6326,11 @@ pub(super) fn run_launcher_loop(
         crate::ui_logln!("magik_context {}", session.metrics.context);
     }
     #[cfg(feature = "tooling")]
-    let mut tooling_drop_baseline: Option<u32> = None;
+    let mut tooling_drop_baseline: Option<(
+        mister_magik_latch_contract::PresentationTelemetry,
+        Instant,
+        bool,
+    )> = None;
     #[cfg(feature = "tooling")]
     let mut tooling_reject_baseline: Option<u16> = None;
     #[cfg(feature = "tooling")]
@@ -6358,7 +6360,7 @@ pub(super) fn run_launcher_loop(
                 metrics.counters.card_prepare_us += duration_us;
                 metrics.card_prepare_max_us = metrics.card_prepare_max_us.max(duration_us);
             }
-            if card_profile_measurement_enabled {
+            if card_presentation_measurement_enabled {
                 session.metrics.process_cpu_us = cpu_process_us();
             }
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
@@ -12596,6 +12598,15 @@ pub(super) fn run_launcher_loop(
                     let render_us = frame_t2.saturating_duration_since(frame_t1).as_micros() as u64;
                     metrics.last_render_us = render_us;
                     metrics.counters.render_us += render_us;
+                    if metrics.window_start.is_some() && metrics.window.is_none() {
+                        metrics.frame_timings_us.push([
+                            render_us,
+                            presented_frame.main_present_hidden_copy_us as u64,
+                            Instant::now()
+                                .saturating_duration_since(frame_t1)
+                                .as_micros() as u64,
+                        ]);
+                    }
                     metrics.counters.render_to_present_us += Instant::now()
                         .saturating_duration_since(frame_t1)
                         .as_micros()
@@ -12613,14 +12624,29 @@ pub(super) fn run_launcher_loop(
                         metrics.counters.card_source_age_us =
                             metrics.counters.card_source_age_us.saturating_add(age_us);
                         metrics.last_card_source_timestamp_us = source_timestamp_us;
-                        if metrics.last_card_source_generation != source_generation {
-                            metrics.counters.card_unique_presentations =
-                                metrics.counters.card_unique_presentations.saturating_add(1);
+                        if metrics.last_card_source_generation != source_generation
+                            || !launcher_card_home
+                                .as_ref()
+                                .is_some_and(|session| session.is_animating())
+                        {
+                            metrics.counters.card_delivered_frames =
+                                metrics.counters.card_delivered_frames.saturating_add(1);
                         } else {
-                            metrics.counters.card_redisplayed_presentations += 1;
+                            metrics.counters.card_dropped_frames += 1;
+                            let pipeline = launcher_card_home
+                                .as_ref()
+                                .and_then(|session| session.dropped_frame_evidence());
+                            metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
+                                reason: "correct animation pose unavailable at presentation; see pipeline decision; worker/wake root cause unknown",
+                                dropped_frames: 1,
+                                source_generation, source_age_us: age_us,
+                                software_target_tick: target_vblank, software_present_tick: pacer.hits(),
+                                pipeline,
+                                ..Default::default()
+                            });
                         }
                         metrics.last_card_source_generation = source_generation;
-                        metrics.note_card_target_vblank(target_vblank, pacer.hits());
+                        metrics.note_card_target_tick(target_vblank, pacer.hits());
                         if let Some(card_session) = launcher_card_home.as_mut() {
                             let delta = card_session.pipeline_counter_delta();
                             metrics.counters.card_producer_total_us += delta.producer_total_us;
@@ -12650,12 +12676,34 @@ pub(super) fn run_launcher_loop(
                     }
                     match f.read_magik_presentation_telemetry() {
                         Ok(telemetry) => {
-                            if let Some(previous) = tooling_drop_baseline {
-                                metrics.counters.drops += u64::from(
-                                    telemetry.repeated_vblank_count.wrapping_sub(previous),
-                                );
+                            let observed_at = Instant::now();
+                            let animation_active = scheduled_frame_class
+                                != FrameProductionClass::EventDriven
+                                || nav.arcade.is_scroll_active() && nav.screen == Screen::Arcade;
+                            if let Some((previous, at, was_animating)) = tooling_drop_baseline {
+                                match mister_magik_latch_contract::validate_presentation_telemetry_window(
+                                    previous, telemetry, observed_at.saturating_duration_since(at).as_micros().max(1) as u64, 8_333,
+                                ) {
+                                    Ok(delta) => {
+                                        metrics.counters.owned_vblanks += u64::from(delta.owned_vblank_delta);
+                                        metrics.counters.presented_vblanks += u64::from(delta.presented_vblank_delta);
+                                        let dropped = if animation_active || was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
+                                        metrics.counters.drops += dropped;
+                                        if dropped != 0 {
+                                            metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
+                                                reason: "cause unknown: no timely display activation; worker/wake timeline unavailable",
+                                                dropped_frames: dropped,
+                                                owned_refresh_observed: Some(telemetry.owned_vblank_count),
+                                                active_sequence: Some(telemetry.active_sequence), ui_render_us: render_us,
+                                                ..Default::default()
+                                            });
+                                        }
+                                    }
+                                    Err(error) => metrics.error = Some(error.to_string()),
+                                }
                             }
-                            tooling_drop_baseline = Some(telemetry.repeated_vblank_count);
+                            tooling_drop_baseline =
+                                Some((telemetry, observed_at, animation_active));
                             metrics.last_physical_drop_count =
                                 Some(presented_frame.main_present_drop_count);
                         }

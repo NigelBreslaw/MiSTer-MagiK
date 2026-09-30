@@ -141,7 +141,7 @@ def validate(metrics, sha256, effect, preset, profile=False, *, quick=False):
         )
     )
     clean = all(
-        w.get(k) == 0 for k in ("physical_drops", "latch_drops", "latch_rejections")
+        w.get(k) == 0 for k in ("dropped_frames", "latch_drops", "latch_rejections")
     )
     passed = (
         cadence
@@ -207,7 +207,7 @@ def measure(application, agent, run, effect, preset, profile, *, quick=False):
         print(
             f"{effect}/{preset}: repetition={repetition + 1} "
             f"fps={result['fps']:.3f} cpu={result['process_cpu_percent']:.1f}% "
-            f"drops={result['physical_drops']} render_p99_us={result.get('render_p99_us')} "
+            f"drops={result['dropped_frames']} render_p99_us={result.get('render_p99_us')} "
             f"qualified={result['qualified']}",
             flush=True,
         )
