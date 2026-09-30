@@ -133,26 +133,10 @@ pub struct LauncherScene {
     pub height: usize,
     crt: bool,
     safe_insets: (usize, usize),
-    quality: CardRenderQuality,
-}
-
-/// Explicit rendering experiments. Production constructors retain Current.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CardRenderQuality {
-    #[default]
-    Current,
-    Dithered,
-    Rgb888,
 }
 
 impl LauncherScene {
-    #[must_use]
-    pub const fn with_render_quality(mut self, quality: CardRenderQuality) -> Self {
-        self.quality = quality;
-        self
-    }
-
-    /// High precision source experiment; no Slint or application dependencies.
+    /// Prepare card textures from high-precision source artwork.
     pub fn prepare_initial_with_rgb888_artwork(
         self,
         data: LauncherData<'_>,
@@ -168,7 +152,6 @@ impl LauncherScene {
             height,
             crt: false,
             safe_insets: (0, 0),
-            quality: CardRenderQuality::Current,
         }
     }
 
@@ -185,7 +168,6 @@ impl LauncherScene {
             height,
             crt: true,
             safe_insets: (0, 0),
-            quality: CardRenderQuality::Current,
         }
     }
 
@@ -811,10 +793,7 @@ impl PreparedLauncher {
                 };
                 #[cfg(test)]
                 FACE_BAKES.set(FACE_BAKES.get() + 2);
-                let mut faces = if scene.quality == CardRenderQuality::Rgb888
-                    && card.rgb888.is_some()
-                    && responsive.is_none()
-                {
+                let mut faces = if card.rgb888.is_some() && responsive.is_none() {
                     #[cfg(feature = "launcher-profile")]
                     let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
                     let [compact, detail] = artwork::faces_rgb888(&card, typography);
@@ -838,7 +817,7 @@ impl PreparedLauncher {
                         }
                     }
                 };
-                let dithered = scene.quality != CardRenderQuality::Current;
+                let dithered = responsive.is_none();
                 faces.compact.dithered = dithered;
                 faces.detail.dithered = dithered;
                 if let Some(back) = &mut faces.back {

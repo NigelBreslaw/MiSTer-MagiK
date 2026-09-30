@@ -462,17 +462,54 @@ pub fn settings_cog_backdrop_rgb565() -> &'static [Rgb565Pixel] {
     })
 }
 
-/// Front-on Arcade cabinet, packed at its exact HDMI destination size.
-pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
-    static PIXELS: std::sync::OnceLock<Vec<Rgb565Pixel>> = std::sync::OnceLock::new();
-    PIXELS.get_or_init(|| {
-        include_bytes!("../assets/ui/arcade/cabinet-483x519.rgb565")
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|packed| Rgb565Pixel(u16::from_le_bytes(*packed)))
-            .collect()
+fn prepared_cabinet() -> &'static (
+    mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
+    Vec<Rgb565Pixel>,
+) {
+    static CABINET: std::sync::OnceLock<(
+        mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
+        Vec<Rgb565Pixel>,
+    )> = std::sync::OnceLock::new();
+    CABINET.get_or_init(|| {
+        // All texture/cache computation stays off the UI thread. Production
+        // warms this while the first launcher faces are being prepared.
+        std::thread::Builder::new()
+            .name("arcade-artwork".into())
+            .spawn(|| {
+                use mister_magik_catalog::runtime_thread::{
+                    RuntimeThreadRole, apply_runtime_thread_policy,
+                };
+                apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+                let texture =
+                    mister_magik_framebuffer_scenes::arcade_card::CabinetTexture::from_rgb888(
+                        include_bytes!("../assets/ui/arcade/cabinet-483x519.rgb888"),
+                    )
+                    .expect("embedded cabinet geometry");
+                (texture.artwork(), texture.destination_pixels())
+            })
+            .expect("start cabinet preparation")
+            .join()
+            .expect("prepare cabinet artwork")
     })
+}
+
+pub fn warm_arcade_cabinet() -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("arcade-artwork-warm".into())
+        .spawn(|| {
+            let _ = prepared_cabinet();
+        })
+        .expect("warm cabinet artwork")
+}
+
+pub fn arcade_cabinet_artwork()
+-> &'static mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork {
+    &prepared_cabinet().0
+}
+
+/// Resting artwork uses the moving cabinet's destination-space quantisation.
+pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
+    &prepared_cabinet().1
 }
 
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565

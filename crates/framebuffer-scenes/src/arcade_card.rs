@@ -51,8 +51,10 @@ const fn rgb565(r: u16, g: u16, b: u16) -> u16 {
     ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
 }
 
+// RGB565 fixture adapter; production accepts the high-precision prepared texture.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub fn render_arcade_card_transition_into(
+fn render_arcade_card_transition_into(
     width: usize,
     height: usize,
     launcher: &[Rgb565Pixel],
@@ -62,23 +64,24 @@ pub fn render_arcade_card_transition_into(
     t_ms: u32,
     output: &mut [Rgb565Pixel],
 ) -> bool {
-    render_with_texture(
+    let Ok(texture) = CabinetTexture::from_rgb565(cabinet) else {
+        return false;
+    };
+    render_arcade_card_into(
         width,
         height,
         launcher,
         arcade,
-        cabinet,
+        &texture,
         source_card,
         t_ms,
         output,
-        None,
-        (0, height),
     )
 }
 
-/// Filtered asset experiment sharing the production timeline and composition.
+/// Live filtered cabinet with destination-space RGB565 quantisation.
 #[allow(clippy::too_many_arguments)]
-pub fn render_arcade_card_filtered_into(
+pub fn render_arcade_card_into(
     width: usize,
     height: usize,
     launcher: &[Rgb565Pixel],
@@ -101,10 +104,10 @@ pub fn render_arcade_card_filtered_into(
         (0, height),
     )
 }
-/// Render disjoint HDMI row bands for the live two-worker experiment. Sources
+/// Render disjoint HDMI row bands. Sources
 /// remain immutable; each worker owns its complete output and row scratch.
 #[allow(clippy::too_many_arguments)]
-pub fn render_arcade_card_filtered_band_into(
+pub fn render_arcade_card_band_into(
     launcher: &[Rgb565Pixel],
     arcade: &[Rgb565Pixel],
     texture: &CabinetTexture,
@@ -164,7 +167,7 @@ fn render_with_texture(
         return true;
     }
     if (width, height) == (960, 540) {
-        render_hdmi(launcher, arcade, cabinet, t, output, filtered, rows);
+        render_hdmi(launcher, arcade, t, output, filtered, rows);
     } else {
         render_crt(width, height, launcher, arcade, source_card, t, output);
     }
@@ -174,7 +177,6 @@ fn render_with_texture(
 fn render_hdmi(
     launcher: &[Rgb565Pixel],
     arcade: &[Rgb565Pixel],
-    cabinet: &[Rgb565Pixel],
     t: u32,
     output: &mut [Rgb565Pixel],
     filtered: Option<&CabinetTexture>,
@@ -248,32 +250,6 @@ fn render_hdmi(
                 && y0 >= HDMI_CONTENT_TOP
                 && y1 <= HDMI_CONTENT_BOTTOM,
         );
-    } else {
-        for y in y0..y1 {
-            let source_y = (((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16) >> 16;
-            if filtered.is_none() && !(0..CABINET_HEIGHT as i64).contains(&source_y) {
-                continue;
-            }
-            for x in x0..x1 {
-                let source_x =
-                    (((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16) >> 16;
-                if filtered.is_none() && !(0..CABINET_WIDTH as i64).contains(&source_x) {
-                    continue;
-                }
-                if let Some(texture) = filtered {
-                    let sx = ((((x as i64) << 16) + (1 << 15) - cabinet_x) * inverse) >> 16;
-                    let sy = ((((y as i64) << 16) + (1 << 15) - cabinet_y) * inverse) >> 16;
-                    let sample = texture.sample(sx - (1 << 15), sy - (1 << 15), inverse as u32);
-                    output[y * W + x] =
-                        crate::launcher_texture::over_dithered(sample, output[y * W + x], x, y);
-                    continue;
-                }
-                let sampled = cabinet[source_y as usize * CABINET_WIDTH + source_x as usize].0;
-                if sampled != 0 {
-                    output[y * W + x] = Rgb565Pixel(sampled);
-                }
-            }
-        }
     }
 
     draw_outline(
@@ -469,16 +445,15 @@ mod tests {
 
     #[test]
     fn filtered_bands_preserve_other_rows_and_reject_invalid_ranges() {
-        let texture = CabinetTexture::from_rgb888(&vec![64; CABINET_WIDTH * CABINET_HEIGHT * 3])
-            .unwrap()
-            .with_scanlines();
+        let texture =
+            CabinetTexture::from_rgb888(&vec![64; CABINET_WIDTH * CABINET_HEIGHT * 3]).unwrap();
         let home = vec![Rgb565Pixel(0x1234); 960 * 540];
         let arcade = vec![Rgb565Pixel(0xabcd); 960 * 540];
         let sentinel = Rgb565Pixel(0xbeef);
         let mut expected = vec![sentinel; 960 * 540];
         let mut tile = expected.clone();
         for t in [0, 200, 500, 800, 1000] {
-            assert!(render_arcade_card_filtered_into(
+            assert!(render_arcade_card_into(
                 960,
                 540,
                 &home,
@@ -489,7 +464,7 @@ mod tests {
                 &mut expected
             ));
             tile.fill(sentinel);
-            assert!(render_arcade_card_filtered_band_into(
+            assert!(render_arcade_card_band_into(
                 &home,
                 &arcade,
                 &texture,
@@ -501,7 +476,7 @@ mod tests {
             assert_eq!(tile[289 * 960..], expected[289 * 960..]);
         }
         let before = tile.clone();
-        assert!(!render_arcade_card_filtered_band_into(
+        assert!(!render_arcade_card_band_into(
             &home,
             &arcade,
             &texture,
@@ -509,7 +484,7 @@ mod tests {
             &mut tile,
             (400, 399)
         ));
-        assert!(!render_arcade_card_filtered_band_into(
+        assert!(!render_arcade_card_band_into(
             &home,
             &arcade,
             &texture,
@@ -646,10 +621,24 @@ mod tests {
 
 /// Preparation-only 2D minification pyramid. RGB8 and coverage survive until
 /// destination-space composition. Geometry remains the production 483x519.
+/// Immutable artwork and mip levels, shared across renderer instances.
+#[derive(Clone)]
+pub struct CabinetArtwork {
+    reference: std::sync::Arc<Vec<Rgb565Pixel>>,
+    levels: std::sync::Arc<Vec<CabinetLevel>>,
+}
+impl std::fmt::Debug for CabinetArtwork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CabinetArtwork")
+            .field("levels", &self.levels.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone)]
 pub struct CabinetTexture {
-    reference: Vec<Rgb565Pixel>,
-    levels: Vec<CabinetLevel>,
+    reference: std::sync::Arc<Vec<Rgb565Pixel>>,
+    levels: std::sync::Arc<Vec<CabinetLevel>>,
     scanlines: Option<Box<std::cell::RefCell<scanline::Scanlines>>>,
 }
 #[derive(Clone)]
@@ -659,6 +648,7 @@ struct CabinetLevel {
     height: usize,
 }
 impl CabinetTexture {
+    #[cfg(test)]
     pub fn from_rgb565(pixels: &[Rgb565Pixel]) -> Result<Self, String> {
         if pixels.len() != CABINET_WIDTH * CABINET_HEIGHT {
             return Err("invalid cabinet geometry".into());
@@ -730,17 +720,27 @@ impl CabinetTexture {
             });
         }
         Ok(Self {
-            reference,
-            levels,
-            scanlines: None,
+            reference: std::sync::Arc::new(reference),
+            levels: std::sync::Arc::new(levels),
+            scanlines: Some(Box::new(
+                std::cell::RefCell::new(scanline::Scanlines::new()),
+            )),
         })
     }
-    /// Opt into bounded row scratch and the live scanline scaler experiment.
-    pub fn with_scanlines(mut self) -> Self {
-        self.scanlines = Some(Box::new(
-            std::cell::RefCell::new(scanline::Scanlines::new()),
-        ));
-        self
+    pub fn artwork(&self) -> CabinetArtwork {
+        CabinetArtwork {
+            reference: std::sync::Arc::clone(&self.reference),
+            levels: std::sync::Arc::clone(&self.levels),
+        }
+    }
+    pub fn from_artwork(artwork: &CabinetArtwork) -> Self {
+        Self {
+            reference: std::sync::Arc::clone(&artwork.reference),
+            levels: std::sync::Arc::clone(&artwork.levels),
+            scanlines: Some(Box::new(
+                std::cell::RefCell::new(scanline::Scanlines::new()),
+            )),
+        }
     }
     /// Prepare the resting cabinet with the same final quantisation as the
     /// filtered reveal. Text, game pixels and chrome remain on their native grid.
@@ -766,6 +766,22 @@ impl CabinetTexture {
         }
         true
     }
+    /// Front-on cabinet quantised at its actual HDMI destination phase.
+    pub fn destination_pixels(&self) -> Vec<Rgb565Pixel> {
+        self.levels[0]
+            .pixels
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| {
+                crate::launcher_texture::over_dithered(
+                    p,
+                    Rgb565Pixel(0),
+                    HDMI_CABINET_X as usize + i % CABINET_WIDTH,
+                    HDMI_CABINET_Y as usize + i / CABINET_WIDTH,
+                )
+            })
+            .collect()
+    }
     pub fn storage_bytes(&self) -> usize {
         self.scanlines
             .as_ref()
@@ -777,42 +793,15 @@ impl CabinetTexture {
                 .map(|l| l.pixels.capacity() * 4)
                 .sum::<usize>()
     }
-    fn sample(&self, x: i64, y: i64, footprint: u32) -> u32 {
-        let level = ((31 - footprint.max(65536).leading_zeros()).saturating_sub(16) as usize)
-            .min(self.levels.len() - 1);
-        let sample = |index: usize| {
-            let l = &self.levels[index];
-            let sx = ((x + (1 << 15)) >> index) - (1 << 15);
-            let sy = ((y + (1 << 15)) >> index) - (1 << 15);
-            let ix = sx.div_euclid(65536);
-            let iy = sy.div_euclid(65536);
-            let at = |dx: i64, dy: i64| {
-                if ix + dx < 0
-                    || iy + dy < 0
-                    || ix + dx >= l.width as i64
-                    || iy + dy >= l.height as i64
-                {
-                    0
-                } else {
-                    l.pixels[(iy + dy) as usize * l.width + (ix + dx) as usize]
-                }
-            };
-            crate::launcher_texture::mix(
-                crate::launcher_texture::mix(at(0, 0), at(1, 0), ((sx & 65535) >> 8) as u32),
-                crate::launcher_texture::mix(at(0, 1), at(1, 1), ((sx & 65535) >> 8) as u32),
-                ((sy & 65535) >> 8) as u32,
-            )
-        };
-        let a = sample(level);
-        if level + 1 == self.levels.len() {
-            a
-        } else {
-            let weight = ((footprint >> level).saturating_sub(65536) >> 8).min(256);
-            if weight == 0 {
-                a
-            } else {
-                crate::launcher_texture::mix(a, sample(level + 1), weight)
-            }
-        }
+}
+
+impl std::fmt::Debug for CabinetTexture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CabinetTexture")
+            .field("levels", &self.levels.len())
+            .finish_non_exhaustive()
     }
 }
+#[path = "arcade_card_renderer.rs"]
+mod renderer;
+pub use renderer::ArcadeCardRenderer;

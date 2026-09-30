@@ -1499,7 +1499,7 @@ mod macos {
                         direction,
                         geometry,
                         self.frame_target.cached_565(),
-                        mister_magik_fb::launcher_presentation::arcade_cabinet_rgb565(),
+                        mister_magik_fb::launcher_presentation::arcade_cabinet_artwork(),
                         now_us,
                     )
                     .unwrap_or(false)

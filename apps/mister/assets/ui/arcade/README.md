@@ -1,28 +1,19 @@
-# Arcade presentation assets
+# Arcade presentation artwork
 
-`cabinet-483x519.rgb565` is the front-on HDMI Arcade cabinet used at its
-native 483x519 size. Its 320x320 screen opening begins at `(82, 61)` within
-the asset, so game screenshots remain on their native pixel grid.
+`cabinet-483x519.rgb888` contains the accepted front-on cabinet render at its
+native HDMI destination size. The screen opening is composed with the live
+320x320 game image; screenshots and UI text retain their native pixel grid.
 
-The accepted source is `arcade-cabinet.png` from the Arcade UI prototype. The
-Blender render's near-black world pixels are clamped to true black before the
-image is flattened and packed as little-endian RGB565 without resizing. This
-prevents its matte from showing against the launcher's `#000000` background:
+The accepted PNG is clamped to black and flattened before RGB encoding:
 
 ```sh
 magick arcade-cabinet.png -channel RGB -black-threshold 4% +channel \
-  -background black -alpha remove PNG24:/tmp/cabinet.png
-ffmpeg -hide_banner -loglevel error -i /tmp/cabinet.png \
-  -f rawvideo -pix_fmt rgb565le -y cabinet-483x519.rgb565
+  -background black -alpha remove -depth 8 RGB:cabinet-483x519.rgb888
 ```
 
-The source PNG remains an external design source and is not committed here.
-
-## Mini source-precision experiment
-
-`cabinet-483x519.rgb888` retains the accepted PNG's 8-bit RGB, with the same
-black clamp and flattening as the production packed asset. Generate it from
-`/tmp/cabinet.png` above with `magick /tmp/cabinet.png -depth 8 RGB:cabinet-483x519.rgb888`.
-The source `arcade-cabinet-302ppm.png` repacks byte-for-byte to the existing
-RGB565 asset. No camera, material or Blender rerender is needed. Mini uses this
-source only with the explicit `rgb888` variant; production defaults stay RGB565.
+The source PNG remains external. Runtime prepares premultiplied mip levels off
+the UI thread and shares the immutable artwork between rendering workers. The
+live two-worker reveal filters before destination-space RGB565 quantisation;
+the resting backdrop uses the same source and dither phase. The superseded
+RGB565 asset and nearest-sampled HDMI reveal have been removed. Output remains
+RGB565 and there is no complete-frame animation cache.

@@ -400,9 +400,18 @@ def _selected_labels(application):
     ]
 
 
+def _menu_ready(application):
+    if _settings_open(application):
+        return _settings_ready(application)
+    if _exists(application, "Collections"):
+        return one_element(application, "Collections").accessible_description == "Ready"
+    return False
+
+
 def _focus_label(application, label, key, limit):
     """Move through a bounded menu, observing each acknowledged focus change."""
     for _ in range(limit):
+        _wait(lambda: _menu_ready(application), "menu transition did not settle")
         before = _selected_labels(application)
         if label in before:
             return

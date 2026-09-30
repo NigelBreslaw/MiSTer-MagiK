@@ -2,13 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! One bounded owner of card preparation, producer construction and retirement.
-use super::{
-    ASIDE_LEVELS, CARD_COUNT, CardLevelSnapshot, LauncherFonts, native_render_ahead, prepare_cached,
-};
+use super::{ASIDE_LEVELS, CardLevelSnapshot, LauncherFonts, native_render_ahead, prepare_cached};
 use crate::ui_runner::launcher_card_pipeline::{CardPipelineCounters, LauncherCardRenderAhead};
-use mister_magik_framebuffer_scenes::{
-    Rgb565Pixel,
-    launcher::{LauncherFaceCache, LauncherScene, PreparedLauncher},
+use mister_magik_framebuffer_scenes::launcher::{
+    LauncherFaceCache, LauncherScene, PreparedLauncher,
 };
 use std::{
     collections::VecDeque,
@@ -53,15 +50,13 @@ pub(super) struct HomePreparation {
 }
 impl HomePreparation {
     pub(super) fn new(
-        artwork: Arc<[Vec<Rgb565Pixel>; CARD_COUNT]>,
         fonts: Arc<LauncherFonts>,
         initial_level: String,
         initial_cache: LauncherFaceCache,
     ) -> Result<Self, String> {
-        Self::start(artwork, fonts, initial_level, initial_cache, |_| {})
+        Self::start(fonts, initial_level, initial_cache, |_| {})
     }
     pub(super) fn start(
-        artwork: Arc<[Vec<Rgb565Pixel>; CARD_COUNT]>,
         fonts: Arc<LauncherFonts>,
         initial_level: String,
         initial_cache: LauncherFaceCache,
@@ -189,7 +184,6 @@ impl HomePreparation {
                                 &request.level,
                                 request.selected,
                                 &request.clock,
-                                &artwork,
                                 &fonts,
                                 face_cache,
                             )

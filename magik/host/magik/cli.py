@@ -44,7 +44,14 @@ CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
 }
 WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
-CHECK_SCENARIOS = ("smoke", "motion", "motion-rollover", "motion-fallback", "idle")
+CHECK_SCENARIOS = (
+    "smoke",
+    "motion",
+    "motion-rollover",
+    "motion-fallback",
+    "idle",
+    "journeys",
+)
 
 
 def agent_binary_path() -> Path:
@@ -114,10 +121,7 @@ def main() -> int:
         choices=(
             "default",
             "reduced",
-            "dithered",
             "rgb888",
-            "cached",
-            "cached-fast",
             "scanline",
         ),
         default="default",
@@ -129,10 +133,7 @@ def main() -> int:
         choices=(
             "default",
             "reduced",
-            "dithered",
             "rgb888",
-            "cached",
-            "cached-fast",
             "scanline",
         ),
         default="default",

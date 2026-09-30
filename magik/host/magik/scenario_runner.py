@@ -75,6 +75,16 @@ def magik_run(request):
 
 @pytest.fixture(scope="session")
 def application_session(request, magik_run):
+    yield from _application_session(request, magik_run)
+
+
+@pytest.fixture
+def journey_application_session(request, magik_run):
+    # Each reversible journey stays inside the native 60-second test lease.
+    yield from _application_session(request, magik_run)
+
+
+def _application_session(request, magik_run):
     from .cli import (
         connect_agent,
         ensure_application,

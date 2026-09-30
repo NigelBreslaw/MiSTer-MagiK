@@ -124,7 +124,7 @@ def test_same_name_preset_selection_waits_for_new_generation(monkeypatch):
 
 
 @pytest.mark.parametrize("effect", ["launcher-cards", "arcade-transition"])
-@pytest.mark.parametrize("preset", ["default", "dithered", "rgb888"])
+@pytest.mark.parametrize("preset", ["default", "rgb888"])
 def test_render_labs_require_production_build_for_qualification(effect, preset):
     data = sample()
     data["window"]["context"].update(
@@ -141,7 +141,7 @@ def test_rendering_presets_are_scoped_to_rendering_labs():
     from magik.concepts import supported
 
     assert supported("launcher-cards", "rgb888")
-    assert supported("arcade-transition", "dithered")
+    assert supported("arcade-transition", "rgb888")
     assert not supported("launcher-cards", "reduced")
     assert not supported("starfield", "rgb888")
     assert supported("starfield", "reduced")
@@ -177,7 +177,7 @@ def test_lab_requires_full_window_cadence_and_exact_geometry():
         validate(data, "abc", "launcher-cards", "default")
 
 
-@pytest.mark.parametrize("preset", ["cached", "cached-fast", "scanline"])
+@pytest.mark.parametrize("preset", ["scanline"])
 def test_arcade_specific_presets_are_only_available_for_arcade(preset):
     from magik.concepts import supported
 

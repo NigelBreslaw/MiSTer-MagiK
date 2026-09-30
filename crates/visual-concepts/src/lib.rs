@@ -26,10 +26,7 @@ pub const EFFECTS: &[&str] = &[
 pub enum Preset {
     Default,
     Reduced,
-    Dithered,
     Rgb888,
-    Cached,
-    CachedFast,
     Scanline,
 }
 impl Preset {
@@ -37,22 +34,14 @@ impl Preset {
         match value {
             "default" => Ok(Self::Default),
             "reduced" => Ok(Self::Reduced),
-            "dithered" => Ok(Self::Dithered),
             "rgb888" => Ok(Self::Rgb888),
-            "cached" => Ok(Self::Cached),
-            "cached-fast" => Ok(Self::CachedFast),
             "scanline" => Ok(Self::Scanline),
             _ => Err(format!("unknown preset: {value}")),
         }
     }
     pub const fn choose(self, default: usize, reduced: usize) -> usize {
         match self {
-            Self::Default
-            | Self::Dithered
-            | Self::Rgb888
-            | Self::Cached
-            | Self::CachedFast
-            | Self::Scanline => default,
+            Self::Default | Self::Rgb888 | Self::Scanline => default,
             Self::Reduced => reduced,
         }
     }
@@ -60,10 +49,7 @@ impl Preset {
         match self {
             Self::Default => "default",
             Self::Reduced => "reduced",
-            Self::Dithered => "dithered",
             Self::Rgb888 => "rgb888",
-            Self::Cached => "cached",
-            Self::CachedFast => "cached-fast",
             Self::Scanline => "scanline",
         }
     }
@@ -109,24 +95,12 @@ impl Scene {
             return Err("rendering labs require a confirmed 960x540 HDMI render surface".into());
         }
         if RENDER_LABS.contains(&name) && preset == Preset::Reduced
-            || !RENDER_LABS.contains(&name)
-                && matches!(
-                    preset,
-                    Preset::Dithered
-                        | Preset::Rgb888
-                        | Preset::Cached
-                        | Preset::CachedFast
-                        | Preset::Scanline
-                )
+            || !RENDER_LABS.contains(&name) && matches!(preset, Preset::Rgb888 | Preset::Scanline)
         {
             return Err("preset is not supported by this workload".into());
         }
-        if matches!(
-            preset,
-            Preset::Cached | Preset::CachedFast | Preset::Scanline
-        ) && name != "arcade-transition"
-        {
-            return Err("cached, cached-fast and scanline require arcade-transition".into());
+        if matches!(preset, Preset::Scanline) && name != "arcade-transition" {
+            return Err("scanline requires arcade-transition".into());
         }
         let effect: Box<dyn Effect> = match name {
             "launcher-cards" | "arcade-transition" => {

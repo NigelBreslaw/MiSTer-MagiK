@@ -835,7 +835,9 @@ pub struct NavigationTransitionBuffers {
     source_ready: bool,
     destination_ready: bool,
     settings_cog_asset: Option<&'static [Rgb565Pixel]>,
-    arcade_cabinet_asset: Option<&'static [Rgb565Pixel]>,
+    arcade_texture: Option<crate::arcade_card::CabinetTexture>,
+    arcade_renderer: std::cell::RefCell<Option<crate::arcade_card::ArcadeCardRenderer>>,
+    arcade_worker_setup: Option<fn()>,
 }
 
 impl NavigationTransitionBuffers {
@@ -887,6 +889,7 @@ impl NavigationTransitionBuffers {
     }
 
     pub fn clear_ready(&mut self) {
+        self.arcade_renderer.get_mut().take();
         self.source_ready = false;
         self.destination_ready = false;
     }
@@ -941,12 +944,16 @@ impl NavigationTransitionBuffers {
         self.settings_cog_asset
     }
 
-    pub fn set_arcade_cabinet_asset(&mut self, asset: &'static [Rgb565Pixel]) {
-        self.arcade_cabinet_asset = Some(asset);
+    pub fn set_arcade_cabinet_asset(
+        &mut self,
+        asset: &crate::arcade_card::CabinetArtwork,
+        setup: Option<fn()>,
+    ) {
+        self.arcade_texture = Some(crate::arcade_card::CabinetTexture::from_artwork(asset));
+        self.arcade_worker_setup = setup;
     }
-
-    pub fn arcade_cabinet_asset(&self) -> Option<&'static [Rgb565Pixel]> {
-        self.arcade_cabinet_asset
+    pub fn retire_arcade_renderer(&mut self) {
+        self.arcade_renderer.get_mut().take();
     }
 
     pub fn copy_source_to_working(&mut self) -> Result<usize, NavigationTransitionFailure> {
@@ -1923,7 +1930,7 @@ fn render_arcade_card_into(
         buffers
             .destination_ready
             .then_some(buffers.destination.as_slice()),
-        buffers.arcade_cabinet_asset,
+        buffers.arcade_texture.as_ref(),
     ) else {
         output.copy_from_slice(source);
         stats.copied_pixels = source.len() as u64;
@@ -1937,7 +1944,35 @@ fn render_arcade_card_into(
         NavigationTransitionDirection::Reverse => (destination, source, duration - elapsed),
     };
     let started = Instant::now();
-    if !crate::arcade_card::render_arcade_card_transition_into(
+    if (buffers.width, buffers.height) == (960, 540) {
+        let mut renderer = buffers.arcade_renderer.borrow_mut();
+        if renderer.is_none() {
+            let (home, arcade) = match request.direction {
+                NavigationTransitionDirection::Forward => (
+                    Arc::clone(&buffers.source),
+                    Arc::clone(&buffers.destination),
+                ),
+                NavigationTransitionDirection::Reverse => (
+                    Arc::clone(&buffers.destination),
+                    Arc::clone(&buffers.source),
+                ),
+            };
+            *renderer = Some(
+                crate::arcade_card::ArcadeCardRenderer::new(
+                    home,
+                    arcade,
+                    cabinet,
+                    buffers.arcade_worker_setup,
+                )
+                .map_err(|_| NavigationTransitionFailure::SnapshotSizeMismatch)?,
+            );
+        }
+        renderer
+            .as_mut()
+            .unwrap()
+            .render(t_ms, output)
+            .map_err(|_| NavigationTransitionFailure::SnapshotSizeMismatch)?;
+    } else if !crate::arcade_card::render_arcade_card_into(
         buffers.width,
         buffers.height,
         launcher,

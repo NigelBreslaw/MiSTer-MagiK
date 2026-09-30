@@ -254,7 +254,7 @@ mod tests {
         c.action("step");
         let before = c.scene.as_ref().unwrap().elapsed();
         let generation = c.generation;
-        c.select("launcher-cards", Preset::Dithered);
+        c.select("launcher-cards", Preset::Rgb888);
         assert!(c.paused);
         assert_eq!(c.scene.as_ref().unwrap().elapsed(), before);
         assert_ne!(c.generation, generation);

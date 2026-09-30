@@ -45,18 +45,6 @@ struct PendingLevel {
     level: CardLevelSnapshot,
 }
 
-const CARD_WIDTH: usize = 180;
-const CARD_HEIGHT: usize = 252;
-
-const CARD_ASSETS: [&[u8]; CARD_COUNT] = [
-    include_bytes!("../../assets/ui/launcher-cards/01_arcade.rgb565"),
-    include_bytes!("../../assets/ui/launcher-cards/02_consoles.rgb565"),
-    include_bytes!("../../assets/ui/launcher-cards/03_computers.rgb565"),
-    include_bytes!("../../assets/ui/launcher-cards/04_handhelds.rgb565"),
-    include_bytes!("../../assets/ui/launcher-cards/05_favourites.rgb565"),
-    include_bytes!("../../assets/ui/launcher-cards/06_settings.rgb565"),
-];
-
 const CARD_RGB888: [&[u8]; CARD_COUNT] = [
     include_bytes!("../../assets/ui/launcher-cards/01_arcade.rgb888"),
     include_bytes!("../../assets/ui/launcher-cards/02_consoles.rgb888"),
@@ -149,8 +137,6 @@ pub(super) struct LauncherCardHomeSession {
     scene: LauncherScene,
     level: CardLevelSnapshot,
     clock: String,
-    #[cfg(test)]
-    artwork: Arc<[Vec<Rgb565Pixel>; CARD_COUNT]>,
     fonts: Arc<LauncherFonts>,
     prepared: VisiblePrepared,
     preparation: HomePreparation,
@@ -186,25 +172,21 @@ impl LauncherCardHomeSession {
         selected: usize,
         clock: &str,
     ) -> Result<Self, String> {
-        let artwork = Arc::new(CARD_ASSETS.map(decode_card_asset));
+        let cabinet_warm = crate::launcher_presentation::warm_arcade_cabinet();
         let fonts = Arc::new(LauncherFonts::load()?);
         let selected = selected.min(level.cards.len().saturating_sub(1));
         let mut cache = LauncherFaceCache::default();
-        let prepared = prepare_cached(scene, &level, selected, clock, &artwork, &fonts, &mut cache);
-        let preparation = HomePreparation::new(
-            Arc::clone(&artwork),
-            Arc::clone(&fonts),
-            level.menu_id.clone(),
-            cache,
-        )?;
+        let prepared = prepare_cached(scene, &level, selected, clock, &fonts, &mut cache);
+        let preparation = HomePreparation::new(Arc::clone(&fonts), level.menu_id.clone(), cache)?;
+        cabinet_warm
+            .join()
+            .map_err(|_| "cabinet preparation failed")?;
         let render_ahead = native_render_ahead(scene, &prepared);
         let frame = settled_frame(selected);
         Ok(Self {
             scene,
             level,
             clock: clock.to_owned(),
-            #[cfg(test)]
-            artwork,
             fonts,
             prepared: VisiblePrepared(Some(Box::new(prepared))),
             preparation,
@@ -920,32 +902,15 @@ fn prepare(
     level: &CardLevelSnapshot,
     selected: usize,
     clock: &str,
-    artwork: &[Vec<Rgb565Pixel>; CARD_COUNT],
     fonts: &LauncherFonts,
 ) -> PreparedLauncher {
     // Only the root cards have approved artwork; nested levels are generic.
     let root = level.is_root();
-    let artwork: [&[Rgb565Pixel]; CARD_COUNT] =
-        std::array::from_fn(|index| artwork[index].as_slice());
-    let (artwork, rgb888): (&[&[Rgb565Pixel]], &[&[u8]]) = if root {
-        (&artwork, &CARD_RGB888)
-    } else {
-        (&[], &[])
-    };
+    let rgb888: &[&[u8]] = if root { &CARD_RGB888 } else { &[] };
     level.with_data(selected, clock, |data| {
-        if scene.uses_responsive_layout() {
-            scene
-                .prepare_initial_with_rgb888_artwork_and_typography(
-                    data,
-                    rgb888,
-                    fonts.typography(),
-                )
-                .finish()
-        } else {
-            scene
-                .prepare_initial_with_artwork_and_typography(data, artwork, fonts.typography())
-                .finish()
-        }
+        scene
+            .prepare_initial_with_rgb888_artwork_and_typography(data, rgb888, fonts.typography())
+            .finish()
     })
 }
 
@@ -955,43 +920,24 @@ fn prepare_cached(
     level: &CardLevelSnapshot,
     selected: usize,
     clock: &str,
-    artwork: &[Vec<Rgb565Pixel>; CARD_COUNT],
     fonts: &LauncherFonts,
     cache: &mut LauncherFaceCache,
 ) -> PreparedLauncher {
     let root = level.is_root();
-    let artwork: [&[Rgb565Pixel]; CARD_COUNT] =
-        std::array::from_fn(|index| artwork[index].as_slice());
-    let (artwork, rgb888): (&[&[Rgb565Pixel]], &[&[u8]]) = if root {
-        (&artwork, &CARD_RGB888)
-    } else {
-        (&[], &[])
-    };
+    let rgb888: &[&[u8]] = if root { &CARD_RGB888 } else { &[] };
     // Immutable assets/fonts belong to this session. Root and nested assets
     // are separate contexts even when card IDs and geometry coincide.
     let assets = if root { 1 } else { 2 };
     level.with_data(selected, clock, |data| {
-        if scene.uses_responsive_layout() {
-            scene
-                .prepare_initial_with_rgb888_artwork_typography_and_cache(
-                    data,
-                    rgb888,
-                    fonts.typography(),
-                    cache,
-                    assets,
-                )
-                .finish()
-        } else {
-            scene
-                .prepare_initial_with_artwork_typography_and_cache(
-                    data,
-                    artwork,
-                    fonts.typography(),
-                    cache,
-                    assets,
-                )
-                .finish()
-        }
+        scene
+            .prepare_initial_with_rgb888_artwork_typography_and_cache(
+                data,
+                rgb888,
+                fonts.typography(),
+                cache,
+                assets,
+            )
+            .finish()
     })
 }
 
@@ -1018,16 +964,6 @@ impl Drop for LauncherCardHomeSession {
         }
         self.preparation.shutdown(contents);
     }
-}
-
-fn decode_card_asset(bytes: &[u8]) -> Vec<Rgb565Pixel> {
-    assert_eq!(bytes.len(), CARD_WIDTH * CARD_HEIGHT * 2);
-    bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| Rgb565Pixel(u16::from_le_bytes(*pair)))
-        .collect()
 }
 
 #[cfg(test)]
@@ -1105,7 +1041,6 @@ mod tests {
             let worker_attempts = Arc::clone(&attempts);
             let ui_thread = std::thread::current().id();
             session.preparation = HomePreparation::start(
-                Arc::clone(&session.artwork),
                 Arc::clone(&session.fonts),
                 root.menu_id.clone(),
                 LauncherFaceCache::default(),
@@ -1132,25 +1067,11 @@ mod tests {
                 now += 16;
                 std::thread::yield_now();
             }
-            let expected = prepare(
-                scene,
-                &destination,
-                0,
-                "07:28",
-                &session.artwork,
-                &session.fonts,
-            );
+            let expected = prepare(scene, &destination, 0, "07:28", &session.fonts);
             assert_eq!(session.render(), expected.pixels());
             destination.cards[0].games = Some(123);
             wait_content(&mut session, scene, &destination, 0, "07:28");
-            let expected = prepare(
-                scene,
-                &destination,
-                0,
-                "07:28",
-                &session.artwork,
-                &session.fonts,
-            );
+            let expected = prepare(scene, &destination, 0, "07:28", &session.fonts);
             assert_eq!(session.render(), expected.pixels());
             assert!(attempts.load(Ordering::SeqCst) >= 3);
             assert!(session.preparation.ownership_is_bounded());
@@ -1170,7 +1091,6 @@ mod tests {
         let worker_attempts = Arc::clone(&attempts);
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         session.preparation = HomePreparation::start(
-            Arc::clone(&session.artwork),
             Arc::clone(&session.fonts),
             root.menu_id.clone(),
             LauncherFaceCache::default(),
@@ -1239,7 +1159,6 @@ mod tests {
                 session.update(scene, &level, 0, 0.0, "07:28", 0, false);
                 let old_pixels = session.render().to_vec();
                 session.preparation = HomePreparation::start(
-                    Arc::clone(&session.artwork),
                     Arc::clone(&session.fonts),
                     level.menu_id.clone(),
                     LauncherFaceCache::default(),
@@ -1294,14 +1213,7 @@ mod tests {
                 "07:29",
             );
             assert_eq!(session.level.cards[0].games, Some(999));
-            let mut reference = prepare(
-                session.scene,
-                &changed,
-                1,
-                "07:29",
-                &session.artwork,
-                &session.fonts,
-            );
+            let mut reference = prepare(session.scene, &changed, 1, "07:29", &session.fonts);
             reference.render_frame(session.frame);
             assert_eq!(session.render(), reference.pixels());
         }
@@ -1321,7 +1233,6 @@ mod tests {
                 LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
             session.update(scene, &level, 0, 0.0, "07:28", 0, false);
             session.preparation = HomePreparation::start(
-                Arc::clone(&session.artwork),
                 Arc::clone(&session.fonts),
                 level.menu_id.clone(),
                 LauncherFaceCache::default(),
@@ -1368,7 +1279,6 @@ mod tests {
         let (entered_tx, entered_rx) = channel();
         let (release_tx, release_rx) = channel();
         session.preparation = HomePreparation::start(
-            Arc::clone(&session.artwork),
             Arc::clone(&session.fonts),
             level.menu_id.clone(),
             LauncherFaceCache::default(),
@@ -1388,14 +1298,7 @@ mod tests {
         assert!(!old_direct_offered);
         wait_content(&mut session, portrait, &level, 0, "07:28");
         assert!(session.scene_ready(portrait));
-        let reference = prepare(
-            portrait,
-            &level,
-            0,
-            "07:28",
-            &session.artwork,
-            &session.fonts,
-        );
+        let reference = prepare(portrait, &level, 0, "07:28", &session.fonts);
         assert_eq!(session.render(), reference.pixels());
     }
 
@@ -1413,7 +1316,7 @@ mod tests {
             session.update(scene, &level, 0, 0.0, "07:28", 0, false);
             session.set_render_ahead_enabled(false);
             let before = session.render_ahead.as_ref().unwrap().counters().submitted;
-            let mut serial = prepare(scene, &level, 0, "07:28", &session.artwork, &session.fonts);
+            let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
             for tick in 1..=120 {
                 let position = if tick % 2 == 0 { 0.25 } else { 0.75 };
                 session.update(scene, &level, 0, position, "07:28", tick * 16, false);
@@ -1499,14 +1402,7 @@ mod tests {
                 scene == LauncherScene::new(960, 540)
             );
             session.update(scene, &snapshot(), 0, 0.0, "07:29", 32, true);
-            let expected = prepare(
-                scene,
-                &snapshot(),
-                0,
-                "07:29",
-                &session.artwork,
-                &session.fonts,
-            );
+            let expected = prepare(scene, &snapshot(), 0, "07:29", &session.fonts);
             assert_eq!(session.render(), expected.pixels());
         }
     }
@@ -1706,7 +1602,6 @@ mod tests {
                 &data,
                 0,
                 clock,
-                &session.artwork,
                 &session.fonts,
             );
             reference.render_frame(session.frame);
@@ -1803,14 +1698,7 @@ mod tests {
         session.render();
         assert!(session.trick.is_none());
         assert!(!session.is_level_trick_active());
-        let mut expected = prepare(
-            scene,
-            &consoles(),
-            0,
-            "21:37",
-            &session.artwork,
-            &session.fonts,
-        );
+        let mut expected = prepare(scene, &consoles(), 0, "21:37", &session.fonts);
         expected.render_frame(settled_frame(0));
         assert_eq!(session.render(), expected.pixels());
     }
@@ -1823,14 +1711,7 @@ mod tests {
         session.update(scene, &consoles(), 0, 0.0, "21:37", 16, false);
         wait_content(&mut session, scene, &consoles(), 0, "21:37");
         assert!(session.trick.is_none());
-        let mut expected = prepare(
-            scene,
-            &consoles(),
-            0,
-            "21:37",
-            &session.artwork,
-            &session.fonts,
-        );
+        let mut expected = prepare(scene, &consoles(), 0, "21:37", &session.fonts);
         expected.render_frame(settled_frame(0));
         assert_eq!(session.render(), expected.pixels());
     }
@@ -1844,14 +1725,7 @@ mod tests {
         session.set_inactive();
         assert!(!session.active);
         wait_content(&mut session, scene, &consoles(), 0, "21:37");
-        let mut expected = prepare(
-            scene,
-            &consoles(),
-            0,
-            "21:37",
-            &session.artwork,
-            &session.fonts,
-        );
+        let mut expected = prepare(scene, &consoles(), 0, "21:37", &session.fonts);
         expected.render_frame(settled_frame(0));
         assert_eq!(session.render(), expected.pixels());
     }

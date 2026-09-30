@@ -25,26 +25,17 @@ EFFECTS = (
 PRESETS = (
     "default",
     "reduced",
-    "dithered",
     "rgb888",
-    "cached",
-    "cached-fast",
     "scanline",
 )
 RENDER_LABS = ("launcher-cards", "arcade-transition")
 
 
 def supported(effect, preset):
-    if effect == "arcade-transition" and preset in (
-        "cached",
-        "cached-fast",
-        "scanline",
-    ):
+    if effect == "arcade-transition" and preset in ("scanline",):
         return True
     return effect in EFFECTS and preset in (
-        ("default", "dithered", "rgb888")
-        if effect in RENDER_LABS
-        else ("default", "reduced")
+        ("default", "rgb888") if effect in RENDER_LABS else ("default", "reduced")
     )
 
 
@@ -227,7 +218,7 @@ def review(application, agent, run, effect, preset):
     select(
         application,
         effect,
-        ("dithered" if effect in RENDER_LABS else "reduced")
+        ("rgb888" if effect in RENDER_LABS else "reduced")
         if preset == "default"
         else "default",
     )
@@ -273,7 +264,7 @@ def review(application, agent, run, effect, preset):
 def interactive(application, agent, run, effect, preset):
     select(application, effect, preset)
     print(
-        "Commands: select EFFECT, preset default|reduced|dithered|rgb888|cached|cached-fast|scanline, pause, resume, step, restart, capture, quit",
+        "Commands: select EFFECT, preset default|reduced|rgb888|scanline, pause, resume, step, restart, capture, quit",
         flush=True,
     )
     capture_number = 0

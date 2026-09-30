@@ -26,7 +26,7 @@ use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
 use crate::launcher_presentation::{
-    SelectionFeedbackTarget, arcade_cabinet_rgb565, settings_cog_backdrop_rgb565,
+    SelectionFeedbackTarget, arcade_cabinet_artwork, settings_cog_backdrop_rgb565,
 };
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
@@ -8337,7 +8337,7 @@ pub(super) fn run_launcher_loop(
                                                             direction,
                                                             geometry,
                                                             target.cached_565(),
-                                                            arcade_cabinet_rgb565(),
+                                                            arcade_cabinet_artwork(),
                                                             now_us,
                                                         )
                                                     } else if layout.is_portrait() {

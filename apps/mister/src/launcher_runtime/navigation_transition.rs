@@ -609,10 +609,20 @@ impl NavigationTransitionRuntime {
         direction: NavigationTransitionDirection,
         geometry: NavigationTransitionGeometry,
         source: &[Rgb565Pixel],
-        cabinet: &'static [SharedRgb565Pixel],
+        cabinet: &mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
-        self.buffers.set_arcade_cabinet_asset(cabinet);
+        if !self.enabled || self.is_active() {
+            return Ok(false);
+        }
+        fn configure_arcade_worker() {
+            use mister_magik_catalog::runtime_thread::{
+                RuntimeThreadRole, apply_runtime_thread_policy,
+            };
+            apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+        }
+        self.buffers
+            .set_arcade_cabinet_asset(cabinet, Some(configure_arcade_worker));
         let mut request = NavigationTransitionRequest::arcade_card(direction, geometry);
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
@@ -933,6 +943,7 @@ impl NavigationTransitionRuntime {
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
         let request = self.request();
         let completion = self.controller.complete()?;
+        self.buffers.retire_arcade_renderer();
         if request.is_some_and(|request| {
             request.is_super_scaler()
                 && matches!(
@@ -1115,6 +1126,80 @@ fn shared_rgb565_as_slint(pixels: &[SharedRgb565Pixel]) -> &[Rgb565Pixel] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_arcade_reveal_preserves_reversal_cancellation_and_new_snapshots() {
+        use mister_magik_framebuffer_scenes::arcade_card::{
+            CABINET_HEIGHT, CABINET_WIDTH, CabinetTexture,
+        };
+        let texture =
+            CabinetTexture::from_rgb888(&vec![100; CABINET_WIDTH * CABINET_HEIGHT * 3]).unwrap();
+        let artwork = texture.artwork();
+        let home = vec![Rgb565Pixel(0x1234); 960 * 540];
+        let mut arcade = vec![SharedRgb565Pixel(0x5a6d); 960 * 540];
+        texture.prepare_destination(&mut arcade);
+        let arcade = shared_rgb565_as_slint(&arcade);
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        assert!(
+            runtime
+                .begin_arcade_card(
+                    NavigationTransitionDirection::Forward,
+                    NavigationTransitionGeometry::default(),
+                    &home,
+                    &artwork,
+                    0
+                )
+                .unwrap()
+        );
+        assert_eq!(runtime.render().unwrap(), home);
+        runtime.capture_destination(arcade, 1).unwrap();
+        runtime.tick(500_001);
+        runtime.render().unwrap();
+        assert!(runtime.request_reverse(500_002));
+        runtime.tick(1_100_003);
+        runtime.render().unwrap();
+        assert_eq!(
+            runtime.complete().unwrap().endpoint,
+            NavigationTransitionEndpoint::Source
+        );
+        assert!(
+            runtime
+                .begin_arcade_card(
+                    NavigationTransitionDirection::Reverse,
+                    NavigationTransitionGeometry::default(),
+                    arcade,
+                    &artwork,
+                    2_000_000
+                )
+                .unwrap()
+        );
+        assert_eq!(runtime.render().unwrap(), arcade);
+        runtime.capture_destination(&home, 2_000_001).unwrap();
+        runtime.tick(2_700_001);
+        runtime.render().unwrap();
+        runtime.cancel_for_exclusive_view();
+        assert!(runtime.complete().is_some());
+        let updated_home = vec![Rgb565Pixel(0x6be7); 960 * 540];
+        assert!(
+            runtime
+                .begin_arcade_card(
+                    NavigationTransitionDirection::Forward,
+                    NavigationTransitionGeometry::default(),
+                    &updated_home,
+                    &artwork,
+                    3_000_000
+                )
+                .unwrap()
+        );
+        assert_eq!(runtime.render().unwrap(), updated_home);
+        runtime.capture_destination(arcade, 3_000_001).unwrap();
+        runtime.tick(4_100_001);
+        assert_eq!(runtime.render().unwrap(), arcade);
+        assert_eq!(
+            runtime.complete().unwrap().endpoint,
+            NavigationTransitionEndpoint::Destination
+        );
+    }
 
     #[test]
     fn crt_navigation_geometry_stays_inside_every_supported_frame_shape() {

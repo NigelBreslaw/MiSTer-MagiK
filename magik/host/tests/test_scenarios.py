@@ -180,3 +180,44 @@ def test_settings_button_is_not_mistaken_for_the_open_screen():
         )
     )
     assert actions._settings_open(app)
+
+
+def test_menu_focus_waits_for_navigation_ownership_to_end(monkeypatch):
+    from types import SimpleNamespace
+
+    selected = ["Settings"]
+    collection = SimpleNamespace(accessible_description="Transitioning")
+    checks = 0
+    keys = []
+
+    def one(_, label):
+        assert label == "Collections"
+        return collection
+
+    def wait(predicate, _):
+        nonlocal checks
+        assert not predicate()
+        checks += 1
+        collection.accessible_description = "Ready"
+        assert predicate()
+
+    def press(_, key):
+        assert collection.accessible_description == "Ready"
+        keys.append(key)
+        selected[:] = ["Arcade"]
+
+    monkeypatch.setattr(actions, "_settings_open", lambda _: False)
+    monkeypatch.setattr(actions, "_exists", lambda _, label: label == "Collections")
+    monkeypatch.setattr(actions, "one_element", one)
+    monkeypatch.setattr(actions, "_selected_labels", lambda _: list(selected))
+    monkeypatch.setattr(actions, "_press_key", press)
+
+    def wait_all(predicate, message):
+        if "transition" in message and collection.accessible_description != "Ready":
+            wait(predicate, message)
+        else:
+            assert predicate()
+
+    monkeypatch.setattr(actions, "_wait", wait_all)
+    actions._focus_label(object(), "Arcade", "right", 2)
+    assert checks == 1 and keys == ["right"]

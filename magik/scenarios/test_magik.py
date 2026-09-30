@@ -196,8 +196,8 @@ def _journeys(application_session, repetition, selected=None):
 
 @pytest.mark.parametrize("journey", ["catalog", "setting"])
 @pytest.mark.parametrize("repetition", range(2))
-def test_journeys(application_session, repetition, journey):
-    _journeys(application_session, repetition, journey)
+def test_journeys(journey_application_session, repetition, journey):
+    _journeys(journey_application_session, repetition, journey)
 
 
 @pytest.mark.magik_profile

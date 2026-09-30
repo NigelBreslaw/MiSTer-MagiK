@@ -129,6 +129,7 @@ export component Launcher inherits MisterWindow {
         background: transparent;
         accessible-role: list;
         accessible-label: "Collections";
+        accessible-description: NavigationView.transition-state == NavigationTransitionState.idle ? "Ready" : "Transitioning";
         for label[index] in ["Arcade", "Consoles", "Computers", "Handhelds", "Favourites", "Settings"] : Rectangle {
             background: transparent;
             accessible-role: list-item;
