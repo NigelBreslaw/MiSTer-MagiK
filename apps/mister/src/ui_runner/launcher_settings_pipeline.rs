@@ -5,7 +5,9 @@
 
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
-use mister_magik_framebuffer_scenes::settings_cog::render_settings_cog_transition_into;
+use mister_magik_framebuffer_scenes::settings_cog::{
+    CogArtwork, CogTexture, render_settings_cog_transition_into,
+};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
 use std::sync::{Arc, Weak};
@@ -46,13 +48,13 @@ struct Work {
     request: SettingsFrameRequest,
     launcher: Arc<Vec<Rgb565Pixel>>,
     settings: Arc<Vec<Rgb565Pixel>>,
-    cog: &'static [Rgb565Pixel],
+    cog: &'static CogArtwork,
     pixels: Vec<Rgb565Pixel>,
 }
 struct Endpoints {
     launcher: Weak<Vec<Rgb565Pixel>>,
     settings: Weak<Vec<Rgb565Pixel>>,
-    cog: &'static [Rgb565Pixel],
+    cog: &'static CogArtwork,
 }
 
 /// Created once during launcher initialization. The worker owns pool allocation;
@@ -91,12 +93,19 @@ impl SettingsCogSession {
                         return;
                     }
                 }
+                let mut texture: Option<(&'static CogArtwork, CogTexture)> = None;
                 while let Ok(mut work) = request_rx.recv() {
+                    if !texture
+                        .as_ref()
+                        .is_some_and(|(artwork, _)| std::ptr::eq(*artwork, work.cog))
+                    {
+                        texture = Some((work.cog, CogTexture::from_artwork(work.cog)));
+                    }
                     let started = Instant::now();
                     if !render_settings_cog_transition_into(
                         &work.launcher,
                         &work.settings,
-                        work.cog,
+                        &texture.as_ref().unwrap().1,
                         work.request.t_ms,
                         &mut work.pixels,
                     ) {
@@ -143,15 +152,10 @@ impl SettingsCogSession {
         &mut self,
         launcher: Arc<Vec<Rgb565Pixel>>,
         settings: Arc<Vec<Rgb565Pixel>>,
-        cog: &'static [Rgb565Pixel],
+        cog: &'static CogArtwork,
         request: SettingsFrameRequest,
     ) {
-        if launcher.len() != FRAME_PIXELS
-            || settings.len() != FRAME_PIXELS
-            || cog.len()
-                != mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-        {
+        if launcher.len() != FRAME_PIXELS || settings.len() != FRAME_PIXELS {
             return;
         }
         let same = self.endpoints.as_ref().is_some_and(|e| {
@@ -232,14 +236,15 @@ mod tests {
     fn settings_transition_lifecycle_has_no_launcher_pixel_allocations() {
         let launcher = std::sync::Arc::new(vec![Rgb565Pixel(0x1234); FRAME_PIXELS]);
         let settings = std::sync::Arc::new(vec![Rgb565Pixel(0x4321); FRAME_PIXELS]);
-        let cog = Box::leak(
-            vec![
-                Rgb565Pixel(0);
+        let cog = Box::leak(Box::new(
+            CogArtwork::from_rgb888(&vec![
+                0;
                 mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
                     * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
+                    * 3
+            ])
+            .unwrap(),
+        ));
         let mut session = SettingsCogSession::new();
         let mut measurements = Vec::new();
         for generation in 1..=2 {
@@ -300,14 +305,15 @@ mod tests {
             go_rx.recv().unwrap();
             let launcher = Arc::new(vec![Rgb565Pixel(7); FRAME_PIXELS]);
             let settings = Arc::new(vec![Rgb565Pixel(9); FRAME_PIXELS]);
-            let cog = Box::leak(
-                vec![
-                    Rgb565Pixel(0);
+            let cog = Box::leak(Box::new(
+                CogArtwork::from_rgb888(&vec![
+                    0;
                     mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
                         * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-                ]
-                .into_boxed_slice(),
-            );
+                        * 3
+                ])
+                .unwrap(),
+            ));
             session.submit(
                 launcher,
                 settings,
@@ -351,14 +357,15 @@ mod tests {
         let mut session = SettingsCogSession::new();
         let launcher = Arc::new(vec![Rgb565Pixel(0x1234); FRAME_PIXELS]);
         let settings = Arc::new(vec![Rgb565Pixel(0x4321); FRAME_PIXELS]);
-        let cog = Box::leak(
-            vec![
-                Rgb565Pixel(0);
+        let cog = Box::leak(Box::new(
+            CogArtwork::from_rgb888(&vec![
+                0;
                 mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
                     * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
+                    * 3
+            ])
+            .unwrap(),
+        ));
         let request = SettingsFrameRequest {
             target_vblank: 21,
             t_ms: 0,

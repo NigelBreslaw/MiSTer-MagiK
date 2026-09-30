@@ -109,3 +109,46 @@ for transition ownership to settle. Each reversible journey uses its own existin
 Reduce motion toggles, each restoring the original Off setting. The application
 and service timeout remain unchanged. The tested artifact SHA-256 was
 `ff6fc6ffd9a1c2c88bea8bcd346c741f88014f91b6111f1872e627cd28320f9a`.
+
+## Settings cog fidelity and return handoff
+
+Settings now retains one 412x374 RGB888 cog source rendered from the existing
+Blender camera. It shares the cabinet's filtered mip/row sampler, and quantises
+at final RGB565 coordinates. The cog fades to 50% between 380 and 700 ms, as in
+the current UI guide; the resting backdrop is quantised after the same fade.
+The old packed source is removed. It adds 154,088 raw artwork bytes, with no
+stored poses or animation frames.
+
+The initial filtered implementation measured 55.600/55.833 FPS, 132/125 repeats,
+and render p99 17.705/18.295 ms. A 603-sample device profile found 31% memcpy,
+23% horizontal filtering, 17% composition and 16% other Settings rendering.
+Copying only visible Home spans, retaining each clipping span once and blending
+rows/fades in ARM kernels measured 60.000/59.998 FPS, zero repeats in both
+30-second windows, and render p99 13.728/13.642 ms. Evidence is retained in
+`20260930T172921Z-2700d288e385`; this precedes the handoff registration fix.
+
+Return playback exposed a separate image-registration error: the fading card
+art followed the expanding outline while the filtered cog followed its own
+camera path. Their visible landmarks were about 20 pixels apart at 180 ms.
+Both images now share the cog transform during their crossfade; the outline
+remains independent. The regression exercises the actual rendered camera
+landmark at 120/180/239 ms. The clipped sampler matches direct bilinear/mip
+sampling, and 100,000 ARM fade rows match the scalar reference, including
+opacities, phases, border/tail lengths and guard pixels.
+
+Use one ten-second device window for focused iteration, with handoff captures:
+
+```sh
+scripts/magik check concept --app mini-magik --concept settings-transition --production-build --quick
+```
+
+The standard longer qualification command remains available without `--quick`.
+
+The final registered renderer passed the focused physical run in
+`20260930T174254Z-7f3902bec1f7`: 600 presentations in 10,000 ms, 600 owned
+refreshes, zero repeated refreshes, render p99 13.647 ms and 62.1% process CPU.
+Artifact: `c46e60a804ce1499bc06ec21714a86d62d961e3a946e7cd233732a3588b7623b`.
+Authoritative captures retained the forward handoff (180 ms), return handoff
+(2020 ms on the reversing storyboard) and settled Settings. The user confirmed
+the return handoff was fixed. This is one focused window, not broad CRT or
+full-app scheduling qualification.

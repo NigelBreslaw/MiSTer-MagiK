@@ -12,7 +12,7 @@ mod stars;
 mod tunnel;
 mod waves;
 
-pub const RENDER_LABS: &[&str] = &["launcher-cards", "arcade-transition"];
+pub const RENDER_LABS: &[&str] = &["launcher-cards", "arcade-transition", "settings-transition"];
 
 pub const EFFECTS: &[&str] = &[
     "raster-waves",
@@ -103,7 +103,7 @@ impl Scene {
             return Err("scanline requires arcade-transition".into());
         }
         let effect: Box<dyn Effect> = match name {
-            "launcher-cards" | "arcade-transition" => {
+            "launcher-cards" | "arcade-transition" | "settings-transition" => {
                 Box::new(render_lab::Lab::new(name, preset, worker_setup)?)
             }
             "raster-waves" => Box::new(waves::new(preset, width, height)?),

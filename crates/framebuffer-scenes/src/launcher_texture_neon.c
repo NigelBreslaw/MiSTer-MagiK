@@ -707,7 +707,7 @@ void magik_cabinet_horizontal(uint32_t *out,const uint32_t *source,size_t width,
   }
   for(;i<n;++i) out[i]=cabinet_border(source,width,columns[i]);
 }
-static void cabinet_composite_black(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y) {
+static void cabinet_composite_black(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y,uint32_t opacity) {
   uint16_t offsets[4];
   for(size_t j=0;j<4;++j) offsets[j]=(uint16_t)(256-image_threshold[y&3][(x+j)&3]);
   const uint16x4_t phase=vld1_u16(offsets),zero=vdup_n_u16(0);
@@ -715,6 +715,7 @@ static void cabinet_composite_black(uint16_t *out,const uint32_t *a,const uint32
   for(;i+3<n;i+=4) {
     uint32x4_t p=blend(vld1q_u32(a+i),vld1q_u32(b+i),wy);
     if(lod) p=blend(p,blend(vld1q_u32(c+i),vld1q_u32(d+i),wy2),lod);
+    if(opacity!=256) p=blend(vdupq_n_u32(0),p,opacity);
     uint32x4_t alpha=vshrq_n_u32(p,24);
     uint32x2_t maximum=vmax_u32(vget_low_u32(alpha),vget_high_u32(alpha));
     if(vget_lane_u32(maximum,0)==0 && vget_lane_u32(maximum,1)==0) continue;
@@ -724,12 +725,13 @@ static void cabinet_composite_black(uint16_t *out,const uint32_t *a,const uint32
   for(;i<n;++i) {
     uint32_t p=scalar(a[i],b[i],wy);
     if(lod) p=scalar(p,scalar(c[i],d[i],wy2),lod);
+    if(opacity!=256) p=scalar(0,p,opacity);
     out[i]=(p>>24)?pack_dithered_scalar(p,x+i,y):0;
   }
 }
 
-void magik_cabinet_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y,uint32_t black) {
-  if(black) {cabinet_composite_black(out,a,b,c,d,n,wy,wy2,lod,x,y);return;}
+void magik_artwork_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,const uint32_t *c,const uint32_t *d,size_t n,uint32_t wy,uint32_t wy2,uint32_t lod,size_t x,size_t y,uint32_t black,uint32_t opacity) {
+  if(black) {cabinet_composite_black(out,a,b,c,d,n,wy,wy2,lod,x,y,opacity);return;}
   uint16_t offsets[4];
   for(size_t j=0;j<4;++j) offsets[j]=(uint16_t)(256-image_threshold[y&3][(x+j)&3]);
   const uint16x4_t phase=vld1_u16(offsets);
@@ -737,6 +739,7 @@ void magik_cabinet_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,c
   for(;i+3<n;i+=4) {
     uint32x4_t p=blend(vld1q_u32(a+i),vld1q_u32(b+i),wy);
     if(lod) p=blend(p,blend(vld1q_u32(c+i),vld1q_u32(d+i),wy2),lod);
+    if(opacity!=256) p=blend(vdupq_n_u32(0),p,opacity);
     uint32x4_t alpha=vshrq_n_u32(p,24);
     uint32x2_t maximum=vmax_u32(vget_low_u32(alpha),vget_high_u32(alpha));
     if(vget_lane_u32(maximum,0)==0 && vget_lane_u32(maximum,1)==0) continue;
@@ -747,6 +750,7 @@ void magik_cabinet_composite(uint16_t *out,const uint32_t *a,const uint32_t *b,c
   for(;i<n;++i) {
     uint32_t p=scalar(a[i],b[i],wy);
     if(lod) p=scalar(p,scalar(c[i],d[i],wy2),lod);
+    if(opacity!=256) p=scalar(0,p,opacity);
     out[i]=dither_pixel(p,out[i],x+i,y);
   }
 }

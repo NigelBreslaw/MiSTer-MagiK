@@ -117,6 +117,11 @@ def main() -> int:
     )
     check_command.add_argument("--concept")
     check_command.add_argument(
+        "--quick",
+        action="store_true",
+        help="one 10-second Mini concept window with focused captures",
+    )
+    check_command.add_argument(
         "--preset",
         choices=(
             "default",
@@ -178,9 +183,18 @@ def main() -> int:
     ) and not (
         arguments.scenario == "concept"
         and arguments.app == "mini-magik"
-        and arguments.concept in {"launcher-cards", "arcade-transition"}
+        and arguments.concept
+        in {"launcher-cards", "arcade-transition", "settings-transition"}
     ):
         parser.error("preparation measurements require a Mini rendering-lab concept")
+    if getattr(arguments, "quick", False) and not (
+        arguments.scenario == "concept"
+        and arguments.app == "mini-magik"
+        and not arguments.profile
+        and not arguments.profile_preparation
+        and not arguments.bench_preparation
+    ):
+        parser.error("--quick requires an unprofiled Mini concept measurement")
     if getattr(arguments, "production_build", False):
         if arguments.app != "mini-magik":
             parser.error("--production-build requires --app mini-magik")

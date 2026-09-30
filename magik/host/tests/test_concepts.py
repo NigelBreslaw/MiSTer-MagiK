@@ -36,6 +36,25 @@ def sample():
     }
 
 
+def test_short_window_requires_explicit_duration_and_preserves_drop_gate():
+    data = sample()
+    w = data["window"]
+    w.update(
+        elapsed_ms=10000,
+        end_ms=12000,
+        presentations=600,
+        physical_latch_posts=600,
+        physical_latch_flips=600,
+        owned_vblanks=600,
+        presented_vblanks=600,
+    )
+    assert validate(data, "abc", "diagnostic", "default", quick=True)["qualified"]
+    with pytest.raises(ValueError, match="boundaries"):
+        validate(data, "abc", "diagnostic", "default")
+    w["physical_drops"] = 1
+    assert not validate(data, "abc", "diagnostic", "default", quick=True)["qualified"]
+
+
 def test_valid_window():
     assert validate(sample(), "abc", "diagnostic", "default")["qualified"]
 
@@ -123,7 +142,9 @@ def test_same_name_preset_selection_waits_for_new_generation(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("effect", ["launcher-cards", "arcade-transition"])
+@pytest.mark.parametrize(
+    "effect", ["launcher-cards", "arcade-transition", "settings-transition"]
+)
 @pytest.mark.parametrize("preset", ["default", "rgb888"])
 def test_render_labs_require_production_build_for_qualification(effect, preset):
     data = sample()

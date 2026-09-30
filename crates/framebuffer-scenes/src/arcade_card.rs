@@ -669,8 +669,20 @@ impl CabinetTexture {
         Self::from_rgb888(&rgb)
     }
     pub fn from_rgb888(rgb: &[u8]) -> Result<Self, String> {
-        if rgb.len() != CABINET_WIDTH * CABINET_HEIGHT * 3 {
-            return Err("invalid RGB888 cabinet geometry".into());
+        Self::from_rgb888_sized(CABINET_WIDTH, CABINET_HEIGHT, rgb)
+    }
+    pub(crate) fn from_rgb888_sized(
+        width: usize,
+        height: usize,
+        rgb: &[u8],
+    ) -> Result<Self, String> {
+        if width == 0
+            || height == 0
+            || width > CABINET_WIDTH
+            || height > CABINET_HEIGHT
+            || rgb.len() != width * height * 3
+        {
+            return Err("invalid RGB888 artwork geometry".into());
         }
         let reference = rgb
             .as_chunks::<3>()
@@ -692,8 +704,8 @@ impl CabinetTexture {
             .collect();
         let mut levels = vec![CabinetLevel {
             pixels,
-            width: CABINET_WIDTH,
-            height: CABINET_HEIGHT,
+            width,
+            height,
         }];
         while levels.last().unwrap().width > 1 || levels.last().unwrap().height > 1 {
             let old = levels.last().unwrap();
@@ -781,6 +793,34 @@ impl CabinetTexture {
                 )
             })
             .collect()
+    }
+    pub(crate) fn pixels_at(&self, x: i32, y: i32, opacity: u32) -> Vec<Rgb565Pixel> {
+        let source = &self.levels[0];
+        source
+            .pixels
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| {
+                crate::launcher_texture::over_dithered(
+                    crate::launcher_texture::mix(0, p, opacity),
+                    Rgb565Pixel(0),
+                    (x + (i % source.width) as i32).rem_euclid(8) as usize,
+                    (y + (i / source.width) as i32).rem_euclid(8) as usize,
+                )
+            })
+            .collect()
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_clipped(
+        &self,
+        width: usize,
+        out: &mut [Rgb565Pixel],
+        bounds: (usize, usize, usize, usize),
+        transform: (i64, i64, i64, i64),
+        alpha: u32,
+        clip: impl Fn(usize) -> (usize, usize),
+    ) {
+        scanline::render_region(self, out, bounds, transform, width, true, alpha, clip);
     }
     pub fn storage_bytes(&self) -> usize {
         self.scanlines

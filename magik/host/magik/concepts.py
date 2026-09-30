@@ -21,6 +21,7 @@ EFFECTS = (
     "diagnostic",
     "launcher-cards",
     "arcade-transition",
+    "settings-transition",
 )
 PRESETS = (
     "default",
@@ -28,7 +29,7 @@ PRESETS = (
     "rgb888",
     "scanline",
 )
-RENDER_LABS = ("launcher-cards", "arcade-transition")
+RENDER_LABS = ("launcher-cards", "arcade-transition", "settings-transition")
 
 
 def supported(effect, preset):
@@ -86,13 +87,13 @@ def capture(agent, destination):
     destination.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
-def validate(metrics, sha256, effect, preset, profile=False):
+def validate(metrics, sha256, effect, preset, profile=False, *, quick=False):
     if metrics.get("sha256") != sha256:
         raise ValueError("concept artifact identity mismatch")
     w = metrics.get("window")
     if not isinstance(w, dict):
         raise ValueError("missing concept measurement window")
-    duration = 10_000 if profile else 30_000
+    duration = 10_000 if profile or quick else 30_000
     if (
         w.get("instrumented") is not profile
         or not duration <= w.get("elapsed_ms", 0) <= duration + 1000
@@ -166,17 +167,17 @@ def validate(metrics, sha256, effect, preset, profile=False):
     }
 
 
-def measure(application, agent, run, effect, preset, profile):
+def measure(application, agent, run, effect, preset, profile, *, quick=False):
     results = []
-    for repetition in range(1 if profile else 2):
+    for repetition in range(1 if profile or quick else 2):
         select(application, effect, preset)
-        action(application, "measure")
+        action(application, "measure-short" if quick else "measure")
         wait_for(
             lambda: value(application, "measuring") == "true",
             "measurement did not start",
         )
         # No bridge polling, captures or streaming during the device-clock window.
-        time.sleep(12.3 if profile else 32.3)
+        time.sleep(12.3 if profile or quick else 32.3)
         wait_for(
             lambda: value(application, "measuring") == "false",
             "measurement did not finish",
@@ -185,7 +186,9 @@ def measure(application, agent, run, effect, preset, profile):
         (run / f"concept-{repetition}-raw.json").write_text(
             json.dumps(raw, indent=2) + "\n"
         )
-        result = validate(raw, agent.expected_sha256, effect, preset, profile)
+        result = validate(
+            raw, agent.expected_sha256, effect, preset, profile, quick=quick
+        )
         results.append(result)
         print(
             f"{effect}/{preset}: repetition={repetition + 1} "
@@ -203,6 +206,7 @@ def measure(application, agent, run, effect, preset, profile):
 BOOKMARKS = {
     "launcher-cards": (210, 420),
     "arcade-transition": (500, 1000),
+    "settings-transition": (500, 1000),
     "light-sweep": (1500, 3000),
     "pixel-dissolve": (1300, 3200),
     "starfield": (4096, 8192),
@@ -212,35 +216,38 @@ BOOKMARKS = {
 }
 
 
-def review(application, agent, run, effect, preset):
-    # Exercise switching and the other preset outside measured windows.
-    select(application, "diagnostic", "reduced")
-    select(
-        application,
-        effect,
-        ("rgb888" if effect in RENDER_LABS else "reduced")
-        if preset == "default"
-        else "default",
-    )
-    action(application, "restart")
-    action(application, "pause")
-    wait_for(lambda: value(application, "paused") == "true", "pause failed")
-    before = int(value(application, "frame"))
-    time.sleep(0.1)
-    if int(value(application, "frame")) != before:
-        raise RuntimeError("paused concept advanced")
-    action(application, "step")
-    wait_for(lambda: int(value(application, "frame")) != before, "step failed")
-    if int(value(application, "frame")) - before not in (16, 17):
-        raise RuntimeError("step must advance exactly one nominal interval")
-    action(application, "restart")
-    wait_for(lambda: value(application, "frame") == "0", "restart failed")
-    select(application, effect, preset)
+def review(application, agent, run, effect, preset, *, quick=False):
+    if not quick:
+        # Exercise switching and the other preset outside measured windows.
+        select(application, "diagnostic", "reduced")
+        select(
+            application,
+            effect,
+            ("rgb888" if effect in RENDER_LABS else "reduced")
+            if preset == "default"
+            else "default",
+        )
+        action(application, "restart")
+        action(application, "pause")
+        wait_for(lambda: value(application, "paused") == "true", "pause failed")
+        before = int(value(application, "frame"))
+        time.sleep(0.1)
+        if int(value(application, "frame")) != before:
+            raise RuntimeError("paused concept advanced")
+        action(application, "step")
+        wait_for(lambda: int(value(application, "frame")) != before, "step failed")
+        if int(value(application, "frame")) - before not in (16, 17):
+            raise RuntimeError("step must advance exactly one nominal interval")
+        action(application, "restart")
+        wait_for(lambda: value(application, "frame") == "0", "restart failed")
+        select(application, effect, preset)
     bookmarks = [
         ("initial", 0),
         ("midpoint", BOOKMARKS[effect][0]),
         ("boundary", BOOKMARKS[effect][1]),
     ]
+    if quick and effect == "settings-transition":
+        bookmarks = [("handoff", 180), ("return-handoff", 2020), ("boundary", 1000)]
     for label, target in bookmarks:
         action(application, "capture-" + label)
         wait_for(
@@ -426,10 +433,25 @@ def run_concept(arguments, run: Path):
                     sampled=preparation_profile,
                 )
                 if preparation
-                else measure(application, agent, run, effect, arguments.preset, profile)
+                else measure(
+                    application,
+                    agent,
+                    run,
+                    effect,
+                    arguments.preset,
+                    profile,
+                    quick=getattr(arguments, "quick", False),
+                )
             )
             if not profile and not preparation:
-                review(application, agent, run, effect, arguments.preset)
+                review(
+                    application,
+                    agent,
+                    run,
+                    effect,
+                    arguments.preset,
+                    quick=getattr(arguments, "quick", False),
+                )
         if profile_id is not None:
             for name in ("profile.json", "profile.folded", "flamegraph.svg"):
                 (run / name).write_bytes(agent.read_profile_artifact(profile_id, name))

@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Mini exercises the production card preparer and live Arcade renderer.
+//! Mini exercises production cards, Arcade and Settings cog rendering.
 use super::{Effect, Pixel, Preset, Rect, full};
 use mister_magik_framebuffer_scenes::{
     arcade_card::{ArcadeCardRenderer, CabinetTexture},
@@ -8,6 +8,7 @@ use mister_magik_framebuffer_scenes::{
         LauncherFramePreparer, LauncherFrameRequest, PreparedLauncher, PreparedLauncherFrame,
     },
     launcher_navigation::{BrowseDirection, BrowseFrame, BrowsePhase},
+    settings_cog::{CogTexture, render_settings_cog_transition_into},
 };
 use std::{
     io::Cursor,
@@ -22,6 +23,9 @@ pub(super) struct Lab {
     home: Vec<Pixel>,
     tiles: Option<ParallelTiles>,
     reveal: Option<ArcadeCardRenderer>,
+    cog: Option<(CogTexture, Vec<Pixel>)>,
+    cog_last_us: u64,
+    cog_max_us: u64,
     preparation: Vec<(&'static str, u64)>,
 }
 impl Lab {
@@ -39,6 +43,9 @@ impl Lab {
             let launcher = crate::fixture::prepare(W, H);
             let home = launcher.pixels().to_vec();
             (Some(launcher), home, false)
+        } else if name == "settings-transition" {
+            let launcher = crate::fixture::prepare_selected(W, H, 5);
+            (None, launcher.pixels().to_vec(), false)
         } else {
             let (home, cached) = crate::fixture::home_prepared();
             (None, home, cached)
@@ -53,39 +60,9 @@ impl Lab {
         ));
         let reveal = if name == "arcade-transition" {
             let stage = Instant::now();
-            let source = include_bytes!(
+            let mut frame = destination_snapshot(include_bytes!(
                 "../../../apps/mister/tests/visual-baselines/launcher/hdmi-arcade.png"
-            );
-            let mut decoder = png::Decoder::new(Cursor::new(source));
-            decoder.set_transformations(png::Transformations::EXPAND);
-            let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
-            let mut bytes = vec![
-                0;
-                reader
-                    .output_buffer_size()
-                    .ok_or("unbounded Arcade snapshot")?
-            ];
-            let info = reader.next_frame(&mut bytes).map_err(|e| e.to_string())?;
-            if (info.width, info.height) != (W as u32, H as u32)
-                || info.bit_depth != png::BitDepth::Eight
-            {
-                return Err("Arcade snapshot geometry or bit depth changed".into());
-            }
-            let channels = match info.color_type {
-                png::ColorType::Rgb => 3,
-                png::ColorType::Rgba => 4,
-                _ => return Err("Arcade snapshot must be RGB or RGBA".into()),
-            };
-            let mut frame: Vec<Pixel> = bytes[..info.buffer_size()]
-                .chunks_exact(channels)
-                .map(|p| {
-                    Pixel(
-                        (u16::from(p[0]) >> 3) << 11
-                            | (u16::from(p[1]) >> 2) << 5
-                            | u16::from(p[2]) >> 3,
-                    )
-                })
-                .collect();
+            ))?;
             preparation.push(("destination_decode", stage.elapsed().as_millis() as u64));
             let stage = Instant::now();
             let texture = CabinetTexture::from_rgb888(include_bytes!(
@@ -107,6 +84,24 @@ impl Lab {
         } else {
             None
         };
+        let cog = if name == "settings-transition" {
+            let stage = Instant::now();
+            let mut destination = destination_snapshot(include_bytes!(
+                "../../../apps/mister/tests/visual-baselines/launcher/hdmi-settings.png"
+            ))?;
+            preparation.push(("destination_decode", stage.elapsed().as_millis() as u64));
+            let stage = Instant::now();
+            let texture = CogTexture::from_rgb888(include_bytes!(
+                "../../../apps/mister/assets/ui/settings/cog-backdrop-412x374.rgb888"
+            ))?;
+            if !texture.prepare_destination(&mut destination) {
+                return Err("invalid resting cog".into());
+            }
+            preparation.push(("cog_texture", stage.elapsed().as_millis() as u64));
+            Some((texture, destination))
+        } else {
+            None
+        };
         let stage = Instant::now();
         let tiles = launcher
             .as_ref()
@@ -121,9 +116,48 @@ impl Lab {
             home,
             tiles,
             reveal,
+            cog,
+            cog_last_us: 0,
+            cog_max_us: 0,
             preparation,
         })
     }
+}
+fn destination_snapshot(source: &[u8]) -> Result<Vec<Pixel>, String> {
+    let mut decoder = png::Decoder::new(Cursor::new(source));
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut bytes = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .ok_or("unbounded destination snapshot")?
+    ];
+    let info = reader.next_frame(&mut bytes).map_err(|e| e.to_string())?;
+    if (info.width, info.height) != (W as u32, H as u32) || info.bit_depth != png::BitDepth::Eight {
+        return Err("destination snapshot geometry or bit depth changed".into());
+    }
+    let channels = match info.color_type {
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        _ => return Err("destination snapshot must be RGB or RGBA".into()),
+    };
+    Ok(bytes[..info.buffer_size()]
+        .chunks_exact(channels)
+        .map(|p| {
+            Pixel((u16::from(p[0]) >> 3) << 11 | (u16::from(p[1]) >> 2) << 5 | u16::from(p[2]) >> 3)
+        })
+        .collect())
+}
+fn reveal_time(ms: u64) -> u32 {
+    let phase = ms % 2400;
+    (if phase < 1000 {
+        phase
+    } else if phase < 1200 {
+        1000
+    } else {
+        2200_u64.saturating_sub(phase)
+    }) as u32
 }
 fn browse(ms: u64) -> BrowseFrame {
     let t = ms % 8040;
@@ -181,15 +215,22 @@ impl Effect for Lab {
     }
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String> {
         let ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
-        if let Some(reveal) = &mut self.reveal {
-            let phase = ms % 2400;
-            let t = if phase < 1000 {
-                phase
-            } else if phase < 1200 {
-                1000
-            } else {
-                2200_u64.saturating_sub(phase)
-            } as u32;
+        if let Some((texture, destination)) = &self.cog {
+            let started = Instant::now();
+            if !render_settings_cog_transition_into(
+                &self.home,
+                destination,
+                texture,
+                reveal_time(ms),
+                pixels,
+            ) {
+                return Err("invalid cog frame".into());
+            }
+            self.cog_last_us = started.elapsed().as_micros() as u64;
+            self.cog_max_us = self.cog_max_us.max(self.cog_last_us);
+            Ok(full(W, H))
+        } else if let Some(reveal) = &mut self.reveal {
+            let t = reveal_time(ms);
             reveal.render(t, pixels)?;
             Ok(full(W, H))
         } else {
@@ -214,12 +255,18 @@ impl Effect for Lab {
         }
     }
     fn render_stage_last_us(&self) -> [u64; 3] {
+        if self.cog.is_some() {
+            return [self.cog_last_us, 0, 0];
+        }
         self.reveal.as_ref().map_or_else(
             || self.tiles.as_ref().map_or([0; 3], |t| t.last_us),
             ArcadeCardRenderer::last_us,
         )
     }
     fn render_stage_max_us(&self) -> [u64; 3] {
+        if self.cog.is_some() {
+            return [self.cog_max_us, 0, 0];
+        }
         self.reveal.as_ref().map_or_else(
             || self.tiles.as_ref().map_or([0; 3], |t| t.max_us),
             ArcadeCardRenderer::max_us,
@@ -229,7 +276,10 @@ impl Effect for Lab {
         &self.preparation
     }
     fn storage_bytes(&self) -> usize {
-        self.reveal
+        self.cog.as_ref().map_or(0, |(texture, destination)| {
+            texture.storage_bytes() + destination.capacity() * 2
+        }) + self
+            .reveal
             .as_ref()
             .map_or(0, ArcadeCardRenderer::storage_bytes)
             + self.tiles.as_ref().map_or(0, |t| t.storage_bytes)
@@ -345,6 +395,24 @@ mod tests {
             reference.render_frame(browse(ms));
             assert_eq!(pixels, reference.pixels(), "{ms}");
         }
+    }
+    #[test]
+    fn settings_reset_reverse_and_settlement_use_the_live_cog_renderer() {
+        let mut lab = Lab::new("settings-transition", Preset::Default, None).unwrap();
+        let mut pixels = vec![Pixel(0); W * H];
+        lab.render(Duration::ZERO, &mut pixels).unwrap();
+        assert_eq!(pixels, lab.home);
+        lab.render(Duration::from_millis(500), &mut pixels).unwrap();
+        let midpoint = pixels.clone();
+        lab.render(Duration::from_millis(1700), &mut pixels)
+            .unwrap();
+        assert_eq!(pixels, midpoint);
+        lab.render(Duration::from_millis(1000), &mut pixels)
+            .unwrap();
+        assert_eq!(pixels, lab.cog.as_ref().unwrap().1);
+        lab.reset();
+        lab.render(Duration::ZERO, &mut pixels).unwrap();
+        assert_eq!(pixels, lab.home);
     }
     #[test]
     fn storyboard_visits_every_card_both_directions_and_unwinds() {

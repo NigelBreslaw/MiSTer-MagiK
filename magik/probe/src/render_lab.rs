@@ -17,7 +17,7 @@ fn run(args: &[String]) -> Result<(), String> {
         || args[6] != "--output"
         || !RENDER_LABS.contains(&args[1].as_str())
     {
-        return Err("expected --render-lab launcher-cards|arcade-transition --preset default|rgb888|scanline --time-ms N --output FILE.ppm".into());
+        return Err("expected --render-lab launcher-cards|arcade-transition|settings-transition --preset default|rgb888|scanline --time-ms N --output FILE.ppm".into());
     }
     let mut scene = Scene::new(&args[1], Preset::parse(&args[3])?, 960, 540)?;
     let ms = args[5].parse::<u64>().map_err(|e| e.to_string())?;

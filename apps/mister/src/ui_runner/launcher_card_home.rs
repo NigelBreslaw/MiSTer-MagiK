@@ -173,6 +173,7 @@ impl LauncherCardHomeSession {
         clock: &str,
     ) -> Result<Self, String> {
         let cabinet_warm = crate::launcher_presentation::warm_arcade_cabinet();
+        let cog_warm = crate::launcher_presentation::warm_settings_cog();
         let fonts = Arc::new(LauncherFonts::load()?);
         let selected = selected.min(level.cards.len().saturating_sub(1));
         let mut cache = LauncherFaceCache::default();
@@ -181,6 +182,7 @@ impl LauncherCardHomeSession {
         cabinet_warm
             .join()
             .map_err(|_| "cabinet preparation failed")?;
+        cog_warm.join().map_err(|_| "cog preparation failed")?;
         let render_ahead = native_render_ahead(scene, &prepared);
         let frame = settled_frame(selected);
         Ok(Self {

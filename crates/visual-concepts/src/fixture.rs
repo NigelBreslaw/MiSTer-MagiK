@@ -62,6 +62,9 @@ fn font(scale: usize) -> BitmapFont {
     }
 }
 pub(crate) fn prepare(width: usize, height: usize) -> PreparedLauncher {
+    prepare_selected(width, height, 0)
+}
+pub(crate) fn prepare_selected(width: usize, height: usize, selected: usize) -> PreparedLauncher {
     let cards = [
         LauncherCard {
             id: LauncherCardId::Arcade,
@@ -105,7 +108,7 @@ pub(crate) fn prepare(width: usize, height: usize) -> PreparedLauncher {
     let scene = LauncherScene::new(width, height);
     let data = LauncherData {
         cards: &cards,
-        selected: 0,
+        selected,
         library_games: 35216,
         collections: 77,
         favourites: 42,

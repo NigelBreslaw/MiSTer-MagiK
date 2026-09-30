@@ -315,7 +315,9 @@ fn main() -> Result<(), String> {
             if c.measure {
                 late_frames.clear();
                 c.measure = false;
-                session.borrow_mut().set_measurement_duration(Some(30_000));
+                session
+                    .borrow_mut()
+                    .set_measurement_duration(Some(c.measure_duration_ms));
                 session.borrow_mut().begin();
                 probe.set_concept_measuring(true);
             }

@@ -13,6 +13,7 @@ pub struct Concepts {
     pub paused: bool,
     pub dirty: bool,
     pub measure: bool,
+    pub measure_duration_ms: u64,
     pub generation: i32,
     pub advance_next: bool,
     animation_at: Option<Instant>,
@@ -36,6 +37,7 @@ impl Concepts {
             paused: false,
             dirty: false,
             measure: false,
+            measure_duration_ms: 30_000,
             generation: 0,
             advance_next: false,
             animation_at: None,
@@ -187,7 +189,7 @@ impl Concepts {
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {
                 "launcher-cards" => (210, 420),
-                "arcade-transition" => (500, 1000),
+                "arcade-transition" | "settings-transition" => (500, 1000),
                 "light-sweep" => (1500, 3000),
                 "pixel-dissolve" => (1300, 3200),
                 "starfield" => (4096, 8192),
@@ -199,6 +201,8 @@ impl Concepts {
                 "initial" => 0,
                 "midpoint" => midpoint,
                 "boundary" => boundary,
+                "handoff" if self.name == "settings-transition" => 180,
+                "return-handoff" if self.name == "settings-transition" => 2020,
                 _ => {
                     self.error = Some("unknown capture bookmark".into());
                     return;
@@ -220,16 +224,21 @@ impl Concepts {
         match action {
             "pause" => self.paused = true,
             "resume" => self.paused = false,
-            "restart" | "measure" => {
+            "restart" | "measure" | "measure-short" => {
                 if let Some(s) = &mut self.scene {
                     s.reset();
                     self.advance_next = false;
                     self.dirty = true;
                 }
-                if action == "measure" {
+                if action.starts_with("measure") {
                     self.paused = false;
                 }
-                self.measure = action == "measure";
+                self.measure = action.starts_with("measure");
+                self.measure_duration_ms = if action == "measure-short" {
+                    10_000
+                } else {
+                    30_000
+                };
             }
             "step" => {
                 self.paused = true;
@@ -283,6 +292,10 @@ mod tests {
         assert!(c.paused && !c.advance_next);
         c.action("measure");
         assert!(c.measure && !c.paused);
+        assert_eq!(c.measure_duration_ms, 30_000);
+        c.action("measure-short");
+        assert!(c.measure && !c.paused);
+        assert_eq!(c.measure_duration_ms, 10_000);
         let generation = c.generation;
         c.select("diagnostic", Preset::Reduced);
         assert_ne!(c.generation, generation);

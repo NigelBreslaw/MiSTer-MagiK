@@ -51,6 +51,35 @@ pub(crate) fn blend(under: u16, over: u16, alpha: u32) -> u16 {
     lerp_rgb565(under, over, (alpha + 4) >> 3)
 }
 
+/// Blend already rendered UI pixels without changing their native grid.
+pub(crate) fn blend_row(
+    output: &mut [crate::Rgb565Pixel],
+    source: &[crate::Rgb565Pixel],
+    alpha: u32,
+) {
+    assert_eq!(output.len(), source.len());
+    assert!(alpha <= 256);
+    #[cfg(target_arch = "arm")]
+    {
+        unsafe extern "C" {
+            fn mister_magik_arcade_over(out: *mut u16, source: *const u16, n: usize, alpha: u16);
+        }
+        // SAFETY: equally sized disjoint RGB565 slices; kernel handles tails.
+        unsafe {
+            mister_magik_arcade_over(
+                output.as_mut_ptr().cast(),
+                source.as_ptr().cast(),
+                output.len(),
+                ((alpha + 4) >> 3) as u16,
+            );
+        }
+    }
+    #[cfg(not(target_arch = "arm"))]
+    for (out, src) in output.iter_mut().zip(source) {
+        out.0 = blend(out.0, src.0, alpha);
+    }
+}
+
 pub(crate) fn alpha_of(q16: i64) -> u32 {
     ((q16.clamp(0, 1 << 16) * 256 + (1 << 15)) >> 16) as u32
 }

@@ -24,7 +24,7 @@ use std::time::Instant;
 pub struct SettingsCogRenderInput {
     pub launcher: std::sync::Arc<Vec<SharedRgb565Pixel>>,
     pub settings: std::sync::Arc<Vec<SharedRgb565Pixel>>,
-    pub cog: &'static [SharedRgb565Pixel],
+    pub cog: &'static mister_magik_framebuffer_scenes::settings_cog::CogArtwork,
     pub t_ms: u32,
     pub direction: NavigationTransitionDirection,
 }
@@ -701,7 +701,7 @@ impl NavigationTransitionRuntime {
         width: usize,
         height: usize,
         source: &[Rgb565Pixel],
-        cog: &'static [SharedRgb565Pixel],
+        cog: &'static mister_magik_framebuffer_scenes::settings_cog::CogArtwork,
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
         self.buffers.set_settings_cog_asset(cog);
@@ -2044,14 +2044,13 @@ mod tests {
         assert_eq!(runtime.request().unwrap().duration_us, 520_000);
 
         let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
-        let cog = Box::leak(
-            vec![
-                SharedRgb565Pixel(0);
+        let cog =
+            Box::leak(Box::new(
+                mister_magik_framebuffer_scenes::settings_cog::CogArtwork::from_rgb888(&vec![0;
                 mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT * 3])
+                .unwrap(),
+            ));
         runtime
             .begin_settings_cog_physical(
                 NavigationTransitionDirection::Forward,
@@ -2204,14 +2203,13 @@ mod tests {
         let mut runtime = NavigationTransitionRuntime::new(8, 6, true);
         let live_settings = vec![Rgb565Pixel(0x2222); 8 * 6];
         let launcher = vec![Rgb565Pixel(0x1111); 8 * 6];
-        let cog = Box::leak(
-            vec![
-                SharedRgb565Pixel(0);
+        let cog =
+            Box::leak(Box::new(
+                mister_magik_framebuffer_scenes::settings_cog::CogArtwork::from_rgb888(&vec![0;
                 mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
-                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
-            ]
-            .into_boxed_slice(),
-        );
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT * 3])
+                .unwrap(),
+            ));
 
         assert!(
             runtime

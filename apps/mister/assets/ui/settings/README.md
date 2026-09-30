@@ -1,32 +1,29 @@
-# Settings backdrop
+# Settings cog source
 
-`cog-backdrop-412x374.rgb565` is the Settings screen's cog: 412×374
-little-endian RGB565, presented 1:1 at an integer position on HDMI landscape
-and portrait. It is never scaled at rest, so no pixels are resampled on the
-device. Rust converts it once to a Slint RGB8 image by bit replication; the
-RGB565 software renderer then writes back exactly these pixels.
+`cog-backdrop-412x374.rgb888` contains one 412×374 sRGB source, without RGB565
+quantisation or baked dithering. Production prepares shared RGBA mip levels off
+the UI thread alongside the initial cards. The cog fades from 100% to 50% between 380 and 700 ms, matching the latest UI
+guide. Its resting image is quantised after the same 50% fade. The expanding cog
+uses the same
+separable filtered sampler and ARM kernels as the Arcade cabinet. It filters
+colour/coverage first and dithers at the final RGB565 destination coordinates.
+The resting Slint backdrop uses the same source, quantised at its HDMI position
+(-18, 97); bit replication preserves those RGB565 pixels exactly.
 
 The source is the `05_SETTINGS | BACKDROP 2x` camera in
-`MiSTer-MagiK-Card-Artwork-5x7.blend`: the card camera's position and angle
-with twice the orthographic frame, so the centre 408×571.5 region of the
-816×1142 render is exactly the launcher card's framing. The studio floor is
-excluded from rendering.
+`outputs/card-studio/MiSTer-MagiK-Card-Artwork-5x7.blend`. Its transform is copied
+from the evaluated `05_SETTINGS | CONCEPT 5x7` camera after activating the Settings
+scene and updating its view layer. The backdrop uses twice the orthographic
+frame and half the camera shifts, bypasses the card compositor overlays and
+excludes the studio floor. Render at 816×1142 with 192 Cycles samples. No changes
+are saved to the Blender scene.
 
-Regenerate from `outputs/card-studio` (ignored design workspace):
+The existing `crop_settings_backdrop.py` removes the near-black world and fades
+the surroundings to true black. The verified crop is (312, 327, 412, 374), with
+centre (205, 193). Export the cropped PNG's stored sRGB channels (Blender image
+colour space `Non-Color`) as rounded 0–255, top-down RGB bytes. Do not apply the
+old RGB565 packing script: final dithering belongs to the renderer.
 
-```sh
-Blender -b MiSTer-MagiK-Card-Artwork-5x7.blend --python render_settings_backdrop.py -- \
-  renders/settings-backdrop/05_SETTINGS_BACKDROP_2x_816.png 816 192
-Blender -b --python crop_settings_backdrop.py -- \
-  renders/settings-backdrop/05_SETTINGS_BACKDROP_2x_816.png \
-  renders/settings-backdrop/05_SETTINGS_BACKDROP_816_crop.png
-Blender -b --python pack_settings_backdrop_rgb565.py -- \
-  renders/settings-backdrop/05_SETTINGS_BACKDROP_816_crop.png \
-  cog-backdrop-412x374.rgb565
-```
-
-The crop fades the cog's surroundings to true black and removes every pixel
-that would quantise to black, then packs with a fixed 4×4 ordered dither
-applied once at the displayed size. Its report gives the crop origin
-(312, 327) in the 816×1142 render, which places the cog relative to the card
-for the Settings transition.
+The single source is 462,264 bytes and replaces the old 308,176-byte packed copy.
+No transition frames or scale variants are stored. Mini's `settings-transition`
+workload exercises the production sampler and forward/reverse timeline.

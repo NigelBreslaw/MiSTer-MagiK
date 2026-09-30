@@ -26,7 +26,7 @@ use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
 use crate::launcher_presentation::{
-    SelectionFeedbackTarget, arcade_cabinet_artwork, settings_cog_backdrop_rgb565,
+    SelectionFeedbackTarget, arcade_cabinet_artwork, settings_cog_artwork,
 };
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
@@ -8113,7 +8113,7 @@ pub(super) fn run_launcher_loop(
                                     nav.settings.reduce_motion,
                                 );
                                 let started = if card_zoom {
-                                    let cog = settings_cog_backdrop_rgb565();
+                                    let cog = settings_cog_artwork();
                                     let source = match direction {
                                         NavigationTransitionDirection::Forward => {
                                             // Card motion presents directly into scanout slots,
