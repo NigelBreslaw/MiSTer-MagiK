@@ -323,13 +323,46 @@ def verify_installed(fields, sha256):
         )
 
 
+def profile_preparation(application, agent, run, effect, preset):
+    action(application, "profile-preparation")
+    select(application, effect, preset)
+    samples = []
+
+    def completed():
+        raw = agent.metrics()
+        context = raw.get("context") or {}
+        if (context.get("preparation_profile") or {}).get("complete"):
+            samples.append(raw)
+            return True
+        return False
+
+    wait_for(completed, "preparation profile was not published", timeout=30)
+    raw = samples[0]
+    context = raw["context"]
+    if raw.get("sha256") != agent.expected_sha256 or (
+        context.get("concept"),
+        context.get("preset"),
+        context.get("build_profile"),
+    ) != (effect, preset, "release-device"):
+        raise ValueError("preparation profile identity or build mismatch")
+    (run / "preparation-raw.json").write_text(json.dumps(raw, indent=2) + "\n")
+    append_event(run, {"phase": "preparation-profile", "context": context})
+    print(
+        f"{effect}/{preset}: cold preparation={context['preparation_ms']}ms "
+        f"cpu={context['preparation_profile']['process_cpu_us']}us (instrumented)",
+        flush=True,
+    )
+    return 0
+
+
 def run_concept(arguments, run: Path):
     from .cli import connect_agent, ensure_application, CHECK_AGENT_CAPABILITIES
 
     effect = arguments.effect if arguments.command == "concept" else arguments.concept
     if not supported(effect, arguments.preset) or arguments.app != "mini-magik":
         raise ValueError("select one supported concept with --app mini-magik")
-    profile = bool(getattr(arguments, "profile", False))
+    preparation = bool(getattr(arguments, "profile_preparation", False))
+    profile = bool(getattr(arguments, "profile", False)) or preparation
     profile_id = f"{run.name}-{uuid.uuid4().hex[:8]}" if profile else None
     agent, status = connect_agent(
         run,
@@ -360,7 +393,11 @@ def run_concept(arguments, run: Path):
         ) as application:
             if arguments.command == "concept":
                 return interactive(application, agent, run, effect, arguments.preset)
-            result = measure(application, agent, run, effect, arguments.preset, profile)
+            result = (
+                profile_preparation(application, agent, run, effect, arguments.preset)
+                if preparation
+                else measure(application, agent, run, effect, arguments.preset, profile)
+            )
             if not profile:
                 review(application, agent, run, effect, arguments.preset)
         if profile_id is not None:

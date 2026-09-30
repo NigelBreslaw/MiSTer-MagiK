@@ -247,6 +247,10 @@ pub(super) fn face_rgb888(
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
+    #[cfg(feature = "launcher-profile")]
+    let _rgb888 = crate::launcher_profile::span("prepare.rgb888_face");
+    #[cfg(feature = "launcher-profile")]
+    let reduction = crate::launcher_profile::span("prepare.rgb888_linear_reduction");
     let source = card.rgb888.expect("validated RGB888 source");
     let transfer = srgb_transfer();
     let rgb8: Vec<[u8; 3]> = (0..252)
@@ -264,6 +268,8 @@ pub(super) fn face_rgb888(
             })
         })
         .collect();
+    #[cfg(feature = "launcher-profile")]
+    drop(reduction);
     let reference: Vec<_> = rgb8
         .iter()
         .map(|&[r, g, b]| {
@@ -291,6 +297,8 @@ pub(super) fn face(
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
+    #[cfg(feature = "launcher-profile")]
+    let _face = crate::launcher_profile::span("prepare.face");
     crate::launcher_flip::Face::new(
         surface(card, width, detail, typography, true),
         width,
@@ -305,6 +313,8 @@ pub(super) fn surface(
     typography: Option<LauncherTypography<'_>>,
     labels: bool,
 ) -> Vec<Rgb565Pixel> {
+    #[cfg(feature = "launcher-profile")]
+    let _surface = crate::launcher_profile::span("prepare.surface");
     let height = card_height(width);
     let mut canvas = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
     let icon = category_icon(card.id);
@@ -321,6 +331,8 @@ pub(super) fn surface(
     };
     let trim = card.colour;
     let ink = CREAM;
+    #[cfg(feature = "launcher-profile")]
+    let surface_pixels = crate::launcher_profile::span("prepare.surface_pixels");
     for y in 0..height {
         for x in 0..width {
             if !rounded_contains(x, y, width, height) {
@@ -336,6 +348,8 @@ pub(super) fn surface(
             canvas[y * LOGICAL_WIDTH + x] = Rgb565Pixel(colour);
         }
     }
+    #[cfg(feature = "launcher-profile")]
+    drop(surface_pixels);
     // Approved photographic artwork replaces the generated category symbol.
     // Keep the old fallback for tests and consumers which do not supply art.
     if card.artwork.is_none() {

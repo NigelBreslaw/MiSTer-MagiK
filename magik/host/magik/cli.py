@@ -96,7 +96,13 @@ def main() -> int:
     check_command.add_argument(
         "scenario", choices=CHECK_SCENARIOS + ("concept",), nargs="?", default="smoke"
     )
-    check_command.add_argument("--profile", action="store_true")
+    profiles = check_command.add_mutually_exclusive_group()
+    profiles.add_argument("--profile", action="store_true")
+    profiles.add_argument(
+        "--profile-preparation",
+        action="store_true",
+        help="profile cold Mini rendering-lab preparation instead of animation",
+    )
     check_command.add_argument("--concept")
     check_command.add_argument(
         "--preset",
@@ -160,6 +166,12 @@ def main() -> int:
             help="use Mini's production-matched optimization profile for cadence qualification",
         )
     arguments = parser.parse_args()
+    if getattr(arguments, "profile_preparation", False) and not (
+        arguments.scenario == "concept"
+        and arguments.app == "mini-magik"
+        and arguments.concept in {"launcher-cards", "arcade-transition"}
+    ):
+        parser.error("--profile-preparation requires a Mini rendering-lab concept")
     if getattr(arguments, "production_build", False):
         if arguments.app != "mini-magik":
             parser.error("--production-build requires --app mini-magik")

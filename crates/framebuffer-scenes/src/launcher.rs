@@ -276,6 +276,8 @@ impl LauncherScene {
         typography: Option<LauncherTypography<'_>>,
     ) -> InitialLauncher {
         let mut prepared = PreparedLauncher::new(self, data, artwork, typography);
+        #[cfg(feature = "launcher-profile")]
+        let _initial_render = crate::launcher_profile::span("prepare.initial_render");
         prepared.render_frame(BrowseFrame {
             selected: data.selected,
             target: data.selected,
@@ -731,6 +733,8 @@ impl PreparedLauncher {
         cache: Option<&mut LauncherFaceCache>,
         asset_generation: u64,
     ) -> Self {
+        #[cfg(feature = "launcher-profile")]
+        let _preparation = crate::launcher_profile::span("prepare.launcher_constructor");
         let keys: Vec<_> = data.cards.iter().map(CardFaceKey::from).collect();
         let artwork_kind = match artwork {
             None => 0,
@@ -750,18 +754,32 @@ impl PreparedLauncher {
         } else {
             LOGICAL_WIDTH * LOGICAL_HEIGHT
         };
+        #[cfg(feature = "launcher-profile")]
+        let chrome_span = crate::launcher_profile::span("prepare.chrome");
         let mut chrome = vec![Rgb565Pixel(BACKGROUND); pixel_count];
         if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
             layout.chrome(&mut chrome, data, fonts);
         } else {
             render_logical(&mut chrome, data, typography);
         }
+        #[cfg(feature = "launcher-profile")]
+        drop(chrome_span);
         let mut bodies = artwork::BodyCache::default();
         let faces: Vec<_> = data
             .cards
             .iter()
             .enumerate()
             .map(|(index, card)| {
+                #[cfg(feature = "launcher-profile")]
+                let _card = crate::launcher_profile::span(match index {
+                    0 => "prepare.card0",
+                    1 => "prepare.card1",
+                    2 => "prepare.card2",
+                    3 => "prepare.card3",
+                    4 => "prepare.card4",
+                    5 => "prepare.card5",
+                    _ => "prepare.card_other",
+                });
                 if let Some(cache) = reusable
                     && cache.keys.get(index) == Some(&keys[index])
                 {
@@ -793,6 +811,8 @@ impl PreparedLauncher {
                 };
                 #[cfg(test)]
                 FACE_BAKES.set(FACE_BAKES.get() + 2);
+                #[cfg(feature = "launcher-profile")]
+                let initial_faces = crate::launcher_profile::span("prepare.initial_faces");
                 let mut faces =
                     if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
                         layout.faces(&card, fonts, &mut bodies, data.level.slides())
@@ -804,10 +824,15 @@ impl PreparedLauncher {
                             slides: data.level.slides(),
                         }
                     };
+                #[cfg(feature = "launcher-profile")]
+                drop(initial_faces);
                 if scene.quality == CardRenderQuality::Rgb888
                     && card.rgb888.is_some()
                     && responsive.is_none()
                 {
+                    #[cfg(feature = "launcher-profile")]
+                    let _replacement =
+                        crate::launcher_profile::span("prepare.rgb888_replacement_faces");
                     faces.compact = artwork::face_rgb888(&card, false, typography);
                     faces.detail = artwork::face_rgb888(&card, true, typography);
                 }
@@ -828,6 +853,8 @@ impl PreparedLauncher {
             cache.keys = keys;
             cache.faces = faces.clone();
         }
+        #[cfg(feature = "launcher-profile")]
+        let _buffers = crate::launcher_profile::span("prepare.retained_buffers");
         Self {
             scene,
             responsive,

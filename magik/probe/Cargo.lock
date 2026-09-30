@@ -2766,6 +2766,8 @@ name = "mister-magik-framebuffer-scenes"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "mister-magik-perf-events",
+ "serde",
 ]
 
 [[package]]

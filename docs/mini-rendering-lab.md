@@ -404,3 +404,78 @@ clang -O3 -Wall -Wextra -Werror crates/framebuffer-scenes/tests/launcher_neon_pa
 clang -O3 -Wall -Wextra -Werror crates/framebuffer-scenes/tests/arcade_neon_parity.c -o /tmp/arcade-neon-parity
 clang -O3 -Wall -Wextra -Werror crates/framebuffer-scenes/tests/cabinet_neon_parity.c -o /tmp/cabinet-neon-parity
 ```
+
+## Cold launcher preparation profile, 2026-09-30
+
+The preparation-only diagnostic starts the existing 99 Hz CPU sampler before
+`Scene::new_with_worker_setup`, stops it as soon as scene construction completes,
+and renders one paused initial frame. It does not start a motion measurement,
+run a storyboard or compare the old implementation. Stage clocks are gated by
+the existing `launcher-profile` feature and an explicit one-shot action. Hardware
+counters are disabled in this mode. Serialization and flamegraph generation happen
+after the preparation timer and sampling window.
+
+```sh
+scripts/magik check concept --app mini-magik --concept launcher-cards --preset rgb888 --production-build --profile-preparation
+```
+
+Measured on the Cortex-A9, production-matched 960x540 build:
+
+- Total cold scene preparation: **2078 ms**, instrumented.
+- Six-card launcher fixture: **2066 ms**; worker setup: **7 ms**.
+- Process CPU consumed during scene preparation: **2,082,219 us**, approximately
+  one fully occupied core; the helper starts only near the end.
+- CPU sample count: **203**. Leaf samples: artwork surface 132 (65.0%), RGB888
+  reduction iterator 32 (15.8%), texture coverage construction 13 (6.4%), texture
+  mip construction 7 (3.4%), RGB8 texture retention 6 (3.0%). Optimisation inlines
+  most inner surface arithmetic, so the sampled symbol is the enclosing surface
+  function rather than each individual helper. All collected stacks contained
+  just one symbol, so this build supplies leaf attribution rather than complete
+  call chains; the stage timers supply the nested cost breakdown. These sample
+  percentages are attribution estimates, not exact elapsed-time percentages.
+
+The mutually exclusive high-level fixture stages account for its elapsed time:
+
+| Work | Wall time |
+| --- | ---: |
+| Construct generic compact/detail faces that are then replaced | 796.5 ms |
+| Construct the retained RGB888 compact/detail faces | 1226.3 ms |
+| Chrome, scratch/buffers, first complete resting render, other fixture setup | about 43 ms |
+
+The constructor makes the initial generic faces before its RGB888 branch replaces
+both faces. All six cards use that branch in this fixture. No generic back is
+retained because RGB888 artwork is present. Therefore the initial 796.5 ms is
+avoidable work on this particular path; it is approximately 38% of total scene
+preparation. No optimisation has been applied as part of this profiling task.
+
+Within the retained RGB888 face construction, measured nested stages are:
+
+| Work | Calls | Wall time |
+| --- | ---: | ---: |
+| Linear-light 360x504 to 180x252 artwork reduction | 12 | 338.8 ms |
+| Surface, labels, silhouette coverage and initial textures | 12 | 789.8 ms |
+| Restore RGB8 source precision and rebuild mip levels | 12 | 90.0 ms |
+| Remaining conversion/copy/replacement work | | about 8 ms |
+
+Each card's compact and detail face repeats the same source reduction. Surface
+construction across both discarded and retained faces totals 24 passes and
+1416.0 ms; 1346.6 ms is inside the surface pixel loops. These are nested totals
+and must not be added to the high-level table. The surface code performs 4x4
+samples for framing across every covered pixel, including interiors. Initial
+complete launcher rendering itself was **19.35 ms**; chrome **4.74 ms** and retained
+buffer construction **4.28 ms**. All six card totals are similar (331.6–343.8 ms).
+The measured delay is predominantly CPU work rather than a long blocking wait.
+
+Evidence under ignored `build/magik-results/20260930T145043Z-e3548c3c2494/`:
+`preparation-raw.json`, `profile.json`, `profile.folded`, `flamegraph.svg`.
+Artifact SHA256:
+`4e147dc04d1a2cb03e546d98ca3baede629f4ad34e7f62cc06770bd94c67a1b4`.
+The prior uninstrumented 2020–2043 ms results remain the performance baseline;
+this profile is not a new startup or 60 Hz qualification. The normal Dev launcher
+was restored with `scripts/magik stop` (run `20260930T145203Z-4526f15a3707`).
+
+The first optimisation candidates are to construct the RGB888 faces directly,
+reuse each card's common source reduction for its two label variants, and reserve
+subpixel framing work for pixels near actual boundaries. Their speedup and pixel
+parity require new-implementation validation; the profile alone does not qualify
+those changes or establish a sub-second first-latched-frame guarantee.

@@ -441,6 +441,8 @@ impl Texture {
         self.levels.iter().map(|l| l.pixels.capacity() * 4).sum()
     }
     pub fn new(pixels: &[Rgb565Pixel], width: usize, height: usize) -> Self {
+        #[cfg(feature = "launcher-profile")]
+        let _texture = crate::launcher_profile::span("prepare.texture_coverage_and_mips");
         assert_eq!(pixels.len(), width * height);
         let mut base = vec![0; (width + 2) * height];
         for x in 0..width {
@@ -476,6 +478,8 @@ impl Texture {
     }
 
     pub(super) fn retain_rgb8(&mut self, rgb8: &[[u8; 3]], reference: &[Rgb565Pixel]) {
+        #[cfg(feature = "launcher-profile")]
+        let _retain = crate::launcher_profile::span("prepare.texture_retain_rgb8");
         let first = &self.levels[0];
         assert_eq!(rgb8.len(), first.width * first.height);
         let mut base = first.pixels.clone();
@@ -495,6 +499,8 @@ impl Texture {
     }
 
     fn from_base(base: Vec<u32>, width: usize, height: usize) -> Self {
+        #[cfg(feature = "launcher-profile")]
+        let _mips = crate::launcher_profile::span("prepare.texture_mips");
         let mut levels = vec![Level {
             pixels: base,
             width,

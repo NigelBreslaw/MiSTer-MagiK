@@ -5,7 +5,7 @@ mod preview;
 mod profile;
 use measurement::PresentationMetrics;
 use preview::PreviewProducer;
-use profile::CpuProfile;
+pub use profile::CpuProfile;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::{
     path::PathBuf,

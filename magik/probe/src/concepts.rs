@@ -19,6 +19,8 @@ pub struct Concepts {
     pub stop_at: Option<Duration>,
     pub error: Option<String>,
     pub preparation_ms: u64,
+    profile_preparation: bool,
+    pub preparation_profile: serde_json::Value,
     width: usize,
     height: usize,
 }
@@ -37,6 +39,8 @@ impl Concepts {
             stop_at: None,
             error: None,
             preparation_ms: 0,
+            profile_preparation: false,
+            preparation_profile: serde_json::Value::Null,
             width,
             height,
         }
@@ -59,6 +63,33 @@ impl Concepts {
         } else {
             None
         };
+        let profiling = std::mem::take(&mut self.profile_preparation);
+        self.preparation_profile = serde_json::Value::Null;
+        let sampler = if profiling {
+            match mister_magik_tooling_support::CpuProfile::start() {
+                Ok(Some(sampler)) => Some(sampler),
+                Ok(None) => {
+                    self.error =
+                        Some("preparation profiling requires a managed profile session".into());
+                    return;
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        if profiling {
+            mister_magik_framebuffer_scenes::launcher_profile::enable_wall_time();
+        }
+        let mut resources =
+            mister_magik_tooling_support::measurement::PresentationMetrics::default();
+        if profiling {
+            crate::measurement::resources(&mut resources);
+        }
+        let cpu_start = resources.process_cpu_us;
         let preparation_started = std::time::Instant::now();
         match Scene::new_with_worker_setup(name, preset, self.width, self.height, worker_setup) {
             Ok(mut scene) => {
@@ -66,6 +97,22 @@ impl Concepts {
                     .elapsed()
                     .as_millis()
                     .min(u128::from(u64::MAX)) as u64;
+                if profiling {
+                    crate::measurement::resources(&mut resources);
+                    let stages = mister_magik_framebuffer_scenes::launcher_profile::take();
+                    mister_magik_framebuffer_scenes::launcher_profile::disable();
+                    let sampled = sampler.unwrap().finish();
+                    self.preparation_profile = serde_json::json!({
+                        "scope": "cold-scene-preparation", "complete": sampled.is_ok(),
+                        "sampler_hz": 99, "preparation_ms": self.preparation_ms,
+                        "process_cpu_us": cpu_start.zip(resources.process_cpu_us).map(|(a,b)| b.saturating_sub(a)),
+                        "renderer": stages,
+                    });
+                    if let Err(error) = sampled {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
                 if keep_time && let Some(time) = previous_time {
                     scene.advance(time);
                 }
@@ -75,6 +122,9 @@ impl Concepts {
                 self.preset = preset;
                 if !keep_time {
                     self.paused = false;
+                }
+                if profiling {
+                    self.paused = true;
                 }
                 self.dirty = true;
                 self.error = None;
@@ -86,7 +136,12 @@ impl Concepts {
                     }
                 }
             }
-            Err(e) => self.error = Some(e),
+            Err(e) => {
+                if profiling {
+                    mister_magik_framebuffer_scenes::launcher_profile::disable();
+                }
+                self.error = Some(e);
+            }
         }
     }
     /// Live motion follows monotonic time even when a render misses a refresh.
@@ -110,6 +165,10 @@ impl Concepts {
         }
     }
     pub fn action(&mut self, action: &str) {
+        if action == "profile-preparation" {
+            self.profile_preparation = true;
+            return;
+        }
         self.animation_at = None;
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {

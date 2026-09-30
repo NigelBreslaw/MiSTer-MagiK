@@ -220,3 +220,49 @@ def test_motion_evidence_accounts_for_device_warmup():
         animation_elapsed_ms=32000,
     )
     assert validate(data, "abc", "launcher-cards", "default")["motion_qualified"]
+
+
+@pytest.mark.parametrize("identity_matches", [True, False])
+def test_preparation_profile_waits_for_attributed_current_artifact(
+    tmp_path, monkeypatch, identity_matches
+):
+    from magik import concepts
+    from unittest.mock import Mock
+
+    app = Mock()
+    agent = Mock(expected_sha256="a" * 64)
+    raw = {
+        "sha256": "a" * 64 if identity_matches else "b" * 64,
+        "context": {
+            "concept": "launcher-cards",
+            "preset": "rgb888",
+            "build_profile": "release-device",
+            "preparation_ms": 2026,
+            "preparation_profile": {"complete": True, "process_cpu_us": 2_000_000},
+        },
+    }
+    agent.metrics.side_effect = [
+        {"context": None},
+        {"context": {"preparation_profile": None}},
+        raw,
+    ]
+    order = []
+    monkeypatch.setattr(concepts, "action", lambda app, name: order.append(name))
+    monkeypatch.setattr(
+        concepts, "select", lambda app, name, preset: order.append((name, preset))
+    )
+    if identity_matches:
+        assert (
+            concepts.profile_preparation(
+                app, agent, tmp_path, "launcher-cards", "rgb888"
+            )
+            == 0
+        )
+        assert (tmp_path / "preparation-raw.json").exists()
+    else:
+        with pytest.raises(ValueError, match="identity"):
+            concepts.profile_preparation(
+                app, agent, tmp_path, "launcher-cards", "rgb888"
+            )
+        assert not (tmp_path / "preparation-raw.json").exists()
+    assert order == ["profile-preparation", ("launcher-cards", "rgb888")]
