@@ -178,7 +178,7 @@ impl LauncherCardHomeSession {
             .join()
             .map_err(|_| "cabinet preparation failed")?;
         cog_warm.join().map_err(|_| "cog preparation failed")?;
-        let renderer = native_renderer(scene, &prepared);
+        let renderer = Some(home_renderer(&prepared));
         let frame = settled_frame(selected);
         Ok(Self {
             scene,
@@ -282,7 +282,7 @@ impl LauncherCardHomeSession {
             }
             let old = PreparedContent {
                 prepared: self.prepared.0.replace(content.prepared).unwrap(),
-                renderer: std::mem::replace(&mut self.renderer, content.renderer),
+                renderer: None,
             };
             self.retire(Prepared::Built(old));
             self.scene = scene;
@@ -485,7 +485,7 @@ impl LauncherCardHomeSession {
         );
         let old = PreparedContent {
             prepared: self.prepared.0.replace(content.prepared).unwrap(),
-            renderer: std::mem::replace(&mut self.renderer, content.renderer),
+            renderer: None,
         };
         if let Some(source) = source {
             self.set_aside(source, Prepared::Built(old));
@@ -591,7 +591,9 @@ impl LauncherCardHomeSession {
                 timestamp_us: self.frame_timestamp_us,
                 generation: self.request_sequence,
             };
-            if let Some(renderer) = self.renderer.as_mut() {
+            if self.scene == LauncherScene::new(960, 540)
+                && let Some(renderer) = self.renderer.as_mut()
+            {
                 self.last_timing = Some(
                     self.prepared
                         .render_parallel_frame(renderer, request)
@@ -658,6 +660,7 @@ impl LauncherCardHomeSession {
     pub(super) fn can_render_native(&self) -> bool {
         self.active
             && self.trick.is_none()
+            && self.scene == LauncherScene::new(960, 540)
             && self.renderer.is_some()
             && self
                 .pending
@@ -684,10 +687,7 @@ impl LauncherCardHomeSession {
     }
 }
 
-fn native_renderer(
-    scene: LauncherScene,
-    prepared: &PreparedLauncher,
-) -> Option<Box<ParallelLauncherRenderer>> {
+fn home_renderer(prepared: &PreparedLauncher) -> Box<ParallelLauncherRenderer> {
     fn setup() {
         use mister_magik_catalog::runtime_thread::{
             RuntimeThreadRole, apply_runtime_thread_policy,
@@ -699,12 +699,10 @@ fn native_renderer(
         .then_some(
             crate::ui_runner::launcher_frame_accounting::cpu_thread_us as fn() -> Option<u64>,
         );
-    (scene == LauncherScene::new(960, 540)).then(|| {
-        Box::new(
-            ParallelLauncherRenderer::new(prepared.frame_preparer(), Some(setup), clock)
-                .expect("start current card renderer"),
-        )
-    })
+    Box::new(
+        ParallelLauncherRenderer::new(prepared.frame_preparer(), Some(setup), clock)
+            .expect("start current card renderer"),
+    )
 }
 
 fn navigation_identity_changed(previous: BrowseFrame, current: BrowseFrame) -> bool {
@@ -1247,7 +1245,7 @@ mod tests {
                 scene == LauncherScene::new(960, 540)
             );
             assert_eq!(
-                session.renderer.is_some(),
+                session.can_render_native(),
                 scene == LauncherScene::new(960, 540)
             );
             session.update(scene, &snapshot(), 0, 0.0, "07:29", 32, true);
@@ -1459,7 +1457,7 @@ mod tests {
             0,
             "22:00",
         );
-        assert_ne!(
+        assert_eq!(
             session.renderer.as_ref().unwrap().helper_thread_id(),
             worker
         );
@@ -1578,6 +1576,7 @@ mod tests {
         let scene = LauncherScene::new(960, 540);
         let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
         session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true);
+        let helper = session.renderer.as_ref().unwrap().helper_thread_id();
         session.prefetch(vec![consoles()]);
         assert_eq!(session.aside.len(), 1);
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1598,6 +1597,14 @@ mod tests {
             true,
         );
         session.render();
+        assert_eq!(
+            session.renderer.as_ref().unwrap().helper_thread_id(),
+            helper
+        );
+        assert!(session.aside.iter().all(|aside| match &aside.prepared {
+            Prepared::Built(content) => content.renderer.is_none(),
+            Prepared::Building(_) => true,
+        }));
         let trick = session.trick.as_ref().unwrap();
         assert_eq!(
             trick.deal_delay_ms,

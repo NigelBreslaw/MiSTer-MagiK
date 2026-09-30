@@ -874,7 +874,7 @@ impl PreparedLauncher {
         if self.scene != LauncherScene::new(960, 540) {
             return Err("parallel cards require native geometry".into());
         }
-        renderer.render(request, &mut self.logical)
+        renderer.render(&self.frame_preparer(), request, &mut self.logical)
     }
 
     pub fn render_into(&mut self, frame: BrowseFrame, output: &mut [Rgb565Pixel]) {

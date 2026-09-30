@@ -25,6 +25,7 @@ pub struct ParallelFrameTiming {
     pub secondary_cpu_us: Option<u64>,
 }
 struct Job {
+    preparer: LauncherFramePreparer,
     request: LauncherFrameRequest,
     buffer: PreparedLauncherFrame,
     dispatched_at: Instant,
@@ -37,7 +38,6 @@ struct Completion {
     finished_at: Instant,
 }
 pub struct ParallelLauncherRenderer {
-    preparer: LauncherFramePreparer,
     primary: PreparedLauncherFrame,
     helper: Option<PreparedLauncherFrame>,
     requests: Option<SyncSender<Job>>,
@@ -63,7 +63,6 @@ impl ParallelLauncherRenderer {
         let storage_bytes = primary.storage_bytes() + helper.storage_bytes();
         let (requests, received) = sync_channel::<Job>(1);
         let (completed, completions) = sync_channel(1);
-        let helper_preparer = preparer.clone();
         let worker = std::thread::Builder::new()
             .name("card-tile-helper".into())
             .spawn(move || {
@@ -73,11 +72,8 @@ impl ParallelLauncherRenderer {
                 while let Ok(mut job) = received.recv() {
                     let started_at = Instant::now();
                     let cpu_start = cpu_clock.and_then(|clock| clock());
-                    helper_preparer.render_tile(
-                        job.request,
-                        &mut job.buffer,
-                        (CAROUSEL_SPLIT, 934),
-                    );
+                    job.preparer
+                        .render_tile(job.request, &mut job.buffer, (CAROUSEL_SPLIT, 934));
                     let cpu_us = cpu_delta(cpu_start, cpu_clock.and_then(|clock| clock()));
                     let wall_us = micros(started_at);
                     let finished_at = Instant::now();
@@ -99,7 +95,6 @@ impl ParallelLauncherRenderer {
             })
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            preparer,
             primary,
             helper: Some(helper),
             requests: Some(requests),
@@ -111,6 +106,7 @@ impl ParallelLauncherRenderer {
     }
     pub fn render(
         &mut self,
+        preparer: &LauncherFramePreparer,
         request: LauncherFrameRequest,
         destination: &mut [Rgb565Pixel],
     ) -> Result<ParallelFrameTiming, String> {
@@ -119,6 +115,7 @@ impl ParallelLauncherRenderer {
             .as_ref()
             .ok_or("card renderer stopped")?
             .send(Job {
+                preparer: preparer.clone(),
                 request,
                 buffer: self.helper.take().ok_or("helper output unavailable")?,
                 dispatched_at: started,
@@ -126,7 +123,7 @@ impl ParallelLauncherRenderer {
             .map_err(|e| e.to_string())?;
         let primary_started = Instant::now();
         let cpu_start = self.cpu_clock.and_then(|clock| clock());
-        self.preparer.render_tile_into(
+        preparer.render_tile_into(
             request,
             &mut self.primary,
             destination,

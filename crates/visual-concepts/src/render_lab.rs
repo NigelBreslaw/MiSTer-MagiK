@@ -263,6 +263,7 @@ impl Effect for Lab {
                 self.first_frame = false;
             }
             let timing = self.tiles.as_mut().unwrap().render(
+                &self.launcher.as_ref().unwrap().frame_preparer(),
                 LauncherFrameRequest {
                     frame: if self.held_navigation {
                         browse_held(ms)

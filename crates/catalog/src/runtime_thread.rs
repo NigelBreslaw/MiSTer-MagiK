@@ -16,7 +16,6 @@ thread_local! {
 pub enum RuntimeThreadRole {
     LauncherUi,
     LauncherCardRenderer,
-    LauncherCardRendererSecondary,
     InputReader,
     InputDiscovery,
     ControllerPersistence,
@@ -51,7 +50,6 @@ impl RuntimeThreadRole {
         match self {
             Self::LauncherUi => "launcher-ui",
             Self::LauncherCardRenderer => "launcher-card-renderer",
-            Self::LauncherCardRendererSecondary => "launcher-card-renderer-secondary",
             Self::InputReader => "input-reader",
             Self::InputDiscovery => "input-discovery",
             Self::ControllerPersistence => "controller-persistence",
@@ -91,11 +89,6 @@ impl RuntimeThreadRole {
             // Cortex-A9 cores. Keep its helper on CPU0 while the UI/latch
             // owner remains isolated on CPU1.
             Self::LauncherCardRenderer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0),
-            // Keep the second tile helper below the UI's ordinary-policy nice
-            // priority while allowing Main's input loop to receive CPU time.
-            Self::LauncherCardRendererSecondary => {
-                RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu1)
-            }
             // The input proxy IRQ/wake path can leave a runnable CPU0 reader
             // behind tens of milliseconds of kernel/catalog work.  Keep the
             // reader with the latency-critical launcher work on CPU1; the
@@ -765,11 +758,6 @@ mod tests {
                 RuntimeThreadRole::LauncherCardRenderer,
                 -5,
                 ThreadAffinity::Cpu0,
-            ),
-            (
-                RuntimeThreadRole::LauncherCardRendererSecondary,
-                -5,
-                ThreadAffinity::Cpu1,
             ),
             (RuntimeThreadRole::InputReader, -15, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::InputDiscovery, 10, ThreadAffinity::Cpu0),

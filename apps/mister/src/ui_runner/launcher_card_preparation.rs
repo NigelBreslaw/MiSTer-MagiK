@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! One bounded owner of card preparation, producer construction and retirement.
-use super::{ASIDE_LEVELS, CardLevelSnapshot, LauncherFonts, native_renderer, prepare_cached};
+use super::{ASIDE_LEVELS, CardLevelSnapshot, LauncherFonts, prepare_cached};
 use mister_magik_framebuffer_scenes::launcher::{
     LauncherFaceCache, LauncherScene, PreparedLauncher,
 };
@@ -19,6 +19,7 @@ const RETIRED: usize = ASIDE_LEVELS + 2;
 
 pub(super) struct PreparedContent {
     pub(super) prepared: Box<PreparedLauncher>,
+    // Populated only when the session moves its single engine to background retirement.
     pub(super) renderer: Option<Box<ParallelLauncherRenderer>>,
 }
 struct Request {
@@ -186,10 +187,9 @@ impl HomePreparation {
                             }
                         };
                         caches.push(cache);
-                        let renderer = native_renderer(request.scene, &prepared);
                         let mut content = Some(PreparedContent {
                             prepared: Box::new(prepared),
-                            renderer,
+                            renderer: None,
                         });
                         {
                             let mut state = worker_shared
