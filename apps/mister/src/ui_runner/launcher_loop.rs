@@ -11485,8 +11485,10 @@ pub(super) fn run_launcher_loop(
                         let _ = navigation_transition
                             .render_into(layer_target.presentation_pixels_mut());
                     }
-                } else if let Ok(frame) = navigation_transition.render() {
-                    let _ = layer_target.restore_cached(frame);
+                } else if navigation_transition
+                    .render_into(layer_target.presentation_pixels_mut())
+                    .is_ok()
+                {
                     navigation_logical_frame_rendered = true;
                 }
                 drop(gui_navigation_pmu);
