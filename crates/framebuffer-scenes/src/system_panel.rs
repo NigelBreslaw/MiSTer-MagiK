@@ -200,6 +200,7 @@ pub fn render_into(
     }
     true
 }
+#[allow(clippy::too_many_arguments)]
 fn blit(
     width: usize,
     height: usize,

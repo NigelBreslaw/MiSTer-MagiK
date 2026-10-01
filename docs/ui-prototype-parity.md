@@ -890,4 +890,22 @@ browse directions and four native layouts. This comparison uses main's current
 RGB888 source, preserving its fidelity fixes. The portable suite passes 170
 tests, with one explicit benchmark ignored. Navigation passes 170 tests, the
 production card session 24, navigation transitions 33, and native preview 42.
-Physical Consoles diagnosis follows deployment of this rebased build.
+Attended deployment of `3cc9e7f18` completed successfully. The installed
+Dev binary SHA-256 was
+`0fb89ad1fe7c20ebbdea74a8688d9c1d436164ce2bfc5cdaa89320224c7632da`.
+
+The native Slint test journey entered Consoles three times, navigated Sega and
+Nintendo maker menus plus the direct PlayStation hub, and returned to the root
+after each route. FPGA-latched RGB565 captures show the maker cards and advancing
+frames. Test cleanup restored the same ready binary; Main reported zero crashes,
+zero invariants and zero input-proxy desyncs/overflows/write failures. The passed
+result is `20261001T090850Z-d1c780ce4945`; images and logs remain in ignored
+`outputs/ui-prototype-parity/rebased-device/` and `build/magik-results/`.
+
+The reported freeze was not reproduced on this rebased build. Development
+keyboard activation enters the same normalized `LogicalAction::Activate` path
+as A, but this is not a fresh physical gamepad test or a frame-rate measurement.
+The prior fault capture came from a different dirty binary reporting revision
+`6d16103de`; its exact source changes and blocked call stack are unavailable, so
+the original cause remains unconfirmed. The rebase retains main's performance
+fixes rather than restoring that older rendering pipeline.
