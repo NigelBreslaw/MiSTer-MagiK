@@ -9319,7 +9319,15 @@ pub(super) fn run_launcher_loop(
             } else {
                 1
             };
-        let status_write_due = frame_accounting.status_write_due();
+        // Card motion keeps CPU1 busy like a navigation transition. Defer the
+        // one-second status publication, whose serialization worker shares
+        // CPU1 and pre-empted card frames, without consuming its deadline:
+        // it is written on the first frame after the carousel settles.
+        let card_motion_defers_status = nav.screen == Screen::Home
+            && launcher_card_home
+                .as_ref()
+                .is_some_and(super::launcher_card_home::LauncherCardHomeSession::is_animating);
+        let status_write_due = frame_accounting.status_write_due() && !card_motion_defers_status;
         let status_snapshot_due = status_write_due
             && !navigation_transition.is_active()
             && !full_screen_transition_owns_cpu1(full_screen_transition.state());
