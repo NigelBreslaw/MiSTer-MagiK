@@ -313,6 +313,28 @@ def launcher_idle(application, agent, *, instrumented=False):
     }
 
 
+# Six right taps 250 ms apart, then right held for ten seconds; the window
+# keeps one further second for the carousel to settle after release.
+TAPS_THEN_HOLD = {"taps": 6, "tap_interval_ms": 250, "hold_ms": 10_000}
+TAPS_THEN_HOLD_WINDOW_MS = 6 * 250 + 10_000 + 1_000
+# Bounded wait for a window that started late because the request arrived idle.
+WINDOW_PICKUP_GRACE_SECONDS = 3
+
+
+def _completed_window_metrics(agent, sleep):
+    """Read metrics, waiting boundedly for a window that started late.
+
+    An idle launcher can service the request up to about a second late, so the
+    device-timed window may still be running at the nominal deadline.
+    """
+    metrics = agent.metrics()
+    deadline = time.monotonic() + WINDOW_PICKUP_GRACE_SECONDS
+    while metrics.get("window") is None and time.monotonic() < deadline:
+        sleep(0.25)
+        metrics = agent.metrics()
+    return metrics
+
+
 def launcher_motion(
     application,
     agent,
@@ -321,38 +343,59 @@ def launcher_motion(
     align_rollover: bool = False,
     force_fallback: bool = False,
     held_direction: bool = False,
+    taps_then_hold: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ):
     """Measure continuous card-carousel navigation on the real launcher."""
+    if taps_then_hold and (held_direction or instrumented):
+        raise ValueError("taps_then_hold is a standalone uninstrumented workload")
     if application.first_window is None:
         raise AssertionError("real launcher window is unavailable")
     _press_key(application, "\uf729")  # Slint Key.Home
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
 
-    if held_direction:
+    if held_direction or taps_then_hold:
         # Home preserves an in-progress card spring. A new press can be rejected
         # until it settles; keep this pause outside the measured hold window.
         sleep(1)
     previous = agent.metrics().get("window")
-    agent._successful(
-        "measure",
-        {
-            "launcher_clock": "rollover" if align_rollover else "fixed",
-            "launcher_fallback": force_fallback,
-            "duration_ms": 8_000 if held_direction else 5_000,
-            "launcher_hold": held_direction,
-        },
+    request = {
+        "launcher_clock": "rollover" if align_rollover else "fixed",
+        "launcher_fallback": force_fallback,
+        "duration_ms": 8_000 if held_direction else 5_000,
+        "launcher_hold": held_direction,
+    }
+    if taps_then_hold:
+        # Device-timed from the window start: taps, a hold, then the settle.
+        request["launcher_sequence"] = TAPS_THEN_HOLD
+        request["duration_ms"] = TAPS_THEN_HOLD_WINDOW_MS
+    agent._successful("measure", request)
+    seconds = (
+        TAPS_THEN_HOLD_WINDOW_MS / 1000
+        if taps_then_hold
+        else 10
+        if instrumented
+        else (8 if held_direction else 5)
     )
-    seconds = 10 if instrumented else (8 if held_direction else 5)
     interval_seconds = 0.25
     deadline = time.monotonic() + 2 + seconds + 0.4
     input_events = 0
-    if held_direction:
+    if taps_then_hold:
+        # Taps and the hold are device-timed; host RPC jitter cannot shift them.
+        # Release only cancels: the window must complete before it is sent.
+        try:
+            input_events += TAPS_THEN_HOLD["taps"] + 1
+            sleep(2 + seconds + 0.4)
+            metrics = _completed_window_metrics(agent, sleep)
+        finally:
+            agent._successful("measure", {"launcher_hold": "release"})
+    elif held_direction:
         # The device feeds a bounded press/release through the real input router.
         # The development keyboard bridge emits taps, so it cannot sustain holds.
         try:
             input_events += 1
             sleep(2 + seconds + 0.4)
+            metrics = _completed_window_metrics(agent, sleep)
         finally:
             agent._successful("measure", {"launcher_hold": "release"})
             input_events += 1
@@ -362,13 +405,16 @@ def launcher_motion(
             _press_key(application, direction)
             input_events += 1
             sleep(interval_seconds)
+        metrics = _completed_window_metrics(agent, sleep)
 
-    metrics = agent.metrics()
     if metrics.get("sha256") != agent.expected_sha256:
         raise AssertionError("metrics belong to another application")
     window = metrics.get("window")
     if not isinstance(window, dict) or window.get("instrumented") is not instrumented:
-        raise AssertionError("real launcher returned no matching measurement window")
+        raise AssertionError(
+            "real launcher returned no matching measurement window "
+            f"(device elapsed_ms={metrics.get('elapsed_ms')}, window={window!r})"
+        )
     if not seconds * 1000 <= window.get("elapsed_ms", 0) <= (seconds + 1) * 1000:
         raise AssertionError("real launcher measurement duration is invalid")
     if isinstance(previous, dict) and window.get("start_ms", -1) <= previous.get(
@@ -410,7 +456,9 @@ def launcher_motion(
     return {
         **window,
         "workload": (
-            "launcher-card-motion-held"
+            "launcher-card-motion-taps-then-hold"
+            if taps_then_hold
+            else "launcher-card-motion-held"
             if held_direction
             else "launcher-card-motion-rollover"
             if align_rollover
@@ -420,7 +468,14 @@ def launcher_motion(
         "pid": metrics.get("pid"),
         "warmup_seconds": 2,
         "input_events": input_events,
-        "input_interval_ms": None if held_direction else int(interval_seconds * 1000),
+        "input_interval_ms": (
+            TAPS_THEN_HOLD["tap_interval_ms"]
+            if taps_then_hold
+            else None
+            if held_direction
+            else int(interval_seconds * 1000)
+        ),
+        "launcher_sequence": TAPS_THEN_HOLD if taps_then_hold else None,
         "held_direction": "right" if held_direction else None,
         "held_measurement_ms": seconds * 1000 if held_direction else 0,
     }

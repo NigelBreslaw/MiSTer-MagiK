@@ -108,6 +108,22 @@ def test_idle(application_session, repetition):
     )
 
 
+def test_motion_taps_then_hold(journey_application_session):
+    # Its 12.5-second window does not fit in the shared session's native
+    # 60-second test lease after the other motion windows; use a fresh lease.
+    app, agent, run, _ = journey_application_session
+    result = launcher_motion(app, agent, taps_then_hold=True)
+    append_event(
+        run,
+        {
+            "phase": "motion",
+            "outcome": "measured",
+            "repetition": "six-taps-then-ten-second-hold",
+            **result,
+        },
+    )
+
+
 @pytest.mark.parametrize("repetition", [0, 1, 2, "held-eight-seconds"])
 def test_motion(application_session, repetition):
     app, agent, run, _ = application_session

@@ -142,6 +142,14 @@ Run only that case with `scripts/magik check motion-held`. Add `--profile` for a
 separate ten-second sampled diagnostic. `--installed-sha256 HASH` skips building
 and delivery when that exact Dev application is already running.
 
+`check motion` first runs a 12.5-second window that plays six right taps 250 ms
+apart, holds right for ten seconds and keeps one second for the release to
+settle. The device times every press from the window start through the same
+input router, so host RPC jitter cannot move them, and keeps the launcher awake
+until the window completes; release is still guaranteed on failure. It uses its
+own native 60-second test lease, which the shared motion session cannot spare.
+Run it alone with `scripts/magik check motion-taps-then-hold` (uninstrumented).
+
 Compare Mini's original storyboard with its sustained default-speed workload:
 
 ```sh

@@ -325,3 +325,122 @@ def test_held_carousel_requests_a_bounded_hold_and_always_releases(
     assert request[1] == ("measure", {"launcher_hold": "release"})
     assert request[0][1]["duration_ms"] == 8000
     assert sleeps == [1, 10.4]
+
+
+def test_taps_then_hold_is_device_timed_and_always_releases(monkeypatch):
+    from types import SimpleNamespace
+
+    request = []
+    sleeps = []
+    keys = []
+    evidence = {
+        **window(),
+        "elapsed_ms": 12_500,
+        "end_ms": 14_500,
+        "presentations": 750,
+        "forced_clock_changes": 0,
+    }
+    replies = iter([{"window": None}, {"sha256": "app", "window": evidence}])
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=lambda: next(replies),
+        _successful=lambda op, fields: request.append((op, fields)),
+    )
+    application = SimpleNamespace(first_window=SimpleNamespace())
+    monkeypatch.setattr(actions, "_press_key", lambda _, key: keys.append(key))
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+
+    result = actions.launcher_motion(
+        application, agent, taps_then_hold=True, sleep=sleeps.append
+    )
+
+    # Only the Home key is sent from the host; taps and the hold are device-timed.
+    assert keys == [""]
+    assert request[0][1]["launcher_sequence"] == {
+        "taps": 6,
+        "tap_interval_ms": 250,
+        "hold_ms": 10_000,
+    }
+    assert request[0][1]["launcher_hold"] is False
+    assert request[0][1]["duration_ms"] == 12_500
+    assert request[1] == ("measure", {"launcher_hold": "release"})
+    assert sleeps == [1, 14.9]
+    assert result["workload"] == "launcher-card-motion-taps-then-hold"
+    assert result["input_events"] == 7
+    with pytest.raises(ValueError):
+        actions.launcher_motion(
+            application, agent, taps_then_hold=True, instrumented=True
+        )
+
+
+def test_motion_waits_boundedly_for_a_window_that_started_late(monkeypatch):
+    from types import SimpleNamespace
+
+    evidence = {
+        **window(),
+        "elapsed_ms": 12_500,
+        "end_ms": 14_500,
+        "presentations": 750,
+        "forced_clock_changes": 0,
+    }
+    replies = iter(
+        [{"window": None}, {"sha256": "app", "window": None}]
+        + [{"sha256": "app", "window": evidence}]
+    )
+    sleeps = []
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=lambda: next(replies),
+        _successful=lambda *_: None,
+    )
+    monkeypatch.setattr(actions, "_press_key", lambda *_: None)
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+    result = actions.launcher_motion(
+        SimpleNamespace(first_window=SimpleNamespace()),
+        agent,
+        taps_then_hold=True,
+        sleep=sleeps.append,
+    )
+    assert result["elapsed_ms"] == 12_500
+    assert sleeps == [1, 14.9, 0.25]
+
+
+@pytest.mark.parametrize("workload", ["held_direction", "taps_then_hold"])
+def test_hold_release_waits_for_a_late_window_to_complete(monkeypatch, workload):
+    from types import SimpleNamespace
+
+    calls = []
+    late = [{"sha256": "app", "window": None}] * 8
+    elapsed = 12_500 if workload == "taps_then_hold" else 8_000
+    evidence = {
+        **window(),
+        "elapsed_ms": elapsed,
+        "end_ms": elapsed + 2_000,
+        "presentations": elapsed * 60 // 1000,
+        "card_continuous_presentations": elapsed * 60 // 1000,
+        "forced_clock_changes": 0,
+    }
+    replies = iter([{"window": None}, *late, {"sha256": "app", "window": evidence}])
+
+    def metrics():
+        calls.append("metrics")
+        return next(replies)
+
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=metrics,
+        _successful=lambda op, fields: calls.append(fields.get("launcher_hold")),
+    )
+    monkeypatch.setattr(actions, "_press_key", lambda *_: None)
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+    actions.launcher_motion(
+        SimpleNamespace(first_window=SimpleNamespace()),
+        agent,
+        sleep=lambda _: None,
+        **{workload: True},
+    )
+    # A two-second pickup delay must not cut the hold short: the release is
+    # sent only after the completed window has been read.
+    assert calls[-1] == "release"
+    assert calls[-2] == "metrics"
+    assert calls.count("metrics") == 1 + len(late) + 1

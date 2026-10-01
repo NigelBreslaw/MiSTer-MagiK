@@ -7644,6 +7644,31 @@ pub(super) fn run_launcher_loop(
                     incoming_input_events.push_back(released);
                 }
             }
+            // A requested sequence taps like the development keyboard bridge:
+            // one press/release pulse through the same router as a held press.
+            #[cfg(feature = "tooling")]
+            if tooling
+                .as_mut()
+                .is_some_and(|session| session.carousel_tap_due())
+            {
+                ui_action_sequence = ui_action_sequence.saturating_add(1);
+                let captured_at_us = frame_now
+                    .saturating_duration_since(start)
+                    .as_micros()
+                    .min(u64::MAX as u128) as u64;
+                for mut event in
+                    LauncherUiAction::Navigate(slint_ui::launcher::NavigationDirection::Right)
+                        .input_pulse(ui_action_sequence, captured_at_us)
+                        .unwrap()
+                {
+                    event.source = crate::input_event::InputSourceId {
+                        kind: crate::input_event::InputSourceKind::Automation,
+                        instance: 0x43415244,
+                    };
+                    event.source_epoch = crate::input_event::SourceEpoch(1);
+                    incoming_input_events.push_back(event);
+                }
+            }
             for event in incoming_input_events.iter().copied() {
                 gui_profiling.observe_route_action(screen_label(nav.screen), event, frame_now);
                 if nav.screen == Screen::Arcade
@@ -9763,9 +9788,17 @@ pub(super) fn run_launcher_loop(
         wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, launching);
         wake_reasons.insert_if(LauncherWakeReasons::SETUP_ACTIVE, setup_active);
         wake_reasons.insert_if(LauncherWakeReasons::BENCHMARK_ACTIVE, launcher_bench_active);
+        #[cfg(feature = "tooling")]
+        let tooling_sequence_pending = tooling
+            .as_ref()
+            .is_some_and(mister_magik_tooling_support::Session::carousel_sequence_pending);
+        #[cfg(not(feature = "tooling"))]
+        let tooling_sequence_pending = false;
         wake_reasons.insert_if(
             LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
-            launcher_input_script.active() || launcher_automation.active(),
+            launcher_input_script.active()
+                || launcher_automation.active()
+                || tooling_sequence_pending,
         );
         wake_reasons.insert_if(
             LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
@@ -10033,6 +10066,16 @@ pub(super) fn run_launcher_loop(
             layer_target.reclaim_preview_publication(&mut launcher_preview_publication);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
+        // Repeats while idle are reuse, not drops. Restart an idle baseline at
+        // every render start so motion starting from rest is measured from its
+        // first frame's render: idle time is excluded, an overrun still counts.
+        #[cfg(feature = "tooling")]
+        if tooling.is_some()
+            && tooling_drop_baseline.is_some_and(|(_, _, was_animating)| !was_animating)
+            && let Ok(telemetry) = f.read_magik_presentation_telemetry()
+        {
+            tooling_drop_baseline = Some((telemetry, frame_t1, false));
+        }
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
         if screensaver.take_restore_full_frame() {
             if let Some(mut snapshot) = screensaver_launcher_frame.take()
@@ -12625,9 +12668,15 @@ pub(super) fn run_launcher_loop(
                     match f.read_magik_presentation_telemetry() {
                         Ok(telemetry) => {
                             let observed_at = Instant::now();
+                            // The scheduled class predates this frame's pose; the card
+                            // session knows whether the frame it just rendered moved.
                             let animation_active = scheduled_frame_class
                                 != FrameProductionClass::EventDriven
-                                || nav.arcade.is_scroll_active() && nav.screen == Screen::Arcade;
+                                || nav.arcade.is_scroll_active() && nav.screen == Screen::Arcade
+                                || nav.screen == Screen::Home
+                                    && launcher_card_home.as_ref().is_some_and(
+                                        super::launcher_card_home::LauncherCardHomeSession::is_animating,
+                                    );
                             if let Some((previous, at, was_animating)) = tooling_drop_baseline {
                                 match mister_magik_latch_contract::validate_presentation_telemetry_window(
                                     previous, telemetry, observed_at.saturating_duration_since(at).as_micros().max(1) as u64, 8_333,
