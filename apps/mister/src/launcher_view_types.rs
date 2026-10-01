@@ -216,6 +216,13 @@ pub const fn confirmation_kind(value: Option<ConfirmAction>) -> view::Confirmati
     }
 }
 
+pub const fn system_page_mode(value: crate::launcher::SystemPageMode) -> view::SystemPageMode {
+    match value {
+        crate::launcher::SystemPageMode::Hub => view::SystemPageMode::Hub,
+        crate::launcher::SystemPageMode::List => view::SystemPageMode::List,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,12 +296,5 @@ mod tests {
         assert!(choice.id.is_empty());
         assert_eq!(choice.label.as_str(), "1920x1200");
         assert!(active_display_choice(usize::MAX, None).label.is_empty());
-    }
-}
-
-pub const fn system_page_mode(value: crate::launcher::SystemPageMode) -> view::SystemPageMode {
-    match value {
-        crate::launcher::SystemPageMode::Hub => view::SystemPageMode::Hub,
-        crate::launcher::SystemPageMode::List => view::SystemPageMode::List,
     }
 }
