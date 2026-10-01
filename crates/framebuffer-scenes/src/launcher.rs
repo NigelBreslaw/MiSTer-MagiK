@@ -561,11 +561,7 @@ impl LauncherFramePreparer {
     pub(crate) fn new_direct_tile_buffer(&self) -> PreparedLauncherFrame {
         PreparedLauncherFrame {
             request: None,
-            scratch: (0..if self.faces.first().is_some_and(|f| f.slides) {
-                CAROUSEL_CAPACITY
-            } else {
-                6
-            })
+            scratch: (0..CAROUSEL_CAPACITY)
                 .map(|_| crate::launcher_flip::Scratch::strip())
                 .collect(),
             pixels: Vec::new(),
@@ -1468,7 +1464,9 @@ fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
             let Some(item) = item else { continue };
             let mut pose = item.pose;
             pose.clip = (pose.clip.0.max(clip.0), pose.clip.1.min(clip.1));
-            if pose.clip.0 >= pose.clip.1 { continue; }
+            if pose.clip.0 >= pose.clip.1 {
+                continue;
+            }
             pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
             pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
             crate::launcher_flip::prepare_target(
@@ -1497,7 +1495,9 @@ fn draw_carousel_plan_prepared<const CULL_SOURCE: bool>(
             let Some(item) = item else { continue };
             let mut pose = item.pose;
             pose.clip = (pose.clip.0.max(clip.0), pose.clip.1.min(clip.1));
-            if pose.clip.0 >= pose.clip.1 { continue; }
+            if pose.clip.0 >= pose.clip.1 {
+                continue;
+            }
             pose.body_clip.0 = pose.body_clip.0.max(clip.0).min(clip.1);
             pose.body_clip.1 = pose.body_clip.1.min(clip.1).max(clip.0);
             crate::launcher_flip::add_opaque_coverage(
@@ -1895,13 +1895,13 @@ mod tests {
         }
     }
 
-    /// Lock the existing root projection/lighting/face-swap/reflection result
-    /// before introducing nested layouts. Artwork is the shipped RGB565 art.
+    /// Root projection, lighting, face swaps and reflections match the independently
+    /// rendered origin/main baseline at 8793765ae. Artwork is the high-precision source shipped by main.
     #[test]
     fn root_artwork_motion_keeps_approved_raster_contract() {
         let asset_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../apps/mister/assets/ui/launcher-cards");
-        let artwork: Vec<Vec<Rgb565Pixel>> = [
+        let artwork: Vec<Vec<u8>> = [
             "01_arcade",
             "02_consoles",
             "03_computers",
@@ -1909,13 +1909,7 @@ mod tests {
             "05_favourites",
         ]
         .iter()
-        .map(|name| {
-            std::fs::read(asset_root.join(format!("{name}.rgb565")))
-                .unwrap()
-                .chunks_exact(2)
-                .map(|p| Rgb565Pixel(u16::from_le_bytes([p[0], p[1]])))
-                .collect()
-        })
+        .map(|name| std::fs::read(asset_root.join(format!("{name}.rgb888"))).unwrap())
         .collect();
         let faces: Vec<_> = artwork.iter().map(Vec::as_slice).collect();
         let scenes = [
@@ -1927,7 +1921,7 @@ mod tests {
         let mut actual = Vec::new();
         for scene in scenes {
             let mut prepared =
-                PreparedLauncher::new(scene, data(), Some(Artwork::Rgb565(&faces)), None);
+                PreparedLauncher::new(scene, data(), Some(Artwork::Rgb888(&faces)), None);
             for direction in [BrowseDirection::Right, BrowseDirection::Left] {
                 let selected = if direction == BrowseDirection::Right {
                     4
@@ -1962,46 +1956,46 @@ mod tests {
         assert_eq!(
             actual,
             vec![
-                0x9bc65a05d5bfaa15,
-                0x863d7a2304b4095c,
-                0x4b007be84d998ed7,
-                0x6151f50f7a008107,
-                0x7b4b9f091e521b81,
-                0x7b4b9f091e521b81,
-                0x67103dbdcf332205,
-                0xead7b8bd3d582bb7,
-                0x147da1b06f37316c,
-                0x9bc65a05d5bfaa15,
-                0xd5a1f3d3a977a48c,
-                0x7a6a71fb99efa886,
-                0x3e5c9d7e031b7040,
-                0xaac36cd62c7c1daa,
-                0xdf51ae4c40ee42d3,
-                0xdf51ae4c40ee42d3,
-                0x7d479f1450fb7d4e,
-                0x533c4078e4da4b0a,
-                0xa2f7d71f24436f4,
-                0xd5a1f3d3a977a48c,
-                0x56a80924eb2483cf,
-                0xdb690473c2061b86,
-                0x468e15835d6eeeee,
-                0xba9024bb5e30265f,
-                0xd7f65fc2b3359e39,
-                0xd7f65fc2b3359e39,
-                0xf1fdb339796ea144,
-                0xe96b9a1d715a1c00,
-                0x911da7ee18ccdc8,
-                0x56a80924eb2483cf,
-                0xd2360ad54799a211,
-                0x1f9964f80818263c,
-                0xa9c717c104f506fd,
-                0xab3aa254f778239a,
-                0xb76f0ad219c910dd,
-                0xb76f0ad219c910dd,
-                0xc8cb9c286582dcdc,
-                0x7fe48ccec64a1eca,
-                0xb8b31879039ae58b,
-                0xd2360ad54799a211
+                0xc394f8d44e82ff4d,
+                0x5f62be6910db80df,
+                0xa3fa917c6962bb37,
+                0x4b48f8013bfe834c,
+                0x60daa1b771e35d5f,
+                0x60daa1b771e35d5f,
+                0x732f9fcb676fe381,
+                0x4be592b8f2e236d6,
+                0xc483a8a561c8311e,
+                0xc394f8d44e82ff4d,
+                0xf8ac5e551d39f36b,
+                0x5d33bcef2c74e893,
+                0xf3ea3c00d4d2fe0d,
+                0x9193dac43efe10b3,
+                0x86e5f9ae0ec9adfc,
+                0x86e5f9ae0ec9adfc,
+                0x442179c3c212a1f4,
+                0x82762e587e373153,
+                0x2f93fe430446b37d,
+                0xf8ac5e551d39f36b,
+                0x7aad31d1ab0c8236,
+                0x28d9c2b5e17eb9d5,
+                0x42ad22aec66929a3,
+                0xc1391c3dd578d056,
+                0xb8fd1aacb7e7c1f1,
+                0xb8fd1aacb7e7c1f1,
+                0x3095685d339eb4c1,
+                0x9dc46ab3e57739a9,
+                0x5eace0b7da247b09,
+                0x7aad31d1ab0c8236,
+                0x104012a1161a17ed,
+                0x64a2391606ca0e25,
+                0xc2e394552026b0e4,
+                0x32393fdbabb310d3,
+                0xc4c238e3e9ad794c,
+                0xc4c238e3e9ad794c,
+                0x8c04e43ed9a03ddc,
+                0x3c64861760b62cbc,
+                0x76f9d2f9120a3679,
+                0x104012a1161a17ed,
             ],
             "Root baseline: {actual:x?}"
         );

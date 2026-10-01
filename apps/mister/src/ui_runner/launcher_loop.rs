@@ -25,7 +25,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
-use crate::launcher_presentation::{SelectionFeedbackTarget, settings_cog_backdrop_rgb565};
+use crate::launcher_presentation::{SelectionFeedbackTarget, settings_cog_artwork};
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
@@ -9800,7 +9800,7 @@ pub(super) fn run_launcher_loop(
                     &last_clock_text,
                     loop_start.duration_since(run_start).as_millis() as u64,
                     !nav.settings.reduce_motion,
-                    nav.home_card_browse_prediction(prediction_time),
+                    nav.home_card_browse_prediction(loop_start),
                 );
                 // Idle on a card: prepare the level it opens and the parent, so
                 // the level trick never waits on preparation.
@@ -10296,6 +10296,7 @@ pub(super) fn run_launcher_loop(
                 &last_clock_text,
                 now_us / 1_000,
                 !nav.settings.reduce_motion,
+                nav.home_card_browse_prediction(pose_at),
             );
             session.render();
             let request = session.current_request();

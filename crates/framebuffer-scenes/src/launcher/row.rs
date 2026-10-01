@@ -53,12 +53,12 @@ fn between(a: Pose, b: Pose, k: i64) -> Pose {
     }
 }
 
-pub(super) fn build(faces: &[CardFaces], frame: BrowseFrame) -> CarouselPlan<'_> {
+pub(super) fn build(faces: &[Arc<CardFaces>], frame: BrowseFrame) -> CarouselPlan<'_> {
     build_with_tilt(faces, frame, TILT)
 }
 
 pub(super) fn build_with_tilt(
-    faces: &[CardFaces],
+    faces: &[Arc<CardFaces>],
     mut frame: BrowseFrame,
     tilt: i64,
 ) -> CarouselPlan<'_> {

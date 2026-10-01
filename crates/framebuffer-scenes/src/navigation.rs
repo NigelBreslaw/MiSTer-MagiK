@@ -881,6 +881,7 @@ pub struct NavigationTransitionBuffers {
     working: Vec<Rgb565Pixel>,
     panel_backdrop: Vec<Rgb565Pixel>,
     reveal_image: Option<crate::device_card::RevealImage>,
+    device_asset: Option<&'static [Rgb565Pixel]>,
     scale_source_x: Vec<usize>,
     scale_source_y: Vec<usize>,
     scale_excluded_x: Vec<bool>,
@@ -971,6 +972,10 @@ impl NavigationTransitionBuffers {
     pub fn destination(&self) -> Option<&[Rgb565Pixel]> {
         self.destination_ready
             .then_some(self.destination.as_slice())
+    }
+
+    pub fn set_device_asset(&mut self, asset: &'static [Rgb565Pixel]) {
+        self.device_asset = Some(asset);
     }
 
     pub fn set_reveal_image(&mut self, image: Option<crate::device_card::RevealImage>) {
@@ -2032,7 +2037,7 @@ fn render_device_card_into(
         buffers.height,
         launcher,
         page,
-        buffers.arcade_cabinet_asset.unwrap_or(&[]),
+        buffers.device_asset.unwrap_or(&[]),
         &buffers.panel_backdrop,
         buffers.reveal_image.as_ref(),
         request.geometry.source_card,

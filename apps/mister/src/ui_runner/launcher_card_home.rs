@@ -540,7 +540,6 @@ impl LauncherCardHomeSession {
         if preparing
             && elapsed >= u64::from(LEVEL_TRICK_MILLIS * 45 / 100)
             && elapsed < edge
-            && matches!(self.trick.as_ref().and_then(|t| t.destination.as_ref()), Some(Prepared::Building(id)) if self.preparation.is_ready(*id))
             && let Some(prepared) = self.take_built_destination()
         {
             self.trick.as_mut().unwrap().destination = Some(Prepared::Built(prepared));
@@ -934,7 +933,16 @@ mod tests {
     ) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            session.update(scene, level, selected, selected as f32, clock, 32, false, None);
+            session.update(
+                scene,
+                level,
+                selected,
+                selected as f32,
+                clock,
+                32,
+                false,
+                None,
+            );
             if session.content_ready(scene, level) && session.trick.is_none() {
                 break;
             }
@@ -1232,7 +1240,16 @@ mod tests {
                 .into_iter()
                 .enumerate()
             {
-                session.update(scene, &level, 0, position, "07:28", tick as u64 * 16, false, None);
+                session.update(
+                    scene,
+                    &level,
+                    0,
+                    position,
+                    "07:28",
+                    tick as u64 * 16,
+                    false,
+                    None,
+                );
                 serial.render_frame(session.frame);
                 assert_eq!(session.render(), serial.pixels());
             }

@@ -619,7 +619,7 @@ impl NavigationTransitionRuntime {
             return Ok(false);
         }
         self.buffers.set_reveal_image(None);
-        self.buffers.set_arcade_cabinet_asset(device);
+        self.buffers.set_device_asset(device);
         self.buffers
             .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
         let mut request = NavigationTransitionRequest::device_card(direction, edge, geometry, spec);

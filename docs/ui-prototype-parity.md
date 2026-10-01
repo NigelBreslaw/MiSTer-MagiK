@@ -843,7 +843,9 @@ Select → list → Y search → B → B (launcher).
 
 ## Implementation commits
 
-All commits build on `ac337f86e` from `nigel/collection-card-browse`.
+Originally based on `ac337f86e` from `nigel/collection-card-browse`; rebased
+onto `origin/main` at `8793765ae` on 1 October 2026. The collection foundation
+is already present in main, so only the ten parity commits are replayed.
 
 1. **Document the parity contract and reference** (this commit): preserve the
    existing root renderer and motion; fix timing and clipping ambiguities.
@@ -873,3 +875,19 @@ An edge hold is a readiness fallback and must be reported separately from
 Portrait and non-240p CRT retain production font grids, insets and native
 aspect correction. Their row geometry requires review because the prototype
 does not specify those layouts.
+
+## Main performance integration
+
+The rebase retains main's RGB888 source artwork, shared face cache, persistent
+preparation worker, off-thread retirement, current-pose rendering and adaptive
+parallel band balancing. Nested clipping begins at 268; the parallel renderer
+uses that level's origin and keeps eight scratch slots across level changes.
+Its buffers are reused for root → Consoles → root instead of recreated.
+
+Root artwork fixtures were regenerated independently from a clean copy of
+`8793765ae`: all 40 output hashes match the rebased implementation across both
+browse directions and four native layouts. This comparison uses main's current
+RGB888 source, preserving its fidelity fixes. The portable suite passes 170
+tests, with one explicit benchmark ignored. Navigation passes 170 tests, the
+production card session 24, navigation transitions 33, and native preview 42.
+Physical Consoles diagnosis follows deployment of this rebased build.

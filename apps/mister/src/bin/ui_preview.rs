@@ -3943,8 +3943,8 @@ mod macos {
                         include_bytes!("../../assets/fonts/jersey25-41px.mmbf"),
                     ),
                     (
-                        "cog-backdrop-412x374.rgb565",
-                        include_bytes!("../../assets/ui/settings/cog-backdrop-412x374.rgb565"),
+                        "cog-backdrop-412x374.rgb888",
+                        include_bytes!("../../assets/ui/settings/cog-backdrop-412x374.rgb888"),
                     ),
                 ]),
                 font_bundle_sha256: bundle_sha256(&[
