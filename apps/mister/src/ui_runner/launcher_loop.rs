@@ -198,6 +198,23 @@ fn custom_damage_invalidation_comparison(
     (bounding, rectangles, bounding && !rectangles)
 }
 
+fn selected_device_reveal_image(
+    preview: &crate::preview_state::PreviewState,
+    backdrop: Option<&CrtBackdropController>,
+    layout: crate::ui_display::UiLayoutGeometry,
+) -> Option<mister_magik_framebuffer_scenes::device_card::RevealImage> {
+    preview.selected_backdrop_source().map(|source| {
+        mister_magik_framebuffer_scenes::device_card::RevealImage {
+            pixels: source.words,
+            width: source.source_width,
+            height: source.source_height,
+            stride: source.stride_pixels,
+            reference_height: backdrop.map_or(layout.logical_h(), |b| b.reference_height()),
+            integer_scale: backdrop.is_some_and(|b| b.reference_height() > b.physical_height()),
+        }
+    })
+}
+
 fn navigation_geometry_to_composition(
     layout: UiLayoutGeometry,
     mut geometry: NavigationTransitionGeometry,
@@ -8464,14 +8481,11 @@ pub(super) fn run_launcher_loop(
                                                         edge,
                                                         NavigationTransitionEdge::HomeToArcade
                                                             | NavigationTransitionEdge::ConsolesToSystem
-                                                    ) && launcher_card_home.is_some()
-                                                        && !layout.is_portrait()
+                                                    ) && !layout.is_portrait()
+                                                        && let Some(cards) = launcher_card_home.as_ref()
                                                     {
                                                         if direction == NavigationTransitionDirection::Forward {
-                                                            geometry.source_card = launcher_card_home
-                                                                .as_ref()
-                                                                .expect("checked card launcher")
-                                                                .selected_card_rect();
+                                                            geometry.source_card = cards.selected_card_rect();
                                                         }
                                                         let kind = if let Some(id) = collection_id.as_deref() {
                                                             nav.device_kind_for_collection(id)
@@ -8512,8 +8526,17 @@ pub(super) fn run_launcher_loop(
                                                             now_us,
                                                         )
                                                     };
-                                                    if started.as_ref().is_ok_and(|started|*started) && crt_layout && direction==NavigationTransitionDirection::Reverse {
-                                                        navigation_transition.update_device_reveal_image(preview.selected_backdrop_source().map(|source|mister_magik_framebuffer_scenes::device_card::RevealImage{pixels:source.words,width:source.source_width,height:source.source_height,stride:source.stride_pixels,reference_height:crt_backdrop.as_ref().map_or(layout.logical_h(),|b|b.reference_height()),integer_scale:crt_backdrop.as_ref().is_some_and(|b|b.reference_height()>b.physical_height())}));
+                                                    if started.as_ref().is_ok_and(|started| *started)
+                                                        && crt_layout
+                                                        && direction == NavigationTransitionDirection::Reverse
+                                                    {
+                                                        navigation_transition.update_device_reveal_image(
+                                                            selected_device_reveal_image(
+                                                                &preview,
+                                                                crt_backdrop.as_ref(),
+                                                                layout,
+                                                            ),
+                                                        );
                                                     }
                                                     started.unwrap_or(false)
                                                 })
@@ -11286,13 +11309,12 @@ pub(super) fn run_launcher_loop(
                     && nav.screen == Screen::Arcade
                     && navigation_transition
                         .request()
-                        .is_some_and(|r| r.renderer_label() == "device-card")
+                        .is_some_and(|r| r.is_device_card())
+                    && let Some(source) = preview.selected_backdrop_source()
                 {
-                    if let Some(source) = preview.selected_backdrop_source() {
-                        destination_layers_ready = crt_backdrop
-                            .as_ref()
-                            .is_some_and(|backdrop| backdrop.source_ready(&source, layout));
-                    }
+                    destination_layers_ready = crt_backdrop
+                        .as_ref()
+                        .is_some_and(|backdrop| backdrop.source_ready(&source, layout));
                 }
                 if destination_layers_ready {
                     if let Some((waited, timed_out)) = status_quiesce {
@@ -11313,20 +11335,7 @@ pub(super) fn run_launcher_loop(
                     }
                     if crt_layout {
                         navigation_transition.update_device_reveal_image(
-                            preview.selected_backdrop_source().map(|source| {
-                                mister_magik_framebuffer_scenes::device_card::RevealImage {
-                                    pixels: source.words,
-                                    width: source.source_width,
-                                    height: source.source_height,
-                                    stride: source.stride_pixels,
-                                    reference_height: crt_backdrop
-                                        .as_ref()
-                                        .map_or(layout.logical_h(), |b| b.reference_height()),
-                                    integer_scale: crt_backdrop.as_ref().is_some_and(|b| {
-                                        b.reference_height() > b.physical_height()
-                                    }),
-                                }
-                            }),
+                            selected_device_reveal_image(&preview, crt_backdrop.as_ref(), layout),
                         );
                     }
                     navigation_transition.update_device_reveal_backdrop(

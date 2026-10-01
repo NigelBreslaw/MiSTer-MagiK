@@ -641,19 +641,13 @@ impl NavigationTransitionRuntime {
         &mut self,
         image: Option<mister_magik_framebuffer_scenes::device_card::RevealImage>,
     ) {
-        if self
-            .request()
-            .is_some_and(|r| r.renderer_label() == "device-card")
-        {
+        if self.request().is_some_and(|r| r.is_device_card()) {
             self.buffers.set_reveal_image(image);
         }
     }
 
     pub fn update_device_reveal_backdrop(&mut self, backdrop: &[Rgb565Pixel]) {
-        if self
-            .request()
-            .is_some_and(|r| r.renderer_label() == "device-card")
-        {
+        if self.request().is_some_and(|r| r.is_device_card()) {
             self.buffers
                 .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
         }

@@ -214,7 +214,7 @@ mod launcher_present;
 mod launcher_readiness;
 #[allow(dead_code)]
 mod launcher_scheduler;
-mod launcher_screensaver;
+pub(crate) mod launcher_screensaver;
 #[allow(dead_code)]
 mod launcher_screensaver_pipeline;
 mod launcher_settings_pipeline;

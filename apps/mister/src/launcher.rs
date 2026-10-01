@@ -3062,7 +3062,7 @@ impl LauncherNav {
         }
         if pressed.btn_a {
             let count = match self.system_hub_selected {
-                0 => self.active_collection().map_or(0, |c| c.count as usize),
+                0 => self.active_collection().map_or(0, |c| c.count),
                 1 => self.active_collection_recent_count(catalog),
                 2 => self.active_collection_favourite_count(catalog),
                 _ => unreachable!(),

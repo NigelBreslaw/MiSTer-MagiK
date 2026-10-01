@@ -1722,7 +1722,7 @@ mod macos {
                     && self
                         .navigation_transition
                         .request()
-                        .is_some_and(|r| r.renderer_label() == "device-card")
+                        .is_some_and(|r| r.is_device_card())
                 {
                     self.navigation_transition
                         .update_device_reveal_image(self.selected_reveal_image());

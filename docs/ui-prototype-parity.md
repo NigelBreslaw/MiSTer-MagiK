@@ -929,3 +929,26 @@ reveal/panel fingerprints match before and after cleanup across HDMI, 240p,
 288p and 480p; the 40 root artwork fixtures also pass. Focused portable,
 navigation, card-session, transition and preview tests plus portable Clippy pass.
 The temporary fingerprint harness was removed; evidence stays in ignored outputs.
+
+## Simplification review
+
+Renderer variants own their device reveal and CRT panel options, so a device
+request cannot omit its reveal specification. Runtime and preview use a typed
+device-card predicate; renderer labels remain diagnostic text. Snapshot
+renderers share readiness/size validation and one reusable working-buffer path.
+Existing snapshot tests exercise the production dispatch entry point. Native
+reveal-image mapping is shared across entry and destination capture.
+
+The macOS preview re-exports the production screensaver module instead of
+compiling that source twice. Redundant casts, checked unwraps and nested
+readiness branches are removed. Root card geometry, artwork, timing constants
+and persistent renderer/preparation workers are unchanged.
+
+All 600 raw/dispatched frame fingerprints match before and after simplification,
+including both directions and missing-destination capture states. Reviewed
+HDMI and native CRT 240p preview frames also retain their RGB565 hashes. The
+portable suite passes 170 tests (one benchmark ignored); navigation 170, card
+session 24, transition 33, screensaver 7 and preview 42 tests pass. Portable and
+feature-enabled UI/preview Clippy pass. The feature-gated native loop is checked
+through Cargo because the default analyzer configuration does not link it.
+Temporary comparison harnesses, renders and logs stay in ignored outputs.

@@ -166,8 +166,9 @@ pub mod preview_state;
 pub mod preview_transition;
 pub mod process_config;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
-#[path = "ui_runner/launcher_screensaver.rs"]
-pub mod production_launcher_screensaver;
+pub mod production_launcher_screensaver {
+    pub use crate::ui_runner::launcher_screensaver::*;
+}
 pub mod raw565;
 pub mod return_catalog_capsule;
 #[cfg(feature = "ui")]

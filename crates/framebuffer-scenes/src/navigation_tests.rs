@@ -113,7 +113,7 @@ fn settings_page_push_settles_to_exact_snapshots_in_both_directions() {
         NavigationTransitionDirection::Reverse,
     ] {
         let request = NavigationTransitionRequest::settings_page(direction);
-        render_settings_page_push(
+        render_navigation_transition(
             &mut buffers,
             request,
             NavigationTransitionFrame {
@@ -124,7 +124,7 @@ fn settings_page_push_settles_to_exact_snapshots_in_both_directions() {
         .unwrap();
         assert_eq!(buffers.working(), source);
 
-        render_settings_page_push(
+        render_navigation_transition(
             &mut buffers,
             request,
             NavigationTransitionFrame {
@@ -159,7 +159,7 @@ fn segmented_settings_motion_keeps_chrome_fixed_and_exact_endpoints() {
         assert_eq!(request.duration_us, 720_000);
 
         for (progress_q16, expected) in [(0, &source), (PROGRESS_MAX, &destination)] {
-            render_settings_page_push(
+            render_navigation_transition(
                 &mut buffers,
                 request,
                 NavigationTransitionFrame {
@@ -171,7 +171,7 @@ fn segmented_settings_motion_keeps_chrome_fixed_and_exact_endpoints() {
             assert_eq!(buffers.working(), expected);
         }
 
-        render_settings_page_push(
+        render_navigation_transition(
             &mut buffers,
             request,
             NavigationTransitionFrame {
@@ -204,7 +204,7 @@ fn segmented_settings_motion_does_not_mark_pixels_left_of_destination_content() 
         400,
     );
 
-    render_settings_page_push(
+    render_navigation_transition(
         &mut buffers,
         request,
         NavigationTransitionFrame {
@@ -243,7 +243,7 @@ fn crt_segmented_settings_keeps_shared_cog_pixels_stationary() {
     let mut buffers = NavigationTransitionBuffers::new(width, height);
     buffers.capture_source(&source).unwrap();
     buffers.capture_destination(&destination).unwrap();
-    render_settings_page_push(
+    render_navigation_transition(
         &mut buffers,
         NavigationTransitionRequest::settings_page_segmented(
             NavigationTransitionDirection::Forward,
@@ -278,7 +278,7 @@ fn crt_segmented_settings_has_exact_endpoints_in_portrait_space() {
     );
 
     for (progress_q16, expected) in [(0, &source), (PROGRESS_MAX, &destination)] {
-        render_settings_page_push(
+        render_navigation_transition(
             &mut buffers,
             request,
             NavigationTransitionFrame {
@@ -310,7 +310,7 @@ fn portrait_settings_page_push_stays_horizontal_in_both_directions() {
     let source_travel = width / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR as usize;
     let row = 5;
 
-    render_settings_page_push(
+    render_navigation_transition(
         &mut buffers,
         NavigationTransitionRequest::settings_page(NavigationTransitionDirection::Forward),
         NavigationTransitionFrame {
@@ -332,7 +332,7 @@ fn portrait_settings_page_push_stays_horizontal_in_both_directions() {
         destination[row * width]
     );
 
-    render_settings_page_push(
+    render_navigation_transition(
         &mut buffers,
         NavigationTransitionRequest::settings_page(NavigationTransitionDirection::Reverse),
         NavigationTransitionFrame {
@@ -552,7 +552,7 @@ fn settings_page_push_moves_contiguous_rows_in_physical_portrait_space() {
     let progress_q16 = PROGRESS_MAX / 2;
     let travel_q16 = spring_ease_q16(progress_q16) as usize;
 
-    render_settings_page_push(
+    render_navigation_transition(
         &mut buffers,
         NavigationTransitionRequest::settings_page_on_axis(
             NavigationTransitionDirection::Forward,
