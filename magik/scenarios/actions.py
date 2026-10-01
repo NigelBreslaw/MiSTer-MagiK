@@ -321,6 +321,20 @@ TAPS_THEN_HOLD_WINDOW_MS = 6 * 250 + 10_000 + 1_000
 WINDOW_PICKUP_GRACE_SECONDS = 3
 
 
+def _completed_window_metrics(agent, sleep):
+    """Read metrics, waiting boundedly for a window that started late.
+
+    An idle launcher can service the request up to about a second late, so the
+    device-timed window may still be running at the nominal deadline.
+    """
+    metrics = agent.metrics()
+    deadline = time.monotonic() + WINDOW_PICKUP_GRACE_SECONDS
+    while metrics.get("window") is None and time.monotonic() < deadline:
+        sleep(0.25)
+        metrics = agent.metrics()
+    return metrics
+
+
 def launcher_motion(
     application,
     agent,
@@ -368,9 +382,11 @@ def launcher_motion(
     input_events = 0
     if taps_then_hold:
         # Taps and the hold are device-timed; host RPC jitter cannot shift them.
+        # Release only cancels: the window must complete before it is sent.
         try:
             input_events += TAPS_THEN_HOLD["taps"] + 1
             sleep(2 + seconds + 0.4)
+            metrics = _completed_window_metrics(agent, sleep)
         finally:
             agent._successful("measure", {"launcher_hold": "release"})
     elif held_direction:
@@ -379,6 +395,7 @@ def launcher_motion(
         try:
             input_events += 1
             sleep(2 + seconds + 0.4)
+            metrics = _completed_window_metrics(agent, sleep)
         finally:
             agent._successful("measure", {"launcher_hold": "release"})
             input_events += 1
@@ -388,14 +405,8 @@ def launcher_motion(
             _press_key(application, direction)
             input_events += 1
             sleep(interval_seconds)
+        metrics = _completed_window_metrics(agent, sleep)
 
-    metrics = agent.metrics()
-    # An idle launcher can service the request up to about a second late, so
-    # the device-timed window may still be running at the nominal deadline.
-    pickup_deadline = time.monotonic() + WINDOW_PICKUP_GRACE_SECONDS
-    while metrics.get("window") is None and time.monotonic() < pickup_deadline:
-        sleep(0.25)
-        metrics = agent.metrics()
     if metrics.get("sha256") != agent.expected_sha256:
         raise AssertionError("metrics belong to another application")
     window = metrics.get("window")

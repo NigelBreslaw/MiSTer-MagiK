@@ -403,3 +403,44 @@ def test_motion_waits_boundedly_for_a_window_that_started_late(monkeypatch):
     )
     assert result["elapsed_ms"] == 12_500
     assert sleeps == [1, 14.9, 0.25]
+
+
+@pytest.mark.parametrize("workload", ["held_direction", "taps_then_hold"])
+def test_hold_release_waits_for_a_late_window_to_complete(monkeypatch, workload):
+    from types import SimpleNamespace
+
+    calls = []
+    late = [{"sha256": "app", "window": None}] * 8
+    elapsed = 12_500 if workload == "taps_then_hold" else 8_000
+    evidence = {
+        **window(),
+        "elapsed_ms": elapsed,
+        "end_ms": elapsed + 2_000,
+        "presentations": elapsed * 60 // 1000,
+        "card_continuous_presentations": elapsed * 60 // 1000,
+        "forced_clock_changes": 0,
+    }
+    replies = iter([{"window": None}, *late, {"sha256": "app", "window": evidence}])
+
+    def metrics():
+        calls.append("metrics")
+        return next(replies)
+
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=metrics,
+        _successful=lambda op, fields: calls.append(fields.get("launcher_hold")),
+    )
+    monkeypatch.setattr(actions, "_press_key", lambda *_: None)
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+    actions.launcher_motion(
+        SimpleNamespace(first_window=SimpleNamespace()),
+        agent,
+        sleep=lambda _: None,
+        **{workload: True},
+    )
+    # A two-second pickup delay must not cut the hold short: the release is
+    # sent only after the completed window has been read.
+    assert calls[-1] == "release"
+    assert calls[-2] == "metrics"
+    assert calls.count("metrics") == 1 + len(late) + 1

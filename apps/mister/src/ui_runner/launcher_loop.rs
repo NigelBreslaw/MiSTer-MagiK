@@ -10066,6 +10066,16 @@ pub(super) fn run_launcher_loop(
             layer_target.reclaim_preview_publication(&mut launcher_preview_publication);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
+        // Repeats while idle are reuse, not drops. Restart an idle baseline at
+        // every render start so motion starting from rest is measured from its
+        // first frame's render: idle time is excluded, an overrun still counts.
+        #[cfg(feature = "tooling")]
+        if tooling.is_some()
+            && tooling_drop_baseline.is_some_and(|(_, _, was_animating)| !was_animating)
+            && let Ok(telemetry) = f.read_magik_presentation_telemetry()
+        {
+            tooling_drop_baseline = Some((telemetry, frame_t1, false));
+        }
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
         if screensaver.take_restore_full_frame() {
             if let Some(mut snapshot) = screensaver_launcher_frame.take()
@@ -12658,9 +12668,15 @@ pub(super) fn run_launcher_loop(
                     match f.read_magik_presentation_telemetry() {
                         Ok(telemetry) => {
                             let observed_at = Instant::now();
+                            // The scheduled class predates this frame's pose; the card
+                            // session knows whether the frame it just rendered moved.
                             let animation_active = scheduled_frame_class
                                 != FrameProductionClass::EventDriven
-                                || nav.arcade.is_scroll_active() && nav.screen == Screen::Arcade;
+                                || nav.arcade.is_scroll_active() && nav.screen == Screen::Arcade
+                                || nav.screen == Screen::Home
+                                    && launcher_card_home.as_ref().is_some_and(
+                                        super::launcher_card_home::LauncherCardHomeSession::is_animating,
+                                    );
                             if let Some((previous, at, was_animating)) = tooling_drop_baseline {
                                 match mister_magik_latch_contract::validate_presentation_telemetry_window(
                                     previous, telemetry, observed_at.saturating_duration_since(at).as_micros().max(1) as u64, 8_333,
@@ -12668,10 +12684,7 @@ pub(super) fn run_launcher_loop(
                                     Ok(delta) => {
                                         metrics.counters.owned_vblanks += u64::from(delta.owned_vblank_delta);
                                         metrics.counters.presented_vblanks += u64::from(delta.presented_vblank_delta);
-                                        // Repeats since an idle baseline are idle reuse, not drops:
-                                        // the first frame after rest would otherwise count the
-                                        // whole idle gap before the input as dropped frames.
-                                        let dropped = if was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
+                                        let dropped = if animation_active || was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
                                         metrics.counters.drops += dropped;
                                         if dropped != 0 {
                                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
