@@ -540,6 +540,60 @@ pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
     &prepared_cabinet().1
 }
 
+pub fn system_device_rgb565(kind: Option<crate::device_art::DeviceKind>) -> &'static [Rgb565Pixel] {
+    use crate::device_art::DeviceKind;
+    static DEVICES: [std::sync::OnceLock<Vec<Rgb565Pixel>>; 3] = [
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+    ];
+    let Some(kind) = kind else {
+        return arcade_cabinet_rgb565();
+    };
+    let index = match kind {
+        DeviceKind::Tv => 0,
+        DeviceKind::Monitor => 1,
+        DeviceKind::Handheld => 2,
+    };
+    DEVICES[index].get_or_init(|| {
+        crate::device_art::device_rgb565(kind)
+            .iter()
+            .copied()
+            .map(Rgb565Pixel)
+            .collect()
+    })
+}
+
+pub fn device_reveal_spec(
+    kind: Option<crate::device_art::DeviceKind>,
+    crt: bool,
+    hub: bool,
+) -> mister_magik_framebuffer_scenes::device_card::DeviceCardReveal {
+    use crate::device_art::DeviceKind;
+    use mister_magik_framebuffer_scenes::navigation::NavigationTransitionRect;
+    let Some(kind) = kind else {
+        return mister_magik_framebuffer_scenes::device_card::DeviceCardReveal {
+            hub,
+            ..mister_magik_framebuffer_scenes::device_card::DeviceCardReveal::cabinet(crt)
+        };
+    };
+    mister_magik_framebuffer_scenes::device_card::DeviceCardReveal {
+        region: NavigationTransitionRect {
+            x: 117,
+            y: 46,
+            width: 250,
+            height: 350,
+        },
+        accent: match kind {
+            DeviceKind::Tv => 0x5b9c,
+            DeviceKind::Monitor => 0xe607,
+            DeviceKind::Handheld => 0x3631,
+        },
+        crt,
+        hub,
+    }
+}
+
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565
 /// software renderer's truncation return exactly the stored pixels.
 fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::Image {

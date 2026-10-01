@@ -12,6 +12,7 @@ use std::time::Duration;
 pub mod arcade_card;
 pub mod bitmap_text;
 mod card_page;
+pub mod device_card;
 pub mod dithered_gradient;
 pub mod dithered_image;
 pub mod launcher;

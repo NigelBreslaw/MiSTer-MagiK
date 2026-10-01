@@ -85,6 +85,7 @@ enum NavigationTransitionRenderer {
     SettingsCog,
     ArcadeCard,
     SystemPanel,
+    DeviceCard,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -572,6 +573,7 @@ pub struct NavigationTransitionRequest {
     settings_style: SettingsPageTransitionStyle,
     settings_destination_content_x: u16,
     panel_crt: bool,
+    device_reveal: Option<crate::device_card::DeviceCardReveal>,
 }
 
 impl NavigationTransitionRequest {
@@ -591,6 +593,7 @@ impl NavigationTransitionRequest {
             settings_style: SettingsPageTransitionStyle::WholePage,
             settings_destination_content_x: 0,
             panel_crt: false,
+            device_reveal: None,
         }
     }
 
@@ -606,6 +609,7 @@ impl NavigationTransitionRequest {
             settings_style: SettingsPageTransitionStyle::WholePage,
             settings_destination_content_x: 0,
             panel_crt: false,
+            device_reveal: None,
         }
     }
 
@@ -684,6 +688,23 @@ impl NavigationTransitionRequest {
             settings_style: SettingsPageTransitionStyle::WholePage,
             settings_destination_content_x: 0,
             panel_crt: false,
+            device_reveal: None,
+        }
+    }
+
+    pub fn device_card(
+        direction: NavigationTransitionDirection,
+        edge: NavigationTransitionEdge,
+        geometry: NavigationTransitionGeometry,
+        spec: crate::device_card::DeviceCardReveal,
+    ) -> Self {
+        Self {
+            renderer: NavigationTransitionRenderer::DeviceCard,
+            edge,
+            geometry,
+            device_reveal: Some(spec),
+            duration_us: u64::from(spec.duration_ms()) * 1000,
+            ..Self::settings_page(direction)
         }
     }
 
@@ -713,6 +734,7 @@ impl NavigationTransitionRequest {
             NavigationTransitionRenderer::SettingsCog => "settings-cog",
             NavigationTransitionRenderer::ArcadeCard => "arcade-card",
             NavigationTransitionRenderer::SystemPanel => "system-panel",
+            NavigationTransitionRenderer::DeviceCard => "device-card",
         }
     }
 
@@ -811,7 +833,8 @@ pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) ->
         }
         NavigationTransitionRenderer::SettingsPage
         | NavigationTransitionRenderer::SettingsCog
-        | NavigationTransitionRenderer::ArcadeCard => PROGRESS_MAX / 2,
+        | NavigationTransitionRenderer::ArcadeCard
+        | NavigationTransitionRenderer::DeviceCard => PROGRESS_MAX / 2,
     };
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
@@ -857,6 +880,7 @@ pub struct NavigationTransitionBuffers {
     destination: Arc<Vec<Rgb565Pixel>>,
     working: Vec<Rgb565Pixel>,
     panel_backdrop: Vec<Rgb565Pixel>,
+    reveal_image: Option<crate::device_card::RevealImage>,
     scale_source_x: Vec<usize>,
     scale_source_y: Vec<usize>,
     scale_excluded_x: Vec<bool>,
@@ -947,6 +971,10 @@ impl NavigationTransitionBuffers {
     pub fn destination(&self) -> Option<&[Rgb565Pixel]> {
         self.destination_ready
             .then_some(self.destination.as_slice())
+    }
+
+    pub fn set_reveal_image(&mut self, image: Option<crate::device_card::RevealImage>) {
+        self.reveal_image = image;
     }
 
     pub fn capture_panel_backdrop(&mut self, pixels: &[Rgb565Pixel]) {
@@ -1075,6 +1103,12 @@ pub fn render_navigation_transition(
             );
             stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
             stats
+        }
+        NavigationTransitionRenderer::DeviceCard => {
+            let mut working = std::mem::take(&mut buffers.working);
+            let result = render_device_card_into(buffers, request, frame, &mut working);
+            buffers.working = working;
+            result?
         }
         NavigationTransitionRenderer::SystemPanel => {
             let mut working = std::mem::take(&mut buffers.working);
@@ -1487,6 +1521,9 @@ pub fn render_settings_page_transition_into(
         || request.is_super_scaler()
     {
         return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    if request.renderer == NavigationTransitionRenderer::DeviceCard {
+        return render_device_card_into(buffers, request, frame, output);
     }
     if request.renderer == NavigationTransitionRenderer::SystemPanel {
         return render_system_panel_into(buffers, request, frame, output);
@@ -1958,6 +1995,57 @@ fn render_settings_cog_into(
     stats.card_scale_us = elapsed_us(started);
     stats.copied_pixels = output.len() as u64;
     Ok(stats)
+}
+
+fn render_device_card_into(
+    buffers: &NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    let Some(destination) = buffers
+        .destination_ready
+        .then_some(buffers.destination.as_slice())
+    else {
+        output.copy_from_slice(&buffers.source);
+        return Ok(NavigationTransitionRenderStats {
+            copied_pixels: output.len() as u64,
+            ..Default::default()
+        });
+    };
+    let spec = request
+        .device_reveal
+        .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
+    let elapsed = (u64::from(frame.progress_q16) * u64::from(spec.duration_ms())
+        / PROGRESS_MAX as u64) as u32;
+    let (launcher, page, t) = if request.direction == NavigationTransitionDirection::Forward {
+        (&buffers.source[..], destination, elapsed)
+    } else {
+        (
+            destination,
+            &buffers.source[..],
+            spec.duration_ms() - elapsed,
+        )
+    };
+    if !crate::device_card::render_into(
+        buffers.width,
+        buffers.height,
+        launcher,
+        page,
+        buffers.arcade_cabinet_asset.unwrap_or(&[]),
+        &buffers.panel_backdrop,
+        buffers.reveal_image.as_ref(),
+        request.geometry.source_card,
+        spec,
+        t,
+        output,
+    ) {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    Ok(NavigationTransitionRenderStats {
+        copied_pixels: output.len() as u64,
+        ..Default::default()
+    })
 }
 
 fn render_system_panel_into(

@@ -164,6 +164,12 @@ pub(super) struct LauncherCardHomeSession {
 }
 
 impl LauncherCardHomeSession {
+    pub(super) fn selected_card_rect(
+        &self,
+    ) -> mister_magik_framebuffer_scenes::navigation::NavigationTransitionRect {
+        self.prepared.slot_zero().rect()
+    }
+
     pub(super) fn new(
         scene: LauncherScene,
         level: CardLevelSnapshot,

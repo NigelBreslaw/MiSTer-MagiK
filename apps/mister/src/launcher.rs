@@ -1896,7 +1896,7 @@ impl LauncherNav {
 
     /// The device for a collection, from where it lives in the hierarchy, so
     /// entering it by ID (benchmarks, launch return) agrees with browsing to it.
-    fn device_kind_for_collection(
+    pub fn device_kind_for_collection(
         &self,
         collection_id: &str,
     ) -> Option<crate::device_art::DeviceKind> {

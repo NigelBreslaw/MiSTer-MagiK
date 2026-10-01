@@ -189,12 +189,19 @@ impl CrtBackdropController {
         self.state.physical_height()
     }
 
-    fn reference_height(&self) -> usize {
+    pub(super) fn reference_height(&self) -> usize {
         self.state.reference_height()
     }
 
     pub(super) fn pixels(&self) -> &[Rgb565Pixel] {
         self.state.pixels()
+    }
+
+    pub(super) fn source_ready(&self, source: &BackdropSource, layout: UiLayoutGeometry) -> bool {
+        let identity = self.prepared_identity(source, layout);
+        self.cache.iter().any(|entry| entry.identity == identity)
+            && self.was_eligible
+            && !self.state.is_transitioning()
     }
 
     pub(super) fn is_transitioning(&self) -> bool {

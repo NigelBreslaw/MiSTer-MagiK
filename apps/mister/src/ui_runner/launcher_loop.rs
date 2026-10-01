@@ -25,9 +25,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
-use crate::launcher_presentation::{
-    SelectionFeedbackTarget, arcade_cabinet_artwork, settings_cog_artwork,
-};
+use crate::launcher_presentation::{SelectionFeedbackTarget, settings_cog_backdrop_rgb565};
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
@@ -1154,7 +1152,13 @@ fn navigation_home_endpoint_is_live(
             (
                 Some(NavigationTransitionRoute::HomeToSettings),
                 "settings-cog"
-            ) | (Some(NavigationTransitionRoute::HomeToArcade), "arcade-card")
+            ) | (
+                Some(
+                    NavigationTransitionRoute::HomeToArcade
+                        | NavigationTransitionRoute::ConsolesToSystem
+                ),
+                "arcade-card" | "device-card"
+            )
         )
 }
 
@@ -8450,21 +8454,40 @@ pub(super) fn run_launcher_loop(
                                                             .geometry_for_reverse(edge)
                                                     }
                                                 };
-                                                geometry.is_some_and(|geometry| {
+                                                geometry.is_some_and(|mut geometry| {
                                                     let now_us = frame_now
                                                         .saturating_duration_since(start)
                                                         .as_micros()
                                                         .min(u64::MAX as u128)
                                                         as u64;
-                                                    let started = if edge
-                                                        == NavigationTransitionEdge::HomeToArcade
+                                                    let started = if matches!(
+                                                        edge,
+                                                        NavigationTransitionEdge::HomeToArcade
+                                                            | NavigationTransitionEdge::ConsolesToSystem
+                                                    ) && launcher_card_home.is_some()
                                                         && !layout.is_portrait()
                                                     {
-                                                        navigation_transition.begin_arcade_card(
+                                                        if direction == NavigationTransitionDirection::Forward {
+                                                            geometry.source_card = launcher_card_home
+                                                                .as_ref()
+                                                                .expect("checked card launcher")
+                                                                .selected_card_rect();
+                                                        }
+                                                        let kind = if let Some(id) = collection_id.as_deref() {
+                                                            nav.device_kind_for_collection(id)
+                                                        } else {
+                                                            nav.device_kind()
+                                                        };
+                                                        let hub = direction == NavigationTransitionDirection::Forward
+                                                            || nav.is_system_hub();
+                                                        navigation_transition.begin_device_card(
+                                                            edge,
                                                             direction,
                                                             geometry,
+                                                            crate::launcher_presentation::device_reveal_spec(kind, crt_layout, hub),
                                                             target.cached_565(),
-                                                            arcade_cabinet_artwork(),
+                                                            crate::launcher_presentation::system_device_rgb565(kind),
+                                                            crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
                                                             now_us,
                                                         )
                                                     } else if layout.is_portrait() {
@@ -8489,6 +8512,9 @@ pub(super) fn run_launcher_loop(
                                                             now_us,
                                                         )
                                                     };
+                                                    if started.as_ref().is_ok_and(|started|*started) && crt_layout && direction==NavigationTransitionDirection::Reverse {
+                                                        navigation_transition.update_device_reveal_image(preview.selected_backdrop_source().map(|source|mister_magik_framebuffer_scenes::device_card::RevealImage{pixels:source.words,width:source.source_width,height:source.source_height,stride:source.stride_pixels,reference_height:crt_backdrop.as_ref().map_or(layout.logical_h(),|b|b.reference_height()),integer_scale:crt_backdrop.as_ref().is_some_and(|b|b.reference_height()>b.physical_height())}));
+                                                    }
                                                     started.unwrap_or(false)
                                                 })
                                             });
@@ -11073,7 +11099,7 @@ pub(super) fn run_launcher_loop(
             let result = backdrop.compose(
                 crt_backdrop_eligible,
                 force_crt_backdrop_repaint,
-                arcade_turbo_active,
+                arcade_turbo_active || navigation_transition.is_active(),
                 nav.arcade.selected,
                 transition_id,
                 (preview_cache_state_before_composition == "exact")
@@ -11254,6 +11280,19 @@ pub(super) fn run_launcher_loop(
                         }
                     }
                 }
+                if destination_layers_ready
+                    && crt_layout
+                    && nav.screen == Screen::Arcade
+                    && navigation_transition
+                        .request()
+                        .is_some_and(|r| r.renderer_label() == "device-card")
+                {
+                    if let Some(source) = preview.selected_backdrop_source() {
+                        destination_layers_ready = crt_backdrop
+                            .as_ref()
+                            .is_some_and(|backdrop| backdrop.source_ready(&source, layout));
+                    }
+                }
                 if destination_layers_ready {
                     if let Some((waited, timed_out)) = status_quiesce {
                         navigation_transition.note_pending_status_quiesce(
@@ -11271,6 +11310,27 @@ pub(super) fn run_launcher_loop(
                         let _ =
                             layer_target.render_custom_home(window, session.render(), true, None);
                     }
+                    if crt_layout {
+                        navigation_transition.update_device_reveal_image(
+                            preview.selected_backdrop_source().map(|source| {
+                                mister_magik_framebuffer_scenes::device_card::RevealImage {
+                                    pixels: source.words,
+                                    width: source.source_width,
+                                    height: source.source_height,
+                                    stride: source.stride_pixels,
+                                    reference_height: crt_backdrop
+                                        .as_ref()
+                                        .map_or(layout.logical_h(), |b| b.reference_height()),
+                                    integer_scale: crt_backdrop.as_ref().is_some_and(|b| {
+                                        b.reference_height() > b.physical_height()
+                                    }),
+                                }
+                            }),
+                        );
+                    }
+                    navigation_transition.update_device_reveal_backdrop(
+                        crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
+                    );
                     // The first Slint destination raster can be expensive.
                     // Start animation at readiness, never at the stale frame
                     // start before that preparation: cold work is not motion.

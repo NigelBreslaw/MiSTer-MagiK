@@ -125,6 +125,72 @@ pub(crate) mod launcher_bench;
 #[allow(dead_code)]
 mod launcher_bridge;
 mod launcher_card_home;
+#[cfg(feature = "ui-preview")]
+pub struct NativeCardPreview {
+    session: launcher_card_home::LauncherCardHomeSession,
+    level: crate::launcher_home::CardLevelSnapshot,
+    scene: mister_magik_framebuffer_scenes::launcher::LauncherScene,
+}
+#[cfg(feature = "ui-preview")]
+impl NativeCardPreview {
+    pub fn new(
+        nav: &crate::launcher::LauncherNav,
+        catalog: &crate::arcade_catalog::ArcadeCatalog,
+        display: &crate::ui_display::UiDisplay,
+        layout: crate::ui_display::UiLayoutGeometry,
+    ) -> Result<Self, String> {
+        let scene = launcher_card_home::scene_for_display(display, layout);
+        let level = crate::launcher_home::CardLevelSnapshot::from_runtime(nav, catalog);
+        Ok(Self {
+            session: launcher_card_home::LauncherCardHomeSession::new(
+                scene,
+                level.clone(),
+                nav.selected,
+                "12:34",
+            )?,
+            scene,
+            level,
+        })
+    }
+    pub fn matches_display(
+        &self,
+        display: &crate::ui_display::UiDisplay,
+        layout: crate::ui_display::UiLayoutGeometry,
+    ) -> bool {
+        self.scene == launcher_card_home::scene_for_display(display, layout)
+    }
+    pub fn set_inactive(&mut self) {
+        self.session.set_inactive();
+    }
+    pub fn render(
+        &mut self,
+        nav: &crate::launcher::LauncherNav,
+        catalog: &crate::arcade_catalog::ArcadeCatalog,
+        now: std::time::Instant,
+        elapsed: std::time::Duration,
+    ) -> &[mister_magik_framebuffer_scenes::Rgb565Pixel] {
+        if !self.level.matches_runtime(nav, catalog) {
+            self.level = crate::launcher_home::CardLevelSnapshot::from_runtime(nav, catalog);
+        }
+        self.session.update(
+            self.scene,
+            &self.level,
+            nav.selected,
+            nav.home_card_visual_index(),
+            "12:34",
+            elapsed.as_millis().min(u128::from(u64::MAX)) as u64,
+            !nav.settings.reduce_motion,
+            nav.home_card_browse_prediction(now),
+        );
+        self.session.render()
+    }
+    pub fn selected_card_rect(
+        &self,
+    ) -> mister_magik_framebuffer_scenes::navigation::NavigationTransitionRect {
+        self.session.selected_card_rect()
+    }
+}
+
 mod launcher_catalog_publication_test;
 #[allow(dead_code)]
 mod launcher_catalog_session;

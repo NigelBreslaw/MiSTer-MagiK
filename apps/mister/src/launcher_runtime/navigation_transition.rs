@@ -603,6 +603,62 @@ impl NavigationTransitionRuntime {
         Ok(started)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_device_card(
+        &mut self,
+        edge: NavigationTransitionEdge,
+        direction: NavigationTransitionDirection,
+        geometry: NavigationTransitionGeometry,
+        spec: mister_magik_framebuffer_scenes::device_card::DeviceCardReveal,
+        source: &[Rgb565Pixel],
+        device: &'static [SharedRgb565Pixel],
+        backdrop: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        if !self.enabled || self.is_active() {
+            return Ok(false);
+        }
+        self.buffers.set_reveal_image(None);
+        self.buffers.set_arcade_cabinet_asset(device);
+        self.buffers
+            .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
+        let mut request = NavigationTransitionRequest::device_card(direction, edge, geometry, spec);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
+        // Start the reveal clock only after the composed destination and its
+        // artwork are ready, as with the Settings card capture contract.
+        let started = self.begin_request(request, source, now_us, false)?;
+        if started {
+            self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
+            if direction == NavigationTransitionDirection::Forward {
+                self.geometry_history.push((edge, geometry));
+            }
+        }
+        Ok(started)
+    }
+    pub fn update_device_reveal_image(
+        &mut self,
+        image: Option<mister_magik_framebuffer_scenes::device_card::RevealImage>,
+    ) {
+        if self
+            .request()
+            .is_some_and(|r| r.renderer_label() == "device-card")
+        {
+            self.buffers.set_reveal_image(image);
+        }
+    }
+
+    pub fn update_device_reveal_backdrop(&mut self, backdrop: &[Rgb565Pixel]) {
+        if self
+            .request()
+            .is_some_and(|r| r.renderer_label() == "device-card")
+        {
+            self.buffers
+                .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
+        }
+    }
+
     pub fn begin_system_panel(
         &mut self,
         crt: bool,
@@ -1376,6 +1432,66 @@ mod tests {
             NavigationTransitionDirection::Forward,
             geometry(),
         )
+    }
+
+    #[test]
+    fn device_reveal_clock_waits_for_the_composed_destination() {
+        let (w, h) = (640, 240);
+        let source = vec![Rgb565Pixel(0x1234); w * h];
+        let destination = vec![Rgb565Pixel(0x5678); w * h];
+        let mut runtime = NavigationTransitionRuntime::new(w, h, true);
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 38,
+                y: 54,
+                width: 160,
+                height: 112,
+            },
+            ..Default::default()
+        };
+        assert!(
+            runtime
+                .begin_device_card(
+                    NavigationTransitionEdge::ConsolesToSystem,
+                    NavigationTransitionDirection::Forward,
+                    geometry,
+                    mister_magik_framebuffer_scenes::device_card::DeviceCardReveal::cabinet(true),
+                    &source,
+                    &[],
+                    &[],
+                    0
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            runtime.tick(200_000).phase,
+            NavigationTransitionPhase::Capture
+        );
+        assert!(runtime.render().unwrap() == source);
+        runtime.update_device_reveal_image(Some(
+            mister_magik_framebuffer_scenes::device_card::RevealImage {
+                pixels: vec![0xffff; 320 * 240].into(),
+                width: 320,
+                height: 240,
+                stride: 320,
+                reference_height: 480,
+                integer_scale: true,
+            },
+        ));
+        runtime.capture_destination(&destination, 200_000).unwrap();
+        assert_eq!(runtime.tick(200_000).progress_q16, 0);
+        assert!(runtime.render().unwrap() == source);
+        runtime.tick(700_000);
+        assert_ne!(
+            runtime.render().unwrap()[120 * w + 320].0,
+            0,
+            "prepared screenshot must be available inside the growing window"
+        );
+        assert_eq!(
+            runtime.tick(1_100_000).phase,
+            NavigationTransitionPhase::Settled
+        );
+        assert!(runtime.render().unwrap() == destination);
     }
 
     #[test]

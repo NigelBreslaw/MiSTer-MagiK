@@ -24,6 +24,17 @@ pub struct CardSlot {
     pose: crate::launcher_flip::Pose,
 }
 
+impl CardSlot {
+    pub fn rect(self) -> crate::navigation::NavigationTransitionRect {
+        crate::navigation::NavigationTransitionRect {
+            x: (self.pose.x >> 16).max(0) as u16,
+            y: (self.pose.top >> 16).max(0) as u16,
+            width: (self.pose.width >> 16) as u16,
+            height: (self.pose.height >> 16) as u16,
+        }
+    }
+}
+
 pub const LOGICAL_WIDTH: usize = 960;
 pub const LOGICAL_HEIGHT: usize = 540;
 
