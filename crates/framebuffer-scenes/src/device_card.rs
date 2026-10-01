@@ -633,6 +633,35 @@ mod tests {
     }
 
     #[test]
+    fn hdmi_reveal_includes_the_caption_below_a_long_title_before_handoff() {
+        let (w, h) = (960, 540);
+        let source = vec![Rgb565Pixel(0); w * h];
+        let mut page = source.clone();
+        page[288 * w + 30] = Rgb565Pixel(0xffff);
+        let device = vec![Rgb565Pixel(0); 483 * 519];
+        let mut out = source.clone();
+        assert!(render_into(
+            w,
+            h,
+            &source,
+            &page,
+            &device,
+            &[],
+            None,
+            NavigationTransitionRect {
+                x: 292,
+                y: 158,
+                width: 180,
+                height: 252
+            },
+            DeviceCardReveal::cabinet(false),
+            980,
+            &mut out
+        ));
+        assert_eq!(out[288 * w + 30], page[288 * w + 30]);
+    }
+
+    #[test]
     fn hdmi_black_screen_pixels_occlude_the_fading_card() {
         let (w, h) = (960, 540);
         let source = vec![Rgb565Pixel(0xffff); w * h];

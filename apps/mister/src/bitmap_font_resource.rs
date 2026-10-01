@@ -34,6 +34,10 @@ static JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px
 static JERSEY_25_HUB_48_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-48px.mmbf");
 #[cfg(not(feature = "asset-tools"))]
 static JERSEY_25_HUB_64_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-64px.mmbf");
+#[cfg(not(feature = "asset-tools"))]
+static JERSEY_25_HUB_COUNT_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-52px.mmbf");
+#[cfg(feature = "asset-tools")]
+static JERSEY_25_HUB_COUNT_RESOURCE: &[u8] = &[];
 #[cfg(feature = "asset-tools")]
 static JERSEY_25_HUB_48_RESOURCE: &[u8] = &[];
 #[cfg(feature = "asset-tools")]
@@ -552,6 +556,8 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
                 decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font"),
                 decode_resource(JERSEY_25_HUB_48_RESOURCE).expect("valid 48px Jersey hub font"),
                 decode_resource(JERSEY_25_HUB_64_RESOURCE).expect("valid 64px Jersey hub font"),
+                decode_resource(JERSEY_25_HUB_COUNT_RESOURCE)
+                    .expect("valid 52px Jersey hub count font"),
             ]),
             leak_font_family(vec![
                 decode_resource(SPLEEN_5X8_NATIVE_RESOURCE)
@@ -1086,7 +1092,7 @@ pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(any(test, feature = "asset-tools"))]
-pub fn generate_jersey_25_hub(font_bytes: &[u8]) -> Result<[(u16, Vec<u8>); 2], String> {
+pub fn generate_jersey_25_hub(font_bytes: &[u8]) -> Result<[(u16, Vec<u8>); 3], String> {
     Ok([
         (
             48,
@@ -1094,6 +1100,16 @@ pub fn generate_jersey_25_hub(font_bytes: &[u8]) -> Result<[(u16, Vec<u8>); 2], 
                 font_bytes,
                 GeneratorSpec {
                     pixel_size: 48,
+                    ..JERSEY_25_SPEC
+                },
+            )?,
+        ),
+        (
+            52,
+            generate_resource(
+                font_bytes,
+                GeneratorSpec {
+                    pixel_size: 52,
                     ..JERSEY_25_SPEC
                 },
             )?,
@@ -1292,6 +1308,7 @@ mod tests {
             .into_iter()
             .zip([
                 (JERSEY_25_HUB_48_RESOURCE, 29),
+                (JERSEY_25_HUB_COUNT_RESOURCE, 32),
                 (JERSEY_25_HUB_64_RESOURCE, 39),
             ])
         {

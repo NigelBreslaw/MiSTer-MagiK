@@ -996,7 +996,7 @@ settled pose, and another tap within 32 ms. Ordinary nested taps during an activ
 step remain discarded, as in the prototype. Offline HDMI/CRT trick frames at
 600, 750 and 900 ms retain readable, correctly oriented faces.
 
-Relevant host suites passed: 172 portable rendering tests (one benchmark
+Relevant host suites passed: 173 portable rendering tests (one benchmark
 ignored), 1,434 UI library tests and 1,440 preview library tests (two tests
 ignored in each), plus 42 preview binary tests. Native title resources are
 regenerated and checked against their source; the font-component contract and
@@ -1010,3 +1010,18 @@ exercise Consoles → maker → system hub → list, Select both ways, section e
 and Back, with authoritative FPGA-latched captures. Physical gamepad A and
 frame-rate qualification remain separate from injected development input.
 Media / Controller ports / Core fact rows remain deferred as agreed.
+
+
+The final native review also covers the three-line name's count/caption region
+through y=302 in HDMI reveal/panel bands, so it is already visible before the
+handoff. Tile counts use the prototype's own 52-pixel source font resource,
+rather than implicitly falling back to the nearest registered title font.
+
+Device checks exposed root-only accessibility labels on nested cards. The
+transparent card mirror now exposes the current menu labels for nested levels,
+while preserving the root's six identities. Dev Tab emits a Select pulse through
+the existing bounded UI input queue. This enables real hub/list and section
+journeys without treating injected UI events as physical gamepad evidence.
+ARM CI's newer compiler deprecated fetch_update in hidden slot reservation;
+fetch_or reserves the same bit with AcqRel ordering and preserves duplicate-slot
+rejection and release-on-drop, without requiring a newer Rust API.

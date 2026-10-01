@@ -16,6 +16,10 @@ Slint pixel size: 64
 Observed uppercase cap height: 39 framebuffer pixels
 Resource SHA-256: d5e9120fd1061ec7a68e6d2659c664e39a26677d295b1fc4adde987aba57b278
 
+Slint pixel size: 52
+Observed uppercase cap height: 32 framebuffer pixels
+Resource SHA-256: 0f43648352e85d9eca14a89e8fd4ac8c604d32bf72aa6f31efe842f58a6e2696
+
 Regenerate only these public resources from the repository root with:
 
     scripts/cargo run --manifest-path apps/mister/Cargo.toml --no-default-features --features asset-tools --example generate-bitmap-fonts -- apps/mister/ui/fonts private/magik-assets apps/mister/assets/fonts --jersey25-hub-only
