@@ -822,7 +822,7 @@ impl PreparedLauncher {
                             layout.card_h,
                         )
                     } else {
-                        crate::launcher_flip::Scratch::new()
+                        crate::launcher_flip::Scratch::strip()
                     }
                 })
                 .collect(),

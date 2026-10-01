@@ -25,6 +25,7 @@ impl Scratch {
             + self.blend.capacity() * 4
             + self.reflection_pixels.capacity() * 2
     }
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_width(960)
     }
