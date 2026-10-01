@@ -49,6 +49,7 @@ CHECK_SCENARIOS = (
     "motion",
     "motion-rollover",
     "motion-held",
+    "motion-taps-then-hold",
     "motion-fallback",
     "idle",
     "journeys",
@@ -430,8 +431,17 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     if arguments.scenario:
         profile_suffix = "_profile" if arguments.profile else ""
         selection += f"::test_{arguments.scenario.replace('-', '_')}{profile_suffix}"
+    selections = [selection]
+    if (
+        arguments.app == "magik"
+        and arguments.scenario == "motion"
+        and not arguments.profile
+    ):
+        # Taps-then-hold owns a fresh test lease; run it before the shared
+        # session opens so the two application sessions never overlap.
+        selections.insert(0, f"{scenario_file}::test_motion_taps_then_hold")
     options = [
-        selection,
+        *selections,
         "-q",
         "--maxfail=1",
         "-p",

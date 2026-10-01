@@ -325,3 +325,81 @@ def test_held_carousel_requests_a_bounded_hold_and_always_releases(
     assert request[1] == ("measure", {"launcher_hold": "release"})
     assert request[0][1]["duration_ms"] == 8000
     assert sleeps == [1, 10.4]
+
+
+def test_taps_then_hold_is_device_timed_and_always_releases(monkeypatch):
+    from types import SimpleNamespace
+
+    request = []
+    sleeps = []
+    keys = []
+    evidence = {
+        **window(),
+        "elapsed_ms": 12_500,
+        "end_ms": 14_500,
+        "presentations": 750,
+        "forced_clock_changes": 0,
+    }
+    replies = iter([{"window": None}, {"sha256": "app", "window": evidence}])
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=lambda: next(replies),
+        _successful=lambda op, fields: request.append((op, fields)),
+    )
+    application = SimpleNamespace(first_window=SimpleNamespace())
+    monkeypatch.setattr(actions, "_press_key", lambda _, key: keys.append(key))
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+
+    result = actions.launcher_motion(
+        application, agent, taps_then_hold=True, sleep=sleeps.append
+    )
+
+    # Only the Home key is sent from the host; taps and the hold are device-timed.
+    assert keys == [""]
+    assert request[0][1]["launcher_sequence"] == {
+        "taps": 6,
+        "tap_interval_ms": 250,
+        "hold_ms": 10_000,
+    }
+    assert request[0][1]["launcher_hold"] is False
+    assert request[0][1]["duration_ms"] == 12_500
+    assert request[1] == ("measure", {"launcher_hold": "release"})
+    assert sleeps == [1, 14.9]
+    assert result["workload"] == "launcher-card-motion-taps-then-hold"
+    assert result["input_events"] == 7
+    with pytest.raises(ValueError):
+        actions.launcher_motion(
+            application, agent, taps_then_hold=True, instrumented=True
+        )
+
+
+def test_motion_waits_boundedly_for_a_window_that_started_late(monkeypatch):
+    from types import SimpleNamespace
+
+    evidence = {
+        **window(),
+        "elapsed_ms": 12_500,
+        "end_ms": 14_500,
+        "presentations": 750,
+        "forced_clock_changes": 0,
+    }
+    replies = iter(
+        [{"window": None}, {"sha256": "app", "window": None}]
+        + [{"sha256": "app", "window": evidence}]
+    )
+    sleeps = []
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=lambda: next(replies),
+        _successful=lambda *_: None,
+    )
+    monkeypatch.setattr(actions, "_press_key", lambda *_: None)
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+    result = actions.launcher_motion(
+        SimpleNamespace(first_window=SimpleNamespace()),
+        agent,
+        taps_then_hold=True,
+        sleep=sleeps.append,
+    )
+    assert result["elapsed_ms"] == 12_500
+    assert sleeps == [1, 14.9, 0.25]

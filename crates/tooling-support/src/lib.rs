@@ -12,6 +12,37 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Measurement windows start after this device-clock warmup.
+const MEASUREMENT_WARMUP_MS: u64 = 2_000;
+
+/// Right taps, then a right hold, timed from the measurement window start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CarouselSequence {
+    taps: u32,
+    tap_interval_ms: u64,
+    hold_ms: u64,
+}
+
+impl CarouselSequence {
+    fn from_request(value: &serde_json::Value) -> Option<Self> {
+        let taps = value["taps"].as_u64().filter(|taps| (1..=20).contains(taps))?;
+        Some(Self {
+            taps: taps as u32,
+            tap_interval_ms: value["tap_interval_ms"]
+                .as_u64()
+                .filter(|ms| (100..=2_000).contains(ms))?,
+            hold_ms: value["hold_ms"]
+                .as_u64()
+                .filter(|ms| (1_000..=20_000).contains(ms))?,
+        })
+    }
+
+    fn hold_window_ms(self) -> (u64, u64) {
+        let start = u64::from(self.taps) * self.tap_interval_ms;
+        (start, start + self.hold_ms)
+    }
+}
+
 pub struct Session {
     pub metrics: PresentationMetrics,
     start: Instant,
@@ -27,6 +58,8 @@ pub struct Session {
     force_card_fallback: bool,
     carousel_hold_requested: bool,
     carousel_hold_active: bool,
+    carousel_sequence: Option<CarouselSequence>,
+    carousel_taps_sent: u32,
 }
 impl Session {
     pub fn from_environment() -> Option<Self> {
@@ -46,6 +79,8 @@ impl Session {
             force_card_fallback: false,
             carousel_hold_requested: false,
             carousel_hold_active: false,
+            carousel_sequence: None,
+            carousel_taps_sent: 0,
         })
     }
     pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
@@ -92,7 +127,12 @@ impl Session {
     /// Emit one logical press, then release on completion or explicit cancellation.
     /// A failed host cannot extend the hold beyond this bounded device window.
     pub fn carousel_hold_change(&mut self) -> Option<bool> {
-        let requested = self.carousel_hold_requested
+        let sequence_holding = self.carousel_sequence.is_some_and(|sequence| {
+            let (start, end) = sequence.hold_window_ms();
+            self.window_elapsed_ms()
+                .is_some_and(|elapsed| (start..end).contains(&elapsed))
+        });
+        let requested = (self.carousel_hold_requested || sequence_holding)
             && self.metrics.motion_started_ms.is_some()
             && self.metrics.window.is_none();
         if requested == self.carousel_hold_active {
@@ -100,6 +140,34 @@ impl Session {
         }
         self.carousel_hold_active = requested;
         Some(requested)
+    }
+
+    /// One logical tap of a requested sequence is due. Taps start with the
+    /// measurement window and never run after it completes.
+    pub fn carousel_tap_due(&mut self) -> bool {
+        let Some(sequence) = self.carousel_sequence else {
+            return false;
+        };
+        let due = self.metrics.window.is_none()
+            && self.carousel_taps_sent < sequence.taps
+            && self.window_elapsed_ms().is_some_and(|elapsed| {
+                elapsed >= u64::from(self.carousel_taps_sent) * sequence.tap_interval_ms
+            });
+        self.carousel_taps_sent += u32::from(due);
+        due
+    }
+
+    /// A requested sequence's window is still open. The launcher must keep
+    /// iterating until it completes: an idle loop sleeps until input arrives,
+    /// so it would otherwise stall the taps or the settle after release.
+    pub fn carousel_sequence_pending(&self) -> bool {
+        self.carousel_sequence.is_some() && self.metrics.window.is_none()
+    }
+
+    /// Device time since the measurement window starts, once the warmup ends.
+    fn window_elapsed_ms(&self) -> Option<u64> {
+        let window_start = self.metrics.motion_started_ms? + MEASUREMENT_WARMUP_MS;
+        (self.start.elapsed().as_millis() as u64).checked_sub(window_start)
     }
 
     /// Device-clock warmup and measurement boundaries, independent of host polling.
@@ -113,9 +181,13 @@ impl Session {
                         .unwrap_or_default();
                 if value["launcher_hold"] == "release" {
                     self.carousel_hold_requested = false;
+                    self.carousel_sequence = None;
                 } else {
                     self.carousel_hold_requested =
                         value["launcher_hold"].as_bool().unwrap_or(false);
+                    self.carousel_sequence =
+                        CarouselSequence::from_request(&value["launcher_sequence"]);
+                    self.carousel_taps_sent = 0;
                     self.clock_mode = match value["launcher_clock"].as_str() {
                         Some("fixed") => Some(false),
                         Some("rollover") => Some(true),
@@ -144,7 +216,7 @@ impl Session {
                 && self
                     .metrics
                     .motion_started_ms
-                    .is_some_and(|start| now - start >= 2000)
+                    .is_some_and(|start| now - start >= MEASUREMENT_WARMUP_MS)
             {
                 self.metrics.window_start = Some((now, self.metrics.counters.clone()));
                 self.metrics.card_prepare_max_us = 0;
@@ -218,6 +290,8 @@ mod tests {
             force_card_fallback: false,
             carousel_hold_requested: false,
             carousel_hold_active: false,
+            carousel_sequence: None,
+            carousel_taps_sent: 0,
         };
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());
@@ -285,6 +359,82 @@ mod tests {
         session.tick(16, 8).unwrap();
         assert_eq!(session.carousel_hold_change(), Some(false));
         assert_eq!(session.metrics.motion_started_ms, started);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn carousel_sequence_taps_then_holds_inside_the_measurement_window() {
+        let root = std::env::temp_dir().join(format!("magik-sequence-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = Session {
+            metrics: PresentationMetrics::default(),
+            start: Instant::now() - Duration::from_secs(60),
+            root: root.clone(),
+            previews: PreviewProducer::new(),
+            profile: None,
+            last_write: Instant::now(),
+            last_request: Instant::now() - Duration::from_secs(1),
+            ready: false,
+            clock_mode: None,
+            measurement_duration_ms: None,
+            clock_advanced: false,
+            force_card_fallback: false,
+            carousel_hold_requested: false,
+            carousel_hold_active: false,
+            carousel_sequence: None,
+            carousel_taps_sent: 0,
+        };
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"duration_ms":12000,"launcher_sequence":
+                {"taps":6,"tap_interval_ms":250,"hold_ms":10000}}"#,
+        )
+        .unwrap();
+        session.tick(16, 8).unwrap();
+        assert_eq!(session.measurement_duration_ms, Some(12_000));
+        // Warmup: neither taps nor the hold start before the window, but the
+        // launcher must keep iterating so an idle loop cannot stall them.
+        assert!(session.carousel_sequence_pending());
+        assert!(!session.carousel_tap_due());
+        assert_eq!(session.carousel_hold_change(), None);
+        let mut taps = 0;
+        let mut hold_started_at = None;
+        let mut hold_ended_at = None;
+        for ms in (0..14_000).step_by(10) {
+            session.metrics.motion_started_ms = Some(
+                (session.start.elapsed().as_millis() as u64).saturating_sub(MEASUREMENT_WARMUP_MS + ms),
+            );
+            taps += u32::from(session.carousel_tap_due());
+            match session.carousel_hold_change() {
+                Some(true) => hold_started_at = Some(ms),
+                Some(false) => hold_ended_at = Some(ms),
+                None => {}
+            }
+            if ms < 1_500 {
+                assert_eq!(taps, (ms / 250 + 1) as u32, "at {ms} ms");
+            }
+        }
+        assert_eq!(taps, 6);
+        assert!(
+            session.carousel_sequence_pending(),
+            "the settle after release stays awake until the window completes"
+        );
+        session.metrics.window = Some(serde_json::json!({}));
+        assert!(!session.carousel_sequence_pending());
+        session.metrics.window = None;
+        assert_eq!(hold_started_at, Some(1_500));
+        assert_eq!(hold_ended_at, Some(11_500));
+
+        session.begin();
+        session.carousel_sequence = None;
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"launcher_sequence":{"taps":0,"tap_interval_ms":250,"hold_ms":10000}}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert!(session.carousel_sequence.is_none(), "out-of-range sequences are ignored");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

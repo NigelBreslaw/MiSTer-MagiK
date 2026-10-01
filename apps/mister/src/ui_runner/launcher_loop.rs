@@ -7644,6 +7644,31 @@ pub(super) fn run_launcher_loop(
                     incoming_input_events.push_back(released);
                 }
             }
+            // A requested sequence taps like the development keyboard bridge:
+            // one press/release pulse through the same router as a held press.
+            #[cfg(feature = "tooling")]
+            if tooling
+                .as_mut()
+                .is_some_and(|session| session.carousel_tap_due())
+            {
+                ui_action_sequence = ui_action_sequence.saturating_add(1);
+                let captured_at_us = frame_now
+                    .saturating_duration_since(start)
+                    .as_micros()
+                    .min(u64::MAX as u128) as u64;
+                for mut event in
+                    LauncherUiAction::Navigate(slint_ui::launcher::NavigationDirection::Right)
+                        .input_pulse(ui_action_sequence, captured_at_us)
+                        .unwrap()
+                {
+                    event.source = crate::input_event::InputSourceId {
+                        kind: crate::input_event::InputSourceKind::Automation,
+                        instance: 0x43415244,
+                    };
+                    event.source_epoch = crate::input_event::SourceEpoch(1);
+                    incoming_input_events.push_back(event);
+                }
+            }
             for event in incoming_input_events.iter().copied() {
                 gui_profiling.observe_route_action(screen_label(nav.screen), event, frame_now);
                 if nav.screen == Screen::Arcade
@@ -9763,9 +9788,17 @@ pub(super) fn run_launcher_loop(
         wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, launching);
         wake_reasons.insert_if(LauncherWakeReasons::SETUP_ACTIVE, setup_active);
         wake_reasons.insert_if(LauncherWakeReasons::BENCHMARK_ACTIVE, launcher_bench_active);
+        #[cfg(feature = "tooling")]
+        let tooling_sequence_pending = tooling
+            .as_ref()
+            .is_some_and(mister_magik_tooling_support::Session::carousel_sequence_pending);
+        #[cfg(not(feature = "tooling"))]
+        let tooling_sequence_pending = false;
         wake_reasons.insert_if(
             LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
-            launcher_input_script.active() || launcher_automation.active(),
+            launcher_input_script.active()
+                || launcher_automation.active()
+                || tooling_sequence_pending,
         );
         wake_reasons.insert_if(
             LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
@@ -12635,7 +12668,10 @@ pub(super) fn run_launcher_loop(
                                     Ok(delta) => {
                                         metrics.counters.owned_vblanks += u64::from(delta.owned_vblank_delta);
                                         metrics.counters.presented_vblanks += u64::from(delta.presented_vblank_delta);
-                                        let dropped = if animation_active || was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
+                                        // Repeats since an idle baseline are idle reuse, not drops:
+                                        // the first frame after rest would otherwise count the
+                                        // whole idle gap before the input as dropped frames.
+                                        let dropped = if was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
                                         metrics.counters.drops += dropped;
                                         if dropped != 0 {
                                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
