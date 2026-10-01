@@ -7427,6 +7427,42 @@ mod tests {
     }
 
     #[test]
+    fn reduce_motion_settles_nested_steps_on_the_input_frame() {
+        use mister_magik_framebuffer_scenes::launcher_navigation::BrowsePhase;
+        let catalog = arcade_catalog(
+            Vec::new(),
+            (0..4)
+                .map(|i| arcade_system(format!("system-{i}"), 1))
+                .collect(),
+        );
+        for crt in [false, true] {
+            let mut nav = LauncherNav::for_crt_layout(crt);
+            nav.settings.reduce_motion = true;
+            nav.sync_launcher_taxonomy(&catalog);
+            assert!(nav.open_menu("menu:consoles:other"));
+            let now = Instant::now();
+            let right = pad_with(|pad| pad.dpad_right = true);
+            nav.handle_input(&right, now, &catalog);
+            assert_eq!(nav.selected, 1);
+            assert_eq!(nav.home_card_visual_index(), 1.0);
+            assert_eq!(
+                nav.home_card_browse_prediction(now).unwrap().phase,
+                BrowsePhase::Settled
+            );
+            release(&mut nav, &catalog, now, 16);
+            nav.handle_input(&right, now + Duration::from_millis(32), &catalog);
+            assert_eq!(nav.selected, 2);
+            assert_eq!(nav.home_card_visual_index(), 2.0);
+            assert_eq!(
+                nav.home_card_browse_prediction(now + Duration::from_millis(32))
+                    .unwrap()
+                    .phase,
+                BrowsePhase::Settled
+            );
+        }
+    }
+
+    #[test]
     fn small_nested_levels_cycle_while_held() {
         let catalog = arcade_catalog(
             Vec::new(),

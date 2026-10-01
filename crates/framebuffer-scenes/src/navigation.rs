@@ -40,6 +40,7 @@ pub enum NavigationTransitionEdge {
     HomeToConsoles,
     HomeToArcade,
     ConsolesToSystem,
+    SystemPanel,
 }
 
 impl NavigationTransitionEdge {
@@ -56,6 +57,7 @@ impl NavigationTransitionEdge {
             Self::HomeToConsoles => "home-consoles",
             Self::HomeToArcade => "home-arcade",
             Self::ConsolesToSystem => "consoles-system",
+            Self::SystemPanel => "system-panel",
         }
     }
 
@@ -65,6 +67,7 @@ impl NavigationTransitionEdge {
             Self::HomeToConsoles,
             Self::HomeToArcade,
             Self::ConsolesToSystem,
+            Self::SystemPanel,
         ]
         .into_iter()
         .find(|edge| edge.label() == normalized)
@@ -695,6 +698,7 @@ impl NavigationTransitionRequest {
     pub fn system_panel(crt: bool, to_list: bool) -> Self {
         Self {
             renderer: NavigationTransitionRenderer::SystemPanel { crt },
+            edge: NavigationTransitionEdge::SystemPanel,
             direction: if to_list {
                 NavigationTransitionDirection::Forward
             } else {

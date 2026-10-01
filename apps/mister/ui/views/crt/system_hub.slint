@@ -27,8 +27,7 @@ export component SystemHubScreen inherits Rectangle {
         property <bool> focused: i == (NavigationView.system-hub-section == SystemHubSection.games ? 0 : NavigationView.system-hub-section == SystemHubSection.recent ? 1 : 2);
         property <color> accent: NavigationView.system-device == DeviceKind.monitor ? #e6c23a
             : NavigationView.system-device == DeviceKind.handheld ? #35c48f : NavigationView.system-device == DeviceKind.cabinet ? #e7695a : #5a71e7;
-        background: self.focused ? (NavigationView.system-device == DeviceKind.monitor ? #3a310f
-            : NavigationView.system-device == DeviceKind.handheld ? #0d3124 : NavigationView.system-device == DeviceKind.cabinet ? #3a1a16 : #171d3a) : transparent;
+        background: self.focused ? @linear-gradient(90deg, self.accent.with-alpha(0.6) 0%, self.accent.with-alpha(0.24) 60%, transparent 100%) : transparent;
         if self.focused : Rectangle { x: 0px; y: 0px; width: 2px; height: parent.height; background: parent.accent; }
         accessible-role: list-item;
         accessible-label: i == 0 ? "GAMES" : i == 1 ? "RECENT" : "FAVOURITES";
@@ -36,12 +35,17 @@ export component SystemHubScreen inherits Rectangle {
         CrtLauncherText {
             x: 8px; y: CrtPageMetrics.len-y(2);
             text: i == 0 ? "GAMES" : i == 1 ? "RECENT" : "FAVOURITES";
-            text-color: PageTheme.cream;
+            text-color: parent.focused ? parent.accent : PageTheme.cream;
         }
         CrtLauncherText {
             x: parent.width - self.preferred-width - 24px; y: CrtPageMetrics.len-y(2);
-            text: i == 0 ? NavigationView.system-hub-games-count : i == 1 ? NavigationView.system-hub-recent-count : NavigationView.system-hub-favourites-count;
-            text-color: PageTheme.muted;
+            text: i == 0 ? NavigationView.system-hub-games-count + " TITLES" : i == 1 ? NavigationView.system-hub-recent-count + " PLAYED" : NavigationView.system-hub-favourites-count + " SAVED";
+            text-color: parent.focused ? PageTheme.cream : PageTheme.muted;
+        }
+        CrtLauncherText {
+            x: parent.width - self.preferred-width; y: CrtPageMetrics.len-y(2);
+            text: ">";
+            text-color: parent.focused ? parent.accent : PageTheme.muted;
         }
     }
 }

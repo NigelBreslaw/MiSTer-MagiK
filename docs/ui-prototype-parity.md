@@ -952,3 +952,61 @@ session 24, transition 33, screensaver 7 and preview 42 tests pass. Portable and
 feature-enabled UI/preview Clippy pass. The feature-gated native loop is checked
 through Cargo because the default analyzer configuration does not link it.
 Temporary comparison harnesses, renders and logs stay in ignored outputs.
+
+
+## Review follow-up: visual continuity and native typography
+
+The October 1 review is implemented without changing the root card spring,
+projection, artwork, or shared flip path.
+
+- Computer and handheld collection icons use the prototype's 16×10 body/glass
+  masks. The gamepad mask remains unchanged. This is a separate artwork commit.
+- Hub titles use registered Jersey bitmap resources at the prototype's 48/64
+  source sizes. They have measured 29/39 pixel capital heights. Previously only
+  the 41-pixel resource existed, so requesting a larger Slint size still selected
+  the small bitmap. The count follows the measured title height: SUPER NINTENDO
+  occupies one line; NINTENDO ENTERTAINMENT SYSTEM occupies three at 48 source
+  pixels, without clipping or overlapping the tiles. The earlier px25 fallback
+  and nominal two-line estimate above are superseded by native raster checks.
+- CRT Games / Recent / Favourites show TITLES / PLAYED / SAVED and chevrons.
+  Focus uses the collection accent and a native gradient applied over the
+  screenshot after backdrop composition, preserving glyphs. The reveal and
+  panel renderer share hub band bounds matching the actual native rows,
+  including the bottom of the Favourites highlight.
+- Select and section transitions have their own system-panel edge and route.
+  HDMI's return to the hub ends at 556 ms, when its final band finishes.
+- Black pixels inside the standardized device screen opening are opaque during
+  the zoom; transparent pixels outside the opening retain the asset silhouette.
+
+The late CRT inspection found a native-preview snapshot issue: a hub whose list
+was loading skipped backdrop composition, although its reveal drew a screenshot.
+The settled snapshot could therefore lose that image. The preview now composes
+the hub backdrop independently of list readiness, matching the production path
+that already gates capture on prepared backdrop readiness. Letterbox pixels
+during the reveal use the prepared backdrop colour. The settled production
+backdrop is uniformly 40% brightness, rather than the prototype's gradient
+scrim; this styling difference remains. The hypothesized switch from 40% to a
+bright right side is therefore not the production brightness model.
+
+Native 640×240 captures at 850, 883 and 900 ms match the settled page exactly
+after the snapshot fix. Portable tests also cover the 899→900 ms boundary and
+the final Favourites fill. The existing 460 ms nested step already observes
+reduce motion; a new HDMI/CRT input-sequence test verifies immediate selection,
+settled pose, and another tap within 32 ms. Ordinary nested taps during an active
+step remain discarded, as in the prototype. Offline HDMI/CRT trick frames at
+600, 750 and 900 ms retain readable, correctly oriented faces.
+
+Relevant host suites passed: 172 portable rendering tests (one benchmark
+ignored), 1,434 UI library tests and 1,440 preview library tests (two tests
+ignored in each), plus 42 preview binary tests. Native title resources are
+regenerated and checked against their source; the font-component contract and
+test-inclusive Clippy cover the changes. Captures and logs are ignored under
+outputs/ui-prototype-parity/review-followup.
+
+The GitHub launcher-visual-matrix job is explicitly disabled in rust-arm.yml
+while its baselines are broken. A passing normal CI run does not supply that
+visual qualification. Device validation must identify the reviewed artifact and
+exercise Consoles → maker → system hub → list, Select both ways, section entry,
+and Back, with authoritative FPGA-latched captures. Physical gamepad A and
+frame-rate qualification remain separate from injected development input.
+Media / Controller ports / Core fact rows remain deferred as agreed.

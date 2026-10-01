@@ -34,6 +34,7 @@ pub enum NavigationTransitionRoute {
     HomeToConsoles,
     HomeToArcade,
     ConsolesToSystem,
+    SystemPanel,
     HomeToSettings,
     SettingsToAbout,
     AboutToLicenses,
@@ -57,6 +58,7 @@ impl NavigationTransitionRoute {
             NavigationTransitionEdge::HomeToConsoles => Self::HomeToConsoles,
             NavigationTransitionEdge::HomeToArcade => Self::HomeToArcade,
             NavigationTransitionEdge::ConsolesToSystem => Self::ConsolesToSystem,
+            NavigationTransitionEdge::SystemPanel => Self::SystemPanel,
         }
     }
 
@@ -65,6 +67,7 @@ impl NavigationTransitionRoute {
             Self::HomeToConsoles => "home-consoles",
             Self::HomeToArcade => "home-arcade",
             Self::ConsolesToSystem => "consoles-system",
+            Self::SystemPanel => "system-panel",
             Self::HomeToSettings => "home-settings",
             Self::SettingsToAbout => "settings-about",
             Self::AboutToLicenses => "about-licenses",
@@ -666,12 +669,16 @@ impl NavigationTransitionRuntime {
         }
         self.buffers
             .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
-        self.begin_request(
+        let started = self.begin_request(
             NavigationTransitionRequest::system_panel(crt, to_list),
             source,
             now_us,
             true,
-        )
+        )?;
+        if started {
+            self.route = Some(NavigationTransitionRoute::SystemPanel);
+        }
+        Ok(started)
     }
 
     /// Home <-> Arcade launcher-card reveal in the current logical raster.
@@ -2047,6 +2054,31 @@ mod tests {
             Some(NavigationTransitionEndpoint::Source)
         );
         assert_eq!(cancelled.render().unwrap(), source);
+    }
+
+    #[test]
+    fn system_panel_reports_its_own_route_and_edge_in_both_directions() {
+        let source = vec![Rgb565Pixel(0); 960 * 540];
+        for to_list in [true, false] {
+            let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+            assert!(
+                runtime
+                    .begin_system_panel(false, to_list, &source, &[], 0)
+                    .unwrap()
+            );
+            assert_eq!(
+                runtime.route(),
+                Some(NavigationTransitionRoute::SystemPanel)
+            );
+            assert_eq!(
+                runtime.request().unwrap().edge,
+                NavigationTransitionEdge::SystemPanel
+            );
+            assert_eq!(
+                runtime.request().unwrap().duration_us,
+                if to_list { 426_000 } else { 556_000 }
+            );
+        }
     }
 
     #[test]

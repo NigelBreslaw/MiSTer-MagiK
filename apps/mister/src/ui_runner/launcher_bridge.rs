@@ -1637,6 +1637,70 @@ mod tests {
     }
 
     #[test]
+    fn long_hub_titles_keep_native_size_and_clear_the_tiles() {
+        use slint::ComponentHandle;
+        use slint::platform::software_renderer::Rgb565Pixel;
+        let window = install_isolated_test_platform();
+        window.set_size(slint::PhysicalSize::new(960, 540));
+        let app = slint_ui::launcher::Launcher::new().expect("launcher");
+        let navigation = app.global::<slint_ui::launcher::NavigationView>();
+        navigation.set_screen(slint_ui::launcher::LauncherScreen::Arcade);
+        navigation.set_system_page_mode(slint_ui::launcher::SystemPageMode::Hub);
+        navigation.set_system_title_wraps(true);
+        app.show().expect("show launcher");
+        let cream = Rgb565Pixel::from_rgb(0xee, 0xe8, 0xd5);
+        for (name, title_lines) in [("SUPER NINTENDO", 1), ("NINTENDO ENTERTAINMENT SYSTEM", 3)] {
+            navigation.set_system_title(name.into());
+            let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+            window.request_redraw();
+            assert!(
+                window.draw_full_frame_resetting_cache_if_needed(|renderer| {
+                    renderer.render(&mut pixels, 960);
+                })
+            );
+            let mut runs = Vec::new();
+            let mut previous = false;
+            for y in 126..302 {
+                let ink = pixels[y * 960 + 28..y * 960 + 468].contains(&cream);
+                if ink {
+                    if previous {
+                        *runs.last_mut().unwrap() += 1;
+                    } else {
+                        runs.push(1);
+                    }
+                }
+                previous = ink;
+            }
+            assert_eq!(
+                runs.len(),
+                title_lines + 1,
+                "{name}: title and caption rows"
+            );
+            assert!(
+                runs[..title_lines].iter().all(|height| *height == 29),
+                "{name}: {runs:?}"
+            );
+            if let Ok(dir) = std::env::var("MISTER_UI_REVIEW_OUTPUT") {
+                let file = PathBuf::from(dir).join(format!("title-{}.ppm", name.replace(' ', "-")));
+                let mut ppm = b"P6\n960 540\n255\n".to_vec();
+                for pixel in pixels {
+                    let (r, g, b) = (
+                        ((pixel.0 >> 11) & 31) as u8,
+                        ((pixel.0 >> 5) & 63) as u8,
+                        (pixel.0 & 31) as u8,
+                    );
+                    ppm.extend_from_slice(&[
+                        (r << 3) | (r >> 2),
+                        (g << 2) | (g >> 4),
+                        (b << 3) | (b >> 2),
+                    ]);
+                }
+                std::fs::write(file, ppm).expect("write review capture");
+            }
+        }
+    }
+
+    #[test]
     fn launcher_bridge_key_tracks_system_page_toggle() {
         let catalog = crate::test_support::arcade_catalog(
             vec![arcade_game("Arcade One").build()],

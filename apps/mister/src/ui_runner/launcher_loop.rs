@@ -1087,7 +1087,7 @@ fn navigation_transition_for_intent(
     }
     match event.action {
         LauncherAction::ToggleSystemPage | LauncherAction::OpenSystemSection => Some((
-            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionEdge::SystemPanel,
             NavigationTransitionDirection::Forward,
         )),
         LauncherAction::OpenMenu => Some((
@@ -11114,7 +11114,19 @@ pub(super) fn run_launcher_loop(
         // the settled custom backdrop in the same frame before the list layer.
         let force_crt_backdrop_repaint = full_screen_transition_release_raster_rendered;
         if let Some(backdrop) = crt_backdrop.as_mut() {
-            backdrop.set_hub_mode(nav.is_system_hub());
+            backdrop.set_hub_mode(nav.is_system_hub().then(|| {
+                (
+                    nav.system_hub_selected,
+                    Rgb565Pixel(
+                        crate::launcher_presentation::device_reveal_spec(
+                            nav.device_kind(),
+                            true,
+                            true,
+                        )
+                        .accent,
+                    ),
+                )
+            }));
             let compose_start = Instant::now();
             let crt_arcade_layout = CrtArcadeLayout::for_layout(
                 layout,

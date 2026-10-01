@@ -70,15 +70,15 @@ export component SystemHubScreen inherits Rectangle {
             color: HubTheme.accent;
             overflow: elide;
         }
-        Jersey25 {
-            x: 28px; y: 126px; width: 440px; height: 120px;
+        title := Jersey25 {
+            x: 28px; y: 126px; width: 440px; height: self.preferred-height;
             text: NavigationView.system-title;
-            size: NavigationView.system-title-wraps ? Jersey25Size.px25 : Jersey25Size.px56;
+            size: NavigationView.system-title-wraps ? Jersey25Size.hub48 : Jersey25Size.hub64;
             wrap: word-wrap;
             color: PageTheme.cream;
         }
         Xerxes10 {
-            x: 30px; y: NavigationView.system-title-wraps ? 226px : 196px; width: 440px;
+            x: 30px; y: title.y + title.height + 10px; width: 440px;
             text: root.games + " GAMES READY TO PLAY";
             color: PageTheme.cream;
         }

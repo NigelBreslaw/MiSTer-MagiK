@@ -3,23 +3,40 @@
 
 use mister_magik_fb::bitmap_font_resource::{
     generate_bacteria_12, generate_bacteria_12_native, generate_jersey_15, generate_jersey_25,
-    generate_nocive_15, generate_spleen_5x8_doubled, generate_spleen_5x8_native,
-    generate_spleen_6x12_doubled, generate_spleen_6x12_native, generate_terminus_8x14_bold,
-    generate_terminus_8x14_native, generate_terminus_8x14_normal, generate_xerxes_10,
-    generate_xerxes_10_crt240, generate_yesterday_10, generate_yesterday_10_crt240,
+    generate_jersey_25_hub, generate_nocive_15, generate_spleen_5x8_doubled,
+    generate_spleen_5x8_native, generate_spleen_6x12_doubled, generate_spleen_6x12_native,
+    generate_terminus_8x14_bold, generate_terminus_8x14_native, generate_terminus_8x14_normal,
+    generate_xerxes_10, generate_xerxes_10_crt240, generate_yesterday_10,
+    generate_yesterday_10_crt240,
 };
 use std::path::PathBuf;
 
-const USAGE: &str =
-    "usage: generate-bitmap-fonts PUBLIC_FONT_DIR PRIVATE_ASSET_DIR PUBLIC_OUTPUT_DIR";
+const USAGE: &str = "usage: generate-bitmap-fonts PUBLIC_FONT_DIR PRIVATE_ASSET_DIR PUBLIC_OUTPUT_DIR [--jersey25-hub-only]";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
     let public_font_dir = PathBuf::from(args.next().ok_or(USAGE)?);
     let private_asset_dir = PathBuf::from(args.next().ok_or(USAGE)?);
     let public_output_dir = PathBuf::from(args.next().ok_or(USAGE)?);
+    let jersey_only = match args.next() {
+        None => false,
+        Some(option) if option == "--jersey25-hub-only" => true,
+        _ => return Err(USAGE.into()),
+    };
     if args.next().is_some() {
         return Err(USAGE.into());
+    }
+    std::fs::create_dir_all(&public_output_dir)?;
+    for (size, bytes) in generate_jersey_25_hub(&std::fs::read(
+        public_font_dir.join("Jersey25-Regular.ttf"),
+    )?)? {
+        std::fs::write(
+            public_output_dir.join(format!("jersey25-{size}px.mmbf")),
+            bytes,
+        )?;
+    }
+    if jersey_only {
+        return Ok(());
     }
 
     let yesterday_dir = private_asset_dir.join("fonts/yesterday-10");

@@ -3,13 +3,16 @@
 
 export enum Jersey25Size {
     px25,
+    // Hub sizes follow the prototype's CSS font size, rather than cap height.
+    hub48,
+    hub64,
     px56,
 }
 
 export global Jersey25Metrics {
     // The 41px Slint resource size produces exact 25px physical capitals.
     pure public function resolve(size: Jersey25Size) -> length {
-        return size == Jersey25Size.px56 ? 92px : 41px;
+        return size == Jersey25Size.hub48 ? 48px : size == Jersey25Size.hub64 ? 64px : size == Jersey25Size.px56 ? 92px : 41px;
     }
 }
 

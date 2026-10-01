@@ -5,7 +5,7 @@
 use crate::Rgb565Pixel;
 use crate::card_page::{alpha_of, blend, ease_in_out, ease_out, rounded_span, window_q16};
 use crate::navigation::NavigationTransitionRect;
-use crate::system_panel::{HDMI_HUB_BANDS, blit};
+use crate::system_panel::{HDMI_HUB_BANDS, blit, crt_hub_bands};
 
 #[derive(Clone, Debug)]
 pub struct RevealImage {
@@ -142,7 +142,7 @@ fn hdmi(
                 let sx = device_x[x];
                 if (0..483).contains(&sx) && (0..519).contains(&sy) {
                     let pixel = device[sy as usize * 483 + sx as usize];
-                    if pixel.0 != 0 {
+                    if pixel.0 != 0 || ((82..402).contains(&sx) && (61..381).contains(&sy)) {
                         out[y * w + x] = pixel;
                     }
                 }
@@ -262,7 +262,7 @@ fn crt(
             && img.stride >= img.width
             && img.pixels.len() >= img.stride.saturating_mul(img.height)
     }) {
-        image_window(w, h, out, rect, 4.0 * (1.0 - p), image, t);
+        image_window(w, h, out, rect, 4.0 * (1.0 - p), image, backdrop, t);
     } else if backdrop.len() == w * h {
         sample_rect(
             w,
@@ -317,14 +317,15 @@ fn crt(
     );
     let count = if spec.hub { 4 } else { 10 };
     for i in 0..count {
-        let (y0, y1) = if spec.hub {
-            if i == 0 {
-                (35, 52)
-            } else {
-                (52 + (i - 1) * 16, 68 + (i - 1) * 16)
-            }
+        let band = if spec.hub {
+            crt_hub_bands(w, h)[i]
         } else {
-            (35 + i * 16, 51 + i * 16)
+            (
+                38 * w / 640,
+                602 * w / 640,
+                (35 + i * 16) * h / 240,
+                (51 + i * 16) * h / 240,
+            )
         };
         let p = ease_out(window_q16(t, 500 + i as u32 * 22, 260));
         blit(
@@ -332,7 +333,7 @@ fn crt(
             h,
             page,
             out,
-            (38 * w / 640, 602 * w / 640, y0 * h / 240, y1 * h / 240),
+            band,
             (24 * (65536 - p) / 65536) as isize,
             alpha_of(p),
             Some(backdrop),
@@ -349,6 +350,7 @@ fn crt(
         None,
     );
 }
+#[allow(clippy::too_many_arguments)]
 fn image_window(
     w: usize,
     h: usize,
@@ -356,6 +358,7 @@ fn image_window(
     rect: (f64, f64, f64, f64),
     radius: f64,
     image: &RevealImage,
+    backdrop: &[Rgb565Pixel],
     t: u32,
 ) {
     // The native 240p routes use the production 640x480 visual reference and
@@ -411,7 +414,7 @@ fn image_window(
                         | green[((p >> 5) & 63) as usize]
                         | blue[(p & 31) as usize]
                 } else {
-                    0
+                    backdrop.get(y * w + x).map_or(0, |pixel| pixel.0)
                 };
                 out[y * w + x] = Rgb565Pixel(pixel);
             }
@@ -574,6 +577,87 @@ mod tests {
             ));
             assert_eq!(out[120 * w + 320].0, expected, "t={t}");
         }
+    }
+
+    #[test]
+    fn crt_last_frames_match_the_settled_backdrop() {
+        let (w, h) = (640, 240);
+        let pixels: Vec<u16> = (0..320 * 240).map(|i| (i * 137) as u16).collect();
+        let image = RevealImage {
+            pixels: pixels.clone().into(),
+            width: 320,
+            height: 240,
+            stride: 320,
+            reference_height: 480,
+            integer_scale: true,
+        };
+        let mut page: Vec<_> = (0..w * h)
+            .map(|i| {
+                let p = pixels[i / w * 320 + (i % w) / 2];
+                Rgb565Pixel(
+                    (((p >> 11) * 40 / 100) << 11)
+                        | ((((p >> 5) & 63) * 40 / 100) << 5)
+                        | ((p & 31) * 40 / 100),
+                )
+            })
+            .collect();
+        let backdrop = page.clone();
+        page[103 * w + 100] = Rgb565Pixel(0x5b9c);
+        let source = vec![Rgb565Pixel(0xffff); w * h];
+        let mut out = vec![Rgb565Pixel(0); w * h];
+        for t in [850, 867, 883, 899, 900] {
+            assert!(render_into(
+                w,
+                h,
+                &source,
+                &page,
+                &[],
+                &backdrop,
+                Some(&image),
+                NavigationTransitionRect {
+                    x: 38,
+                    y: 54,
+                    width: 160,
+                    height: 112
+                },
+                DeviceCardReveal::cabinet(true),
+                t,
+                &mut out
+            ));
+            assert!(
+                out == page,
+                "t={t}: changed pixels={}",
+                out.iter().zip(&page).filter(|(a, b)| a != b).count()
+            );
+        }
+    }
+
+    #[test]
+    fn hdmi_black_screen_pixels_occlude_the_fading_card() {
+        let (w, h) = (960, 540);
+        let source = vec![Rgb565Pixel(0xffff); w * h];
+        let page = vec![Rgb565Pixel(0); w * h];
+        let device = vec![Rgb565Pixel(0); 483 * 519];
+        let mut out = vec![Rgb565Pixel(0); w * h];
+        assert!(render_into(
+            w,
+            h,
+            &source,
+            &page,
+            &device,
+            &[],
+            None,
+            NavigationTransitionRect {
+                x: 292,
+                y: 158,
+                width: 180,
+                height: 252
+            },
+            DeviceCardReveal::cabinet(false),
+            120,
+            &mut out
+        ));
+        assert_eq!(out[232 * w + 368], Rgb565Pixel(0));
     }
 
     #[test]

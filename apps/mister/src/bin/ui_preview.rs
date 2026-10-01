@@ -1167,6 +1167,9 @@ mod macos {
             self.scenario = Scenario::Home;
             self.launcher_nav.go_root();
             let target_id = match edge {
+                NavigationTransitionEdge::SystemPanel => {
+                    return Err("use --panel-transition-demo for system-panel motion".into());
+                }
                 NavigationTransitionEdge::HomeToConsoles => CONSOLES_MENU_ID.to_string(),
                 NavigationTransitionEdge::HomeToArcade => MENU_ARCADE_SYSTEM_ID.to_string(),
                 NavigationTransitionEdge::ConsolesToSystem => {
@@ -1895,7 +1898,8 @@ mod macos {
                     | Scenario::ArcadeSearch
                     | Scenario::ArcadeCrossfade
                     | Scenario::SystemHub
-            ) && self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready
+            ) && (self.launcher_nav.is_system_hub()
+                || self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready)
             {
                 let low_resolution_backdrop = self.crt_backdrop.is_some()
                     && matches!(
@@ -1919,6 +1923,17 @@ mod macos {
                                 self.frame_target.cached_565_mut(),
                                 layout,
                                 metrics,
+                                (
+                                    self.launcher_nav.system_hub_selected,
+                                    Rgb565Pixel(
+                                        mister_magik_fb::launcher_presentation::device_reveal_spec(
+                                            self.launcher_nav.device_kind(),
+                                            true,
+                                            true,
+                                        )
+                                        .accent,
+                                    ),
+                                ),
                             );
                         } else {
                             let _ = backdrop.compose_product_into_layout(

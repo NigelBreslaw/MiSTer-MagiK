@@ -31,6 +31,15 @@ static BACTERIA_12_NATIVE_RESOURCE: &[u8] =
 static JERSEY_15_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey15-27px.mmbf");
 static JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
 #[cfg(not(feature = "asset-tools"))]
+static JERSEY_25_HUB_48_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-48px.mmbf");
+#[cfg(not(feature = "asset-tools"))]
+static JERSEY_25_HUB_64_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-64px.mmbf");
+#[cfg(feature = "asset-tools")]
+static JERSEY_25_HUB_48_RESOURCE: &[u8] = &[];
+#[cfg(feature = "asset-tools")]
+static JERSEY_25_HUB_64_RESOURCE: &[u8] = &[];
+
+#[cfg(not(feature = "asset-tools"))]
 static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-1x.mmbf");
 #[cfg(feature = "asset-tools")]
@@ -539,7 +548,11 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
             leak_font(decode_resource(XERXES_10_RESOURCE).expect("valid Xerxes 10 bitmap font")),
             leak_font(decode_resource(NOCIVE_15_RESOURCE).expect("valid Nocive 15 bitmap font")),
             leak_font(decode_resource(JERSEY_15_RESOURCE).expect("valid Jersey 15 bitmap font")),
-            leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
+            leak_font_family(vec![
+                decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font"),
+                decode_resource(JERSEY_25_HUB_48_RESOURCE).expect("valid 48px Jersey hub font"),
+                decode_resource(JERSEY_25_HUB_64_RESOURCE).expect("valid 64px Jersey hub font"),
+            ]),
             leak_font_family(vec![
                 decode_resource(SPLEEN_5X8_NATIVE_RESOURCE)
                     .expect("valid native Spleen 5x8 bitmap font"),
@@ -1072,6 +1085,32 @@ pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, JERSEY_25_SPEC)
 }
 
+#[cfg(any(test, feature = "asset-tools"))]
+pub fn generate_jersey_25_hub(font_bytes: &[u8]) -> Result<[(u16, Vec<u8>); 2], String> {
+    Ok([
+        (
+            48,
+            generate_resource(
+                font_bytes,
+                GeneratorSpec {
+                    pixel_size: 48,
+                    ..JERSEY_25_SPEC
+                },
+            )?,
+        ),
+        (
+            64,
+            generate_resource(
+                font_bytes,
+                GeneratorSpec {
+                    pixel_size: 64,
+                    ..JERSEY_25_SPEC
+                },
+            )?,
+        ),
+    ])
+}
+
 #[cfg(feature = "asset-tools")]
 pub fn generate_jersey_15(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, JERSEY_15_SPEC)
@@ -1243,6 +1282,25 @@ mod tests {
             assert_eq!(glyph(&bacteria_12_native, code_point).height, 12);
             assert_eq!(glyph(&jersey_15, code_point).height, 15);
             assert_eq!(glyph(&jersey_25, code_point).height, 25);
+        }
+    }
+
+    #[test]
+    fn hub_fonts_match_the_prototype_title_sizes() {
+        for ((size, generated), (resource, cap_height)) in generate_jersey_25_hub(JERSEY_25_TTF)
+            .unwrap()
+            .into_iter()
+            .zip([
+                (JERSEY_25_HUB_48_RESOURCE, 29),
+                (JERSEY_25_HUB_64_RESOURCE, 39),
+            ])
+        {
+            assert_eq!(generated, resource);
+            let font = decode_resource(resource).unwrap();
+            assert_eq!(font.pixel_size, size as i16);
+            for ch in ['A', 'H', 'M', 'S'] {
+                assert_eq!(glyph(&font, ch).height, cap_height);
+            }
         }
     }
 

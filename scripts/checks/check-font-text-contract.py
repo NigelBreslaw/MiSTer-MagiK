@@ -18,7 +18,7 @@ from typing import NoReturn
 UI_ROOT = PurePosixPath("apps/mister/ui")
 RAW_TEXT = re.compile(r"(?<![A-Za-z0-9_])Text\s*\{")
 DIRECT_FONT_SIZE = re.compile(r"(?<![A-Za-z0-9_-])font-size\s*:")
-ENUM_VALUE = re.compile(r"\b(px[0-9]+)\s*,")
+ENUM_VALUE = re.compile(r"\b((?:px|hub)[0-9]+)\s*,")
 LEGACY_API = re.compile(
     r"\b(?:PixelText8Metrics|PixelText8|PixelTextSize|JerseyTitleText"
     r"|Start2PMetrics|Start2P|Start2PSize)\b"
@@ -57,7 +57,7 @@ CONTRACTS = (
         UI_ROOT / "components/jersey_25.slint",
         "Jersey25",
         "Jersey25Size",
-        ("px25", "px56"),
+        ("px25", "hub48", "hub64", "px56"),
         "Jersey 25",
         "41px",
     ),

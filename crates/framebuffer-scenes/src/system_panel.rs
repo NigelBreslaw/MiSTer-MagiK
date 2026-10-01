@@ -11,7 +11,7 @@ pub fn duration_ms(crt: bool, to_list: bool) -> u32 {
     } else if to_list {
         426
     } else {
-        582
+        120 + (HDMI_HUB_BANDS.len() as u32 - 1) * 26 + 280
     }
 }
 
@@ -45,20 +45,35 @@ pub(crate) const HDMI_HUB_BANDS: [Band; 7] = [
     (26, 488, 462, 498),
 ];
 
+pub(crate) fn crt_hub_bands(width: usize, height: usize) -> [Band; 4] {
+    let narrow = width.min(height);
+    let sy = if narrow >= 400 || (narrow <= 288 && height > width && height >= 640) {
+        2
+    } else {
+        1
+    };
+    let header = (height * 5 / 100).max(6 * sy) + 18 * sy;
+    let first_row = header + 26 * sy;
+    std::array::from_fn(|i| {
+        let (top, bottom) = if i == 0 {
+            (header + 8, first_row)
+        } else {
+            (first_row + (i - 1) * 16 * sy, first_row + i * 16 * sy)
+        };
+        (38 * width / 640, 602 * width / 640, top, bottom)
+    })
+}
+
 fn bands(crt: bool, hub: bool, width: usize, height: usize) -> ([Band; 7], usize) {
     let mut result = [(0, 0, 0, 0); 7];
     if crt {
-        let count = if hub { 4 } else { 7 };
+        if hub {
+            result[..4].copy_from_slice(&crt_hub_bands(width, height));
+            return (result, 4);
+        }
+        let count = 7;
         for (i, b) in result.iter_mut().enumerate().take(count) {
-            let (y0, y1) = if hub {
-                if i == 0 {
-                    (35, 52)
-                } else {
-                    (52 + (i - 1) * 16, 68 + (i - 1) * 16)
-                }
-            } else {
-                (52 + i * 16, 68 + i * 16)
-            };
+            let (y0, y1) = (52 + i * 16, 68 + i * 16);
             *b = (
                 38 * width / 640,
                 602 * width / 640,

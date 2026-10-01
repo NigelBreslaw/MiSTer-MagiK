@@ -135,7 +135,7 @@ pub(super) struct CrtBackdropFrame {
 
 pub(super) struct CrtBackdropController {
     state: CrtBackdropState,
-    hub_mode: bool,
+    hub_mode: Option<(usize, Rgb565Pixel)>,
     worker: PrepareWorker,
     cache: VecDeque<PreparedEntry>,
     cache_bytes: usize,
@@ -154,7 +154,7 @@ impl CrtBackdropController {
     pub(super) fn for_display(display: &UiDisplay) -> Option<Self> {
         Some(Self {
             state: CrtBackdropState::for_display(display)?,
-            hub_mode: false,
+            hub_mode: None,
             worker: PrepareWorker::new(),
             cache: VecDeque::new(),
             cache_bytes: 0,
@@ -170,7 +170,7 @@ impl CrtBackdropController {
         })
     }
 
-    pub(super) fn set_hub_mode(&mut self, hub: bool) {
+    pub(super) fn set_hub_mode(&mut self, hub: Option<(usize, Rgb565Pixel)>) {
         if self.hub_mode != hub {
             self.hub_mode = hub;
             self.was_eligible = false;
@@ -395,9 +395,14 @@ impl CrtBackdropController {
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
-            frame.trace = if self.hub_mode {
-                self.state
-                    .compose_system_hub_into_layout(now, destination, layout, metrics)
+            frame.trace = if let Some(highlight) = self.hub_mode {
+                self.state.compose_system_hub_into_layout(
+                    now,
+                    destination,
+                    layout,
+                    metrics,
+                    highlight,
+                )
             } else {
                 self.state.compose_product_into_layout(
                     now,
