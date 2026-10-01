@@ -22,12 +22,7 @@ const SPLIT_ALIGNMENT: usize = 8;
 /// Move the band boundary a quarter of the way to where both bands would
 /// finish together. Each band's measured cost is spread evenly across its
 /// columns; carousel poses change little between consecutive frames.
-#[cfg(test)]
-fn balanced_split(split: usize, primary_us: u64, secondary_us: u64) -> usize {
-    balanced_split_from(CAROUSEL_LEFT, split, primary_us, secondary_us)
-}
-
-fn balanced_split_from(left: usize, split: usize, primary_us: u64, secondary_us: u64) -> usize {
+fn balanced_split(left: usize, split: usize, primary_us: u64, secondary_us: u64) -> usize {
     if primary_us == 0 || secondary_us == 0 {
         return split;
     }
@@ -230,7 +225,7 @@ impl ParallelLauncherRenderer {
         self.helper = Some(completed.buffer);
         // Balance what each band adds to the critical path, including the
         // helper's wake-up; the primary band runs on the presenting thread.
-        self.split = balanced_split_from(
+        self.split = balanced_split(
             left,
             split,
             primary_us,
@@ -283,9 +278,9 @@ mod tests {
     #[test]
     fn split_moves_toward_balance_and_stays_bounded() {
         // Equal cost per column leaves a balanced boundary in place.
-        assert_eq!(balanced_split(616, 3200, 3180), 616);
+        assert_eq!(balanced_split(CAROUSEL_LEFT, 616, 3200, 3180), 616);
         // A slower helper band moves the boundary right, by a bounded step.
-        let next = balanced_split(CAROUSEL_SPLIT, 11_300, 13_300);
+        let next = balanced_split(CAROUSEL_LEFT, CAROUSEL_SPLIT, 11_300, 13_300);
         assert!(
             next > CAROUSEL_SPLIT && next <= CAROUSEL_SPLIT + 24,
             "{next}"
@@ -297,7 +292,7 @@ mod tests {
         for _ in 0..40 {
             let primary = ((split - CAROUSEL_LEFT) as f64 * left_rate) as u64;
             let secondary = ((CAROUSEL_RIGHT - split) as f64 * right_rate) as u64;
-            split = balanced_split(split, primary, secondary);
+            split = balanced_split(CAROUSEL_LEFT, split, primary, secondary);
         }
         let ideal = (left_rate * CAROUSEL_LEFT as f64 + right_rate * CAROUSEL_RIGHT as f64)
             / (left_rate + right_rate);
@@ -308,12 +303,15 @@ mod tests {
         // Extremes cannot starve either band.
         let (mut right, mut left) = (CAROUSEL_SPLIT, CAROUSEL_SPLIT);
         for _ in 0..40 {
-            right = balanced_split(right, 1, 1_000_000);
-            left = balanced_split(left, 1_000_000, 1);
+            right = balanced_split(CAROUSEL_LEFT, right, 1, 1_000_000);
+            left = balanced_split(CAROUSEL_LEFT, left, 1_000_000, 1);
         }
         assert_eq!(right, CAROUSEL_RIGHT - MINIMUM_BAND);
         assert_eq!(left, CAROUSEL_LEFT + MINIMUM_BAND);
-        assert_eq!(balanced_split(CAROUSEL_SPLIT, 0, 5_000), CAROUSEL_SPLIT);
+        assert_eq!(
+            balanced_split(CAROUSEL_LEFT, CAROUSEL_SPLIT, 0, 5_000),
+            CAROUSEL_SPLIT
+        );
     }
 
     #[test]

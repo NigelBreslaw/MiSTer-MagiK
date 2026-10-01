@@ -18076,9 +18076,10 @@ mod tests {
             vec![crate::test_support::arcade_system("snes", 1)],
         );
 
-        for (open_game_list_directly, expected_screen) in
-            [(false, Screen::Arcade), (true, Screen::Arcade)]
-        {
+        for (open_game_list_directly, expected_mode) in [
+            (false, launcher::SystemPageMode::Hub),
+            (true, launcher::SystemPageMode::List),
+        ] {
             let mut nav = LauncherNav::new();
             nav.sync_launcher_taxonomy(&registry);
             let mut pending = Some(PendingCollectionEntry {
@@ -18094,7 +18095,8 @@ mod tests {
                 &hydrated,
                 Instant::now(),
             ));
-            assert_eq!(nav.screen, expected_screen);
+            assert_eq!(nav.screen, Screen::Arcade);
+            assert_eq!(nav.system_page_mode, expected_mode);
         }
     }
 

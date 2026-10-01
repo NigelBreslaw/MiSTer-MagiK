@@ -909,3 +909,23 @@ The prior fault capture came from a different dirty binary reporting revision
 `6d16103de`; its exact source changes and blocked call stack are unavailable, so
 the original cause remains unconfirmed. The rebase retains main's performance
 fixes rather than restoring that older rendering pipeline.
+
+## Deletion-focused review
+
+The cleanup removes unused gather/deal compatibility methods, the old
+hub-return method, and the root-only balancing test shim. Existing callers
+use the explicit transition slots, Select mode toggle and production balancer.
+
+Reveal and toggle motion share one band blit and one HDMI hub band table.
+Frame clearing and reported damage share one level-aware rectangle. Direct
+section activation uses the same navigation commit path as animated activation.
+The cold SNES entry test now checks Hub versus List mode, preserving the route
+distinction after both routes adopted `Screen::Arcade`.
+
+Card projection, turn/travel clocks, clip boundaries, source artwork and
+persistent preparation/render workers are unchanged. The prototype snapshot
+and independent raster/reference tests remain useful evidence. All 200 sampled
+reveal/panel fingerprints match before and after cleanup across HDMI, 240p,
+288p and 480p; the 40 root artwork fixtures also pass. Focused portable,
+navigation, card-session, transition and preview tests plus portable Clippy pass.
+The temporary fingerprint harness was removed; evidence stays in ignored outputs.

@@ -5,6 +5,7 @@
 use crate::Rgb565Pixel;
 use crate::card_page::{alpha_of, blend, ease_in_out, ease_out, rounded_span, window_q16};
 use crate::navigation::NavigationTransitionRect;
+use crate::system_panel::{HDMI_HUB_BANDS, blit};
 
 #[derive(Clone, Debug)]
 pub struct RevealImage {
@@ -159,7 +160,7 @@ fn hdmi(
         77,
         500,
     );
-    band(
+    blit(
         w,
         h,
         page,
@@ -175,7 +176,7 @@ fn hdmi(
         width: 320,
         height: 320,
     };
-    band(
+    blit(
         w,
         h,
         page,
@@ -191,26 +192,15 @@ fn hdmi(
         None,
     );
     if spec.hub {
-        for (i, b) in [
-            (26, 488, 104, 126),
-            (26, 488, 126, 194),
-            (26, 488, 194, 246),
-            (26, 176, 302, 450),
-            (176, 326, 302, 450),
-            (326, 488, 302, 450),
-            (26, 488, 462, 498),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (i, b) in HDMI_HUB_BANDS.into_iter().enumerate() {
             let p = ease_out(window_q16(t, 500 + i as u32 * 26, 280));
-            band(
+            blit(
                 w,
                 h,
                 page,
                 out,
                 b,
-                (40 * (65536 - p) / 65536) as i32,
+                (40 * (65536 - p) / 65536) as isize,
                 alpha_of(p),
                 None,
             );
@@ -218,19 +208,19 @@ fn hdmi(
     } else {
         for i in 0..11 {
             let p = ease_out(window_q16(t, 500 + i * 26, 280));
-            band(
+            blit(
                 w,
                 h,
                 page,
                 out,
                 (26, 488, 88 + i as usize * 36, 124 + i as usize * 36),
-                (40 * (65536 - p) / 65536) as i32,
+                (40 * (65536 - p) / 65536) as isize,
                 alpha_of(p),
                 None,
             );
         }
     }
-    band(
+    blit(
         w,
         h,
         page,
@@ -315,7 +305,7 @@ fn crt(
     );
     let header = h * 35 / 240;
     let footer = h * 210 / 240;
-    band(
+    blit(
         w,
         h,
         page,
@@ -337,18 +327,18 @@ fn crt(
             (35 + i * 16, 51 + i * 16)
         };
         let p = ease_out(window_q16(t, 500 + i as u32 * 22, 260));
-        band(
+        blit(
             w,
             h,
             page,
             out,
             (38 * w / 640, 602 * w / 640, y0 * h / 240, y1 * h / 240),
-            (24 * (65536 - p) / 65536) as i32,
+            (24 * (65536 - p) / 65536) as isize,
             alpha_of(p),
             Some(backdrop),
         );
     }
-    band(
+    blit(
         w,
         h,
         page,
@@ -539,34 +529,6 @@ fn outline(
             for x in (a..inner.0).chain(inner.1..b) {
                 out[y * w + x] = Rgb565Pixel(blend(out[y * w + x].0, accent, alpha));
             }
-        }
-    }
-}
-#[allow(clippy::too_many_arguments)]
-fn band(
-    w: usize,
-    h: usize,
-    src: &[Rgb565Pixel],
-    out: &mut [Rgb565Pixel],
-    b: (usize, usize, usize, usize),
-    dx: i32,
-    alpha: u32,
-    bg: Option<&[Rgb565Pixel]>,
-) {
-    if alpha == 0 {
-        return;
-    }
-    for y in b.2..b.3.min(h) {
-        for sx in b.0..b.1.min(w) {
-            if bg.is_some_and(|v| v.get(y * w + sx) == Some(&src[y * w + sx])) {
-                continue;
-            }
-            let x = sx as i32 + dx;
-            if x < b.0 as i32 || x >= b.1.min(w) as i32 {
-                continue;
-            }
-            let dst = y * w + x as usize;
-            out[dst] = Rgb565Pixel(blend(out[dst].0, src[y * w + sx].0, alpha));
         }
     }
 }

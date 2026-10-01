@@ -33,21 +33,20 @@ fn bezier(p: i64, x1: f64, y1: f64, x2: f64, y2: f64) -> i64 {
     (curve((lo + hi) * 0.5, y1, y2) * 65536.0).round() as i64
 }
 
-#[derive(Clone, Copy)]
-struct Band {
-    x0: usize,
-    x1: usize,
-    y0: usize,
-    y1: usize,
-}
+/// Exclusive horizontal and vertical bounds: (left, right, top, bottom).
+pub(crate) type Band = (usize, usize, usize, usize);
+pub(crate) const HDMI_HUB_BANDS: [Band; 7] = [
+    (26, 488, 104, 126),
+    (26, 488, 126, 194),
+    (26, 488, 194, 246),
+    (26, 176, 302, 450),
+    (176, 326, 302, 450),
+    (326, 488, 302, 450),
+    (26, 488, 462, 498),
+];
+
 fn bands(crt: bool, hub: bool, width: usize, height: usize) -> ([Band; 7], usize) {
-    let empty = Band {
-        x0: 0,
-        x1: 0,
-        y0: 0,
-        y1: 0,
-    };
-    let mut result = [empty; 7];
+    let mut result = [(0, 0, 0, 0); 7];
     if crt {
         let count = if hub { 4 } else { 7 };
         for (i, b) in result.iter_mut().enumerate().take(count) {
@@ -60,40 +59,19 @@ fn bands(crt: bool, hub: bool, width: usize, height: usize) -> ([Band; 7], usize
             } else {
                 (52 + i * 16, 68 + i * 16)
             };
-            *b = Band {
-                x0: 38 * width / 640,
-                x1: 602 * width / 640,
-                y0: y0 * height / 240,
-                y1: y1 * height / 240,
-            };
+            *b = (
+                38 * width / 640,
+                602 * width / 640,
+                y0 * height / 240,
+                y1 * height / 240,
+            );
         }
         (result, count)
     } else if hub {
-        for (b, (x0, x1, y0, y1)) in result.iter_mut().zip([
-            (26, 488, 104, 126),
-            (26, 488, 126, 194),
-            (26, 488, 194, 246),
-            (26, 176, 302, 450),
-            (176, 326, 302, 450),
-            (326, 488, 302, 450),
-            (26, 488, 462, 498),
-        ]) {
-            *b = Band { x0, x1, y0, y1 };
-        }
-        (result, 7)
+        (HDMI_HUB_BANDS, 7)
     } else {
-        result[0] = Band {
-            x0: 26,
-            x1: 488,
-            y0: 48,
-            y1: 76,
-        };
-        result[1] = Band {
-            x0: 26,
-            x1: 488,
-            y0: 124,
-            y1: 498,
-        };
+        result[0] = (26, 488, 48, 76);
+        result[1] = (26, 488, 124, 498);
         (result, 2)
     }
 }
@@ -130,12 +108,12 @@ pub fn render_into(
     let (out_bands, out_count) = bands(crt, to_list, width, height);
     let (in_bands, in_count) = bands(crt, !to_list, width, height);
     // Clear only the panel's subjects; retain chrome and the device exactly.
-    for band in out_bands[..out_count]
+    for &(left, right, top, bottom) in out_bands[..out_count]
         .iter()
         .chain(in_bands[..in_count].iter())
     {
-        for y in band.y0..band.y1.min(height) {
-            for x in band.x0..band.x1.min(width) {
+        for y in top..bottom.min(height) {
+            for x in left..right.min(width) {
                 output[y * width + x] = if crt {
                     backdrop
                         .get(y * width + x)
@@ -161,7 +139,7 @@ pub fn render_into(
             source,
             output,
             *b,
-            -(if crt { 24 } else { 40 }) * dir * out_p / 65536,
+            (-(if crt { 24 } else { 40 }) * dir * out_p / 65536) as isize,
             256 - alpha_of(out_p),
             if crt { Some(backdrop) } else { None },
         );
@@ -188,7 +166,7 @@ pub fn render_into(
                 destination,
                 output,
                 *b,
-                (if crt { 24 } else { 32 }) * dir * (65536 - p) / 65536,
+                ((if crt { 24 } else { 32 }) * dir * (65536 - p) / 65536) as isize,
                 alpha_of(p),
                 if crt { Some(backdrop) } else { None },
             );
@@ -201,26 +179,26 @@ pub fn render_into(
     true
 }
 #[allow(clippy::too_many_arguments)]
-fn blit(
+pub(crate) fn blit(
     width: usize,
     height: usize,
     source: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
-    b: Band,
-    dx: i64,
+    (left, right, top, bottom): Band,
+    dx: isize,
     alpha: u32,
     backdrop: Option<&[Rgb565Pixel]>,
 ) {
     if alpha == 0 {
         return;
     }
-    for y in b.y0..b.y1.min(height) {
-        for sx in b.x0..b.x1.min(width) {
+    for y in top..bottom.min(height) {
+        for sx in left..right.min(width) {
             if backdrop.is_some_and(|bg| bg.get(y * width + sx) == Some(&source[y * width + sx])) {
                 continue;
             }
-            let x = sx as i64 + dx;
-            if x < b.x0 as i64 || x >= b.x1.min(width) as i64 {
+            let x = sx as isize + dx;
+            if x < left as isize || x >= right.min(width) as isize {
                 continue;
             }
             let dst = y * width + x as usize;

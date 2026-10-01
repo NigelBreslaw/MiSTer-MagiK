@@ -862,7 +862,7 @@ impl PreparedLauncher {
         let clear_profile = crate::launcher_profile::span("scene.clear");
         // All animation, including projected edges and reflections, is clipped
         // to this region. Keep static chrome resident between frames.
-        for rect in self.logical_damage_for_level() {
+        for rect in self.logical_damage() {
             for y in rect.y0..rect.y1 {
                 let range = y * LOGICAL_WIDTH + rect.x0..y * LOGICAL_WIDTH + rect.x1;
                 // The damage region contains only the pure-black background in
@@ -915,15 +915,9 @@ impl PreparedLauncher {
         }
     }
 
-    fn logical_damage_for_level(&self) -> [crate::Rgb565Rect; 1] {
-        let mut damage = Self::logical_damage();
-        damage[0].x0 = self.carousel_clip().0;
-        damage
-    }
-
-    const fn logical_damage() -> [crate::Rgb565Rect; 1] {
+    fn logical_damage(&self) -> [crate::Rgb565Rect; 1] {
         [crate::Rgb565Rect {
-            x0: 296,
+            x0: self.carousel_clip().0,
             y0: 120,
             x1: 934,
             y1: 495,
@@ -934,9 +928,7 @@ impl PreparedLauncher {
     /// At other output sizes, fitting still invalidates the complete surface.
     pub fn damage(&self) -> [crate::Rgb565Rect; 1] {
         if self.scene.width == LOGICAL_WIDTH && self.scene.height == LOGICAL_HEIGHT {
-            let mut damage = Self::logical_damage();
-            damage[0].x0 = self.carousel_clip().0;
-            damage
+            self.logical_damage()
         } else {
             [crate::Rgb565Rect {
                 x0: 0,
@@ -2124,15 +2116,16 @@ mod tests {
                     "motion differs at {phase}, nested={nested}"
                 );
             }
+            let slot = scene.slot_zero(nested);
             for elapsed in [0, 200, 400, 600, 920] {
-                updated.render_level_gather(0, LevelChange::Descend, elapsed);
-                reference.render_level_gather(0, LevelChange::Descend, elapsed);
+                updated.render_level_gather_to(0, LevelChange::Descend, elapsed, slot);
+                reference.render_level_gather_to(0, LevelChange::Descend, elapsed, slot);
                 assert!(
                     updated.pixels() == reference.pixels(),
                     "gather differs at {elapsed}"
                 );
-                updated.render_level_deal(0, LevelChange::Ascend, elapsed);
-                reference.render_level_deal(0, LevelChange::Ascend, elapsed);
+                updated.render_level_deal_from(0, LevelChange::Ascend, elapsed, slot);
+                reference.render_level_deal_from(0, LevelChange::Ascend, elapsed, slot);
                 assert!(
                     updated.pixels() == reference.pixels(),
                     "deal differs at {elapsed}"
@@ -2201,7 +2194,7 @@ mod tests {
             let mut incremental = PreparedLauncher::new(scene, data(), None, None);
             let mut reference = PreparedLauncher::new(scene, data(), None, None);
             let chrome = reference.logical.clone();
-            for rect in PreparedLauncher::logical_damage() {
+            for rect in reference.logical_damage() {
                 for y in rect.y0..rect.y1 {
                     assert!(
                         chrome[y * 960 + rect.x0..y * 960 + rect.x1]

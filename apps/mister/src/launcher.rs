@@ -3061,31 +3061,24 @@ impl LauncherNav {
             self.system_hub_selected -= 1;
         }
         if pressed.btn_a {
-            let mode = match self.system_hub_selected {
-                0 => ArcadeUserListMode::Games,
-                1 => ArcadeUserListMode::Recent,
-                2 => ArcadeUserListMode::Favourites,
+            let count = match self.system_hub_selected {
+                0 => self.active_collection().map_or(0, |c| c.count as usize),
+                1 => self.active_collection_recent_count(catalog),
+                2 => self.active_collection_favourite_count(catalog),
                 _ => unreachable!(),
-            };
-            let count = match mode {
-                ArcadeUserListMode::Games => {
-                    self.active_collection().map_or(0, |c| c.count as usize)
-                }
-                ArcadeUserListMode::Recent => self.active_collection_recent_count(catalog),
-                ArcadeUserListMode::Favourites => self.active_collection_favourite_count(catalog),
             };
             if count == 0 {
                 return None;
             }
+            let event = LauncherEvent {
+                action: LauncherAction::OpenSystemSection,
+                path: None,
+                settings: None,
+            };
             if emit_navigation_intents {
-                return Some(LauncherEvent {
-                    action: LauncherAction::OpenSystemSection,
-                    path: None,
-                    settings: None,
-                });
+                return Some(event);
             }
-            self.set_arcade_user_list_mode(catalog, mode);
-            self.system_page_mode = SystemPageMode::List;
+            self.commit_navigation_intent(&event, catalog);
         }
         None
     }
@@ -4092,16 +4085,6 @@ impl LauncherNav {
         self.arcade_filter.drawer_open = false;
         self.arcade_search = ArcadeSearchState::new();
         self.arcade.reset();
-    }
-
-    pub fn return_arcade_to_system_hub(&mut self) -> bool {
-        if self.active_collection_id.is_some() {
-            self.screen = Screen::Arcade;
-            self.system_page_mode = SystemPageMode::Hub;
-            true
-        } else {
-            false
-        }
     }
 
     pub fn arcade_user_list_mode(&self) -> ArcadeUserListMode {
@@ -11680,7 +11663,7 @@ mod tests {
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Recent);
 
-        nav.return_arcade_to_system_hub();
+        nav.toggle_system_page_mode();
         nav.system_hub_selected = 2;
         nav.handle_input(
             &PadState::default(),
@@ -11716,10 +11699,10 @@ mod tests {
             nav.device_kind(),
             Some(crate::device_art::DeviceKind::Monitor)
         );
-        // The page's tiles open the game list, and B returns to the page.
+        // The page's tiles open the game list; Select returns to the overview.
         nav.skip_system_page(&catalog);
         assert_eq!(nav.screen, Screen::Arcade);
-        assert!(nav.return_arcade_to_system_hub());
+        nav.toggle_system_page_mode();
         assert!(nav.is_system_hub());
     }
 

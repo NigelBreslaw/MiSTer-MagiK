@@ -48,15 +48,6 @@ impl LevelChange {
 }
 
 impl PreparedLauncher {
-    pub fn render_level_gather(
-        &mut self,
-        selected: usize,
-        change: LevelChange,
-        elapsed_millis: u32,
-    ) {
-        self.render_level_gather_to(selected, change, elapsed_millis, self.slot_zero());
-    }
-
     pub fn render_level_gather_to(
         &mut self,
         selected: usize,
@@ -118,10 +109,6 @@ impl PreparedLauncher {
             });
         }
         self.draw_trick_plan(&mut CarouselPlan { items, row: false });
-    }
-
-    pub fn render_level_deal(&mut self, selected: usize, change: LevelChange, elapsed_millis: u32) {
-        self.render_level_deal_from(selected, change, elapsed_millis, self.slot_zero());
     }
 
     pub fn render_level_deal_from(
@@ -482,7 +469,7 @@ mod tests {
             let mut from = scene.prepare(level(&from_cards, 3, &["CONSOLES"]));
             let mut expected_from = scene.prepare(level(&from_cards, 3, &["CONSOLES"]));
             expected_from.render_frame(settled(3));
-            from.render_level_gather(3, LevelChange::Descend, 0);
+            from.render_level_gather_to(3, LevelChange::Descend, 0, from.slot_zero());
             assert!(
                 from.pixels() == expected_from.pixels(),
                 "{scene:?} first frame"
@@ -491,7 +478,7 @@ mod tests {
             let mut to = scene.prepare(level(&to_cards, 0, &["CONSOLES", "NINTENDO"]));
             let mut expected_to = scene.prepare(level(&to_cards, 0, &["CONSOLES", "NINTENDO"]));
             expected_to.render_frame(settled(0));
-            to.render_level_deal(0, LevelChange::Descend, LEVEL_TRICK_MILLIS);
+            to.render_level_deal_from(0, LevelChange::Descend, LEVEL_TRICK_MILLIS, to.slot_zero());
             assert!(to.pixels() == expected_to.pixels(), "{scene:?} final frame");
         }
     }
@@ -514,7 +501,7 @@ mod tests {
         from.render_transition_title_from(&to, EDGE_MILLIS);
         assert!(widest_lit_row(from.pixels()) < 16);
         // The destination can hold here for as long as preparation takes.
-        to.render_level_deal(0, LevelChange::Descend, 0);
+        to.render_level_deal_from(0, LevelChange::Descend, 0, to.slot_zero());
         assert!(widest_lit_row(to.pixels()) < 16);
         // The target breadcrumb is dim; the clock and rule stay visible.
         for y in 0..76 {
@@ -535,7 +522,7 @@ mod tests {
         let from_cards = cards(6);
         let scene = LauncherScene::new(960, 540);
         let mut from = scene.prepare(level(&from_cards, 3, &["CONSOLES"]));
-        from.render_level_gather(3, LevelChange::Ascend, 200);
+        from.render_level_gather_to(3, LevelChange::Ascend, 200, from.slot_zero());
         from.restore_chrome();
         from.render_frame(settled(3));
         let mut expected = scene.prepare(level(&from_cards, 3, &["CONSOLES"]));
