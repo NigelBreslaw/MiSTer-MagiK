@@ -10142,6 +10142,8 @@ pub(super) fn run_launcher_loop(
         #[cfg(feature = "tooling")]
         let mut card_direct_measurement = None;
         #[cfg(feature = "tooling")]
+        let mut card_pose_sampled_at = None;
+        #[cfg(feature = "tooling")]
         let mut card_work_timing = None;
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
@@ -10224,6 +10226,7 @@ pub(super) fn run_launcher_loop(
                     frame_production_completed_at = Some(Instant::now());
                     #[cfg(feature = "tooling")]
                     if card_presentation_measurement_enabled {
+                        card_pose_sampled_at = Some(pose_at);
                         card_direct_measurement = Some((
                             copy.copy_us,
                             request.timestamp_us,
@@ -10247,6 +10250,7 @@ pub(super) fn run_launcher_loop(
                                 merge_us: timing.merge_us,
                                 primary_cpu_us: timing.primary_cpu_us,
                                 secondary_cpu_us: timing.secondary_cpu_us,
+                                split: timing.split as u64,
                             };
                             card_work_timing = Some(work);
                             if tooling.metrics.window_start.is_some()
@@ -12650,6 +12654,20 @@ pub(super) fn run_launcher_loop(
                         {
                             metrics.counters.card_delivered_frames =
                                 metrics.counters.card_delivered_frames.saturating_add(1);
+                            if let Some(pose_at) = card_pose_sampled_at.take()
+                                && launcher_card_home
+                                    .as_ref()
+                                    .is_some_and(|session| session.is_animating())
+                                && metrics.window_start.is_some()
+                                && metrics.window.is_none()
+                            {
+                                // The post-present wait recorded the vblank that showed it.
+                                let now = Instant::now();
+                                metrics.pose_to_scanout_us.push(
+                                    (now.saturating_duration_since(pose_at).as_micros() as u64)
+                                        .saturating_sub(pacer.age_since_last_hit_us(now)),
+                                );
+                            }
                         } else {
                             metrics.counters.card_dropped_frames += 1;
                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {

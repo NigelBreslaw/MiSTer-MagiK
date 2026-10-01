@@ -12,13 +12,16 @@ pub struct FrameWorkTiming {
     pub merge_us: u64,
     pub primary_cpu_us: Option<u64>,
     pub secondary_cpu_us: Option<u64>,
+    /// First helper column; zero when the producer has no band split.
+    pub split: u64,
 }
 impl FrameWorkTiming {
     fn json(self) -> Value {
         json!({"producer_us":self.producer_us,"primary_us":self.primary_us,"secondary_us":self.secondary_us,
             "wait_us":self.wait_us,"helper_start_delay_us":self.helper_start_delay_us,
             "completion_delivery_us":self.completion_delivery_us,"merge_us":self.merge_us,
-            "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us})
+            "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us,
+            "split":self.split})
     }
 }
 
@@ -77,6 +80,9 @@ pub struct Counters {
 pub struct PresentationMetrics {
     pub frame_timings_us: Vec<[u64; 3]>,
     pub work_timings: Vec<FrameWorkTiming>,
+    /// Per delivered card frame: pose sample time to the vblank that showed it.
+    /// Its spread is positional judder that dropped-frame counts cannot see.
+    pub pose_to_scanout_us: Vec<u64>,
     pub peak_rss_bytes: Option<u64>,
     pub process_cpu_us: Option<u64>,
     pub window_cpu_start_us: Option<u64>,
@@ -206,6 +212,19 @@ impl PresentationMetrics {
                     json!(samples[(samples.len() * 99 / 100).min(samples.len() - 1)]);
                 window[format!("{name}_max_us")] = json!(samples.last());
             }
+        }
+        let mut pose = self.pose_to_scanout_us.clone();
+        pose.sort_unstable();
+        if !pose.is_empty() {
+            let at = |permille: usize| pose[(pose.len() * permille / 1000).min(pose.len() - 1)];
+            window["card_pose_to_scanout"] = json!({
+                "samples": pose.len(),
+                "min_us": pose[0],
+                "p1_us": at(10),
+                "p50_us": at(500),
+                "p99_us": at(990),
+                "max_us": pose[pose.len() - 1],
+            });
         }
         window["context"] = self.context.clone();
         window["peak_rss_bytes"] = json!(self.peak_rss_bytes);
