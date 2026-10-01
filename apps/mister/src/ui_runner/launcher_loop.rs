@@ -4384,20 +4384,6 @@ fn frame_production_class(
     }
 }
 
-/// Whether anything is moving on screen: an animation, scroll, transition,
-/// held direction, or the screensaver. Deferrable work yields while it is.
-fn launcher_ui_motion(
-    on_screen_motion: bool,
-    frame_class: FrameProductionClass,
-    full_screen_transition: bool,
-    directional_input_held: bool,
-) -> bool {
-    on_screen_motion
-        || frame_class != FrameProductionClass::EventDriven
-        || full_screen_transition
-        || directional_input_held
-}
-
 fn latch_late_start_wait_enabled(
     latch_backend_active: bool,
     production_class: FrameProductionClass,
@@ -6338,11 +6324,11 @@ pub(super) fn run_launcher_loop(
         });
         crate::ui_logln!("magik_context {}", session.metrics.context);
     }
-    // Whether the previous iteration showed motion. Work decided before this
-    // iteration's motion is known uses it; one frame of lag is harmless.
-    let mut ui_motion_previous = false;
-    // UI-thread maintenance yields to motion, for a bounded time.
+    // Launcher-thread maintenance and status publication yield to UI motion.
+    // Both are decided before this frame's motion is known, so they use the
+    // signal published by the previous frame; one frame of lag is harmless.
     let mut background_maintenance_deferral = mister_magik_catalog::ui_motion::Deferral::default();
+    let mut status_write_deferral = mister_magik_catalog::ui_motion::Deferral::default();
     #[cfg(feature = "tooling")]
     let mut tooling_drop_baseline: Option<(
         mister_magik_latch_contract::PresentationTelemetry,
@@ -6379,7 +6365,7 @@ pub(super) fn run_launcher_loop(
             if card_presentation_measurement_enabled {
                 session.metrics.process_cpu_us = cpu_process_us();
             }
-            session.set_ui_motion(ui_motion_previous);
+            session.set_ui_motion(mister_magik_catalog::ui_motion::active());
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
             }
@@ -6429,7 +6415,7 @@ pub(super) fn run_launcher_loop(
                 directional_input_held,
             )
             && !full_screen_transition_owned_at_loop_start
-            && background_maintenance_deferral.allows_during(ui_motion_previous, loop_start);
+            && background_maintenance_deferral.allows(loop_start);
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
             lifecycle.startup_status().state,
@@ -9353,10 +9339,9 @@ pub(super) fn run_launcher_loop(
                 1
             };
         // The one-second status publication (its serialization worker shares
-        // CPU1) yields to motion without consuming its deadline, for a bounded
-        // time: it is written on the first idle frame or after the bound.
-        let status_write_due = frame_accounting.status_write_due()
-            && (!ui_motion_previous || frame_accounting.status_write_overdue());
+        // CPU1) yields to motion without consuming its deadline.
+        let status_write_due =
+            frame_accounting.status_write_due() && status_write_deferral.allows(loop_start);
         let status_snapshot_due = status_write_due
             && !navigation_transition.is_active()
             && !full_screen_transition_owns_cpu1(full_screen_transition.state());
@@ -10033,17 +10018,16 @@ pub(super) fn run_launcher_loop(
             home_motion_active,
             navigation_transition.is_active(),
         );
-        // One app-wide motion signal, including the screensaver: background
+        // One app-wide motion signal: anything moving on screen (animations,
+        // scrolls, transitions, held directions, the screensaver). Background
         // and periodic work across the process yield to it.
-        let ui_motion_now = launcher_ui_motion(
-            stream_motion_before_render,
-            scheduled_frame_class,
-            orientation_transition.is_active()
-                || full_screen_transition_owns_cpu1(full_screen_transition.state()),
-            directional_input_held,
+        mister_magik_catalog::ui_motion::set_active(
+            stream_motion_before_render
+                || scheduled_frame_class != FrameProductionClass::EventDriven
+                || orientation_transition.is_active()
+                || full_screen_transition_owns_cpu1(full_screen_transition.state())
+                || directional_input_held,
         );
-        mister_magik_catalog::ui_motion::set_active(ui_motion_now);
-        ui_motion_previous = ui_motion_now;
         let late_frame_start_headroom_us = if latch_backend_active {
             phase_alignment.required_headroom_us()
         } else {
@@ -10190,8 +10174,6 @@ pub(super) fn run_launcher_loop(
         #[cfg(feature = "tooling")]
         let mut card_direct_measurement = None;
         #[cfg(feature = "tooling")]
-        let mut card_pose_sampled_at = None;
-        #[cfg(feature = "tooling")]
         let mut card_work_timing = None;
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
@@ -10274,7 +10256,6 @@ pub(super) fn run_launcher_loop(
                     frame_production_completed_at = Some(Instant::now());
                     #[cfg(feature = "tooling")]
                     if card_presentation_measurement_enabled {
-                        card_pose_sampled_at = Some(pose_at);
                         card_direct_measurement = Some((
                             copy.copy_us,
                             request.timestamp_us,
@@ -10299,16 +10280,8 @@ pub(super) fn run_launcher_loop(
                                 primary_cpu_us: timing.primary_cpu_us,
                                 secondary_cpu_us: timing.secondary_cpu_us,
                                 split: timing.split as u64,
-                                primary_run_delay_us: timing
-                                    .primary_scheduling
-                                    .map(|s| s.run_delay_us),
-                                primary_timeslices: timing.primary_scheduling.map(|s| s.timeslices),
-                                secondary_run_delay_us: timing
-                                    .secondary_scheduling
-                                    .map(|s| s.run_delay_us),
-                                secondary_timeslices: timing
-                                    .secondary_scheduling
-                                    .map(|s| s.timeslices),
+                                primary_run_delay_us: timing.primary_run_delay_us,
+                                secondary_run_delay_us: timing.secondary_run_delay_us,
                             };
                             card_work_timing = Some(work);
                             if tooling.metrics.window_start.is_some()
@@ -12715,20 +12688,6 @@ pub(super) fn run_launcher_loop(
                         {
                             metrics.counters.card_delivered_frames =
                                 metrics.counters.card_delivered_frames.saturating_add(1);
-                            if let Some(pose_at) = card_pose_sampled_at.take()
-                                && launcher_card_home
-                                    .as_ref()
-                                    .is_some_and(|session| session.is_animating())
-                                && metrics.window_start.is_some()
-                                && metrics.window.is_none()
-                            {
-                                // The post-present wait recorded the vblank that showed it.
-                                let now = Instant::now();
-                                metrics.pose_to_scanout_us.push(
-                                    (now.saturating_duration_since(pose_at).as_micros() as u64)
-                                        .saturating_sub(pacer.age_since_last_hit_us(now)),
-                                );
-                            }
                         } else {
                             metrics.counters.card_dropped_frames += 1;
                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
@@ -19050,34 +19009,6 @@ mod tests {
             true,
             true
         ));
-    }
-
-    #[test]
-    fn ui_motion_covers_animation_screensaver_transitions_and_held_input() {
-        let idle = FrameProductionClass::EventDriven;
-        assert!(!launcher_ui_motion(false, idle, false, false));
-        assert!(
-            launcher_ui_motion(true, idle, false, false),
-            "scroll or animation"
-        );
-        assert!(
-            launcher_ui_motion(false, FrameProductionClass::Prepared, false, false),
-            "screensaver"
-        );
-        assert!(launcher_ui_motion(
-            false,
-            FrameProductionClass::SynchronousAnimation,
-            false,
-            false
-        ));
-        assert!(
-            launcher_ui_motion(false, idle, true, false),
-            "full-screen transition"
-        );
-        assert!(
-            launcher_ui_motion(false, idle, false, true),
-            "held direction"
-        );
     }
 
     #[test]

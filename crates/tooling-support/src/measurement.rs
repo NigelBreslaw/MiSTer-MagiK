@@ -14,12 +14,9 @@ pub struct FrameWorkTiming {
     pub secondary_cpu_us: Option<u64>,
     /// First helper column; zero when the producer has no band split.
     pub split: u64,
-    /// Time each band's thread was runnable while another task held its CPU,
-    /// and how often it was scheduled, while that band rendered.
+    /// Time each band's thread was runnable while another task held its CPU.
     pub primary_run_delay_us: Option<u64>,
-    pub primary_timeslices: Option<u64>,
     pub secondary_run_delay_us: Option<u64>,
-    pub secondary_timeslices: Option<u64>,
 }
 impl FrameWorkTiming {
     fn json(self) -> Value {
@@ -28,8 +25,8 @@ impl FrameWorkTiming {
             "completion_delivery_us":self.completion_delivery_us,"merge_us":self.merge_us,
             "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us,
             "split":self.split,
-            "primary_run_delay_us":self.primary_run_delay_us,"primary_timeslices":self.primary_timeslices,
-            "secondary_run_delay_us":self.secondary_run_delay_us,"secondary_timeslices":self.secondary_timeslices})
+            "primary_run_delay_us":self.primary_run_delay_us,
+            "secondary_run_delay_us":self.secondary_run_delay_us})
     }
 }
 
@@ -89,9 +86,6 @@ pub struct Counters {
 pub struct PresentationMetrics {
     pub frame_timings_us: Vec<[u64; 3]>,
     pub work_timings: Vec<FrameWorkTiming>,
-    /// Per delivered card frame: pose sample time to the vblank that showed it.
-    /// Its spread is positional judder that dropped-frame counts cannot see.
-    pub pose_to_scanout_us: Vec<u64>,
     pub peak_rss_bytes: Option<u64>,
     pub process_cpu_us: Option<u64>,
     pub window_cpu_start_us: Option<u64>,
@@ -225,19 +219,6 @@ impl PresentationMetrics {
                     json!(samples[(samples.len() * 99 / 100).min(samples.len() - 1)]);
                 window[format!("{name}_max_us")] = json!(samples.last());
             }
-        }
-        let mut pose = self.pose_to_scanout_us.clone();
-        pose.sort_unstable();
-        if !pose.is_empty() {
-            let at = |permille: usize| pose[(pose.len() * permille / 1000).min(pose.len() - 1)];
-            window["card_pose_to_scanout"] = json!({
-                "samples": pose.len(),
-                "min_us": pose[0],
-                "p1_us": at(10),
-                "p50_us": at(500),
-                "p99_us": at(990),
-                "max_us": pose[pose.len() - 1],
-            });
         }
         window["context"] = self.context.clone();
         window["peak_rss_bytes"] = json!(self.peak_rss_bytes);

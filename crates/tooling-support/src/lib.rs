@@ -68,6 +68,9 @@ pub struct Session {
     carousel_hold_active: bool,
     carousel_sequence: Option<CarouselSequence>,
     carousel_taps_sent: u32,
+    /// Whether windows record system scheduling evidence. Each snapshot scans
+    /// procfs for tens of milliseconds of real time.
+    scheduling_evidence: bool,
     /// Device ms and system snapshot taken late in the warmup.
     scheduling_start: Option<(u64, scheduling::Snapshot)>,
     /// The application's UI is in motion; periodic writes yield to it.
@@ -95,6 +98,7 @@ impl Session {
             carousel_hold_active: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
+            scheduling_evidence: true,
             scheduling_start: None,
             ui_motion: false,
             screensaver_requested: false,
@@ -115,8 +119,6 @@ impl Session {
         self.metrics.dropped_frame_records.reserve(64);
         self.metrics.work_timings.clear();
         self.metrics.work_timings.reserve(3601);
-        self.metrics.pose_to_scanout_us.clear();
-        self.metrics.pose_to_scanout_us.reserve(3601);
         self.metrics.frame_timings_us.clear();
         self.metrics.frame_timings_us.reserve(3601);
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);
@@ -250,7 +252,8 @@ impl Session {
         let mut completed = false;
         // Scanning procfs blocks for tens of milliseconds and a helper thread
         // would compete with rendering, so snapshot inside the warmup instead.
-        if self.metrics.window.is_none()
+        if self.scheduling_evidence
+            && self.metrics.window.is_none()
             && self.metrics.window_start.is_none()
             && self.scheduling_start.is_none()
             && self.metrics.motion_started_ms.is_some_and(|start| {
@@ -332,14 +335,12 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn readiness_requires_a_presentation_and_measurements_exclude_warmup() {
-        let root = std::env::temp_dir().join(format!("magik-session-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut session = Session {
+    /// A session with idle defaults; tests override only what they exercise.
+    fn test_session(root: PathBuf) -> Session {
+        Session {
             metrics: PresentationMetrics::default(),
             start: Instant::now(),
-            root: root.clone(),
+            root: root,
             previews: PreviewProducer::new(),
             profile: None,
             last_write: Instant::now(),
@@ -353,10 +354,18 @@ mod tests {
             carousel_hold_active: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
+            scheduling_evidence: false,
             scheduling_start: None,
             ui_motion: false,
             screensaver_requested: false,
-        };
+        }
+    }
+
+    #[test]
+    fn readiness_requires_a_presentation_and_measurements_exclude_warmup() {
+        let root = std::env::temp_dir().join(format!("magik-session-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = test_session(root.clone());
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());
         session.metrics.counters.presentations = 10;
@@ -431,25 +440,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("magik-motion-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut session = Session {
-            metrics: PresentationMetrics::default(),
-            start: Instant::now(),
-            root: root.clone(),
-            previews: PreviewProducer::new(),
-            profile: None,
             last_write: Instant::now() - Duration::from_millis(250),
-            last_request: Instant::now(),
             ready: true,
-            clock_mode: None,
-            measurement_duration_ms: None,
-            clock_advanced: false,
-            force_card_fallback: false,
-            carousel_hold_requested: false,
-            carousel_hold_active: false,
-            carousel_sequence: None,
-            carousel_taps_sent: 0,
-            scheduling_start: None,
             ui_motion: true,
-            screensaver_requested: false,
+            ..test_session(root.clone())
         };
         let metrics = root.join("probe-metrics.json");
         session.tick(16, 8).unwrap();
@@ -470,25 +464,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("magik-sequence-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut session = Session {
-            metrics: PresentationMetrics::default(),
             start: Instant::now() - Duration::from_secs(60),
-            root: root.clone(),
-            previews: PreviewProducer::new(),
-            profile: None,
-            last_write: Instant::now(),
             last_request: Instant::now() - Duration::from_secs(1),
-            ready: false,
-            clock_mode: None,
-            measurement_duration_ms: None,
-            clock_advanced: false,
-            force_card_fallback: false,
-            carousel_hold_requested: false,
-            carousel_hold_active: false,
-            carousel_sequence: None,
-            carousel_taps_sent: 0,
-            scheduling_start: None,
-            ui_motion: false,
-            screensaver_requested: false,
+            ..test_session(root.clone())
         };
         std::fs::write(
             root.join("measure-request"),

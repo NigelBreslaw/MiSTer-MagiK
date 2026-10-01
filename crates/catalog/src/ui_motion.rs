@@ -52,9 +52,7 @@ impl Deferral {
         self.allows_during(active(), now)
     }
 
-    /// [`Self::allows`] with an explicit motion state, for a caller that
-    /// samples motion itself.
-    pub fn allows_during(&mut self, motion: bool, now: Instant) -> bool {
+    fn allows_during(&mut self, motion: bool, now: Instant) -> bool {
         let since = *self.deferred_since.get_or_insert(now);
         if motion && now.saturating_duration_since(since) < MAX_DEFERRAL {
             return false;

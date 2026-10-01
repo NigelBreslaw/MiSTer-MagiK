@@ -1354,12 +1354,6 @@ impl LauncherFrameAccounting {
                 && cpu_profile::screensaver_profile_state() == "complete")
     }
 
-    /// A status write postponed by UI motion for the full motion bound.
-    pub(super) fn status_write_overdue(&self) -> bool {
-        self.last_status_write.elapsed()
-            >= Duration::from_secs(1) + mister_magik_catalog::ui_motion::MAX_DEFERRAL
-    }
-
     pub(super) fn request_status_write(&mut self) {
         self.last_status_write = Instant::now() - Duration::from_secs(2);
     }
@@ -2836,24 +2830,16 @@ pub(super) fn cpu_thread_us() -> Option<u64> {
     clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
-/// Calling thread's cumulative run delay and timeslices. Measurement only:
-/// each call reads procfs.
+/// Calling thread's cumulative run delay: time runnable while another task
+/// held its CPU. Measurement only: each call reads procfs.
 #[cfg(target_os = "linux")]
-pub(super) fn thread_scheduling()
--> Option<mister_magik_framebuffer_scenes::launcher_parallel::ThreadScheduling> {
+pub(super) fn thread_run_delay_us() -> Option<u64> {
     let value = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-    let mut fields = value.split_whitespace().skip(1);
-    Some(
-        mister_magik_framebuffer_scenes::launcher_parallel::ThreadScheduling {
-            run_delay_us: fields.next()?.parse::<u64>().ok()? / 1_000,
-            timeslices: fields.next()?.parse().ok()?,
-        },
-    )
+    Some(value.split_whitespace().nth(1)?.parse::<u64>().ok()? / 1_000)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(super) fn thread_scheduling()
--> Option<mister_magik_framebuffer_scenes::launcher_parallel::ThreadScheduling> {
+pub(super) fn thread_run_delay_us() -> Option<u64> {
     None
 }
 

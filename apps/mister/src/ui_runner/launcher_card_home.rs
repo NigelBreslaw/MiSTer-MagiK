@@ -688,7 +688,7 @@ fn home_renderer(prepared: &PreparedLauncher) -> Box<ParallelLauncherRenderer> {
         .then_some(
             mister_magik_framebuffer_scenes::launcher_parallel::ThreadClocks {
                 cpu_us: crate::ui_runner::launcher_frame_accounting::cpu_thread_us,
-                scheduling: crate::ui_runner::launcher_frame_accounting::thread_scheduling,
+                run_delay_us: crate::ui_runner::launcher_frame_accounting::thread_run_delay_us,
             },
         );
     Box::new(
