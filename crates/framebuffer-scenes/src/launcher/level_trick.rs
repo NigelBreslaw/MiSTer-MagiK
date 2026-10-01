@@ -47,6 +47,12 @@ impl LevelChange {
     }
 }
 
+pub(super) struct ChromeSpan {
+    start: usize,
+    end: usize,
+    title: bool,
+}
+
 impl PreparedLauncher {
     pub fn render_level_gather_to(
         &mut self,
@@ -206,11 +212,14 @@ impl PreparedLauncher {
                 self.logical[at] = Rgb565Pixel(scale_rgb565(target.chrome[at].0, alpha));
             }
         }
+        self.level_foreign_title = true;
         self.fit_output();
     }
 
     pub fn restore_chrome(&mut self) {
         self.logical.copy_from_slice(&self.chrome);
+        self.level_chrome_alpha = None;
+        self.level_foreign_title = false;
         self.fit_output();
     }
 
@@ -237,43 +246,90 @@ impl PreparedLauncher {
         }
         self.fit_output();
     }
-    fn fade_level_chrome(&mut self, alpha: i64) {
-        let alpha = (alpha * 256 / GEOMETRY_ONE) as u32;
+    fn level_chrome_regions(&self) -> [((usize, usize, usize, usize), bool); 3] {
         let width = if self.responsive.is_some() {
             self.scene.width
         } else {
             LOGICAL_WIDTH
         };
-        let (logical, chrome) = (&mut self.logical, &self.chrome);
-        let mut fade = |x0: usize, y0: usize, x1: usize, y1: usize| {
+        let (summary, panel) = if let Some(layout) = self.responsive {
+            let (_, title_end) = layout.level_chrome_rows()[0];
+            let (_, _, _, rule_y) = layout.title_rect();
+            let (y0, y1) = layout.level_chrome_rows()[1];
+            ((0, rule_y + 1, width, title_end), (0, y0, width, y1))
+        } else {
+            ((0, 77, 265, 500), (296, 77, LOGICAL_WIDTH, 120))
+        };
+        let title = self.responsive.map_or((26, 0, 826, 76), |l| l.title_rect());
+        [(summary, false), (panel, false), (title, true)]
+    }
+
+    pub(super) fn rebuild_level_chrome_spans(&mut self) {
+        self.level_chrome_spans.clear();
+        self.level_chrome_alpha = None;
+        self.level_foreign_title = false;
+        let width = if self.responsive.is_some() {
+            self.scene.width
+        } else {
+            LOGICAL_WIDTH
+        };
+        for ((x0, y0, x1, y1), title) in self.level_chrome_regions() {
             for y in y0..y1 {
-                let row = y * width;
-                for (out, pixel) in logical[row + x0..row + x1]
-                    .iter_mut()
-                    .zip(&chrome[row + x0..row + x1])
-                {
+                let start = y * width + x0;
+                let row = &self.chrome[start..y * width + x1];
+                if let Some(first) = row.iter().position(|p| p.0 != BACKGROUND) {
+                    let last = row.iter().rposition(|p| p.0 != BACKGROUND).unwrap();
+                    self.level_chrome_spans.push(ChromeSpan {
+                        start: start + first,
+                        end: start + last + 1,
+                        title,
+                    });
+                }
+            }
+        }
+    }
+
+    fn fade_level_chrome(&mut self, alpha: i64) {
+        let alpha = (alpha * 256 / GEOMETRY_ONE) as u32;
+        let foreign_title = std::mem::take(&mut self.level_foreign_title);
+        if self.level_chrome_alpha == Some(alpha) && !foreign_title {
+            return;
+        }
+        // A target breadcrumb may occupy pixels that are black in our source.
+        // Clear that overlay before restoring this level's sparse title rows.
+        if foreign_title {
+            let ((x0, y0, x1, y1), _) = self.level_chrome_regions()[2];
+            let width = if self.responsive.is_some() {
+                self.scene.width
+            } else {
+                LOGICAL_WIDTH
+            };
+            for y in y0..y1 {
+                self.logical[y * width + x0..y * width + x1].fill(Rgb565Pixel(BACKGROUND));
+            }
+        }
+        for span in &self.level_chrome_spans {
+            if self.level_chrome_alpha == Some(alpha) && !span.title {
+                continue;
+            }
+            let alpha = if span.title {
+                76 + 180 * alpha / 256
+            } else {
+                alpha
+            };
+            let output = &mut self.logical[span.start..span.end];
+            let source = &self.chrome[span.start..span.end];
+            if alpha == 0 {
+                output.fill(Rgb565Pixel(0));
+            } else if alpha >= 256 {
+                output.copy_from_slice(source);
+            } else {
+                for (out, pixel) in output.iter_mut().zip(source) {
                     *out = Rgb565Pixel(scale_rgb565(pixel.0, alpha));
                 }
             }
-        };
-        if let Some(layout) = self.responsive {
-            let (_, title_end) = layout.level_chrome_rows()[0];
-            let (_, _, _, rule_y) = layout.title_rect();
-            fade(0, rule_y + 1, width, title_end);
-            let (y0, y1) = layout.level_chrome_rows()[1];
-            fade(0, y0, width, y1);
-        } else {
-            fade(0, 77, 265, 500);
-            fade(296, 77, LOGICAL_WIDTH, 120);
         }
-        let title_alpha = 76 + 180 * alpha / 256;
-        let (x0, y0, x1, y1) = self.responsive.map_or((26, 0, 826, 76), |l| l.title_rect());
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let at = y * width + x;
-                self.logical[at] = Rgb565Pixel(scale_rgb565(self.chrome[at].0, title_alpha));
-            }
-        }
+        self.level_chrome_alpha = Some(alpha);
     }
 }
 
@@ -515,6 +571,91 @@ mod tests {
             );
         }
         assert!(from.pixels()[76 * 960..77 * 960] == from.chrome[76 * 960..77 * 960]);
+    }
+
+    #[test]
+    fn sparse_chrome_matches_dense_fade_through_breadcrumbs_and_interruptions() {
+        let source_cards = cards(6);
+        let target_cards = cards(4);
+        for scene in [
+            LauncherScene::new(960, 540),
+            LauncherScene::crt(640, 240),
+            LauncherScene::new(540, 960),
+        ] {
+            for root in [false, true] {
+                let mut data = level(&source_cards, 3, &["CONSOLES"]);
+                if root {
+                    data.level = LauncherLevel::Root;
+                }
+                let mut sparse = scene.prepare(data);
+                let mut dense = scene.prepare(data);
+                let target = scene.prepare(level(&target_cards, 0, &["CONSOLES", "NINTENDO"]));
+                for change in [LevelChange::Descend, LevelChange::Ascend] {
+                    sparse.restore_chrome();
+                    dense.restore_chrome();
+                    for t in [1, 130, 260, 280, 414, 459, 460, 260, 200, 459] {
+                        sparse.render_level_gather_to(3, change, t, target.slot_zero());
+                        dense.render_level_gather_to(3, change, t, target.slot_zero());
+                        let alpha = ((GEOMETRY_ONE
+                            - ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS)))
+                            * 256
+                            / GEOMETRY_ONE) as u32;
+                        let width = if dense.responsive.is_some() {
+                            dense.scene.width
+                        } else {
+                            LOGICAL_WIDTH
+                        };
+                        // Previous implementation: repaint every pixel, including black.
+                        for ((x0, y0, x1, y1), title) in dense.level_chrome_regions() {
+                            let alpha = if title { 76 + 180 * alpha / 256 } else { alpha };
+                            for y in y0..y1 {
+                                for x in x0..x1 {
+                                    let at = y * width + x;
+                                    dense.logical[at] =
+                                        Rgb565Pixel(scale_rgb565(dense.chrome[at].0, alpha));
+                                }
+                            }
+                        }
+                        dense.fit_output();
+                        sparse.render_transition_title_from(&target, t);
+                        dense.render_transition_title_from(&target, t);
+                        assert!(
+                            sparse.pixels() == dense.pixels(),
+                            "scene={scene:?} root={root} change={change:?} t={t}"
+                        );
+                    }
+                    for t in [460, 490, 600, 760, 866, 880, 900, 919, 790, 920] {
+                        sparse.render_level_deal_from(3, change, t, target.slot_zero());
+                        dense.render_level_deal_from(3, change, t, target.slot_zero());
+                        let alpha =
+                            (ease_out_quart(window(t, CHROME_IN_AT_MILLIS, CHROME_IN_MILLIS)) * 256
+                                / GEOMETRY_ONE) as u32;
+                        let width = if dense.responsive.is_some() {
+                            dense.scene.width
+                        } else {
+                            LOGICAL_WIDTH
+                        };
+                        for ((x0, y0, x1, y1), title) in dense.level_chrome_regions() {
+                            let alpha = if title { 76 + 180 * alpha / 256 } else { alpha };
+                            for y in y0..y1 {
+                                for x in x0..x1 {
+                                    let at = y * width + x;
+                                    dense.logical[at] =
+                                        Rgb565Pixel(scale_rgb565(dense.chrome[at].0, alpha));
+                                }
+                            }
+                        }
+                        dense.fit_output();
+                        assert!(
+                            sparse.pixels() == dense.pixels(),
+                            "scene={scene:?} root={root} change={change:?} deal t={t}"
+                        );
+                    }
+                    sparse.refresh_chrome(data, None);
+                    dense.refresh_chrome(data, None);
+                }
+            }
+        }
     }
 
     #[test]

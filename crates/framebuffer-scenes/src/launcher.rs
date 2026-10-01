@@ -429,6 +429,9 @@ pub struct PreparedLauncher {
     /// Pristine static chrome. Level transitions fade between two levels'
     /// chrome without re-rendering text in motion.
     chrome: Vec<Rgb565Pixel>,
+    level_chrome_spans: Vec<level_trick::ChromeSpan>,
+    level_chrome_alpha: Option<u32>,
+    level_foreign_title: bool,
     cyclic: bool,
     fitted: Vec<Rgb565Pixel>,
     faces: Arc<Vec<Arc<CardFaces>>>,
@@ -626,6 +629,7 @@ impl PreparedLauncher {
             render_logical(&mut self.logical, data, typography);
         }
         self.chrome.copy_from_slice(&self.logical);
+        self.rebuild_level_chrome_spans();
         self.fit_output();
     }
 
@@ -795,10 +799,13 @@ impl PreparedLauncher {
         }
         #[cfg(feature = "launcher-profile")]
         let _buffers = crate::launcher_profile::span("prepare.retained_buffers");
-        Self {
+        let mut prepared = Self {
             scene,
             responsive,
             chrome: chrome.clone(),
+            level_chrome_spans: Vec::new(),
+            level_chrome_alpha: None,
+            level_foreign_title: false,
             cyclic: data.level.cyclic(),
             logical: chrome,
             fitted: if responsive.is_some()
@@ -826,7 +833,9 @@ impl PreparedLauncher {
                     }
                 })
                 .collect(),
-        }
+        };
+        prepared.rebuild_level_chrome_spans();
+        prepared
     }
 
     pub fn render_parallel_frame(
