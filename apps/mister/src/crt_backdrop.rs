@@ -471,10 +471,6 @@ impl CrtBackdropState {
             CRT_PRODUCT_WARNING_TEXT,
             rgb565_from_rgb888(0xee, 0xe8, 0xd5),
             rgb565_from_rgb888(0x8f, 0x97, 0x96),
-            rgb565_from_rgb888(0x3a, 0x1a, 0x16),
-            rgb565_from_rgb888(0x17, 0x1d, 0x3a),
-            rgb565_from_rgb888(0x3a, 0x31, 0x0f),
-            rgb565_from_rgb888(0x0d, 0x31, 0x24),
             rgb565_from_rgb888(0xe7, 0x69, 0x5a),
             rgb565_from_rgb888(0x5a, 0x71, 0xe7),
             rgb565_from_rgb888(0xe6, 0xc2, 0x3a),
@@ -527,9 +523,11 @@ impl CrtBackdropState {
                 }
                 let value = pixel.0 as u32;
                 let inverse = 256 - alpha;
-                let blended = (((value & 0xf81f) * inverse + (accent & 0xf81f) * alpha) >> 8)
-                    & 0xf81f
-                    | (((value & 0x07e0) * inverse + (accent & 0x07e0) * alpha) >> 8) & 0x07e0;
+                let red = (((value >> 11) * inverse + (accent >> 11) * alpha) >> 8) << 11;
+                let green =
+                    ((((value >> 5) & 63) * inverse + ((accent >> 5) & 63) * alpha) >> 8) << 5;
+                let blue = ((value & 31) * inverse + (accent & 31) * alpha) >> 8;
+                let blended = red | green | blue;
                 surface.set(mx + x, y, Rgb565Pixel(blended as u16));
             }
         }
@@ -1582,6 +1580,10 @@ mod tests {
             (0, rgb565_from_rgb888(0x5a, 0x71, 0xe7)),
         );
         assert_eq!(pixels[60 * 640 + 62], cream);
+        assert_eq!(
+            pixels[60 * 640 + 46],
+            Rgb565Pixel((6 << 11) | (17 << 5) | 17)
+        );
         assert_ne!(pixels[60 * 640 + 46], pixels[60 * 640 + 320]);
         assert_ne!(pixels[60 * 640 + 320], pixels[60 * 640 + 598]);
         assert_eq!(pixels[80 * 640 + 46], CRT_BACKDROP_BACKGROUND);
