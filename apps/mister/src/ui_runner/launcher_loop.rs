@@ -9893,6 +9893,27 @@ pub(super) fn run_launcher_loop(
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             composition_decision.clear_direct_layers,
         );
+        let home_motion_active = home_frame_driven_redraw_active(
+            nav.screen,
+            home_pan_present_active,
+            home_horizontal_input_held,
+        );
+        let scheduled_frame_class = frame_production_class(
+            screensaver.active,
+            home_motion_active,
+            navigation_transition.is_active(),
+        );
+        // One app-wide motion signal: anything moving on screen (animations,
+        // scrolls, transitions, held directions, the screensaver). Background
+        // and periodic work across the process yield to it. Publish before the
+        // restart and idle branches so settling clears it at once.
+        mister_magik_catalog::ui_motion::set_active(
+            stream_motion_before_render
+                || scheduled_frame_class != FrameProductionClass::EventDriven
+                || orientation_transition.is_active()
+                || full_screen_transition_owns_cpu1(full_screen_transition.state())
+                || directional_input_held,
+        );
         let render_intent = LauncherRenderIntent {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             startup_input_enabled: startup_status.input_enabled,
@@ -10008,26 +10029,6 @@ pub(super) fn run_launcher_loop(
         let redraw_pending_for_trace = window.redraw_pending();
         let wake_reasons_bits = wake_reasons.bits();
         let latch_backend_active = launcher_presenter.pacing_backend().is_latch();
-        let home_motion_active = home_frame_driven_redraw_active(
-            nav.screen,
-            home_pan_present_active,
-            home_horizontal_input_held,
-        );
-        let scheduled_frame_class = frame_production_class(
-            screensaver.active,
-            home_motion_active,
-            navigation_transition.is_active(),
-        );
-        // One app-wide motion signal: anything moving on screen (animations,
-        // scrolls, transitions, held directions, the screensaver). Background
-        // and periodic work across the process yield to it.
-        mister_magik_catalog::ui_motion::set_active(
-            stream_motion_before_render
-                || scheduled_frame_class != FrameProductionClass::EventDriven
-                || orientation_transition.is_active()
-                || full_screen_transition_owns_cpu1(full_screen_transition.state())
-                || directional_input_held,
-        );
         let late_frame_start_headroom_us = if latch_backend_active {
             phase_alignment.required_headroom_us()
         } else {

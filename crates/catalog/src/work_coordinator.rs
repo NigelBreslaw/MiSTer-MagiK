@@ -80,18 +80,24 @@ impl WorkCoordinator {
         }
     }
 
-    fn cooperate_background(&self, label: &'static str, motion: bool) -> bool {
+    fn cooperate_background(&self, label: &'static str, yield_to_motion: bool) -> bool {
         let mut state = self.state.lock().expect("work coordinator lock poisoned");
-        if motion {
+        if yield_to_motion && crate::ui_motion::active() {
             let started = *state.motion_yield_started.get_or_insert_with(Instant::now);
+            let within_bound = || started.elapsed() < crate::ui_motion::MAX_DEFERRAL;
             // Bounded like every motion deferral: after the limit one unit runs.
-            if started.elapsed() < crate::ui_motion::MAX_DEFERRAL {
+            if within_bound() {
                 state.background_yields += 1;
                 let waited = Instant::now();
-                let _ = self
-                    .changed
-                    .wait_timeout(state, MOTION_WAIT)
-                    .expect("work coordinator wait poisoned");
+                // Hold the unit until motion ends or the bound expires; ending
+                // motion notifies, and each timeout re-checks the bound.
+                while crate::ui_motion::active() && within_bound() {
+                    state = self
+                        .changed
+                        .wait_timeout(state, MOTION_WAIT)
+                        .expect("work coordinator wait poisoned")
+                        .0;
+                }
                 crate::catalog_logln!(
                     "work_coordinator_tsv\tphase=yield-motion\tclass=background\tlabel={}\thold_us={}",
                     label,
@@ -248,14 +254,28 @@ mod tests {
 
     #[test]
     fn background_yields_to_ui_motion_within_the_deferral_bound() {
+        let _motion = crate::ui_motion::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let coordinator = Box::leak(Box::new(WorkCoordinator::new()));
+        crate::ui_motion::set_active(true);
+        // A unit stays held while motion lasts, across many wait slices.
+        let ender = std::thread::spawn(|| {
+            std::thread::sleep(MOTION_WAIT * 3);
+            crate::ui_motion::set_active(false);
+        });
         let started = Instant::now();
         assert!(coordinator.cooperate_background("test-motion", true));
-        assert!(started.elapsed() >= MOTION_WAIT - Duration::from_millis(5));
+        assert!(started.elapsed() >= MOTION_WAIT * 3 - Duration::from_millis(5));
+        ender.join().unwrap();
         // Past the bound one unit runs, then yielding starts afresh.
+        crate::ui_motion::set_active(true);
         coordinator.state.lock().unwrap().motion_yield_started =
             Some(Instant::now() - crate::ui_motion::MAX_DEFERRAL);
         assert!(!coordinator.cooperate_background("test-motion", true));
+        // Work watched live never yields to motion.
+        assert!(!coordinator.cooperate_background("test-motion", false));
+        crate::ui_motion::set_active(false);
         assert!(
             coordinator
                 .state

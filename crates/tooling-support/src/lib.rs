@@ -122,6 +122,8 @@ impl Session {
         self.metrics.frame_timings_us.clear();
         self.metrics.frame_timings_us.reserve(3601);
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);
+        // A restarted measurement takes its own scheduling baseline.
+        self.scheduling_start = None;
         self.metrics.window_start = None;
         self.metrics.window = None;
         self.clock_advanced = false;
@@ -340,7 +342,7 @@ mod tests {
         Session {
             metrics: PresentationMetrics::default(),
             start: Instant::now(),
-            root: root,
+            root,
             previews: PreviewProducer::new(),
             profile: None,
             last_write: Instant::now(),
@@ -433,6 +435,27 @@ mod tests {
         assert_eq!(session.carousel_hold_change(), Some(false));
         assert_eq!(session.metrics.motion_started_ms, started);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restarting_a_measurement_takes_a_fresh_scheduling_baseline() {
+        let root = std::env::temp_dir().join(format!("magik-restart-{}", std::process::id()));
+        let mut session = Session {
+            scheduling_evidence: true,
+            ..test_session(root.clone())
+        };
+        session.begin();
+        session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
+        session.tick(16, 8).unwrap();
+        let (first_baseline_ms, _) = session.scheduling_start.as_ref().unwrap();
+        let first_baseline_ms = *first_baseline_ms;
+        session.begin();
+        assert!(session.scheduling_start.is_none());
+        session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
+        session.tick(16, 8).unwrap();
+        let (second_baseline_ms, _) = session.scheduling_start.as_ref().unwrap();
+        assert!(*second_baseline_ms > first_baseline_ms);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
