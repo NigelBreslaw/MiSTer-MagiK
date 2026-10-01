@@ -1,6 +1,6 @@
 # Card launcher and system pages: web prototype → production parity plan
 
-Status: implementation contract, 2026-10-01. Scope: HDMI (960×540 logical, landscape) and CRT
+Status: host implementation and review record, 2026-10-01. Scope: HDMI (960×540 logical, landscape) and CRT
 (640×240 raster, 2:1 pixel aspect). Portrait layouts are called out where the
 prototype is silent.
 
@@ -10,6 +10,84 @@ behaviour (file and line, which match that folder), the production Rust or
 Slint that must change, the exact numbers to carry over, and how to prove it.
 Production must reproduce the prototype's *geometry, timing and ordering*; it
 does not need to reproduce its implementation (DOM transforms, canvas).
+
+---
+
+## Implementation record (2026-10-01)
+
+Implemented locally on `nigel/ui-prototype-parity`, based on collection-browse
+commit `ac337f86e`. The inventory in section 1 describes that starting point;
+this record describes the current branch.
+
+| Commit | Review scope |
+|---|---|
+| `9cb2e39bf` | Prototype source and implementation contract |
+| `652495fbf` | Forty root artwork golden frames across directions and layouts |
+| `359cc601e` | Nested row geometry, overlap, capacity, cycling and clip propagation |
+| `77149af19` | Explicit nested 460 ms step clock and bounded input repeat |
+| `e6afa8c30` | Continuous 920 ms level turn/travel and native slot geometry |
+| `3ff5506de` | One system page, hub/list mode, Arcade hub and Select/Back semantics |
+| `bf716bd8d` | Timed panel bands over the persistent device/backdrop |
+| `60ea50fc8` | Correct incoming/outgoing band selection and mid-animation regression |
+| `29e930b57` | Device-card reveals, prepared destination capture and native review support |
+
+The root's approved artwork, back, projection, lighting, reflections, spring
+and input policy remain protected. The proposed two-tone icon redraw is
+outside this implementation because changing the existing card appearance was
+explicitly excluded. CRT hubs show the existing identity and the three real
+Games/Recent/Favourites sections; the prototype's additional Media/Controller/
+Core fact rows still require real metadata before they can be added.
+
+### Evidence
+
+Focused suites passed: framebuffer scenes (153 tests, one ignored benchmark),
+launcher navigation (166), transition runtime (30), card sessions (16),
+composition (23), and native preview (42). The root golden frames remained
+unchanged. The reveal readiness regression verifies that time stays at zero
+while the composed destination is being prepared, with the full reveal clock
+starting once its screenshot and layers are available.
+
+Twenty-four final host captures cover HDMI 960×540 and native CRT 640×240,
+system and Arcade entry/back, and Select in both directions. Reverse replays
+compare the entire source/resting endpoint, including restored selection.
+Captures and logs are kept under the ignored directory
+`outputs/ui-prototype-parity/final-review/`; they are not part of the commits.
+The 230 ms review request uses the nearest 60 Hz frame. Preparation can delay
+the start of a reveal; renderer unit tests exercise exact elapsed times.
+
+The preview now uses the production Rust card session. `ui-preview` enables
+the shared UI runtime, `crt-native-240p` selects native 240-line composition,
+and the older `crt-240p` profile retains its legacy 480-line review behavior.
+For example:
+
+```sh
+scripts/cargo run --manifest-path apps/mister/Cargo.toml \
+  --features ui-preview --bin mister-magik-ui-preview -- \
+  --content fixtures --no-scan --no-download --cold-start skip \
+  --display-profile crt-native-240p --refresh-rate 60 \
+  --navigation-transition-demo consoles-system \
+  --navigation-transition-duration-ms 900 --frame 14 \
+  --output /tmp/magik-system-reveal.png
+```
+
+Use `--panel-transition-demo` for a Select replay and add
+`--navigation-transition-demo-reverse` for either reverse journey. Output paths
+must be fresh because the capture writer deliberately refuses overwrites.
+
+Slint MCP was built and attempted, but its requests timed out in the custom
+preview event loop. The native gesture replay and captured images were used
+instead. Rust LSP reported no diagnostics for the indexed changed modules;
+the feature-gated launcher loop is not indexed, so its assurance comes from
+explicit Cargo compilation and the focused runtime suites.
+
+### Remaining sign-off
+
+No device deployment or physical measurement was performed. Section WS8's
+attended HDMI/CRT journeys, authoritative captures and 60 Hz Analytics checks
+remain required before release, including held-controller gestures, cold
+preparation, and entry from each device family. Portrait and other CRT profiles
+have responsive fallbacks, but remain outside the supplied prototype's visual
+sign-off. This record makes no claim of zero dropped frames on MiSTer hardware.
 
 ---
 
