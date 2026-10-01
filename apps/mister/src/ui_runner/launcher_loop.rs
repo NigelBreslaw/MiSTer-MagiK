@@ -2077,7 +2077,7 @@ impl LauncherResponseState {
                 Screen::Licenses => nav.licenses_selected,
                 _ => nav.selected,
             },
-            arcade_visual_index_milli: (nav.screen == Screen::Arcade)
+            arcade_visual_index_milli: (nav.screen == Screen::Arcade && !nav.is_system_hub())
                 .then(|| (f64::from(nav.arcade.visual_index) * 1_000.0).round() as i64),
         }
     }
@@ -2093,11 +2093,12 @@ impl LauncherResponseState {
     }
 
     fn matches_presented(&self, before: &Self, presented: &Self) -> bool {
-        if self.screen != "arcade" {
+        if self.arcade_visual_index_milli.is_none() {
             return self == presented;
         }
         self.screen == presented.screen
             && self.selected_index == presented.selected_index
+            && presented.arcade_visual_index_milli.is_some()
             && before.arcade_visual_index_milli != presented.arcade_visual_index_milli
     }
 }
@@ -15678,6 +15679,7 @@ mod tests {
             Some(SelectionFeedbackTarget::new("licenses", "slint"))
         );
         nav.screen = Screen::Arcade;
+        nav.system_page_mode = launcher::SystemPageMode::List;
         assert_eq!(nav_selection_feedback_target(&nav), None);
         nav.arcade_filter.drawer_open = true;
         nav.arcade_filter.selected = 3;
@@ -16374,6 +16376,9 @@ mod tests {
 
         assert!(!selected.matches_presented(&before, &stationary));
         assert!(selected.matches_presented(&before, &moved));
+        let mut hub = stationary;
+        hub.arcade_visual_index_milli = None;
+        assert!(!selected.matches_presented(&before, &hub));
     }
 
     #[test]
