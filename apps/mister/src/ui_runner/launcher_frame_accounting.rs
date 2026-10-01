@@ -2830,6 +2830,19 @@ pub(super) fn cpu_thread_us() -> Option<u64> {
     clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
+/// Calling thread's cumulative run delay: time runnable while another task
+/// held its CPU. Measurement only: each call reads procfs.
+#[cfg(target_os = "linux")]
+pub(super) fn thread_run_delay_us() -> Option<u64> {
+    let value = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    Some(value.split_whitespace().nth(1)?.parse::<u64>().ok()? / 1_000)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn thread_run_delay_us() -> Option<u64> {
+    None
+}
+
 #[cfg(not(target_os = "linux"))]
 pub(super) fn cpu_thread_us() -> Option<u64> {
     None

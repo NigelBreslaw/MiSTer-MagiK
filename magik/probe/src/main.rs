@@ -323,6 +323,15 @@ fn main() -> Result<(), String> {
             }
         }
 
+        // The same app-wide motion signal as MiSTer MagiK: background and
+        // periodic work in this process yields while a concept or the motion
+        // workload plays, so measured cadence reflects the renderer.
+        let ui_motion = {
+            let c = concepts.borrow();
+            c.scene.is_some() && !c.paused
+        } || probe.get_motion_running();
+        mister_magik_catalog::ui_motion::set_active(ui_motion);
+        session.borrow_mut().set_ui_motion(ui_motion);
         measurement::resources(&mut session.borrow_mut().metrics);
         if session.borrow_mut().tick(width, height)? {
             concepts.borrow_mut().paused = true;

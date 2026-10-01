@@ -12,13 +12,21 @@ pub struct FrameWorkTiming {
     pub merge_us: u64,
     pub primary_cpu_us: Option<u64>,
     pub secondary_cpu_us: Option<u64>,
+    /// First helper column; zero when the producer has no band split.
+    pub split: u64,
+    /// Time each band's thread was runnable while another task held its CPU.
+    pub primary_run_delay_us: Option<u64>,
+    pub secondary_run_delay_us: Option<u64>,
 }
 impl FrameWorkTiming {
     fn json(self) -> Value {
         json!({"producer_us":self.producer_us,"primary_us":self.primary_us,"secondary_us":self.secondary_us,
             "wait_us":self.wait_us,"helper_start_delay_us":self.helper_start_delay_us,
             "completion_delivery_us":self.completion_delivery_us,"merge_us":self.merge_us,
-            "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us})
+            "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us,
+            "split":self.split,
+            "primary_run_delay_us":self.primary_run_delay_us,
+            "secondary_run_delay_us":self.secondary_run_delay_us})
     }
 }
 
@@ -72,6 +80,7 @@ pub struct Counters {
     pub card_prepare_us: u64,
     pub card_fallback_copies: u64,
     pub card_fallback_copy_pixels: u64,
+    pub screensaver_presentations: u64,
 }
 #[derive(Default)]
 pub struct PresentationMetrics {
@@ -179,6 +188,8 @@ impl PresentationMetrics {
             "merge",
             "primary_cpu",
             "secondary_cpu",
+            "primary_run_delay",
+            "secondary_run_delay",
         ]
         .into_iter()
         .enumerate()
@@ -195,7 +206,9 @@ impl PresentationMetrics {
                     5 => Some(t.completion_delivery_us),
                     6 => Some(t.merge_us),
                     7 => t.primary_cpu_us,
-                    _ => t.secondary_cpu_us,
+                    8 => t.secondary_cpu_us,
+                    9 => t.primary_run_delay_us,
+                    _ => t.secondary_run_delay_us,
                 })
                 .collect::<Vec<_>>();
             samples.sort_unstable();
@@ -221,6 +234,8 @@ impl PresentationMetrics {
             json!(cpu_us.map(|us| us as f64 / ((end_ms - start_ms).max(1) as f64 * 10.0)));
         window["card_fallback_copies"] =
             json!(c.card_fallback_copies - baseline.card_fallback_copies);
+        window["screensaver_presentations"] =
+            json!(c.screensaver_presentations - baseline.screensaver_presentations);
         window["card_fallback_copy_pixels"] =
             json!(c.card_fallback_copy_pixels - baseline.card_fallback_copy_pixels);
     }

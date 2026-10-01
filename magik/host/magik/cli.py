@@ -50,6 +50,7 @@ CHECK_SCENARIOS = (
     "motion-rollover",
     "motion-held",
     "motion-taps-then-hold",
+    "screensaver",
     "motion-fallback",
     "idle",
     "journeys",

@@ -150,6 +150,11 @@ until the window completes; release is still guaranteed on failure. It uses its
 own native 60-second test lease, which the shared motion session cannot spare.
 Run it alone with `scripts/magik check motion-taps-then-hold` (uninstrumented).
 
+`scripts/magik check screensaver` starts the screensaver at once for one
+ten-second window, requires every measured presentation to be a screensaver
+frame, then wakes the launcher. The user's screensaver setting and delay apply
+again afterwards.
+
 Compare Mini's original storyboard with its sustained default-speed workload:
 
 ```sh

@@ -148,6 +148,11 @@ impl Journal {
 }
 
 fn run(receiver: mpsc::Receiver<Event>) {
+    // Spawned lazily from whichever thread records first, often the launcher
+    // thread: do not inherit its interactive priority and CPU.
+    mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+        mister_magik_catalog::runtime_thread::RuntimeThreadRole::MediaWorker,
+    );
     let tmp = Path::new("/tmp/mister-magik");
     let dir = mister_magik_catalog::device_layout::current_app_path("diagnostics/media");
     let boot =
@@ -187,6 +192,7 @@ fn run(receiver: mpsc::Receiver<Event>) {
         );
     }
     let mut last_live = Instant::now();
+    let mut write_deferral = mister_magik_catalog::ui_motion::Deferral::default();
     let mut io_errors = 0;
     loop {
         let remaining = Duration::from_secs(2).saturating_sub(last_live.elapsed());
@@ -199,7 +205,7 @@ fn run(receiver: mpsc::Receiver<Event>) {
             continue;
         }
         last_live = Instant::now();
-        if !journal.changed {
+        if !journal.changed || !write_deferral.allows(Instant::now()) {
             continue;
         }
         journal.changed = false;

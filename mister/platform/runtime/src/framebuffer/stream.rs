@@ -537,7 +537,8 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                 NEEDS_KEYFRAME.store(true, Ordering::Release);
             }
             WorkerEvent::Frame(update) => {
-                let _ = background_lease.cooperate();
+                // A viewer asked for live frames, including during motion.
+                let _ = background_lease.cooperate_with_foreground();
                 if update.kind == FrameUpdateKind::Delta {
                     producer_state.remember_rect_pixels(
                         update.geometry,

@@ -3,6 +3,7 @@
 pub mod measurement;
 mod preview;
 mod profile;
+pub mod scheduling;
 use measurement::PresentationMetrics;
 use preview::PreviewProducer;
 pub use profile::CpuProfile;
@@ -14,6 +15,11 @@ use std::{
 
 /// Measurement windows start after this device-clock warmup.
 const MEASUREMENT_WARMUP_MS: u64 = 2_000;
+/// Live metrics refresh while the UI is idle, and at most this often in motion.
+const PERIODIC_WRITE_INTERVAL: Duration = Duration::from_millis(200);
+const MOTION_WRITE_INTERVAL: Duration = Duration::from_secs(5);
+/// The scheduling baseline is taken this long before the window starts.
+const SCHEDULING_SNAPSHOT_LEAD_MS: u64 = 500;
 
 /// Right taps, then a right hold, timed from the measurement window start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +31,9 @@ struct CarouselSequence {
 
 impl CarouselSequence {
     fn from_request(value: &serde_json::Value) -> Option<Self> {
-        let taps = value["taps"].as_u64().filter(|taps| (1..=20).contains(taps))?;
+        let taps = value["taps"]
+            .as_u64()
+            .filter(|taps| (1..=20).contains(taps))?;
         Some(Self {
             taps: taps as u32,
             tap_interval_ms: value["tap_interval_ms"]
@@ -60,6 +68,15 @@ pub struct Session {
     carousel_hold_active: bool,
     carousel_sequence: Option<CarouselSequence>,
     carousel_taps_sent: u32,
+    /// Whether windows record system scheduling evidence. Each snapshot scans
+    /// procfs for tens of milliseconds of real time.
+    scheduling_evidence: bool,
+    /// Device ms and system snapshot taken late in the warmup.
+    scheduling_start: Option<(u64, scheduling::Snapshot)>,
+    /// The application's UI is in motion; periodic writes yield to it.
+    ui_motion: bool,
+    /// The latest request asked for the screensaver during its window.
+    screensaver_requested: bool,
 }
 impl Session {
     pub fn from_environment() -> Option<Self> {
@@ -81,8 +98,19 @@ impl Session {
             carousel_hold_active: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
+            scheduling_evidence: true,
+            scheduling_start: None,
+            ui_motion: false,
+            screensaver_requested: false,
         })
     }
+    /// Report whether the application's UI is in motion. Periodic metric
+    /// writes are postponed while it is, for at most five seconds; completed
+    /// windows and readiness are always written immediately.
+    pub fn set_ui_motion(&mut self, active: bool) {
+        self.ui_motion = active;
+    }
+
     pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
         self.measurement_duration_ms = milliseconds;
     }
@@ -94,6 +122,8 @@ impl Session {
         self.metrics.frame_timings_us.clear();
         self.metrics.frame_timings_us.reserve(3601);
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);
+        // A restarted measurement takes its own scheduling baseline.
+        self.scheduling_start = None;
         self.metrics.window_start = None;
         self.metrics.window = None;
         self.clock_advanced = false;
@@ -119,6 +149,14 @@ impl Session {
         } else {
             "12:34"
         })
+    }
+
+    /// The screensaver should start immediately and stay up until the
+    /// requested window completes.
+    pub fn screensaver_requested(&self) -> bool {
+        self.screensaver_requested
+            && self.metrics.motion_started_ms.is_some()
+            && self.metrics.window.is_none()
     }
 
     pub fn card_fallback_forced(&self) -> bool {
@@ -182,7 +220,10 @@ impl Session {
                 if value["launcher_hold"] == "release" {
                     self.carousel_hold_requested = false;
                     self.carousel_sequence = None;
+                    self.screensaver_requested = false;
                 } else {
+                    self.screensaver_requested =
+                        value["launcher_screensaver"].as_bool().unwrap_or(false);
                     self.carousel_hold_requested =
                         value["launcher_hold"].as_bool().unwrap_or(false);
                     self.carousel_sequence =
@@ -211,6 +252,18 @@ impl Session {
             self.measurement_duration_ms.unwrap_or(5_000)
         };
         let mut completed = false;
+        // Scanning procfs blocks for tens of milliseconds and a helper thread
+        // would compete with rendering, so snapshot inside the warmup instead.
+        if self.scheduling_evidence
+            && self.metrics.window.is_none()
+            && self.metrics.window_start.is_none()
+            && self.scheduling_start.is_none()
+            && self.metrics.motion_started_ms.is_some_and(|start| {
+                now - start >= MEASUREMENT_WARMUP_MS - SCHEDULING_SNAPSHOT_LEAD_MS
+            })
+        {
+            self.scheduling_start = Some((now, scheduling::snapshot()));
+        }
         if self.metrics.window.is_none() {
             if self.metrics.window_start.is_none()
                 && self
@@ -230,6 +283,16 @@ impl Session {
                 .is_some_and(|(start, _)| now - start >= duration)
             {
                 self.metrics.finish_window(now, width, height, instrumented);
+                if let Some((taken_ms, start)) = self.scheduling_start.take()
+                    && let Some(window) = self.metrics.window.as_mut()
+                {
+                    // Linux reports /proc/stat in USER_HZ, which is 100 on ARM.
+                    let mut report = scheduling::report(&start, &scheduling::snapshot(), 100);
+                    let window_start = window["start_ms"].as_u64().unwrap_or(taken_ms);
+                    report["warmup_ms_included"] =
+                        serde_json::json!(window_start.saturating_sub(taken_ms));
+                    window["scheduling"] = report;
+                }
                 if let Some(profile) = self.profile.take() {
                     profile.finish()?;
                 }
@@ -240,7 +303,10 @@ impl Session {
             self.write("probe-ready.json", &self.metrics.json(width, height, now))?;
             self.ready = true;
         }
-        if completed || self.last_write.elapsed() >= Duration::from_millis(200) {
+        let since_write = self.last_write.elapsed();
+        let periodic_write_due = since_write >= PERIODIC_WRITE_INTERVAL
+            && (!self.ui_motion || since_write >= MOTION_WRITE_INTERVAL);
+        if completed || periodic_write_due {
             self.write("probe-metrics.json", &self.metrics.json(width, height, now))?;
             self.last_write = Instant::now();
         }
@@ -271,14 +337,12 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn readiness_requires_a_presentation_and_measurements_exclude_warmup() {
-        let root = std::env::temp_dir().join(format!("magik-session-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut session = Session {
+    /// A session with idle defaults; tests override only what they exercise.
+    fn test_session(root: PathBuf) -> Session {
+        Session {
             metrics: PresentationMetrics::default(),
             start: Instant::now(),
-            root: root.clone(),
+            root,
             previews: PreviewProducer::new(),
             profile: None,
             last_write: Instant::now(),
@@ -292,7 +356,18 @@ mod tests {
             carousel_hold_active: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
-        };
+            scheduling_evidence: false,
+            scheduling_start: None,
+            ui_motion: false,
+            screensaver_requested: false,
+        }
+    }
+
+    #[test]
+    fn readiness_requires_a_presentation_and_measurements_exclude_warmup() {
+        let root = std::env::temp_dir().join(format!("magik-session-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = test_session(root.clone());
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());
         session.metrics.counters.presentations = 10;
@@ -363,26 +438,58 @@ mod tests {
     }
 
     #[test]
+    fn restarting_a_measurement_takes_a_fresh_scheduling_baseline() {
+        let root = std::env::temp_dir().join(format!("magik-restart-{}", std::process::id()));
+        let mut session = Session {
+            scheduling_evidence: true,
+            ..test_session(root.clone())
+        };
+        session.begin();
+        session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
+        session.tick(16, 8).unwrap();
+        let (first_baseline_ms, _) = session.scheduling_start.as_ref().unwrap();
+        let first_baseline_ms = *first_baseline_ms;
+        session.begin();
+        assert!(session.scheduling_start.is_none());
+        session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
+        session.tick(16, 8).unwrap();
+        let (second_baseline_ms, _) = session.scheduling_start.as_ref().unwrap();
+        assert!(*second_baseline_ms > first_baseline_ms);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn periodic_metric_writes_yield_to_ui_motion_but_completion_does_not() {
+        let root = std::env::temp_dir().join(format!("magik-motion-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = Session {
+            last_write: Instant::now() - Duration::from_millis(250),
+            ready: true,
+            ui_motion: true,
+            ..test_session(root.clone())
+        };
+        let metrics = root.join("probe-metrics.json");
+        session.tick(16, 8).unwrap();
+        assert!(!metrics.exists(), "motion postpones a routine refresh");
+        session.last_write -= MOTION_WRITE_INTERVAL;
+        session.tick(16, 8).unwrap();
+        assert!(metrics.exists(), "but only for a bounded time");
+        std::fs::remove_file(&metrics).unwrap();
+        session.last_write = Instant::now() - Duration::from_millis(250);
+        session.set_ui_motion(false);
+        session.tick(16, 8).unwrap();
+        assert!(metrics.exists(), "idle refreshes keep their cadence");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn carousel_sequence_taps_then_holds_inside_the_measurement_window() {
         let root = std::env::temp_dir().join(format!("magik-sequence-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut session = Session {
-            metrics: PresentationMetrics::default(),
             start: Instant::now() - Duration::from_secs(60),
-            root: root.clone(),
-            previews: PreviewProducer::new(),
-            profile: None,
-            last_write: Instant::now(),
             last_request: Instant::now() - Duration::from_secs(1),
-            ready: false,
-            clock_mode: None,
-            measurement_duration_ms: None,
-            clock_advanced: false,
-            force_card_fallback: false,
-            carousel_hold_requested: false,
-            carousel_hold_active: false,
-            carousel_sequence: None,
-            carousel_taps_sent: 0,
+            ..test_session(root.clone())
         };
         std::fs::write(
             root.join("measure-request"),
@@ -402,7 +509,8 @@ mod tests {
         let mut hold_ended_at = None;
         for ms in (0..14_000).step_by(10) {
             session.metrics.motion_started_ms = Some(
-                (session.start.elapsed().as_millis() as u64).saturating_sub(MEASUREMENT_WARMUP_MS + ms),
+                (session.start.elapsed().as_millis() as u64)
+                    .saturating_sub(MEASUREMENT_WARMUP_MS + ms),
             );
             taps += u32::from(session.carousel_tap_due());
             match session.carousel_hold_change() {
@@ -434,7 +542,10 @@ mod tests {
         .unwrap();
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
-        assert!(session.carousel_sequence.is_none(), "out-of-range sequences are ignored");
+        assert!(
+            session.carousel_sequence.is_none(),
+            "out-of-range sequences are ignored"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -565,6 +565,21 @@ mailbox defers acknowledgement instead of waiting. Selected-preview adoption
 may also finish the exact generation-bound entry preview; ordinary scrolling
 prefetch remains disabled.
 
+Outside those transitions, one process-wide UI motion signal
+(`mister_magik_catalog::ui_motion`) protects every animated frame. MiSTer MagiK
+publishes it once per frame from all motion sources: animations, scrolls,
+navigation, orientation and full-screen transitions, held directions, card
+motion and the screensaver. Mini-MagiK publishes it while a concept or the
+motion workload plays. While it is set, deferrable work yields for at most five
+seconds at a time, so very long motion such as the screensaver cannot starve it:
+launcher-thread maintenance, runtime-status publication, controller hotplug
+rescans, media-diagnostics writes and tooling metric refreshes are postponed;
+`work_coordinator` background leases such as scrolling preview prefetch wait
+between units; catalog background scopes park at their cooperative checkpoints.
+User-requested foreground work never consults the signal, and the framebuffer
+stream keeps sending frames to a live viewer. Scheduling evidence in measurement
+windows records what still ran on each CPU.
+
 Screenshot presentation and direct-layer retirement are parallel state-chart
 regions. Preview demand (`Empty` or `Image`) is independent from route
 eligibility (`Eligible`, `Occluded`, or `Unavailable`). Domain-presenter

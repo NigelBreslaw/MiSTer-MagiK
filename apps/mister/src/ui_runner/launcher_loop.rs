@@ -6324,6 +6324,11 @@ pub(super) fn run_launcher_loop(
         });
         crate::ui_logln!("magik_context {}", session.metrics.context);
     }
+    // Launcher-thread maintenance and status publication yield to UI motion.
+    // Both are decided before this frame's motion is known, so they use the
+    // signal published by the previous frame; one frame of lag is harmless.
+    let mut background_maintenance_deferral = mister_magik_catalog::ui_motion::Deferral::default();
+    let mut status_write_deferral = mister_magik_catalog::ui_motion::Deferral::default();
     #[cfg(feature = "tooling")]
     let mut tooling_drop_baseline: Option<(
         mister_magik_latch_contract::PresentationTelemetry,
@@ -6360,6 +6365,7 @@ pub(super) fn run_launcher_loop(
             if card_presentation_measurement_enabled {
                 session.metrics.process_cpu_us = cpu_process_us();
             }
+            session.set_ui_motion(mister_magik_catalog::ui_motion::active());
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
             }
@@ -6408,7 +6414,8 @@ pub(super) fn run_launcher_loop(
                 orientation_transition.is_active(),
                 directional_input_held,
             )
-            && !full_screen_transition_owned_at_loop_start;
+            && !full_screen_transition_owned_at_loop_start
+            && background_maintenance_deferral.allows(loop_start);
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
             lifecycle.startup_status().state,
@@ -7507,10 +7514,22 @@ pub(super) fn run_launcher_loop(
             latch_v5_qualification.stress_class() == LatchV5StressClass::Particles,
         );
         let restore_before = screensaver.restore_full_frame;
+        // A screensaver measurement starts it at once and keeps it up for the
+        // window; the user's setting and delay apply again afterwards.
+        #[cfg(feature = "tooling")]
+        let screensaver_measured = tooling
+            .as_ref()
+            .is_some_and(mister_magik_tooling_support::Session::screensaver_requested);
+        #[cfg(not(feature = "tooling"))]
+        let screensaver_measured = false;
         screensaver.update(
             Instant::now(),
-            nav.settings.screensaver_enabled,
-            Duration::from_secs(u64::from(nav.settings.screensaver_delay_minutes) * 60),
+            nav.settings.screensaver_enabled || screensaver_measured,
+            if screensaver_measured {
+                Duration::ZERO
+            } else {
+                Duration::from_secs(u64::from(nav.settings.screensaver_delay_minutes) * 60)
+            },
             catalog_build_busy,
             screensaver_preview_start_ready(
                 catalog_ready,
@@ -9319,7 +9338,10 @@ pub(super) fn run_launcher_loop(
             } else {
                 1
             };
-        let status_write_due = frame_accounting.status_write_due();
+        // The one-second status publication (its serialization worker shares
+        // CPU1) yields to motion without consuming its deadline.
+        let status_write_due =
+            frame_accounting.status_write_due() && status_write_deferral.allows(loop_start);
         let status_snapshot_due = status_write_due
             && !navigation_transition.is_active()
             && !full_screen_transition_owns_cpu1(full_screen_transition.state());
@@ -9871,6 +9893,27 @@ pub(super) fn run_launcher_loop(
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             composition_decision.clear_direct_layers,
         );
+        let home_motion_active = home_frame_driven_redraw_active(
+            nav.screen,
+            home_pan_present_active,
+            home_horizontal_input_held,
+        );
+        let scheduled_frame_class = frame_production_class(
+            screensaver.active,
+            home_motion_active,
+            navigation_transition.is_active(),
+        );
+        // One app-wide motion signal: anything moving on screen (animations,
+        // scrolls, transitions, held directions, the screensaver). Background
+        // and periodic work across the process yield to it. Publish before the
+        // restart and idle branches so settling clears it at once.
+        mister_magik_catalog::ui_motion::set_active(
+            stream_motion_before_render
+                || scheduled_frame_class != FrameProductionClass::EventDriven
+                || orientation_transition.is_active()
+                || full_screen_transition_owns_cpu1(full_screen_transition.state())
+                || directional_input_held,
+        );
         let render_intent = LauncherRenderIntent {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             startup_input_enabled: startup_status.input_enabled,
@@ -9986,16 +10029,6 @@ pub(super) fn run_launcher_loop(
         let redraw_pending_for_trace = window.redraw_pending();
         let wake_reasons_bits = wake_reasons.bits();
         let latch_backend_active = launcher_presenter.pacing_backend().is_latch();
-        let home_motion_active = home_frame_driven_redraw_active(
-            nav.screen,
-            home_pan_present_active,
-            home_horizontal_input_held,
-        );
-        let scheduled_frame_class = frame_production_class(
-            screensaver.active,
-            home_motion_active,
-            navigation_transition.is_active(),
-        );
         let late_frame_start_headroom_us = if latch_backend_active {
             phase_alignment.required_headroom_us()
         } else {
@@ -10247,6 +10280,9 @@ pub(super) fn run_launcher_loop(
                                 merge_us: timing.merge_us,
                                 primary_cpu_us: timing.primary_cpu_us,
                                 secondary_cpu_us: timing.secondary_cpu_us,
+                                split: timing.split as u64,
+                                primary_run_delay_us: timing.primary_run_delay_us,
+                                secondary_run_delay_us: timing.secondary_run_delay_us,
                             };
                             card_work_timing = Some(work);
                             if tooling.metrics.window_start.is_some()
@@ -12617,6 +12653,9 @@ pub(super) fn run_launcher_loop(
                 if let Some(session) = tooling.as_mut() {
                     let metrics = &mut session.metrics;
                     metrics.counters.presentations += 1;
+                    if screensaver.active {
+                        metrics.counters.screensaver_presentations += 1;
+                    }
                     metrics.counters.posts += 1;
                     metrics.counters.flips += 1;
                     let render_us = frame_t2.saturating_duration_since(frame_t1).as_micros() as u64;

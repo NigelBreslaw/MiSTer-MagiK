@@ -5,12 +5,15 @@
 //!
 //! This intentionally does not change the first catalog builder's scheduling
 //! policy.  It is for work which can safely defer a small unit while a user
-//! action is pending (preview decode, launch preparation, and media I/O).
+//! action is pending (preview decode, launch preparation, and media I/O), or
+//! while the UI is in motion (see [`crate::ui_motion`]).
 
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const BACKGROUND_WAIT: Duration = Duration::from_millis(2);
+/// One background wait while the UI is in motion; ending motion wakes it early.
+const MOTION_WAIT: Duration = Duration::from_millis(100);
 const FAIRNESS_YIELD_LIMIT: u32 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +38,8 @@ struct State {
     background_yields: u64,
     fairness_passes: u64,
     consecutive_background_yields: u32,
+    /// When background units began yielding to the current UI motion.
+    motion_yield_started: Option<Instant>,
 }
 
 /// A small coordinator which deliberately favours foreground work while
@@ -75,8 +80,33 @@ impl WorkCoordinator {
         }
     }
 
-    fn cooperate_background(&self, label: &'static str) -> bool {
+    fn cooperate_background(&self, label: &'static str, yield_to_motion: bool) -> bool {
         let mut state = self.state.lock().expect("work coordinator lock poisoned");
+        if yield_to_motion && crate::ui_motion::active() {
+            let started = *state.motion_yield_started.get_or_insert_with(Instant::now);
+            let within_bound = || started.elapsed() < crate::ui_motion::MAX_DEFERRAL;
+            // Bounded like every motion deferral: after the limit one unit runs.
+            if within_bound() {
+                state.background_yields += 1;
+                let waited = Instant::now();
+                // Hold the unit until motion ends or the bound expires; ending
+                // motion notifies, and each timeout re-checks the bound.
+                while crate::ui_motion::active() && within_bound() {
+                    state = self
+                        .changed
+                        .wait_timeout(state, MOTION_WAIT)
+                        .expect("work coordinator wait poisoned")
+                        .0;
+                }
+                crate::catalog_logln!(
+                    "work_coordinator_tsv\tphase=yield-motion\tclass=background\tlabel={}\thold_us={}",
+                    label,
+                    waited.elapsed().as_micros()
+                );
+                return true;
+            }
+        }
+        state.motion_yield_started = None;
         if state.foreground_active == 0 {
             state.consecutive_background_yields = 0;
             return false;
@@ -133,6 +163,18 @@ impl WorkCoordinator {
     }
 }
 
+/// Wake background units waiting on UI motion so they re-check it.
+pub(crate) fn wake_motion_waiters() {
+    if let Some(coordinator) = GLOBAL.get() {
+        let state = coordinator
+            .state
+            .lock()
+            .expect("work coordinator lock poisoned");
+        coordinator.changed.notify_all();
+        drop(state);
+    }
+}
+
 impl Default for WorkCoordinator {
     fn default() -> Self {
         Self::new()
@@ -157,7 +199,7 @@ pub fn background(label: &'static str) -> WorkLease {
 pub fn cooperate_background(label: &'static str) -> bool {
     GLOBAL
         .get_or_init(WorkCoordinator::new)
-        .cooperate_background(label)
+        .cooperate_background(label, crate::ui_motion::active())
 }
 
 /// RAII lease.  Dropping it releases the class even during an error or panic.
@@ -173,7 +215,16 @@ impl WorkLease {
     /// Returns true when it yielded to foreground work.
     pub fn cooperate(&self) -> bool {
         matches!(self.class, WorkClass::Background)
-            && self.coordinator.cooperate_background(self.label)
+            && self
+                .coordinator
+                .cooperate_background(self.label, crate::ui_motion::active())
+    }
+
+    /// Yield only to foreground leases, not to UI motion: for background work
+    /// whose output someone is watching live, such as the framebuffer stream.
+    pub fn cooperate_with_foreground(&self) -> bool {
+        matches!(self.class, WorkClass::Background)
+            && self.coordinator.cooperate_background(self.label, false)
     }
 }
 
@@ -190,6 +241,9 @@ mod tests {
 
     #[test]
     fn dropping_foreground_lease_unblocks_background_cooperation() {
+        let _motion = crate::ui_motion::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let coordinator = Box::leak(Box::new(WorkCoordinator::new()));
         let background = coordinator.acquire(WorkClass::Background, "test-background");
         let foreground = coordinator.acquire(WorkClass::Foreground, "test-foreground");
@@ -199,7 +253,46 @@ mod tests {
     }
 
     #[test]
+    fn background_yields_to_ui_motion_within_the_deferral_bound() {
+        let _motion = crate::ui_motion::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let coordinator = Box::leak(Box::new(WorkCoordinator::new()));
+        crate::ui_motion::set_active(true);
+        // A unit stays held while motion lasts, across many wait slices.
+        let ender = std::thread::spawn(|| {
+            std::thread::sleep(MOTION_WAIT * 3);
+            crate::ui_motion::set_active(false);
+        });
+        let started = Instant::now();
+        assert!(coordinator.cooperate_background("test-motion", true));
+        assert!(started.elapsed() >= MOTION_WAIT * 3 - Duration::from_millis(5));
+        ender.join().unwrap();
+        // Past the bound one unit runs, then yielding starts afresh.
+        crate::ui_motion::set_active(true);
+        coordinator.state.lock().unwrap().motion_yield_started =
+            Some(Instant::now() - crate::ui_motion::MAX_DEFERRAL);
+        assert!(!coordinator.cooperate_background("test-motion", true));
+        // Work watched live never yields to motion.
+        assert!(!coordinator.cooperate_background("test-motion", false));
+        crate::ui_motion::set_active(false);
+        assert!(
+            coordinator
+                .state
+                .lock()
+                .unwrap()
+                .motion_yield_started
+                .is_none()
+        );
+        // Idle UI and no foreground lease: background runs immediately.
+        assert!(!coordinator.cooperate_background("test-motion", false));
+    }
+
+    #[test]
     fn fairness_bounds_repeated_background_yields() {
+        let _motion = crate::ui_motion::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let coordinator = Box::leak(Box::new(WorkCoordinator::new()));
         let background = coordinator.acquire(WorkClass::Background, "test-background");
         let _foreground = coordinator.acquire(WorkClass::Foreground, "test-foreground");
