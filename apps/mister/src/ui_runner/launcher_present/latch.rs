@@ -378,6 +378,14 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let slot = physical_slot_mirror_index(grant.slot_index);
         let seed = self.direct_slot_content_generation[slot] != Some(content_generation);
         let full = self.full_rect();
+        let whole_frame_tiles = damage[0].x0 == full.x0
+            && damage[1].x1 == full.x1
+            && damage[0].x1 == damage[1].x0
+            && damage[0].x1 > full.x0
+            && damage[0].x1 < full.x1
+            && damage
+                .iter()
+                .all(|rect| rect.y0 == full.y0 && rect.y1 == full.y1);
         if seed || self.direct_slot_tile_damage[slot] != Some(damage) {
             self.direct_retained_tiles.invalidate_slot(grant.slot_index);
         }
@@ -388,7 +396,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let started = Instant::now();
         let result = (|| {
             let mut bytes = 0;
-            if seed {
+            // A complete tile pair seeds every pixel itself. Partial carousel
+            // tiles still need the chrome copy when this slot is unseeded.
+            if seed && !whole_frame_tiles {
                 bytes += B::copy_rect(buffer, chrome, full, self.vertical_sampling)?.bytes;
             }
             bytes += self
@@ -2410,6 +2420,87 @@ mod tests {
             assert_eq!(hardware.post_bases, vec![BASE2]);
             presenter.invalidate_external_mode();
             assert_eq!(presenter.direct_slot_content_generation, [None; 2]);
+        }
+    }
+
+    #[test]
+    fn full_frame_tiles_seed_both_slots_once_but_gapped_tiles_keep_the_chrome_seed() {
+        for full_frame in [false, true] {
+            let events = EventLog::default();
+            let mut presenter = presenter_with_events(events.clone());
+            let mut statuses = Vec::new();
+            for (front, next) in [(BASE1, BASE2), (BASE2, BASE1)] {
+                statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
+            }
+            let mut hardware = FakeHardware {
+                statuses,
+                events: Some(events.clone()),
+                ..Default::default()
+            };
+            let mut display = display_session();
+            let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+            let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+            let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+            let damage = [
+                DirtyRect {
+                    x0: 0,
+                    x1: if full_frame { 2 } else { 1 },
+                    y0: 0,
+                    y1: HEIGHT,
+                },
+                DirtyRect {
+                    x0: 2,
+                    x1: WIDTH,
+                    y0: 0,
+                    y1: HEIGHT,
+                },
+            ];
+            for sequence in 1..=2 {
+                let start = events.borrow().len();
+                let copy = presenter
+                    .try_copy_direct_hidden_tiles(
+                        &mut hardware,
+                        &mut display,
+                        CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                        [
+                            CachedFrameView::new(&left, WIDTH, HEIGHT),
+                            CachedFrameView::new(&right, WIDTH, HEIGHT),
+                        ],
+                        damage,
+                        TileImageIdentity::new(7, sequence),
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(copy.copy.bytes, if full_frame { 24 } else { 42 });
+                let row = [
+                    Rgb565Pixel(11),
+                    Rgb565Pixel(if full_frame { 11 } else { 7 }),
+                    Rgb565Pixel(13),
+                    Rgb565Pixel(13),
+                ];
+                assert_eq!(
+                    presenter
+                        .buffers
+                        .buffer_mut(copy.completed.grant.slot_index)
+                        .pixels,
+                    row.repeat(HEIGHT)
+                );
+                let mut expected = vec![TestEvent::ReadStatus, TestEvent::Copy, TestEvent::Copy];
+                if !full_frame {
+                    expected.push(TestEvent::Copy);
+                }
+                expected.push(TestEvent::Publish);
+                assert_eq!(&events.borrow()[start..], expected);
+                presenter
+                    .present_completed_hidden_frame(
+                        copy.completed,
+                        &mut hardware,
+                        &mut display,
+                        false,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(hardware.post_bases, [BASE2, BASE1]);
         }
     }
 

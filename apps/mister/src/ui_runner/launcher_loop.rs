@@ -109,9 +109,20 @@ const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
     },
 ];
 
-fn card_direct_tile_damage(left: usize) -> [DirtyRect; 2] {
+fn card_direct_tile_damage(left: usize, level_trick: bool) -> [DirtyRect; 2] {
     let mut damage = CARD_DIRECT_TILE_DAMAGE;
-    damage[0].x0 = left;
+    if level_trick {
+        // The trick fades chrome outside the carousel. Include the endpoint,
+        // whose render clears the active trick before the frame is copied.
+        damage[0].x0 = 0;
+        damage[1].x1 = 960;
+        for rect in &mut damage {
+            rect.y0 = 0;
+            rect.y1 = 540;
+        }
+    } else {
+        damage[0].x0 = left;
+    }
     damage
 }
 
@@ -10322,6 +10333,7 @@ pub(super) fn run_launcher_loop(
                 !nav.settings.reduce_motion,
                 nav.home_card_browse_prediction(pose_at),
             );
+            let level_trick = session.is_level_trick_active();
             session.render();
             let request = session.current_request();
             let timing = session.last_timing();
@@ -10335,7 +10347,7 @@ pub(super) fn run_launcher_loop(
                 display_session,
                 cached,
                 [cached, cached],
-                card_direct_tile_damage(session.carousel_clip().0),
+                card_direct_tile_damage(session.carousel_clip().0, level_trick),
                 mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
                     session.content_generation(),
                     request.generation,
@@ -15314,6 +15326,21 @@ mod tests {
             600,
             false,
         ));
+    }
+
+    #[test]
+    fn level_trick_direct_damage_covers_chrome_and_the_settled_endpoint() {
+        let trick = card_direct_tile_damage(268, true);
+        assert_eq!(trick[0].x0, 0);
+        assert_eq!(trick[0].x1, trick[1].x0);
+        assert_eq!(trick[1].x1, 960);
+        for rect in trick {
+            assert_eq!((rect.y0, rect.y1), (0, 540));
+        }
+        let browse = card_direct_tile_damage(268, false);
+        assert_eq!(browse[0].x0, 268);
+        assert_eq!(browse[1], CARD_DIRECT_TILE_DAMAGE[1]);
+        assert_eq!((browse[0].y0, browse[0].y1), (120, 495));
     }
 
     fn eligible_card_direct_input() -> CardDirectEligibility {

@@ -486,11 +486,12 @@ impl PreparedLauncherFrame {
 pub struct LauncherFramePreparer {
     faces: Arc<Vec<Arc<CardFaces>>>,
     cyclic: bool,
+    trick: Option<level_trick::TrickPlan>,
 }
 
 impl LauncherFramePreparer {
     pub fn carousel_clip(&self) -> (usize, usize) {
-        if self.faces.first().is_some_and(|face| face.slides) {
+        if self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides) {
             (268, 934)
         } else {
             (296, 934)
@@ -538,7 +539,10 @@ impl LauncherFramePreparer {
             pixels[y * 960 + clip.0..y * 960 + clip.1].fill(Rgb565Pixel(0));
         }
         if !self.faces.is_empty() {
-            let plan = build_carousel_plan(&self.faces, request.frame, self.cyclic);
+            let plan = self.trick.map_or_else(
+                || build_carousel_plan(&self.faces, request.frame, self.cyclic),
+                |plan| plan.with_faces(&self.faces),
+            );
             // Each screen strip is independent: finish every reflection before
             // its bodies, then reuse the same cache-local scratch for the next.
             let width = crate::launcher_flip::STRIP_WIDTH;
@@ -637,6 +641,7 @@ impl PreparedLauncher {
         LauncherFramePreparer {
             faces: self.faces.clone(),
             cyclic: self.cyclic,
+            trick: None,
         }
     }
     /// Owned raster-buffer capacity, excluding strings and small metadata.

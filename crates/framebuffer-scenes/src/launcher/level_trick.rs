@@ -16,6 +16,7 @@
 //! reflection path and allocates nothing.
 use super::*;
 use crate::launcher_flip::Pose;
+use crate::launcher_parallel::{ParallelFrameTiming, ParallelLauncherRenderer};
 
 /// Complete duration of a level change.
 pub const LEVEL_TRICK_MILLIS: u32 = 920;
@@ -47,6 +48,37 @@ impl LevelChange {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TrickCard {
+    index: usize,
+    detail: bool,
+    pose: Pose,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TrickPlan {
+    items: [Option<TrickCard>; CAROUSEL_CAPACITY],
+}
+
+impl TrickPlan {
+    pub(super) fn with_faces(self, faces: &[Arc<CardFaces>]) -> CarouselPlan<'_> {
+        CarouselPlan {
+            items: self.items.map(|item| {
+                item.map(|item| CarouselItem {
+                    face: if item.detail {
+                        &faces[item.index].detail
+                    } else {
+                        &faces[item.index].compact
+                    },
+                    blend: None,
+                    pose: item.pose,
+                })
+            }),
+            row: false,
+        }
+    }
+}
+
 pub(super) struct ChromeSpan {
     start: usize,
     end: usize,
@@ -61,11 +93,81 @@ impl PreparedLauncher {
         elapsed_millis: u32,
         destination: CardSlot,
     ) {
+        if let Some(plan) = self.level_gather_plan(selected, change, elapsed_millis, destination) {
+            self.draw_trick_plan(plan);
+        } else {
+            self.render_frame(settled(selected));
+        }
+    }
+
+    pub fn render_level_deal_from(
+        &mut self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        source: CardSlot,
+    ) {
+        if let Some(plan) = self.level_deal_plan(selected, change, elapsed_millis, source) {
+            self.draw_trick_plan(plan);
+        } else {
+            self.render_frame(settled(selected));
+        }
+    }
+
+    pub fn render_level_gather_to_parallel(
+        &mut self,
+        request: LauncherFrameRequest,
+        change: LevelChange,
+        elapsed_millis: u32,
+        destination: CardSlot,
+        renderer: &mut ParallelLauncherRenderer,
+    ) -> Result<ParallelFrameTiming, String> {
+        let plan =
+            self.level_gather_plan(request.frame.selected, change, elapsed_millis, destination);
+        self.render_parallel_trick_plan(renderer, request, plan)
+    }
+
+    pub fn render_level_deal_from_parallel(
+        &mut self,
+        request: LauncherFrameRequest,
+        change: LevelChange,
+        elapsed_millis: u32,
+        source: CardSlot,
+        renderer: &mut ParallelLauncherRenderer,
+    ) -> Result<ParallelFrameTiming, String> {
+        let plan = self.level_deal_plan(request.frame.selected, change, elapsed_millis, source);
+        self.render_parallel_trick_plan(renderer, request, plan)
+    }
+
+    fn render_parallel_trick_plan(
+        &mut self,
+        renderer: &mut ParallelLauncherRenderer,
+        request: LauncherFrameRequest,
+        plan: Option<TrickPlan>,
+    ) -> Result<ParallelFrameTiming, String> {
+        if self.scene != LauncherScene::new(960, 540) {
+            return Err("parallel cards require native geometry".into());
+        }
+        if let Some(plan) = plan {
+            let mut preparer = self.frame_preparer();
+            preparer.trick = Some(plan);
+            renderer.render(&preparer, request, &mut self.logical)
+        } else {
+            self.render_parallel_frame(renderer, request)
+        }
+    }
+
+    fn level_gather_plan(
+        &mut self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        destination: CardSlot,
+    ) -> Option<TrickPlan> {
         let t = elapsed_millis.min(EDGE_MILLIS);
         if t == 0 {
             self.restore_chrome();
-            self.render_frame(settled(selected));
-            return;
+            return None;
         }
         self.fade_level_chrome(GEOMETRY_ONE - ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS)));
         let hero = hero_pose(self.slot_zero(), destination, change, t);
@@ -100,35 +202,34 @@ impl PreparedLauncher {
                     / GEOMETRY_ONE
                     / GEOMETRY_ONE;
             pose.brightness = pose.brightness * ((EDGE_MILLIS - t).min(20) * 256 / 20) / 256;
-            items[count] = Some(CarouselItem {
-                face: &faces[index].compact,
-                blend: None,
+            items[count] = Some(TrickCard {
+                index,
+                detail: false,
                 pose,
             });
             count += 1;
         }
-        if let Some(card) = faces.get(selected) {
-            items[count] = Some(CarouselItem {
-                face: &card.detail,
-                blend: None,
+        if faces.get(selected).is_some() {
+            items[count] = Some(TrickCard {
+                index: selected,
+                detail: true,
                 pose: hero,
             });
         }
-        self.draw_trick_plan(&mut CarouselPlan { items, row: false });
+        Some(TrickPlan { items })
     }
 
-    pub fn render_level_deal_from(
+    fn level_deal_plan(
         &mut self,
         selected: usize,
         change: LevelChange,
         elapsed_millis: u32,
         source: CardSlot,
-    ) {
+    ) -> Option<TrickPlan> {
         let t = elapsed_millis.clamp(EDGE_MILLIS, LEVEL_TRICK_MILLIS);
         if t == LEVEL_TRICK_MILLIS {
             self.restore_chrome();
-            self.render_frame(settled(selected));
-            return;
+            return None;
         }
         self.fade_level_chrome(ease_out_quart(window(
             t,
@@ -172,21 +273,21 @@ impl PreparedLauncher {
             let mut pose = lerp_pose(behind, rest, dealt);
             pose.angle = rest.angle * dealt / GEOMETRY_ONE
                 - relative.signum() as i64 * EDGE_ON * (GEOMETRY_ONE - dealt) / GEOMETRY_ONE;
-            items[count] = Some(CarouselItem {
-                face: &faces[index].compact,
-                blend: None,
+            items[count] = Some(TrickCard {
+                index,
+                detail: false,
                 pose,
             });
             count += 1;
         }
-        if let Some(card) = faces.get(selected) {
-            items[count] = Some(CarouselItem {
-                face: &card.detail,
-                blend: None,
+        if faces.get(selected).is_some() {
+            items[count] = Some(TrickCard {
+                index: selected,
+                detail: true,
                 pose: hero,
             });
         }
-        self.draw_trick_plan(&mut CarouselPlan { items, row: false });
+        Some(TrickPlan { items })
     }
 
     /// The target breadcrumb swaps at 45% of the timeline while both panels are dim.
@@ -223,11 +324,13 @@ impl PreparedLauncher {
         self.fit_output();
     }
 
-    fn draw_trick_plan(&mut self, plan: &mut CarouselPlan<'_>) {
+    fn draw_trick_plan(&mut self, plan: TrickPlan) {
+        let faces = Arc::clone(&self.faces);
+        let plan = plan.with_faces(&faces);
         // Both halves already use native poses. Mapping again would move the hero at the swap.
         if let Some(layout) = self.responsive {
             layout.clear_carousel(&mut self.logical);
-            layout.draw_plan(&mut self.logical, plan, &mut self.flip_columns);
+            layout.draw_plan(&mut self.logical, &plan, &mut self.flip_columns);
             return;
         }
         for y in 120..495 {
@@ -239,7 +342,7 @@ impl PreparedLauncher {
                 &mut self.logical,
                 LOGICAL_WIDTH,
                 (0, 0),
-                plan,
+                &plan,
                 &mut self.flip_columns,
                 (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
             );
@@ -571,6 +674,81 @@ mod tests {
             );
         }
         assert!(from.pixels()[76 * 960..77 * 960] == from.chrome[76 * 960..77 * 960]);
+    }
+
+    #[test]
+    fn parallel_tricks_match_serial_pixels_and_reuse_the_current_worker() {
+        let cards = cards(6);
+        let scene = LauncherScene::new(960, 540);
+        let mut initial_data = level(&cards, 3, &["CONSOLES"]);
+        initial_data.level = LauncherLevel::Root;
+        let initial = scene.prepare(initial_data);
+        let mut renderer =
+            ParallelLauncherRenderer::new(initial.frame_preparer(), None, None).unwrap();
+        let mut generation = 0;
+        for root in [true, false] {
+            let mut data = level(&cards, 3, &["CONSOLES"]);
+            if root {
+                data.level = LauncherLevel::Root;
+            }
+            let mut serial = scene.prepare(data);
+            let mut parallel = scene.prepare(data);
+            let mut target_data = level(&cards, 0, &["CONSOLES", "NINTENDO"]);
+            if !root {
+                target_data.level = LauncherLevel::Root;
+            }
+            let target = scene.prepare(target_data);
+            for change in [LevelChange::Descend, LevelChange::Ascend] {
+                serial.restore_chrome();
+                parallel.restore_chrome();
+                for t in [0, 1, 150, 260, 414, 459, 460] {
+                    generation += 1;
+                    let request = LauncherFrameRequest {
+                        frame: settled(3),
+                        timestamp_us: t as u64 * 1000,
+                        generation,
+                    };
+                    serial.render_level_gather_to(3, change, t, target.slot_zero());
+                    parallel
+                        .render_level_gather_to_parallel(
+                            request,
+                            change,
+                            t,
+                            target.slot_zero(),
+                            &mut renderer,
+                        )
+                        .unwrap();
+                    serial.render_transition_title_from(&target, t);
+                    parallel.render_transition_title_from(&target, t);
+                    assert!(
+                        serial.pixels() == parallel.pixels(),
+                        "root={root} {change:?} gather {t}"
+                    );
+                }
+                for t in [460, 461, 600, 750, 866, 899, 919, 920] {
+                    generation += 1;
+                    let request = LauncherFrameRequest {
+                        frame: settled(3),
+                        timestamp_us: t as u64 * 1000,
+                        generation,
+                    };
+                    serial.render_level_deal_from(3, change, t, target.slot_zero());
+                    parallel
+                        .render_level_deal_from_parallel(
+                            request,
+                            change,
+                            t,
+                            target.slot_zero(),
+                            &mut renderer,
+                        )
+                        .unwrap();
+                    assert!(
+                        serial.pixels() == parallel.pixels(),
+                        "root={root} {change:?} deal {t}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

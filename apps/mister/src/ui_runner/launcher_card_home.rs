@@ -150,6 +150,7 @@ pub(super) struct LauncherCardHomeSession {
     renderer: Option<Box<ParallelLauncherRenderer>>,
     last_rendered: Option<(BrowseFrame, u64)>,
     last_timing: Option<ParallelFrameTiming>,
+    last_request: Option<LauncherFrameRequest>,
     request_sequence: u64,
     frame_timestamp_us: u64,
     last_visual_index: f32,
@@ -203,6 +204,7 @@ impl LauncherCardHomeSession {
             renderer,
             last_rendered: None,
             last_timing: None,
+            last_request: None,
             request_sequence: 0,
             frame_timestamp_us: 0,
             last_visual_index: selected as f32,
@@ -239,6 +241,7 @@ impl LauncherCardHomeSession {
         let count = level.cards.len().max(1);
         let selected = selected.min(count - 1);
         self.now_ms = now_ms;
+        self.frame_timestamp_us = now_ms.saturating_mul(1_000);
         if self.trick.is_some() {
             if self.active && self.level.menu_id == level.menu_id && self.scene == scene && motion {
                 return;
@@ -323,7 +326,6 @@ impl LauncherCardHomeSession {
             )
         });
         self.last_visual_index = visual_index;
-        self.frame_timestamp_us = now_ms.saturating_mul(1_000);
         if navigation_identity_changed(previous_frame, self.frame) {
             self.content_dirty = true;
         }
@@ -563,13 +565,18 @@ impl LauncherCardHomeSession {
         };
         let Some(delay) = trick.deal_delay_ms else {
             let t = elapsed.min(edge) as u32;
-            self.prepared.render_level_gather_to(
+            self.render_trick_frame(
                 trick.source_selected,
                 trick.change,
                 t,
                 trick.destination_slot,
+                true,
             );
-            if let Some(Prepared::Built(target)) = trick.destination.as_ref() {
+            if let Some(Prepared::Built(target)) = self
+                .trick
+                .as_ref()
+                .and_then(|trick| trick.destination.as_ref())
+            {
                 self.prepared.render_transition_title_from(target, t);
             }
             return true;
@@ -577,17 +584,58 @@ impl LauncherCardHomeSession {
         let t = elapsed
             .saturating_sub(delay)
             .min(u64::from(LEVEL_TRICK_MILLIS)) as u32;
-        self.prepared.render_level_deal_from(
+        self.render_trick_frame(
             trick.destination_selected,
             trick.change,
             t,
             trick.source_slot,
+            false,
         );
         if t >= LEVEL_TRICK_MILLIS {
             self.trick = None;
             self.content_generation = self.content_generation.wrapping_add(1).max(1);
         }
         true
+    }
+
+    fn render_trick_frame(
+        &mut self,
+        selected: usize,
+        change: LevelChange,
+        t: u32,
+        slot: CardSlot,
+        gather: bool,
+    ) {
+        self.request_sequence = self.request_sequence.wrapping_add(1).max(1);
+        let request = LauncherFrameRequest {
+            frame: settled_frame(selected),
+            timestamp_us: self.frame_timestamp_us,
+            generation: self.request_sequence,
+        };
+        self.last_request = Some(request);
+        self.last_timing = if self.scene == LauncherScene::new(960, 540)
+            && let Some(renderer) = self.renderer.as_mut()
+        {
+            Some(
+                if gather {
+                    self.prepared
+                        .render_level_gather_to_parallel(request, change, t, slot, renderer)
+                } else {
+                    self.prepared
+                        .render_level_deal_from_parallel(request, change, t, slot, renderer)
+                }
+                .expect("current level rendering failed"),
+            )
+        } else {
+            if gather {
+                self.prepared
+                    .render_level_gather_to(selected, change, t, slot);
+            } else {
+                self.prepared
+                    .render_level_deal_from(selected, change, t, slot);
+            }
+            None
+        };
     }
 
     /// A level change is playing. The carousel shows neither level's real
@@ -607,7 +655,6 @@ impl LauncherCardHomeSession {
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
         if self.render_trick() {
             self.last_rendered = None;
-            self.last_timing = None;
             self.content_dirty = true;
             self.compositor_stale = false;
             return self.prepared.pixels();
@@ -619,6 +666,7 @@ impl LauncherCardHomeSession {
                 timestamp_us: self.frame_timestamp_us,
                 generation: self.request_sequence,
             };
+            self.last_request = Some(request);
             if self.scene == LauncherScene::new(960, 540)
                 && let Some(renderer) = self.renderer.as_mut()
             {
@@ -691,7 +739,6 @@ impl LauncherCardHomeSession {
     }
     pub(super) fn can_render_native(&self) -> bool {
         self.active
-            && self.trick.is_none()
             && self.scene == LauncherScene::new(960, 540)
             && self.renderer.is_some()
             && self
@@ -700,11 +747,11 @@ impl LauncherCardHomeSession {
                 .is_none_or(|pending| pending.scene == self.scene)
     }
     pub(super) fn current_request(&self) -> LauncherFrameRequest {
-        LauncherFrameRequest {
+        self.last_request.unwrap_or(LauncherFrameRequest {
             frame: self.frame,
             timestamp_us: self.frame_timestamp_us,
             generation: self.request_sequence,
-        }
+        })
     }
     pub(super) fn last_timing(&self) -> Option<ParallelFrameTiming> {
         self.last_timing
@@ -1587,11 +1634,15 @@ mod tests {
         session.update(scene, &consoles(), 0, 0.0, "21:37", 16, true, None);
         assert!(session.is_animating());
         assert!(session.is_level_trick_active(), "input is held during it");
-        assert!(!session.can_render_native());
+        assert!(session.can_render_native());
         assert_eq!(session.compositor_copy_damage(true), None);
+        let source_generation = session.current_request().generation;
         // Gather, then hold edge-on until the worker has prepared the level.
         session.update(scene, &consoles(), 0, 0.0, "21:37", 200, true, None);
         session.render();
+        assert_eq!(session.current_request().frame.selected, 1);
+        assert_eq!(session.current_request().timestamp_us, 200_000);
+        assert!(session.current_request().generation > source_generation);
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut now = 400;
         while session
@@ -1610,6 +1661,9 @@ mod tests {
         session.render();
         assert!(session.trick.is_none());
         assert!(!session.is_level_trick_active());
+        assert!(session.can_render_native());
+        assert_eq!(session.current_request().frame.selected, 0);
+        assert_eq!(session.current_request().timestamp_us, now * 1_000);
         let mut expected = prepare(scene, &consoles(), 0, "21:37", &session.fonts);
         expected.render_frame(settled_frame(0));
         assert_eq!(session.render(), expected.pixels());
