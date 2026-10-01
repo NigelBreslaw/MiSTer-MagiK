@@ -3,7 +3,7 @@
 
 //! System overview/list bands over a stationary device or CRT backdrop.
 use crate::Rgb565Pixel;
-use crate::card_page::{alpha_of, blend, ease_in_out, ease_out, window_q16};
+use crate::card_page::{alpha_of, blend, blend_row, ease_in_out, ease_out, window_q16};
 
 pub fn duration_ms(crt: bool, to_list: bool) -> u32 {
     if crt {
@@ -122,21 +122,26 @@ pub fn render_into(
     output.copy_from_slice(source);
     let (out_bands, out_count) = bands(crt, to_list, width, height);
     let (in_bands, in_count) = bands(crt, !to_list, width, height);
-    // Clear only the panel's subjects; retain chrome and the device exactly.
-    for &(left, right, top, bottom) in out_bands[..out_count]
-        .iter()
-        .chain(in_bands[..in_count].iter())
-    {
-        for y in top..bottom.min(height) {
-            for x in left..right.min(width) {
-                output[y * width + x] = if crt {
-                    backdrop
+    // HDMI panels overlap; clear their exact union once. CRT retains the
+    // screenshot beneath its subjects instead of a pure-black panel base.
+    if crt {
+        for &(left, right, top, bottom) in out_bands[..out_count]
+            .iter()
+            .chain(in_bands[..in_count].iter())
+        {
+            for y in top..bottom.min(height) {
+                for x in left..right.min(width) {
+                    output[y * width + x] = backdrop
                         .get(y * width + x)
                         .copied()
-                        .unwrap_or(Rgb565Pixel(0))
-                } else {
-                    Rgb565Pixel(0)
-                };
+                        .unwrap_or(Rgb565Pixel(0));
+                }
+            }
+        }
+    } else {
+        for (top, bottom) in [(48, 76), (104, 498)] {
+            for y in top..bottom.min(height) {
+                output[y * width + 26.min(width)..y * width + 488.min(width)].fill(Rgb565Pixel(0));
             }
         }
     }
@@ -207,6 +212,25 @@ pub(crate) fn blit(
     if alpha == 0 {
         return;
     }
+    if backdrop.is_none() {
+        let (left, right) = (left.min(width) as isize, right.min(width) as isize);
+        let first = left.max(left.saturating_sub(dx));
+        let end = right.min(right.saturating_sub(dx));
+        if first >= end {
+            return;
+        }
+        for y in top..bottom.min(height) {
+            let source = &source[y * width + first as usize..y * width + end as usize];
+            let start = y * width + (first + dx) as usize;
+            let destination = &mut output[start..start + source.len()];
+            if alpha >= 256 {
+                destination.copy_from_slice(source);
+            } else {
+                blend_row(destination, source, alpha);
+            }
+        }
+        return;
+    }
     for y in top..bottom.min(height) {
         for sx in left..right.min(width) {
             if backdrop.is_some_and(|bg| bg.get(y * width + sx) == Some(&source[y * width + sx])) {
@@ -224,6 +248,159 @@ pub(crate) fn blit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn panel_matches_pre_optimization_pixel_hashes() {
+        let cases = [
+            (
+                960,
+                540,
+                false,
+                false,
+                [
+                    0xd745302f5ae6c17d,
+                    0x080288564d76d755,
+                    0xed41efcbe346ae67,
+                    0xcb91274e4fa206bc,
+                    0xd87bab527fcba380,
+                    0x54def9dd55fb224a,
+                    0xb8bdda0fd1862da3,
+                    0xb9ade3fe7cc49918,
+                    0x563b3ccdc8c70135,
+                ],
+            ),
+            (
+                960,
+                540,
+                false,
+                true,
+                [
+                    0xd745302f5ae6c17d,
+                    0xf3867138af462ff3,
+                    0x5b8cc4196dc8c565,
+                    0xbda216afcdd916a0,
+                    0x8a8001096334edfa,
+                    0x1f4d74d8f5f0f093,
+                    0xd9e9d8eeafcf082d,
+                    0x7bc88a912aad8a22,
+                    0x563b3ccdc8c70135,
+                ],
+            ),
+            (
+                640,
+                240,
+                true,
+                false,
+                [
+                    0x5c662676a82985a9,
+                    0xff4cd7c72ce4a16a,
+                    0x89a196f653e5bcd2,
+                    0x89a196f653e5bcd2,
+                    0x99110c58842dcd20,
+                    0x89a12ba640272cb4,
+                    0xf6541802c90513b7,
+                    0xd245bdffdd478f41,
+                    0xd245bdffdd478f41,
+                ],
+            ),
+            (
+                640,
+                240,
+                true,
+                true,
+                [
+                    0x5c662676a82985a9,
+                    0x86d4a35a48195229,
+                    0x1086d715e3ae36e8,
+                    0x1086d715e3ae36e8,
+                    0x86261fc8a58368db,
+                    0xf3fbd2420b6ba53c,
+                    0xe6b3175a84f17b1d,
+                    0xd245bdffdd478f41,
+                    0xd245bdffdd478f41,
+                ],
+            ),
+        ];
+        for (w, h, crt, to_list, hashes) in cases {
+            let source: Vec<_> = (0..w * h)
+                .map(|i| {
+                    Rgb565Pixel(
+                        (i as u32)
+                            .wrapping_mul(1664525)
+                            .wrapping_add(1013904223)
+                            .wrapping_shr(16) as u16,
+                    )
+                })
+                .collect();
+            let destination: Vec<_> = source.iter().map(|p| Rgb565Pixel(p.0 ^ 0x5a96)).collect();
+            let backdrop: Vec<_> = source
+                .iter()
+                .enumerate()
+                .map(|(i, p)| if i % 3 == 0 { *p } else { Rgb565Pixel(0x0102) })
+                .collect();
+            let mut output = source.clone();
+            for (t, expected) in [
+                0,
+                39,
+                119,
+                120,
+                160,
+                220,
+                300,
+                400,
+                duration_ms(crt, to_list),
+            ]
+            .into_iter()
+            .zip(hashes)
+            {
+                assert!(render_into(
+                    w,
+                    h,
+                    &source,
+                    Some(&destination),
+                    &backdrop,
+                    crt,
+                    to_list,
+                    t,
+                    &mut output
+                ));
+                let hash = output.iter().fold(0xcbf29ce484222325u64, |hash, p| {
+                    (hash ^ u64::from(p.0)).wrapping_mul(0x100000001b3)
+                });
+                assert_eq!(hash, expected, "crt={crt} to_list={to_list} t={t}");
+            }
+        }
+    }
+
+    #[test]
+    fn row_blits_match_scalar_clipping_and_opacity() {
+        let (w, h) = (129, 3);
+        let source: Vec<_> = (0..w * h)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(1089)))
+            .collect();
+        let initial: Vec<_> = source.iter().map(|p| Rgb565Pixel(p.0 ^ 0xa53c)).collect();
+        for band in [(7, 121, 0, 3), (1, 130, 1, 9)] {
+            for dx in [-200, -64, -9, 0, 11, 64, 200] {
+                for alpha in [0, 1, 4, 8, 15, 31, 64, 127, 128, 129, 252, 255, 256, 300] {
+                    let mut expected = initial.clone();
+                    let (left, right, top, bottom) = band;
+                    for y in top..bottom.min(h) {
+                        for sx in left..right.min(w) {
+                            let x = sx as isize + dx;
+                            if x >= left as isize && x < right.min(w) as isize {
+                                let at = y * w + x as usize;
+                                expected[at] =
+                                    Rgb565Pixel(blend(expected[at].0, source[y * w + sx].0, alpha));
+                            }
+                        }
+                    }
+                    let mut actual = initial.clone();
+                    blit(w, h, &source, &mut actual, band, dx, alpha, None);
+                    assert_eq!(actual, expected, "band={band:?} dx={dx} alpha={alpha}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn incoming_list_uses_list_bands_instead_of_tile_crops() {
         for (w, h, crt, t) in [(960, 540, false, 230), (640, 240, true, 330)] {
