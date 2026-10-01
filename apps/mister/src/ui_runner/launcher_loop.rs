@@ -1071,6 +1071,10 @@ fn navigation_transition_for_intent(
         return None;
     }
     match event.action {
+        LauncherAction::ToggleSystemPage | LauncherAction::OpenSystemSection => Some((
+            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionDirection::Forward,
+        )),
         LauncherAction::OpenMenu => Some((
             NavigationTransitionEdge::HomeToConsoles,
             NavigationTransitionDirection::Forward,
@@ -8289,7 +8293,9 @@ pub(super) fn run_launcher_loop(
                                     LauncherAction::OpenMenu
                                     | LauncherAction::OpenCollection
                                     | LauncherAction::NavigateBack
-                                    | LauncherAction::NavigateHome => {
+                                    | LauncherAction::NavigateHome
+                                    | LauncherAction::ToggleSystemPage
+                                    | LauncherAction::OpenSystemSection => {
                                         let collection_id = (event.action
                                             == LauncherAction::OpenCollection)
                                             .then(|| event.path.clone())
@@ -8331,14 +8337,41 @@ pub(super) fn run_launcher_loop(
                                             && !crt_layout
                                             && !layout.is_portrait()
                                         {
-                                            arcade_list_renderer
-                                                .compose_layer_to_cached(target, true);
+                                            if !nav.is_system_hub() {
+                                                arcade_list_renderer
+                                                    .compose_layer_to_cached(target, true);
+                                            }
                                             let _ = target.compose_direct_preview_rect(
                                                 preview_screen_rect(ui),
                                             );
                                         }
                                         let navigation_runtime_started = transition_spec
                                             .is_some_and(|(edge, direction)| {
+                                                if matches!(
+                                                    event.action,
+                                                    LauncherAction::ToggleSystemPage
+                                                        | LauncherAction::OpenSystemSection
+                                                ) {
+                                                    if layout.is_portrait() {
+                                                        return false;
+                                                    }
+                                                    let now_us = frame_now
+                                                        .saturating_duration_since(start)
+                                                        .as_micros()
+                                                        .min(u64::MAX as u128)
+                                                        as u64;
+                                                    return navigation_transition
+                                                        .begin_system_panel(
+                                                            crt_layout,
+                                                            nav.is_system_hub(),
+                                                            target.cached_565(),
+                                                            crt_backdrop
+                                                                .as_ref()
+                                                                .map_or(&[], |b| b.pixels()),
+                                                            now_us,
+                                                        )
+                                                        .unwrap_or(false);
+                                                }
                                                 let geometry = match direction {
                                                     NavigationTransitionDirection::Forward => {
                                                         let root_menu = nav.current_menu_id()

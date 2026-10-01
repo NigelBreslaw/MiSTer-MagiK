@@ -27,6 +27,7 @@ pub mod packed_copy;
 pub mod retained_tiles;
 pub mod settings_cog;
 pub mod spring_animation;
+pub mod system_panel;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

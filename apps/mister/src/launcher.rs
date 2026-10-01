@@ -345,6 +345,8 @@ pub enum ConfirmAction {
 pub enum LauncherAction {
     OpenMenu,
     OpenCollection,
+    ToggleSystemPage,
+    OpenSystemSection,
     NavigateBack,
     NavigateHome,
     LaunchGame,
@@ -2897,6 +2899,20 @@ impl LauncherNav {
         catalog: &ArcadeCatalog,
     ) -> bool {
         match event.action {
+            LauncherAction::ToggleSystemPage => {
+                self.toggle_system_page_mode();
+                true
+            }
+            LauncherAction::OpenSystemSection if self.is_system_hub() => {
+                let mode = match self.system_hub_selected {
+                    1 => ArcadeUserListMode::Recent,
+                    2 => ArcadeUserListMode::Favourites,
+                    _ => ArcadeUserListMode::Games,
+                };
+                self.set_arcade_user_list_mode(catalog, mode);
+                self.system_page_mode = SystemPageMode::List;
+                true
+            }
             LauncherAction::OpenMenu => event
                 .path
                 .as_deref()
@@ -2962,6 +2978,13 @@ impl LauncherNav {
                 && !self.arcade_filter.drawer_open
                 && !matches!(self.arcade_filter.active, ArcadeFilter::Search)
             {
+                if self.active_collection_id.is_some() && emit_navigation_intents {
+                    return Some(LauncherEvent {
+                        action: LauncherAction::ToggleSystemPage,
+                        path: None,
+                        settings: None,
+                    });
+                }
                 self.toggle_system_page_mode();
                 return None;
             }
@@ -3053,6 +3076,13 @@ impl LauncherNav {
             };
             if count == 0 {
                 return None;
+            }
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::OpenSystemSection,
+                    path: None,
+                    settings: None,
+                });
             }
             self.set_arcade_user_list_mode(catalog, mode);
             self.system_page_mode = SystemPageMode::List;
@@ -11522,6 +11552,31 @@ mod tests {
             &catalog,
         );
         assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn page_motion_intents_preserve_source_until_commit() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+        let event = LauncherEvent {
+            action: LauncherAction::ToggleSystemPage,
+            path: None,
+            settings: None,
+        };
+        let source = nav.navigation_transition_state();
+        assert!(nav.commit_navigation_intent(&event, &catalog));
+        assert_eq!(nav.system_page_mode, SystemPageMode::List);
+        nav.restore_navigation_transition_state(source);
+        assert!(nav.is_system_hub());
+        let event = LauncherEvent {
+            action: LauncherAction::OpenSystemSection,
+            path: None,
+            settings: None,
+        };
+        assert!(nav.commit_navigation_intent(&event, &catalog));
+        assert_eq!(nav.system_page_mode, SystemPageMode::List);
+        assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Games);
     }
 
     #[test]

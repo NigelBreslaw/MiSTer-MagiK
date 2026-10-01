@@ -603,6 +603,27 @@ impl NavigationTransitionRuntime {
         Ok(started)
     }
 
+    pub fn begin_system_panel(
+        &mut self,
+        crt: bool,
+        to_list: bool,
+        source: &[Rgb565Pixel],
+        backdrop: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        if !self.enabled || self.is_active() {
+            return Ok(false);
+        }
+        self.buffers
+            .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
+        self.begin_request(
+            NavigationTransitionRequest::system_panel(crt, to_list),
+            source,
+            now_us,
+            true,
+        )
+    }
+
     /// Home <-> Arcade launcher-card reveal in the current logical raster.
     pub fn begin_arcade_card(
         &mut self,

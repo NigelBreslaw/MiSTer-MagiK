@@ -1394,7 +1394,9 @@ mod macos {
                         LauncherAction::OpenMenu
                         | LauncherAction::OpenCollection
                         | LauncherAction::NavigateBack
-                        | LauncherAction::NavigateHome => {
+                        | LauncherAction::NavigateHome
+                        | LauncherAction::ToggleSystemPage
+                        | LauncherAction::OpenSystemSection => {
                             if self.begin_navigation_transition(event.clone(), now_us) {
                                 self.pending_navigation_source_state =
                                     Some(self.launcher_nav.navigation_transition_state());
@@ -1435,6 +1437,24 @@ mod macos {
         }
 
         fn begin_navigation_transition(&mut self, event: LauncherEvent, now_us: u64) -> bool {
+            if matches!(
+                event.action,
+                LauncherAction::ToggleSystemPage | LauncherAction::OpenSystemSection
+            ) {
+                if self.orientation.is_portrait() {
+                    return false;
+                }
+                return self
+                    .navigation_transition
+                    .begin_system_panel(
+                        self.display_profile.is_crt(),
+                        self.launcher_nav.is_system_hub(),
+                        self.frame_target.cached_565(),
+                        self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
+                        now_us,
+                    )
+                    .unwrap_or(false);
+            }
             let Some((edge, direction)) =
                 navigation_transition_for_intent(&self.launcher_nav, &event)
             else {

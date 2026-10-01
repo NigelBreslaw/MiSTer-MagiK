@@ -29,7 +29,7 @@ export component SystemHubScreen inherits Rectangle {
             : NavigationView.system-device == DeviceKind.handheld ? #35c48f : NavigationView.system-device == DeviceKind.cabinet ? #e7695a : #5a71e7;
         background: self.focused ? (NavigationView.system-device == DeviceKind.monitor ? #3a310f
             : NavigationView.system-device == DeviceKind.handheld ? #0d3124 : NavigationView.system-device == DeviceKind.cabinet ? #3a1a16 : #171d3a) : transparent;
-        if self.focused : Rectangle { width: 2px; height: parent.height; background: parent.accent; }
+        if self.focused : Rectangle { x: 0px; y: 0px; width: 2px; height: parent.height; background: parent.accent; }
         accessible-role: list-item;
         accessible-label: i == 0 ? "GAMES" : i == 1 ? "RECENT" : "FAVOURITES";
         accessible-item-selected: self.focused;
