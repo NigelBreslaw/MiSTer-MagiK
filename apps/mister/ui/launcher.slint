@@ -121,6 +121,7 @@ export component Launcher inherits MisterWindow {
             else if event.text == Key.LeftArrow { LauncherActions.navigate(NavigationDirection.left); }
             else if event.text == Key.RightArrow { LauncherActions.navigate(NavigationDirection.right); }
             else if event.text == Key.Return { LauncherActions.activate(); }
+            else if event.text == Key.Tab { LauncherActions.select(); }
             else if event.text == Key.Escape { LauncherActions.back(); }
             else { return reject; }
             accept
@@ -132,10 +133,12 @@ export component Launcher inherits MisterWindow {
         accessible-role: list;
         accessible-label: "Collections";
         accessible-description: NavigationView.transition-state == NavigationTransitionState.idle ? "Ready" : "Transitioning";
-        for label[index] in ["Arcade", "Consoles", "Computers", "Handhelds", "Favourites", "Settings"] : Rectangle {
+        property <[string]> root-labels: ["Arcade", "Consoles", "Computers", "Handhelds", "Favourites", "Settings"];
+        for index in (NavigationView.menu-hierarchy == MenuHierarchy.root ? 6 : NavigationView.menu-items.length) : Rectangle {
             background: transparent;
             accessible-role: list-item;
-            accessible-label: label;
+            accessible-label: NavigationView.menu-hierarchy == MenuHierarchy.root
+                ? parent.root-labels[index] : NavigationView.menu-items[index].label;
             accessible-description: index < NavigationView.menu-items.length
                 ? NavigationView.menu-items[index].subtitle : "";
             accessible-item-selected: index == NavigationView.home-selected-index;

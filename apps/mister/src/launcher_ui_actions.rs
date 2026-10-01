@@ -18,6 +18,7 @@ const LAUNCHER_UI_ACTION_CAPACITY: usize = 64;
 pub enum LauncherUiAction {
     Navigate(slint_ui::launcher::NavigationDirection),
     Activate,
+    Select,
     Back,
     Home,
     SelectMenuItem(String),
@@ -115,6 +116,7 @@ impl LauncherUiAction {
             Self::Navigate(slint_ui::launcher::NavigationDirection::Left) => LogicalAction::Left,
             Self::Navigate(slint_ui::launcher::NavigationDirection::Right) => LogicalAction::Right,
             Self::Activate => LogicalAction::Activate,
+            Self::Select => LogicalAction::Select,
             Self::Back | Self::DismissOverlay => LogicalAction::Back,
             Self::Home => LogicalAction::Home,
             _ => return None,
@@ -283,6 +285,7 @@ pub fn apply_navigation_action(
         LauncherUiAction::SelectSetupEntry(_)
         | LauncherUiAction::Navigate(_)
         | LauncherUiAction::Activate
+        | LauncherUiAction::Select
         | LauncherUiAction::Back
         | LauncherUiAction::Home
         | LauncherUiAction::DismissOverlay => None,
@@ -328,6 +331,8 @@ fn bind_simple_action(
     actions.on_navigate(move |direction| enqueue(&queue, LauncherUiAction::Navigate(direction)));
     let queue = state.clone();
     actions.on_activate(move || enqueue(&queue, LauncherUiAction::Activate));
+    let queue = state.clone();
+    actions.on_select(move || enqueue(&queue, LauncherUiAction::Select));
     let queue = state.clone();
     actions.on_back(move || enqueue(&queue, LauncherUiAction::Back));
     let queue = state.clone();
@@ -636,6 +641,14 @@ mod tests {
         assert_eq!(pressed.captured_at_us, 11);
         assert_eq!(pressed.action, LogicalAction::Left);
         assert_eq!(pressed.phase, InputPhase::Pressed);
+        assert_eq!(released.press_id, pressed.press_id);
+        assert_eq!(released.phase, InputPhase::Released);
+
+        actions.invoke_select();
+        let action = adapter.pop_routable(true).expect("Select action");
+        let [pressed, released] = action.input_pulse(9, 13).expect("Select input pulse");
+        assert_eq!(pressed.action, LogicalAction::Select);
+        assert_eq!(pressed.source.kind, InputSourceKind::Ui);
         assert_eq!(released.press_id, pressed.press_id);
         assert_eq!(released.phase, InputPhase::Released);
     }
