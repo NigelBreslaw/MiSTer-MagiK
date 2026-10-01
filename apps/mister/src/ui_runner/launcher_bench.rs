@@ -31,6 +31,7 @@ const HOME_REPEAT_LEFT_HOLD: Duration = Duration::from_secs(20);
 pub struct LauncherBenchmarkConfig {
     scenario: Option<LauncherBenchScenario>,
     start_screen: Option<Screen>,
+    start_page_mode: launcher::SystemPageMode,
     start_system: Option<String>,
     system_entry_system: Option<String>,
     start_menu: Option<String>,
@@ -63,6 +64,11 @@ impl LauncherBenchmarkConfig {
         Self {
             scenario,
             start_screen: launcher_screen_from_value(get(START_SCREEN)),
+            start_page_mode: if matches!(get(START_SCREEN), Some("system-hub" | "snes-hub")) {
+                launcher::SystemPageMode::Hub
+            } else {
+                launcher::SystemPageMode::List
+            },
             start_system: normalized_nonempty(get(START_SYSTEM)),
             system_entry_system: normalized_nonempty(get(SYSTEM_ENTRY_BENCHMARK_SYSTEM)),
             start_menu: normalized_nonempty(get(START_MENU)).filter(|value| {
@@ -103,6 +109,10 @@ impl LauncherBenchmarkConfig {
     pub(super) fn scenario(&self) -> Option<LauncherBenchScenario> {
         self.scenario
     }
+    pub(super) fn start_page_mode(&self) -> launcher::SystemPageMode {
+        self.start_page_mode
+    }
+
     pub(super) fn start_screen(&self) -> Option<Screen> {
         self.start_screen
     }
@@ -271,7 +281,7 @@ impl LauncherBenchScenario {
 fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
     match value?.to_ascii_lowercase().as_str() {
         "home" => Some(Screen::Home),
-        "system-hub" | "snes-hub" => Some(Screen::SystemHub),
+        "system-hub" | "snes-hub" => Some(Screen::Arcade),
         "arcade" => Some(Screen::Arcade),
         "controller" | "controller-test" | "controller_test" => Some(Screen::Controller),
         "settings" => Some(Screen::Settings),
@@ -782,7 +792,7 @@ mod tests {
         ]);
         let config = LauncherBenchmarkConfig::capture_with(|name| values.get(name).copied());
 
-        assert_eq!(config.start_screen(), Some(Screen::SystemHub));
+        assert_eq!(config.start_screen(), Some(Screen::Arcade));
         assert_eq!(config.start_system(), Some("neogeo"));
         assert_eq!(config.start_menu(), Some("consoles"));
         assert_eq!(config.lock_screen(), Some(Screen::Arcade));

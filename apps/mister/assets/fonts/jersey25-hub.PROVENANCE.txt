@@ -1,0 +1,25 @@
+MiSTer MagiK system hub bitmap font resources
+
+Source: apps/mister/ui/fonts/Jersey25-Regular.ttf
+Source SHA-256: 4d4acdd89a748e9548041a3046d95536c500e1a7be9197c6aeef7d980f79d370
+Family: Jersey 25
+Swash hinting: enabled
+Alpha threshold: 128
+Coverage: full source charmap
+Encoding: MMBF1, packed 1-bit rows
+
+Slint pixel size: 48
+Observed uppercase cap height: 29 framebuffer pixels
+Resource SHA-256: dd23c813f79bf15e7da149b0aaed5c6a8cbe6e47debe7bf72909216f4ad81fae
+
+Slint pixel size: 64
+Observed uppercase cap height: 39 framebuffer pixels
+Resource SHA-256: d5e9120fd1061ec7a68e6d2659c664e39a26677d295b1fc4adde987aba57b278
+
+Slint pixel size: 52
+Observed uppercase cap height: 32 framebuffer pixels
+Resource SHA-256: 0f43648352e85d9eca14a89e8fd4ac8c604d32bf72aa6f31efe842f58a6e2696
+
+Regenerate only these public resources from the repository root with:
+
+    scripts/cargo run --manifest-path apps/mister/Cargo.toml --no-default-features --features asset-tools --example generate-bitmap-fonts -- apps/mister/ui/fonts private/magik-assets apps/mister/assets/fonts --jersey25-hub-only

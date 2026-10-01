@@ -14,7 +14,7 @@ use crate::launcher_view_types::{
     active_display_choice, arcade_list_mode, arcade_search_pane, arcade_search_status, device_kind,
     display_transaction_state, home_scroll_phase, launcher_screen, menu_hierarchy, orientation_at,
     screen_orientation, selected_display_choice, settings_display_choice, settings_popup,
-    settings_section, system_hub_section,
+    settings_section, system_hub_section, system_page_mode,
 };
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::arcade_card::{CABINET_HEIGHT, CABINET_WIDTH};
@@ -405,8 +405,6 @@ struct NavigationViewPresenter {
     /// the collection or its user lists change.
     hub_counts_key: Option<(String, u64, usize, Option<String>)>,
     hub_counts: (usize, usize),
-    /// The CRT hero currently installed: its device and raster size.
-    hero_key: Option<(crate::device_art::DeviceKind, usize, usize)>,
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     menu_item_presentation: Option<Rc<VecModel<MenuItemPresentation>>>,
@@ -542,6 +540,60 @@ pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
     &prepared_cabinet().1
 }
 
+pub fn system_device_rgb565(kind: Option<crate::device_art::DeviceKind>) -> &'static [Rgb565Pixel] {
+    use crate::device_art::DeviceKind;
+    static DEVICES: [std::sync::OnceLock<Vec<Rgb565Pixel>>; 3] = [
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+    ];
+    let Some(kind) = kind else {
+        return arcade_cabinet_rgb565();
+    };
+    let index = match kind {
+        DeviceKind::Tv => 0,
+        DeviceKind::Monitor => 1,
+        DeviceKind::Handheld => 2,
+    };
+    DEVICES[index].get_or_init(|| {
+        crate::device_art::device_rgb565(kind)
+            .iter()
+            .copied()
+            .map(Rgb565Pixel)
+            .collect()
+    })
+}
+
+pub fn device_reveal_spec(
+    kind: Option<crate::device_art::DeviceKind>,
+    crt: bool,
+    hub: bool,
+) -> mister_magik_framebuffer_scenes::device_card::DeviceCardReveal {
+    use crate::device_art::DeviceKind;
+    use mister_magik_framebuffer_scenes::navigation::NavigationTransitionRect;
+    let Some(kind) = kind else {
+        return mister_magik_framebuffer_scenes::device_card::DeviceCardReveal {
+            hub,
+            ..mister_magik_framebuffer_scenes::device_card::DeviceCardReveal::cabinet(crt)
+        };
+    };
+    mister_magik_framebuffer_scenes::device_card::DeviceCardReveal {
+        region: NavigationTransitionRect {
+            x: 117,
+            y: 46,
+            width: 250,
+            height: 350,
+        },
+        accent: match kind {
+            DeviceKind::Tv => 0x5b9c,
+            DeviceKind::Monitor => 0xe607,
+            DeviceKind::Handheld => 0x3631,
+        },
+        crt,
+        hub,
+    }
+}
+
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565
 /// software renderer's truncation return exactly the stored pixels.
 fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::Image {
@@ -572,22 +624,6 @@ fn settings_cog_backdrop_image() -> slint::Image {
 
 /// Raster size of the CRT system page's hero: 232 display pixels wide, with
 /// half-height rows on the native 15 kHz rasters. Portrait has no room for it.
-fn crt_hero_dims(width: i32, height: i32) -> Option<(usize, usize)> {
-    if width <= height {
-        return None;
-    }
-    let display_height = 232 * crate::device_art::VISIBLE_HEIGHT / crate::device_art::DEVICE_WIDTH;
-    let native_rows = height <= 288 && width >= 640;
-    Some((
-        232,
-        if native_rows {
-            display_height / 2
-        } else {
-            display_height
-        },
-    ))
-}
-
 /// A generic TV, monitor or handheld backdrop, or the cabinet for `None`.
 fn device_image(kind: Option<crate::device_art::DeviceKind>) -> slint::Image {
     let Some(kind) = kind else {
@@ -773,7 +809,20 @@ impl LauncherViewPresenters {
             set_system_device,
             device_kind(nav.device_kind())
         );
-        if nav.screen == Screen::SystemHub {
+        set_if_changed!(
+            navigation,
+            get_system_page_mode,
+            set_system_page_mode,
+            system_page_mode(nav.system_page_mode)
+        );
+        set_if_changed!(
+            navigation,
+            get_system_title_wraps,
+            set_system_title_wraps,
+            nav.active_collection()
+                .is_some_and(|c| c.title.chars().count() > 13)
+        );
+        if nav.is_system_hub() {
             let collection = nav.active_collection();
             let system_id = collection
                 .map(|collection| {
@@ -813,29 +862,6 @@ impl LauncherViewPresenters {
                     nav.active_collection_favourite_count(catalog),
                 );
                 self.navigation.hub_counts_key = Some(key);
-            }
-            // CRT shows the device scaled to its raster; HDMI reads the list's
-            // backdrop directly, so it gets no hero image.
-            let ui = app.global::<MisterUi>();
-            let hero = ui
-                .get_crt_layout()
-                .then(|| crt_hero_dims(ui.get_window_width(), ui.get_window_height()))
-                .flatten()
-                .zip(nav.device_kind())
-                .map(|((width, height), kind)| (kind, width, height));
-            if self.navigation.hero_key != hero {
-                navigation.set_system_hero(match hero {
-                    Some((kind, width, height)) => {
-                        let pixels: Vec<Rgb565Pixel> =
-                            crate::device_art::hero_rgb565(kind, width, height)
-                                .into_iter()
-                                .map(Rgb565Pixel)
-                                .collect();
-                        rgb565_image(width, height, &pixels)
-                    }
-                    None => slint::Image::default(),
-                });
-                self.navigation.hero_key = hero;
             }
             let (recent, favourites) = self.navigation.hub_counts;
             set_view_string_if_changed!(

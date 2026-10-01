@@ -17,7 +17,7 @@ import { LandscapePageChrome, PageTheme, PortraitPageChrome } from "../../compon
 global HubTheme {
     // Each collection's neon colour: TV blue, monitor yellow, handheld green.
     out property <color> accent: NavigationView.system-device == DeviceKind.monitor ? #e6c23a
-        : NavigationView.system-device == DeviceKind.handheld ? #35c48f : #5a71e7;
+        : NavigationView.system-device == DeviceKind.handheld ? #35c48f : NavigationView.system-device == DeviceKind.cabinet ? #e7695a : #5a71e7;
 }
 
 component HubTile inherits Rectangle {
@@ -41,8 +41,8 @@ component HubTile inherits Rectangle {
     Jersey25 {
         x: 14px; y: 8px; width: parent.width - 28px; height: 60px;
         text: root.count;
-        size: Jersey25Size.px56;
-        color: PageTheme.cream;
+        size: Jersey25Size.hub52;
+        color: root.count == 0 ? PageTheme.muted : PageTheme.cream;
     }
     Nocive15 {
         x: 14px; y: parent.height - 30px; width: parent.width - 28px;
@@ -61,80 +61,51 @@ export component SystemHubScreen inherits Rectangle {
     property <int> games: NavigationView.system-hub-games-count;
     property <int> recent: NavigationView.system-hub-recent-count;
     property <int> favourites: NavigationView.system-hub-favourites-count;
-    background: PageTheme.background;
+    background: transparent;
 
     if !MisterUi.portrait-layout : Rectangle {
-        // Hero: the device, cropped like the game list's, with a dim lit glass.
-        Rectangle {
-            x: 490px; y: 77px; width: 483px; height: 423px;
-            clip: true;
-            Image {
-                x: 0px; y: -42px; width: 483px; height: 519px;
-                source: ArcadeView.device-backdrop;
-                image-fit: fill;
-                image-rendering: pixelated;
-                accessible-role: none;
-            }
-            Rectangle {
-                x: 82px; y: 19px; width: 320px; height: 320px;
-                background: HubTheme.accent.mix(#03050a, 0.07);
-                Xerxes10 {
-                    width: parent.width; height: parent.height;
-                    text: "PRESS A";
-                    color: HubTheme.accent.mix(#000000, 0.5);
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        LandscapePageChrome {
-            hint-a: "A  OPEN";
-            hint-b: "B  BACK";
-            hint-right: "LEFT RIGHT  MOVE";
-        }
-
         Xerxes10 {
-            x: 28px; y: 104px; width: 450px;
+            x: 30px; y: 104px; width: 440px;
             text: NavigationView.system-subtitle;
             color: HubTheme.accent;
             overflow: elide;
         }
-        Jersey25 {
-            x: 26px; y: 124px; width: 450px; height: 60px;
+        title := Jersey25 {
+            x: 28px; y: 126px; width: 440px; height: self.preferred-height;
             text: NavigationView.system-title;
-            size: Jersey25Size.px56;
+            size: NavigationView.system-title-wraps ? Jersey25Size.hub48 : Jersey25Size.hub64;
+            wrap: word-wrap;
             color: PageTheme.cream;
         }
         Xerxes10 {
-            x: 28px; y: 196px; width: 450px;
+            x: 30px; y: title.y + title.height + 10px; width: 440px;
             text: root.games + " GAMES READY TO PLAY";
             color: PageTheme.cream;
         }
 
         HubTile {
-            x: 26px; y: root.section == SystemHubSection.games ? 310px : 318px;
-            width: 148px; height: 128px;
+            x: 30px; y: root.section == SystemHubSection.games ? 310px : 318px;
+            width: 140px; height: 128px;
             label: "GAMES"; count: root.games;
             focused: root.section == SystemHubSection.games;
             acknowledged: FeedbackView.acknowledged("system-hub", "games", FeedbackView.revision);
         }
         HubTile {
-            x: 186px; y: root.section == SystemHubSection.recent ? 310px : 318px;
-            width: 148px; height: 128px;
+            x: 180px; y: root.section == SystemHubSection.recent ? 310px : 318px;
+            width: 140px; height: 128px;
             label: "RECENT"; count: root.recent;
             focused: root.section == SystemHubSection.recent;
             acknowledged: FeedbackView.acknowledged("system-hub", "recent", FeedbackView.revision);
         }
         HubTile {
-            x: 346px; y: root.section == SystemHubSection.favourites ? 310px : 318px;
-            width: 148px; height: 128px;
+            x: 330px; y: root.section == SystemHubSection.favourites ? 310px : 318px;
+            width: 140px; height: 128px;
             label: "FAVOURITES"; count: root.favourites;
             focused: root.section == SystemHubSection.favourites;
             acknowledged: FeedbackView.acknowledged("system-hub", "favorites", FeedbackView.revision);
         }
         Xerxes10 {
-            x: 28px; y: 466px; width: 450px;
+            x: 30px; y: 470px; width: 440px;
             text: NavigationView.system-hub-caption;
             color: #c9c3b3;
             overflow: elide;

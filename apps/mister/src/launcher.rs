@@ -303,13 +303,19 @@ impl std::error::Error for LaunchError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Home,
-    SystemHub,
     Controller,
     Arcade,
     Settings,
     About,
     Licenses,
     LicenseText,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SystemPageMode {
+    Hub,
+    #[default]
+    List,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -339,6 +345,8 @@ pub enum ConfirmAction {
 pub enum LauncherAction {
     OpenMenu,
     OpenCollection,
+    ToggleSystemPage,
+    OpenSystemSection,
     NavigateBack,
     NavigateHome,
     LaunchGame,
@@ -433,6 +441,7 @@ pub struct ArcadeNav {
     row_height: i32,
     step_rows: usize,
     input_policy: ScrollInputPolicy,
+    nested_step: Option<NestedCardStep>,
     /// Card carousels wrap only at the root; nested levels stop at their ends.
     wraps: bool,
     scroll: ArcadeScrollState,
@@ -444,6 +453,14 @@ pub struct ArcadeNav {
 enum ScrollInputPolicy {
     Arcade,
     RootCards,
+    NestedCards,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NestedCardStep {
+    from: i64,
+    direction: i32,
+    started: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -494,6 +511,7 @@ impl ArcadeNav {
             row_height: row_height.max(1),
             step_rows: step_rows.max(1),
             input_policy: ScrollInputPolicy::Arcade,
+            nested_step: None,
             wraps: false,
             scroll: ArcadeScrollState::default(),
             scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
@@ -502,6 +520,7 @@ impl ArcadeNav {
     }
 
     pub fn reset(&mut self) {
+        self.nested_step = None;
         self.selected = 0;
         self.scroll_y = 0;
         self.visual_index = 0.0;
@@ -511,6 +530,7 @@ impl ArcadeNav {
     }
 
     pub fn snap_to_selected(&mut self) {
+        self.nested_step = None;
         self.scroll.target_index = self.selected;
         self.scroll.intent_queue = 0;
         self.scroll_animation
@@ -538,7 +558,7 @@ impl ArcadeNav {
     }
 
     pub fn is_settled_at_selected(&self) -> bool {
-        if self.input_policy == ScrollInputPolicy::RootCards {
+        if self.input_policy != ScrollInputPolicy::Arcade {
             return self.is_settled() && !self.is_scroll_active();
         }
         self.scroll_y == self.selected as i32 * self.row_height
@@ -551,6 +571,9 @@ impl ArcadeNav {
     /// The spring's long tail is not motion anyone can see, so this is what
     /// decides when a press on a card may act.
     pub fn is_visually_at_rest(&self, count: usize) -> bool {
+        if self.nested_step.is_some() {
+            return false;
+        }
         if count == 0 || self.scroll.intent_queue != 0 || self.scroll.held_dir != 0 {
             return false;
         }
@@ -560,6 +583,7 @@ impl ArcadeNav {
     }
 
     pub fn restore_position(&mut self, selected: usize, scroll_y: i32, count: usize) {
+        self.nested_step = None;
         if count == 0 {
             self.reset();
             return;
@@ -602,6 +626,16 @@ impl ArcadeNav {
 
         let dir = dir.signum();
         let previous_dir = previous_dir.signum();
+        if self.input_policy == ScrollInputPolicy::NestedCards {
+            self.scroll.held_dir = dir;
+            if previous_dir != dir {
+                self.scroll.hold_started_at = if dir == 0 { None } else { Some(now) };
+                if dir != 0 && self.nested_step.is_none() {
+                    self.start_nested_step(dir, count, now);
+                }
+            }
+            return;
+        }
         let reversing_hold =
             self.scroll.continuous_active && previous_dir != 0 && dir != 0 && dir != previous_dir;
         if previous_dir != 0 && previous_dir != dir {
@@ -647,6 +681,10 @@ impl ArcadeNav {
     }
 
     pub fn tick(&mut self, count: usize, now: Instant) {
+        if self.input_policy == ScrollInputPolicy::NestedCards {
+            self.tick_nested(count, now);
+            return;
+        }
         if count == 0 {
             self.reset();
             return;
@@ -741,6 +779,93 @@ impl ArcadeNav {
             self.scroll.intent_queue = 0;
         }
         self.sync_visual_from_px();
+    }
+
+    fn start_nested_step(&mut self, dir: i32, count: usize, now: Instant) {
+        if count < 2 {
+            return;
+        }
+        self.scroll.last_frame_at = Some(now);
+        self.nested_step = Some(NestedCardStep {
+            from: self.visual_index.round() as i64,
+            direction: dir.signum(),
+            started: now,
+        });
+    }
+
+    fn tick_nested(&mut self, count: usize, now: Instant) {
+        use mister_magik_framebuffer_scenes::launcher_navigation::NESTED_STEP_MILLIS;
+        if count == 0 {
+            self.reset();
+            return;
+        }
+        if let Some(step) = self.nested_step {
+            let elapsed = now
+                .saturating_duration_since(step.started)
+                .as_millis()
+                .min(u128::from(NESTED_STEP_MILLIS)) as u32;
+            self.visual_index = step.from as f32
+                + step.direction as f32 * elapsed as f32 / NESTED_STEP_MILLIS as f32;
+            self.scroll_y = (self.visual_index * self.row_height as f32).round() as i32;
+            if elapsed == NESTED_STEP_MILLIS {
+                self.selected =
+                    (step.from + i64::from(step.direction)).rem_euclid(count as i64) as usize;
+                self.scroll.target_index = self.selected;
+                self.nested_step = None;
+            }
+        }
+        self.scroll.continuous_active = self.scroll.held_dir != 0
+            && self
+                .scroll
+                .hold_started_at
+                .is_some_and(|at| now.saturating_duration_since(at) > ROOT_CARD_HOLD_DELAY);
+        if self.nested_step.is_none()
+            && self.scroll.continuous_active
+            && self.scroll.last_frame_at.is_none_or(|at| {
+                now.saturating_duration_since(at)
+                    >= Duration::from_millis(u64::from(NESTED_STEP_MILLIS))
+            })
+        {
+            // Schedule at most one step, even after a late UI frame.
+            self.start_nested_step(self.scroll.held_dir, count, now);
+        }
+    }
+
+    fn nested_browse_frame(
+        &self,
+        count: usize,
+        at: Instant,
+    ) -> mister_magik_framebuffer_scenes::launcher_navigation::BrowseFrame {
+        use mister_magik_framebuffer_scenes::launcher_navigation::{
+            BrowseDirection, BrowseFrame, BrowsePhase, NESTED_STEP_MILLIS,
+        };
+        let Some(step) = self.nested_step else {
+            return BrowseFrame {
+                selected: self.selected,
+                target: self.selected,
+                phase: BrowsePhase::Settled,
+                direction: None,
+                progress_millis: 0,
+                duration_millis: NESTED_STEP_MILLIS,
+            };
+        };
+        let elapsed = at
+            .saturating_duration_since(step.started)
+            .as_millis()
+            .min(u128::from(NESTED_STEP_MILLIS)) as u32;
+        BrowseFrame {
+            selected: step.from.rem_euclid(count.max(1) as i64) as usize,
+            target: (step.from + i64::from(step.direction)).rem_euclid(count.max(1) as i64)
+                as usize,
+            phase: BrowsePhase::Flipping,
+            direction: Some(if step.direction > 0 {
+                BrowseDirection::Right
+            } else {
+                BrowseDirection::Left
+            }),
+            progress_millis: elapsed,
+            duration_millis: NESTED_STEP_MILLIS,
+        }
     }
 
     pub fn bench_direction_tick(
@@ -895,7 +1020,7 @@ impl ArcadeNav {
     }
 
     pub fn is_settled(&self) -> bool {
-        self.scroll_animation.is_settled()
+        self.nested_step.is_none() && self.scroll_animation.is_settled()
     }
 
     pub fn is_scroll_active(&self) -> bool {
@@ -1013,6 +1138,7 @@ pub struct LauncherNav {
     portrait_layout: bool,
     license_viewport: crate::licenses::LicenseViewport,
     pub screen: Screen,
+    pub system_page_mode: SystemPageMode,
     pub selected: usize,
     pub system_hub_selected: usize,
     pub scroll_x: i32,
@@ -1112,6 +1238,7 @@ pub struct HomeViewState {
 #[derive(Clone, Debug)]
 pub struct NavigationTransitionState {
     screen: Screen,
+    system_page_mode: SystemPageMode,
     selected: usize,
     system_hub_selected: usize,
     scroll_x: i32,
@@ -1372,6 +1499,23 @@ impl LauncherNav {
         self.confirm_selected = 0;
     }
 
+    pub fn is_system_hub(&self) -> bool {
+        self.screen == Screen::Arcade && self.system_page_mode == SystemPageMode::Hub
+    }
+
+    pub fn toggle_system_page_mode(&mut self) {
+        if self.screen != Screen::Arcade || self.active_collection_id.is_none() {
+            return;
+        }
+        self.system_page_mode = if self.system_page_mode == SystemPageMode::Hub {
+            SystemPageMode::List
+        } else {
+            SystemPageMode::Hub
+        };
+        self.arcade_filter.drawer_open = false;
+        self.arcade_search.pane = ArcadeSearchPane::Results;
+    }
+
     pub fn for_crt_layout(crt_layout: bool) -> Self {
         Self::for_crt_layout_with_row_height(crt_layout, ARCADE_ROW_HEIGHT)
     }
@@ -1405,8 +1549,12 @@ impl LauncherNav {
     }
 
     fn restore_home_card_scroll(&mut self) {
-        // The root always cycles; a nested level cycles once it has enough
-        // cards to fill the carousel without repeating one.
+        self.home_card_scroll.input_policy = if self.current_menu_id() == ROOT_MENU_ID {
+            ScrollInputPolicy::RootCards
+        } else {
+            ScrollInputPolicy::NestedCards
+        };
+        // Root and nested levels cycle; a single-card level stays still.
         self.home_card_scroll.set_wraps(
             self.current_menu_id() == ROOT_MENU_ID
                 || self.home_navigation_count()
@@ -1482,6 +1630,21 @@ impl LauncherNav {
         (predicted.selected, predicted.visual_index)
     }
 
+    pub fn home_card_browse_prediction(
+        &self,
+        at: Instant,
+    ) -> Option<mister_magik_framebuffer_scenes::launcher_navigation::BrowseFrame> {
+        if self.home_card_scroll.input_policy != ScrollInputPolicy::NestedCards {
+            return None;
+        }
+        // Predict only the already accepted step. Future time cannot create
+        // another held input before its capture boundary has been observed.
+        Some(
+            self.home_card_scroll
+                .nested_browse_frame(self.home_navigation_count(), at),
+        )
+    }
+
     pub fn arcade_uses_menu_repeat(&self) -> bool {
         self.screen == Screen::Arcade
             && self.arcade_search.is_active(&self.arcade_filter.active)
@@ -1495,6 +1658,7 @@ impl LauncherNav {
             portrait_layout: false,
             license_viewport: crate::licenses::LicenseViewport::HDMI,
             screen: Screen::Home,
+            system_page_mode: SystemPageMode::List,
             selected: 0,
             system_hub_selected: 0,
             scroll_x: 0,
@@ -1616,8 +1780,9 @@ impl LauncherNav {
         }
 
         // A system's page whose collection has gone has nothing left to show.
-        if self.screen == Screen::SystemHub && self.active_collection_id.is_none() {
+        if self.is_system_hub() && self.active_collection_id.is_none() {
             self.screen = Screen::Home;
+            self.system_page_mode = SystemPageMode::List;
             self.restore_current_menu_view();
         }
 
@@ -1644,7 +1809,9 @@ impl LauncherNav {
             let preserved_search = self.arcade_search.clone();
             let preserved_selected = self.arcade.selected;
             let preserved_scroll_y = self.arcade.scroll_y;
+            let requested_page_mode = self.system_page_mode;
             if self.open_default_arcade_synced(catalog) {
+                self.system_page_mode = requested_page_mode;
                 let collection_id = self
                     .active_collection_id
                     .clone()
@@ -1729,7 +1896,7 @@ impl LauncherNav {
 
     /// The device for a collection, from where it lives in the hierarchy, so
     /// entering it by ID (benchmarks, launch return) agrees with browsing to it.
-    fn device_kind_for_collection(
+    pub fn device_kind_for_collection(
         &self,
         collection_id: &str,
     ) -> Option<crate::device_art::DeviceKind> {
@@ -1748,9 +1915,9 @@ impl LauncherNav {
     /// Go from a system's page straight to its game list, as launch return,
     /// the start-system setting and benchmarks do.
     pub fn skip_system_page(&mut self, catalog: &ArcadeCatalog) {
-        if self.screen == Screen::SystemHub {
+        if self.is_system_hub() {
             self.set_arcade_user_list_mode(catalog, ArcadeUserListMode::Games);
-            self.screen = Screen::Arcade;
+            self.system_page_mode = SystemPageMode::List;
         }
     }
 
@@ -1759,6 +1926,9 @@ impl LauncherNav {
         let opened = self.open_system(catalog, system_id);
         if opened {
             self.skip_system_page(catalog);
+            let id = self.active_collection_scope_id(catalog).to_string();
+            let count = self.active_arcade_game_count(catalog, &id);
+            self.restore_game_list_state(&id, count);
         }
         opened
     }
@@ -2206,6 +2376,7 @@ impl LauncherNav {
         self.menu_path.push(ROOT_MENU_ID.to_string());
         self.active_collection_id = None;
         self.screen = Screen::Home;
+        self.system_page_mode = SystemPageMode::List;
         self.restore_current_menu_view();
     }
 
@@ -2290,11 +2461,23 @@ impl LauncherNav {
         }
         let count = self.active_arcade_game_count(catalog, &collection.id);
         self.restore_game_list_state(&collection.id, count);
-        self.screen = Screen::Arcade;
-        if self.device_kind_for_collection(&collection.id).is_some() {
-            self.screen = Screen::SystemHub;
-            self.system_hub_selected = 0;
+        let memory_key = collection_filter_memory_key(&collection.id, &self.arcade_filter.active);
+        if !self.game_list_memory.contains_key(&memory_key) {
+            let representative = self
+                .recent_launch_refs
+                .iter()
+                .find_map(|path| {
+                    self.active_arcade_game_view(catalog, &collection.id)
+                        .iter()
+                        .position(|game| game.mra_path.as_ref() == path.as_str())
+                })
+                .unwrap_or(0);
+            self.arcade.selected = representative.min(count.saturating_sub(1));
+            self.arcade.snap_to_selected();
         }
+        self.screen = Screen::Arcade;
+        self.system_page_mode = SystemPageMode::Hub;
+        self.system_hub_selected = 0;
         if let Some(system_index) = catalog.systems.iter().position(|system| {
             collection
                 .system_id
@@ -2357,6 +2540,7 @@ impl LauncherNav {
     pub fn navigation_transition_state(&self) -> NavigationTransitionState {
         NavigationTransitionState {
             screen: self.screen,
+            system_page_mode: self.system_page_mode,
             selected: self.selected,
             system_hub_selected: self.system_hub_selected,
             scroll_x: self.scroll_x,
@@ -2402,6 +2586,7 @@ impl LauncherNav {
 
     pub fn restore_navigation_transition_state(&mut self, state: NavigationTransitionState) {
         self.screen = state.screen;
+        self.system_page_mode = state.system_page_mode;
         self.selected = state.selected;
         self.system_hub_selected = state.system_hub_selected;
         self.scroll_x = state.scroll_x;
@@ -2714,6 +2899,20 @@ impl LauncherNav {
         catalog: &ArcadeCatalog,
     ) -> bool {
         match event.action {
+            LauncherAction::ToggleSystemPage => {
+                self.toggle_system_page_mode();
+                true
+            }
+            LauncherAction::OpenSystemSection if self.is_system_hub() => {
+                let mode = match self.system_hub_selected {
+                    1 => ArcadeUserListMode::Recent,
+                    2 => ArcadeUserListMode::Favourites,
+                    _ => ArcadeUserListMode::Games,
+                };
+                self.set_arcade_user_list_mode(catalog, mode);
+                self.system_page_mode = SystemPageMode::List;
+                true
+            }
             LauncherAction::OpenMenu => event
                 .path
                 .as_deref()
@@ -2724,9 +2923,6 @@ impl LauncherNav {
                 .is_some_and(|collection_id| self.activate_collection(catalog, collection_id)),
             LauncherAction::NavigateBack if self.screen == Screen::Home => self.pop_menu(),
             LauncherAction::NavigateBack if self.screen == Screen::Arcade => {
-                if self.return_arcade_to_system_hub() {
-                    return true;
-                }
                 let collection_id = self.active_collection_scope_id(catalog).to_string();
                 let before = self.screen;
                 self.leave_arcade(false, &collection_id);
@@ -2777,6 +2973,21 @@ impl LauncherNav {
         if self.confirm_action.is_some() {
             self.handle_confirm(pressed)
         } else {
+            if self.screen == Screen::Arcade
+                && pressed.btn_select
+                && !self.arcade_filter.drawer_open
+                && !matches!(self.arcade_filter.active, ArcadeFilter::Search)
+            {
+                if self.active_collection_id.is_some() && emit_navigation_intents {
+                    return Some(LauncherEvent {
+                        action: LauncherAction::ToggleSystemPage,
+                        path: None,
+                        settings: None,
+                    });
+                }
+                self.toggle_system_page_mode();
+                return None;
+            }
             match self.screen {
                 Screen::Home => self.handle_home(
                     input,
@@ -2784,7 +2995,7 @@ impl LauncherNav {
                     emit_collection_intents,
                     emit_navigation_intents,
                 ),
-                Screen::SystemHub => self.handle_system_hub(pressed, catalog),
+
                 Screen::Controller => {
                     if pressed.btn_home {
                         self.go_root();
@@ -2793,6 +3004,9 @@ impl LauncherNav {
                         self.restore_current_menu_view();
                     }
                     None
+                }
+                Screen::Arcade if self.is_system_hub() => {
+                    self.handle_system_hub(pressed, catalog, emit_navigation_intents)
                 }
                 Screen::Arcade => self.handle_arcade(input, catalog, emit_navigation_intents),
                 Screen::Settings => self.handle_settings(pressed),
@@ -2809,23 +3023,33 @@ impl LauncherNav {
         &mut self,
         pressed: &PadState,
         catalog: &ArcadeCatalog,
+        emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
         if pressed.btn_home {
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateHome,
+                    path: None,
+                    settings: None,
+                });
+            }
             self.go_root();
             return None;
         }
         if pressed.btn_b {
-            self.active_collection_id = None;
-            self.screen = Screen::Home;
-            if let Some(source) = self.active_collection_source.take() {
-                self.restore_home_view_state(source);
-            } else {
-                self.restore_current_menu_view();
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateBack,
+                    path: None,
+                    settings: None,
+                });
             }
+            let collection_id = self.active_collection_scope_id(catalog).to_string();
+            self.leave_arcade(false, &collection_id);
             return None;
         }
         // Games, Recent and Favourites sit in a row; HDMI portrait stacks them.
-        let (next, previous) = if self.portrait_layout && !self.crt_layout {
+        let (next, previous) = if self.portrait_layout || self.crt_layout {
             (pressed.dpad_down, pressed.dpad_up)
         } else {
             (pressed.dpad_right, pressed.dpad_left)
@@ -2837,14 +3061,24 @@ impl LauncherNav {
             self.system_hub_selected -= 1;
         }
         if pressed.btn_a {
-            let mode = match self.system_hub_selected {
-                0 => ArcadeUserListMode::Games,
-                1 => ArcadeUserListMode::Recent,
-                2 => ArcadeUserListMode::Favourites,
+            let count = match self.system_hub_selected {
+                0 => self.active_collection().map_or(0, |c| c.count),
+                1 => self.active_collection_recent_count(catalog),
+                2 => self.active_collection_favourite_count(catalog),
                 _ => unreachable!(),
             };
-            self.set_arcade_user_list_mode(catalog, mode);
-            self.screen = Screen::Arcade;
+            if count == 0 {
+                return None;
+            }
+            let event = LauncherEvent {
+                action: LauncherAction::OpenSystemSection,
+                path: None,
+                settings: None,
+            };
+            if emit_navigation_intents {
+                return Some(event);
+            }
+            self.commit_navigation_intent(&event, catalog);
         }
         None
     }
@@ -2979,6 +3213,7 @@ impl LauncherNav {
                 self.active_collection_id = None;
                 self.set_arcade_user_list_mode(catalog, ArcadeUserListMode::Favourites);
                 self.screen = Screen::Arcade;
+                self.system_page_mode = SystemPageMode::List;
                 return None;
             }
             5 => {
@@ -3040,6 +3275,17 @@ impl LauncherNav {
         self.home_card_scroll
             .handle_direction_input(dir, previous_dir, frame_now, count);
         self.home_card_scroll.tick(count, frame_now);
+        if self.settings.reduce_motion
+            && let Some(step) = self.home_card_scroll.nested_step
+        {
+            self.home_card_scroll.selected =
+                (step.from + i64::from(step.direction)).rem_euclid(count as i64) as usize;
+            self.home_card_scroll.scroll.target_index = self.home_card_scroll.selected;
+            self.home_card_scroll.visual_index = (step.from + i64::from(step.direction)) as f32;
+            self.home_card_scroll.scroll_y =
+                (self.home_card_scroll.visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
+            self.home_card_scroll.nested_step = None;
+        }
         self.selected = self.home_card_scroll.selected;
         keep_home_visible(self.selected, &mut self.scroll_x, count);
     }
@@ -3099,9 +3345,6 @@ impl LauncherNav {
                     path: None,
                     settings: None,
                 });
-            }
-            if self.return_arcade_to_system_hub() {
-                return None;
             }
             self.leave_arcade(false, &collection_id);
             return None;
@@ -3842,15 +4085,6 @@ impl LauncherNav {
         self.arcade_filter.drawer_open = false;
         self.arcade_search = ArcadeSearchState::new();
         self.arcade.reset();
-    }
-
-    pub fn return_arcade_to_system_hub(&mut self) -> bool {
-        if self.active_collection_id.is_some() && self.device_kind().is_some() {
-            self.screen = Screen::SystemHub;
-            true
-        } else {
-            false
-        }
     }
 
     pub fn arcade_user_list_mode(&self) -> ArcadeUserListMode {
@@ -7156,7 +7390,80 @@ mod tests {
     }
 
     #[test]
-    fn small_nested_levels_hold_to_browse_and_stop_at_the_last_card() {
+    fn nested_steps_use_elapsed_time_and_ignore_taps_until_the_endpoint() {
+        use mister_magik_framebuffer_scenes::launcher_navigation::BrowsePhase;
+        let mut nav = ArcadeNav::new_cyclic();
+        nav.input_policy = ScrollInputPolicy::NestedCards;
+        let start = Instant::now();
+        nav.handle_direction_input(1, 0, start, 2);
+        nav.handle_direction_input(0, 1, start + Duration::from_millis(16), 2);
+        nav.tick(2, start + Duration::from_millis(230));
+        let frame = nav.nested_browse_frame(2, start + Duration::from_millis(230));
+        assert_eq!((frame.progress_millis, frame.duration_millis), (230, 460));
+        assert_eq!((frame.selected, frame.target), (0, 1));
+        assert_eq!(nav.visual_index, 0.5);
+        nav.handle_direction_input(1, 0, start + Duration::from_millis(240), 2);
+        nav.handle_direction_input(0, 1, start + Duration::from_millis(256), 2);
+        nav.tick(2, start + Duration::from_millis(459));
+        assert_eq!(nav.selected, 0);
+        assert!(!nav.is_visually_at_rest(2));
+        nav.tick(2, start + Duration::from_millis(460));
+        assert_eq!(nav.selected, 1);
+        assert_eq!(
+            nav.nested_browse_frame(2, start + Duration::from_millis(460))
+                .phase,
+            BrowsePhase::Settled
+        );
+        nav.handle_direction_input(-1, 0, start + Duration::from_millis(500), 2);
+        let reverse = nav.nested_browse_frame(2, start + Duration::from_millis(730));
+        assert_eq!(
+            (reverse.selected, reverse.target, reverse.progress_millis),
+            (1, 0, 230)
+        );
+        nav.handle_direction_input(0, -1, start + Duration::from_millis(516), 2);
+        nav.tick(2, start + Duration::from_secs(5));
+        assert_eq!(nav.selected, 0);
+        assert!(nav.is_visually_at_rest(2));
+    }
+
+    #[test]
+    fn reduce_motion_settles_nested_steps_on_the_input_frame() {
+        use mister_magik_framebuffer_scenes::launcher_navigation::BrowsePhase;
+        let catalog = arcade_catalog(
+            Vec::new(),
+            (0..4)
+                .map(|i| arcade_system(format!("system-{i}"), 1))
+                .collect(),
+        );
+        for crt in [false, true] {
+            let mut nav = LauncherNav::for_crt_layout(crt);
+            nav.settings.reduce_motion = true;
+            nav.sync_launcher_taxonomy(&catalog);
+            assert!(nav.open_menu("menu:consoles:other"));
+            let now = Instant::now();
+            let right = pad_with(|pad| pad.dpad_right = true);
+            nav.handle_input(&right, now, &catalog);
+            assert_eq!(nav.selected, 1);
+            assert_eq!(nav.home_card_visual_index(), 1.0);
+            assert_eq!(
+                nav.home_card_browse_prediction(now).unwrap().phase,
+                BrowsePhase::Settled
+            );
+            release(&mut nav, &catalog, now, 16);
+            nav.handle_input(&right, now + Duration::from_millis(32), &catalog);
+            assert_eq!(nav.selected, 2);
+            assert_eq!(nav.home_card_visual_index(), 2.0);
+            assert_eq!(
+                nav.home_card_browse_prediction(now + Duration::from_millis(32))
+                    .unwrap()
+                    .phase,
+                BrowsePhase::Settled
+            );
+        }
+    }
+
+    #[test]
+    fn small_nested_levels_cycle_while_held() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..4)
@@ -7167,7 +7474,7 @@ mod tests {
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_menu("menu:consoles:other"));
         let count = nav.current_menu_count();
-        assert_eq!(count, 4, "a small level does not cycle");
+        assert_eq!(count, 4);
         let held_right = pad_with(|pad| pad.dpad_right = true);
         let start = Instant::now();
         let mut previous = nav.home_card_visual_index();
@@ -7178,15 +7485,15 @@ mod tests {
                 &catalog,
             );
             let visual = nav.home_card_visual_index();
-            // A linear level never wraps back to the first card.
+            // Integrated position stays continuous while identity wraps.
             assert!(
                 visual >= previous - 0.001,
                 "frame {frame}: {visual} < {previous}"
             );
-            assert!(visual <= (count - 1) as f32 + 0.001);
+            assert!(nav.selected < count);
             previous = visual;
         }
-        assert_eq!(nav.selected, count - 1);
+        assert!(previous > count as f32);
         for frame in 0..120 {
             nav.handle_input(
                 &PadState::default(),
@@ -7194,12 +7501,14 @@ mod tests {
                 &catalog,
             );
         }
-        assert_eq!(nav.selected, count - 1);
-        assert!((nav.home_card_visual_index() - (count - 1) as f32).abs() < 0.001);
+        assert_eq!(
+            nav.home_card_visual_index().round() as i64 % count as i64,
+            nav.selected as i64
+        );
     }
 
     #[test]
-    fn small_nested_levels_step_one_card_per_tap_and_ignore_left_at_the_first() {
+    fn small_nested_levels_step_one_card_per_tap_and_wrap_in_both_directions() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..4)
@@ -7220,14 +7529,15 @@ mod tests {
             }
         };
         tap(&mut nav, pad_with(|pad| pad.dpad_left = true));
+        assert_eq!(nav.selected, 3);
+        tap(&mut nav, pad_with(|pad| pad.dpad_right = true));
         assert_eq!(nav.selected, 0);
-        assert!(nav.home_card_visual_index().abs() < 0.001);
         for step in 1..=3 {
             tap(&mut nav, pad_with(|pad| pad.dpad_right = true));
             assert_eq!(nav.selected, step);
             let visual = nav.home_card_visual_index();
             assert!(
-                (visual - step as f32).abs() < 0.001,
+                (visual.round() as i64).rem_euclid(4) == step as i64,
                 "step {step}: visual {visual}"
             );
         }
@@ -7324,6 +7634,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
 
@@ -7563,6 +7874,7 @@ mod tests {
         assert_no_catalog_loads_during(|| {
             let _ = nav.handle_input(&press_a, t0, &catalog);
             release(&mut nav, &catalog, t0, 16);
+            nav.skip_system_page(&catalog);
             let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
             release(&mut nav, &catalog, t0, 48);
             let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(64), &catalog);
@@ -7912,6 +8224,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
@@ -8187,6 +8500,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
@@ -8248,6 +8562,7 @@ mod tests {
             let mut ms = 0;
 
             tap(&mut nav, &catalog, t0, &mut ms, &press_a);
+            nav.skip_system_page(&catalog);
             open_filter_drawer(&mut nav, &catalog, t0, ms);
             ms += 64;
             for _ in 0..top_index {
@@ -8355,6 +8670,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
 
         let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
         release(&mut nav, &catalog, t0, 48);
@@ -8452,6 +8768,7 @@ mod tests {
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
+        nav.skip_system_page(&catalog);
         open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
@@ -8562,7 +8879,7 @@ mod tests {
         assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
         assert!(nav.commit_navigation_intent(&event, &catalog));
         // A console opens its own page before its game list.
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
     }
 
     #[test]
@@ -8706,7 +9023,7 @@ mod tests {
             .expect("Nintendo 64");
 
         let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog);
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
         release(&mut nav, &catalog, t0, 16);
         let _ = nav.handle_input(
             &pad_with(|pad| pad.btn_b = true),
@@ -8724,7 +9041,7 @@ mod tests {
         let initial = hierarchy_catalog();
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&initial, "neogeopocket"));
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
 
         let computers_only = ArcadeCatalog::new(
             PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
@@ -11118,7 +11435,7 @@ mod tests {
             vec![arcade_system("snes", 1)],
         );
         let mut nav = LauncherNav::new();
-        assert!(nav.open_system(&catalog, "snes"));
+        assert!(nav.open_system_game_list(&catalog, "snes"));
         nav.screen = Screen::Arcade;
         let now = Instant::now();
 
@@ -11222,7 +11539,67 @@ mod tests {
     }
 
     #[test]
-    fn snes_routes_through_hub_and_lists_return_to_it() {
+    fn arcade_overview_and_list_share_selection_and_select_never_navigates() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+        assert!(nav.is_system_hub());
+        let collection = nav.active_collection_id().map(str::to_owned);
+        let now = Instant::now();
+        let select = pad_with(|pad| pad.btn_select = true);
+        nav.handle_input(&select, now, &catalog);
+        assert_eq!(nav.system_page_mode, SystemPageMode::List);
+        nav.arcade.selected = 1;
+        nav.arcade.snap_to_selected();
+        release(&mut nav, &catalog, now, 16);
+        nav.handle_input(&select, now + Duration::from_millis(32), &catalog);
+        assert!(nav.is_system_hub());
+        assert_eq!(nav.arcade.selected, 1);
+        assert_eq!(nav.active_collection_id().map(str::to_owned), collection);
+        nav.system_hub_selected = 1;
+        release(&mut nav, &catalog, now, 48);
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_a = true),
+            now + Duration::from_millis(64),
+            &catalog,
+        );
+        assert!(nav.is_system_hub(), "zero-count Recent tile is a no-op");
+        release(&mut nav, &catalog, now, 80);
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
+            now + Duration::from_millis(96),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn page_motion_intents_preserve_source_until_commit() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+        let event = LauncherEvent {
+            action: LauncherAction::ToggleSystemPage,
+            path: None,
+            settings: None,
+        };
+        let source = nav.navigation_transition_state();
+        assert!(nav.commit_navigation_intent(&event, &catalog));
+        assert_eq!(nav.system_page_mode, SystemPageMode::List);
+        nav.restore_navigation_transition_state(source);
+        assert!(nav.is_system_hub());
+        let event = LauncherEvent {
+            action: LauncherAction::OpenSystemSection,
+            path: None,
+            settings: None,
+        };
+        assert!(nav.commit_navigation_intent(&event, &catalog));
+        assert_eq!(nav.system_page_mode, SystemPageMode::List);
+        assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Games);
+    }
+
+    #[test]
+    fn snes_routes_through_hub_and_back_from_list_leaves_the_page() {
         let catalog = arcade_catalog(
             vec![
                 arcade_game("F-Zero")
@@ -11234,7 +11611,7 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&catalog, "snes"));
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
 
         let now = Instant::now();
         nav.handle_input(&pad_with(|pad| pad.btn_a = true), now, &catalog);
@@ -11249,7 +11626,7 @@ mod tests {
             now + Duration::from_millis(2),
             &catalog,
         );
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert_eq!(nav.screen, Screen::Home);
     }
 
     #[test]
@@ -11322,7 +11699,7 @@ mod tests {
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Recent);
 
-        nav.return_arcade_to_system_hub();
+        nav.toggle_system_page_mode();
         nav.system_hub_selected = 2;
         nav.handle_input(
             &PadState::default(),
@@ -11352,17 +11729,17 @@ mod tests {
         let mut nav = LauncherNav::new();
 
         assert!(nav.open_system(&catalog, "c64"));
-        assert_eq!(nav.screen, Screen::SystemHub);
+        assert!(nav.is_system_hub());
         assert_eq!(nav.active_collection_id(), Some("c64"));
         assert_eq!(
             nav.device_kind(),
             Some(crate::device_art::DeviceKind::Monitor)
         );
-        // The page's tiles open the game list, and B returns to the page.
+        // The page's tiles open the game list; Select returns to the overview.
         nav.skip_system_page(&catalog);
         assert_eq!(nav.screen, Screen::Arcade);
-        assert!(nav.return_arcade_to_system_hub());
-        assert_eq!(nav.screen, Screen::SystemHub);
+        nav.toggle_system_page_mode();
+        assert!(nav.is_system_hub());
     }
 
     #[test]

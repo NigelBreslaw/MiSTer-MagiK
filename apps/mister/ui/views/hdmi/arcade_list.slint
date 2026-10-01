@@ -4,7 +4,7 @@
 import { Xerxes10 } from "../../components/xerxes_10.slint";
 import { FocusHighlight, LandscapePageChrome, PageTheme, PortraitPageChrome } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
+import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, NavigationView, SystemPageMode, FeedbackView, LauncherLayout } from "../../api.slint";
 
 component SearchKey inherits Rectangle {
     in property <string> label;
@@ -84,12 +84,13 @@ component SearchKeyboard inherits Rectangle {
 }
 
 export component ArcadeListScreen inherits Rectangle {
+    property <bool> hub: NavigationView.system-page-mode == SystemPageMode.hub;
     property <int> count: ArcadeView.active-count;
     property <bool> search: ArcadeView.search-mode == ArcadeSearchMode.active;
     property <bool> ready: ArcadeView.load-state == ArcadeLoadState.ready;
     background: PageTheme.background;
 
-    if ArcadeView.drawer-open : Rectangle {
+    if !root.hub && ArcadeView.drawer-open : Rectangle {
         accessible-role: list;
         accessible-label: ArcadeView.drawer-title;
         accessible-description: ArcadeView.active-filter-label;
@@ -118,11 +119,13 @@ export component ArcadeListScreen inherits Rectangle {
         }
 
         LandscapePageChrome {
-            hint-a: root.ready ? "A  PLAY" : "";
+            hint-a: root.hub ? "A  OPEN" : root.ready ? "A  PLAY" : "";
             hint-b: "B  BACK";
-            hint-right: root.search ? "UP DOWN MOVE   Y CLOSE" : "UP DOWN MOVE   Y SEARCH";
+            hint-right: root.hub ? "SELECT GAME LIST" : root.search ? "UP DOWN MOVE   Y CLOSE" : "SELECT OVERVIEW   Y SEARCH   X OPTIONS";
         }
 
+        if !root.hub : Rectangle {
+            width: 100%; height: 100%;
         Xerxes10 {
             x: 26px; y: 52px;
             text: root.search ? ArcadeView.collection-title + " / SEARCH" : ArcadeView.collection-title;
@@ -179,12 +182,13 @@ export component ArcadeListScreen inherits Rectangle {
                 vertical-alignment: center;
             }
         }
+        }
     }
 
     if MisterUi.portrait-layout : Rectangle {
         PortraitPageChrome {
             section: root.search ? ArcadeView.collection-title + " / SEARCH" : ArcadeView.collection-title;
-            hint-a: root.ready ? "A PLAY" : "";
+            hint-a: root.hub ? "A OPEN" : root.ready ? "A PLAY" : "";
             hint-b: "B BACK";
         }
         Rectangle {
@@ -194,7 +198,7 @@ export component ArcadeListScreen inherits Rectangle {
             height: LauncherLayout.arcade-preview.height * 1px;
             background: black;
         }
-        Rectangle {
+        if !root.hub : Rectangle {
             x: LauncherLayout.arcade-list.x * 1px;
             y: LauncherLayout.arcade-list.y * 1px;
             width: LauncherLayout.arcade-list.width * 1px;

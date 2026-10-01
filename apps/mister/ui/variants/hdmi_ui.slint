@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
-import { CatalogActivity, CatalogView, ConfirmationKind, LauncherScreen, LoadingState, MediaView, NavigationView, OverlayView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
+import { CatalogActivity, CatalogView, ConfirmationKind, LauncherScreen, LoadingState, MediaView, NavigationView, SystemPageMode, OverlayView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
 import { ControllerPanel } from "../controller_panel.slint";
 import { SetupOverlay } from "hdmi_setup.slint";
 import { ArcadeListScreen } from "../views/hdmi/arcade_list.slint";
@@ -30,7 +30,7 @@ export component HdmiLauncherUi inherits Rectangle {
     if NavigationView.screen == LauncherScreen.about : AboutScreen { }
     if NavigationView.screen == LauncherScreen.licenses : LicensesScreen { }
     if NavigationView.screen == LauncherScreen.license-text : LicenseTextScreen { }
-    if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
+    if NavigationView.screen == LauncherScreen.arcade && NavigationView.system-page-mode == SystemPageMode.hub : SystemHubScreen { }
 
     if CatalogView.background-activity-visible : BackgroundScanBadge { }
     if SetupView.phase != SetupPhase.none : SetupOverlay { }

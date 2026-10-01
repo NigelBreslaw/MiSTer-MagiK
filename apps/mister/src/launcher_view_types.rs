@@ -54,7 +54,6 @@ pub fn settings_display_choice(settings_index: usize) -> view::ChoiceOption {
 pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
     match value {
         Screen::Home => view::LauncherScreen::Home,
-        Screen::SystemHub => view::LauncherScreen::SystemHub,
         Screen::Controller => view::LauncherScreen::Controller,
         Screen::Arcade => view::LauncherScreen::Arcade,
         Screen::Settings => view::LauncherScreen::Settings,
@@ -217,6 +216,13 @@ pub const fn confirmation_kind(value: Option<ConfirmAction>) -> view::Confirmati
     }
 }
 
+pub const fn system_page_mode(value: crate::launcher::SystemPageMode) -> view::SystemPageMode {
+    match value {
+        crate::launcher::SystemPageMode::Hub => view::SystemPageMode::Hub,
+        crate::launcher::SystemPageMode::List => view::SystemPageMode::List,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,8 +230,8 @@ mod tests {
     #[test]
     fn every_domain_variant_has_a_named_view_variant() {
         assert_eq!(
-            launcher_screen(Screen::SystemHub),
-            view::LauncherScreen::SystemHub
+            launcher_screen(Screen::Arcade),
+            view::LauncherScreen::Arcade
         );
         assert_eq!(menu_hierarchy(true), view::MenuHierarchy::Root);
         assert_eq!(menu_hierarchy(false), view::MenuHierarchy::Nested);

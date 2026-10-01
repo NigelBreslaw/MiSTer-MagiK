@@ -181,12 +181,15 @@ fn review_level_trick(
         "{name}: nested level prepared in {:?}",
         prepare_started.elapsed()
     );
-    for t in [0, 150, 300, 380, 430, 520, 640, LEVEL_TRICK_MILLIS] {
+    let source_slot = root.slot_zero();
+    let destination_slot = consoles.slot_zero();
+    for t in [0, 150, 300, 459, 460, 461, 580, 740, LEVEL_TRICK_MILLIS] {
         let frame = if t < LEVEL_TRICK_EDGE_MILLIS {
-            root.render_level_gather(1, LevelChange::Descend, t);
+            root.render_level_gather_to(1, LevelChange::Descend, t, destination_slot);
+            root.render_transition_title_from(&consoles, t);
             root.pixels()
         } else {
-            consoles.render_level_deal(0, LevelChange::Descend, t);
+            consoles.render_level_deal_from(0, LevelChange::Descend, t, source_slot);
             consoles.pixels()
         };
         write_ppm(

@@ -441,6 +441,101 @@ impl CrtBackdropState {
         trace
     }
 
+    /// Preserve the overview's native glyphs and focus fill while composing the
+    /// same screenshot backdrop used by the list. No device hero is involved.
+    pub fn compose_system_hub_into_layout(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+        layout: UiLayoutGeometry,
+        metrics: CrtUiMetrics,
+        highlight: (usize, Rgb565Pixel),
+    ) -> CrtBackdropWorkTrace {
+        let content = layout.content_rect();
+        let [header, footer] = product_chrome_rects(content, metrics);
+        let hub = (
+            content.x,
+            content.y + metrics.header_height.max(1) as usize,
+            content.x + content.width,
+            content.y + content.height - metrics.footer_height.max(1) as usize,
+        );
+        let protected = [header, footer, hub].map(|(x0, y0, x1, y1)| {
+            let r = layout.logical_rect_to_composition(
+                mister_magik_mister_runtime::framebuffer::damage::DirtyRect { x0, y0, x1, y1 },
+            );
+            (r.x0, r.y0, r.x1, r.y1)
+        });
+        let colors = [
+            CRT_PRODUCT_HEADER_TEXT,
+            CRT_PRODUCT_FOOTER_TEXT,
+            CRT_PRODUCT_WARNING_TEXT,
+            rgb565_from_rgb888(0xee, 0xe8, 0xd5),
+            rgb565_from_rgb888(0x8f, 0x97, 0x96),
+            rgb565_from_rgb888(0x3a, 0x1a, 0x16),
+            rgb565_from_rgb888(0x17, 0x1d, 0x3a),
+            rgb565_from_rgb888(0x3a, 0x31, 0x0f),
+            rgb565_from_rgb888(0x0d, 0x31, 0x24),
+            rgb565_from_rgb888(0xe7, 0x69, 0x5a),
+            rgb565_from_rgb888(0x5a, 0x71, 0xe7),
+            rgb565_from_rgb888(0xe6, 0xc2, 0x3a),
+            rgb565_from_rgb888(0x35, 0xc4, 0x8f),
+        ];
+        let trace = self.compose_to(now, destination, &protected, &colors, 1);
+        if !trace.active {
+            self.expand_to_logical();
+        }
+        // Slint's translucent fill is rasterized against its placeholder
+        // background. Reapply it over the composed screenshot, preserving
+        // native glyphs, rather than relying on a fixed colour-key palette.
+        let (w, h) = (layout.logical_w(), layout.logical_h());
+        let narrow = w.min(h);
+        let (sx, sy) = if narrow <= 288 && w.max(h) >= 640 {
+            if w > h { (2, 1) } else { (1, 2) }
+        } else if narrow >= 400 {
+            (2, 2)
+        } else {
+            (1, 1)
+        };
+        let mx = (w * 6 / 100)
+            .max(8 * sx)
+            .max(content.x.max(w - content.x - content.width));
+        let my = (h * 5 / 100)
+            .max(6 * sy)
+            .max(content.y.max(h - content.y - content.height));
+        let top = my + (44 + highlight.0.min(2) * 16) * sy;
+        let width = w.saturating_sub(2 * mx);
+        let mut surface = mister_magik_framebuffer_scenes::Rgb565SurfaceMut::new(
+            destination,
+            layout.output_layout(),
+        )
+        .expect("CRT hub destination matches the output layout");
+        for x in 0..width {
+            let position = x * 256 / width.max(1);
+            let alpha = if position < 154 {
+                154 - position * 92 / 154
+            } else {
+                (256 - position) * 62 / 102
+            };
+            let alpha = alpha as u32;
+            let accent = highlight.1.0 as u32;
+            for y in top..(top + 16 * sy).min(h) {
+                let Some(pixel) = surface.get(mx + x, y).copied() else {
+                    continue;
+                };
+                if colors.contains(&pixel) {
+                    continue;
+                }
+                let value = pixel.0 as u32;
+                let inverse = 256 - alpha;
+                let blended = (((value & 0xf81f) * inverse + (accent & 0xf81f) * alpha) >> 8)
+                    & 0xf81f
+                    | (((value & 0x07e0) * inverse + (accent & 0x07e0) * alpha) >> 8) & 0x07e0;
+                surface.set(mx + x, y, Rgb565Pixel(blended as u16));
+            }
+        }
+        trace
+    }
+
     fn compose_to(
         &mut self,
         now: Duration,
@@ -1453,6 +1548,43 @@ mod tests {
             display_width: width,
             display_height: height,
         }
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn hub_focus_gradient_survives_composition_without_tinting_glyphs() {
+        let plan = crate::ui_display::UiDisplayPlan::from_mister_ini_text(
+            "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+        )
+        .unwrap();
+        let display = crate::ui_display::UiDisplay::for_plan(crate::ui_display::UiDisplayPlan {
+            fb_h: 240,
+            render_h: 240,
+            output_h: 240,
+            scan_h: 240,
+            crt240_composition: crate::ui_display::Crt240Composition::Native240,
+            ..plan
+        });
+        let layout = crate::ui_display::UiLayoutGeometry::for_display(
+            &display,
+            crate::settings::ScreenOrientation::Normal,
+        );
+        let metrics = crate::ui_display::CrtUiMetrics::for_display(&display);
+        let mut state = CrtBackdropState::for_display(&display).unwrap();
+        let mut pixels = vec![CRT_BACKDROP_BACKGROUND; 640 * 240];
+        let cream = rgb565_from_rgb888(0xee, 0xe8, 0xd5);
+        pixels[60 * 640 + 62] = cream;
+        state.compose_system_hub_into_layout(
+            Duration::ZERO,
+            &mut pixels,
+            layout,
+            metrics,
+            (0, rgb565_from_rgb888(0x5a, 0x71, 0xe7)),
+        );
+        assert_eq!(pixels[60 * 640 + 62], cream);
+        assert_ne!(pixels[60 * 640 + 46], pixels[60 * 640 + 320]);
+        assert_ne!(pixels[60 * 640 + 320], pixels[60 * 640 + 598]);
+        assert_eq!(pixels[80 * 640 + 46], CRT_BACKDROP_BACKGROUND);
     }
 
     #[cfg(feature = "ui")]

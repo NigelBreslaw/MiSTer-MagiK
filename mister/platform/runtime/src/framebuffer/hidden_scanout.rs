@@ -119,11 +119,9 @@ struct HiddenSlotLease {
 impl HiddenSlotLease {
     fn acquire(index: HiddenRgb565BufferIndex) -> Result<Self, HiddenScanoutError> {
         let bit = 1 << (index.get() - 1);
-        MAPPED_SLOTS
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |mapped| {
-                (mapped & bit == 0).then_some(mapped | bit)
-            })
-            .map_err(|_| HiddenScanoutError::SlotAlreadyMapped { index: index.get() })?;
+        if MAPPED_SLOTS.fetch_or(bit, Ordering::AcqRel) & bit != 0 {
+            return Err(HiddenScanoutError::SlotAlreadyMapped { index: index.get() });
+        }
         Ok(Self { bit })
     }
 }

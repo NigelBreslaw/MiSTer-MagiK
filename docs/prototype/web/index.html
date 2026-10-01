@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settings Transition</title>
+<style>
+@font-face{font-family:Nocive;src:url(nocive.ttf)}
+@font-face{font-family:Xerxes;src:url(xerxes.ttf)}
+@font-face{font-family:Jersey;src:url(jersey25.ttf)}
+:root{--cream:#eee8d5;--muted:#8f9796;--rule:#303d3f;--violet:#9c86e7;--violet-deep:#735dbd}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#050507;height:100%;overflow:hidden;color:var(--cream)}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+#viewport{width:960px;height:540px;position:relative}
+#stage{position:absolute;left:0;top:0;width:960px;height:540px;background:#000;overflow:hidden;transform-origin:0 0;
+  -webkit-font-smoothing:none;box-shadow:0 0 0 1px #1a1a22}
+.a{position:absolute}
+.h{font-family:Nocive;font-size:16px;line-height:16px;text-transform:uppercase;white-space:nowrap}
+.m{font-family:Xerxes;font-size:16px;line-height:16px;text-transform:uppercase;white-space:nowrap}
+.n{font-family:Jersey;line-height:1;white-space:nowrap}
+.muted{color:var(--muted)}
+.layer{position:absolute;inset:0}
+
+#launcher{position:absolute;inset:0;width:960px;height:540px}
+
+/* The card window: a rounded box that zooms (transform only). Inside it, the
+   cog is counter-scaled so its own path on screen is independent of the zoom. */
+#win{position:absolute;left:521px;top:158px;width:178px;height:251px;border-radius:8px;overflow:hidden;background:#000;
+  transform-origin:50% 50%;will-change:transform}
+#cog{position:absolute;left:-521px;top:-158px;transform-origin:0 0;will-change:transform}
+#cardart{position:absolute;left:0;top:0;width:178px;height:251px}
+#band{position:absolute;left:0;top:0;width:178px;height:251px;
+  background:linear-gradient(180deg,transparent 0 58%,rgba(0,0,0,.7) 78%,rgba(0,0,0,.85) 100%)}
+#cardlabel{position:absolute;left:0;width:178px;top:188px;text-align:center;font-size:17px}
+#frame{position:absolute;left:518px;top:155px;width:184px;height:257px;border:3px solid var(--violet);border-radius:10px;pointer-events:none;
+  box-shadow:0 0 14px #735dbdaa, inset 0 0 10px #735dbd55;transform-origin:50% 50%;will-change:transform,opacity}
+.row,.group,#desc{will-change:transform,opacity}
+
+/* settings content */
+.group{position:absolute;left:412px}
+.row{position:absolute;left:400px;width:534px;height:36px}
+.row .lbl{position:absolute;left:12px;top:11px}
+.row .val{position:absolute;right:14px;top:11px;color:var(--muted)}
+.row .sep{position:absolute;left:12px;right:0;bottom:0;height:1px;background:var(--rule)}
+.row .hl{position:absolute;inset:0;opacity:0;background:linear-gradient(90deg,#221843 0%,#120d24 60%,rgba(0,0,0,.6) 100%)}
+.row .hl::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--violet);box-shadow:0 0 8px var(--violet-deep)}
+.row.focus .hl{opacity:1}
+.row.focus .lbl{color:var(--violet)}
+.row.focus .val{color:var(--cream)}
+.row.focus .sep,.row.last .sep{background:transparent}
+.row.focus .chev{color:var(--violet)}
+.chev{color:var(--muted)}
+.pill{display:inline-block;border:1px solid var(--muted);padding:2px 6px 1px}
+.row.focus .pill{border-color:var(--cream)}
+.pill.on{border-color:var(--violet)!important;color:var(--violet);background:#1d1535}
+#desc{left:412px;top:470px;color:#8f9796!important;line-height:20px;color:#c9c3b3;text-shadow:0 0 4px #000,0 0 2px #000,0 0 1px #000}
+
+#chrome{pointer-events:none}
+.band{position:absolute;left:0;right:0;background:#000}
+.rule{position:absolute;height:1px;background:var(--rule)}
+.foot{top:518px}
+
+#hint{font:12px/1.5 ui-monospace,Menlo,monospace;color:#8a8a99;text-align:center;max-width:960px}
+#hint b{color:#cfc8ea;font-weight:600}
+#hint button{font:inherit;background:#15131d;color:#cfc8ea;border:1px solid #3a3350;padding:3px 10px;margin:0 3px;cursor:pointer}
+#hint button[aria-pressed=true]{border-color:var(--violet);color:var(--violet)}
+
+/* combo-box drop-down, anchored to its row */
+#content .dimmable{transition:opacity .14s}
+#stage.dd-open .row:not(.anchor),#stage.dd-open .group{opacity:.35!important}
+#stage.dd-open #cog{filter:brightness(.6)}
+#dd{position:absolute;right:26px;width:300px;background:#0b0913;border:1px solid #4a3d73;
+  box-shadow:0 10px 28px #000,0 0 0 1px #000;transform-origin:50% 0;opacity:0;pointer-events:none;
+  transition:opacity .12s ease-out,transform .16s cubic-bezier(.2,.8,.2,1);transform:scaleY(.6)}
+#dd.up{transform-origin:50% 100%}
+#dd.show{opacity:1;transform:none}
+#dd::before{content:"";position:absolute;left:-1px;right:-1px;top:-1px;height:2px;background:var(--violet)}
+#dd.up::before{top:auto;bottom:-1px}
+#dd .viewport{position:relative;overflow:hidden}
+#dd .opt{position:relative;height:28px}
+#dd .opt .t{position:absolute;left:16px;top:6px}
+#dd .opt.hi{background:linear-gradient(90deg,#221843 0%,#120d24 70%,rgba(0,0,0,0) 100%)}
+#dd .opt.hi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--violet)}
+#dd .opt.hi .t{color:var(--cream)}
+#dd .opt .t{color:var(--muted)}
+#dd .opt .cur{position:absolute;right:14px;top:11px;width:6px;height:6px;background:var(--violet)}
+#dd .hd{height:22px;position:relative}
+#dd .hd .t{position:absolute;left:16px;top:7px;color:#5d6564}
+/* keep / revert confirmation */
+#cf .q{padding:12px 16px 4px;color:var(--cream)}
+#cf .v{padding:0 16px 12px;color:var(--violet)}
+#cf .btns{display:flex;gap:8px;padding:0 12px 12px}
+#cf .btn{flex:1;height:26px;border:1px solid #3a3350;position:relative}
+#cf .btn .t{position:absolute;left:0;right:0;top:6px;text-align:center;color:var(--muted)}
+#cf .btn.hi{border-color:var(--violet);background:#1d1535}
+#cf .btn.hi .t{color:var(--cream)}
+/* confirmation dialogs (ask.js): anchored like the drop-downs, or centred */
+#ask{position:absolute;background:#0b0913;border:1px solid #4a3d73;box-shadow:0 10px 28px #000,0 0 0 1px #000;
+  --acc:var(--violet);--accTint:#1d1535;--edge:#3a3350;
+  transform-origin:50% 0;opacity:0;pointer-events:none;transform:scaleY(.6);
+  transition:opacity .12s ease-out,transform .16s cubic-bezier(.2,.8,.2,1)}
+#ask.red{background:#0d0807;border-color:#6b2e27;--acc:#e7695a;--accTint:#2a0f0c;--edge:#4a2723}
+#ask.up{transform-origin:50% 100%}
+#ask.show{opacity:1;transform:none}
+#ask::before{content:"";position:absolute;left:-1px;right:-1px;top:-1px;height:2px;background:var(--acc)}
+#ask.up::before{top:auto;bottom:-1px}
+#ask .t{padding:16px 18px 0;color:var(--cream)}
+#ask .v{padding:8px 18px 0;color:var(--acc)}
+#ask .q{padding:10px 18px 16px;color:var(--muted);line-height:20px;white-space:normal}
+#ask .btns{display:flex;gap:8px;padding:0 14px 14px}
+#ask .btn{flex:1;height:30px;border:1px solid var(--edge);position:relative}
+#ask .btn span{position:absolute;left:0;right:0;top:8px;text-align:center;color:var(--muted)}
+#ask .btn.hi{border-color:var(--acc);background:var(--accTint);box-shadow:inset 3px 0 0 var(--acc)}
+#ask .btn.hi span{color:var(--cream)}
+#askScrim{position:absolute;left:0;top:77px;width:960px;height:423px;background:#000;opacity:0;pointer-events:none;transition:opacity .16s}
+#askScrim.on{opacity:.62}
+#askFoot{position:absolute;left:0;top:0;width:960px;height:540px;pointer-events:none;display:none}
+#askFoot::before{content:"";position:absolute;left:0;top:501px;width:960px;height:39px;background:#000}
+#stage.ask-open #askFoot{display:block}
+#stage.ask-set .row:not(.focus),#stage.ask-set .group{opacity:.35!important}
+#stage.ask-set #cog{filter:brightness(.6)}
+#stage.ask-arc .arow:not(.cur){opacity:.3!important}
+#stage.ask-arc #arcCab{filter:brightness(.55)}
+/* stepper: < value > with the arrows lit only on the focused row */
+.step{display:inline-flex;gap:10px;align-items:baseline}
+.step .ar{color:transparent}
+.row.focus .step .ar{color:var(--violet)}
+.row.focus .step .ar.end{color:#3a3350}
+.step .vt{display:inline-block;min-width:56px;text-align:center}
+#footD{opacity:0}
+@keyframes blink{50%{opacity:0}}
+#footArc,#footArcHub,#footSearch{transition:opacity .2s}
+/* pages inside Settings: About, Licenses, licence text */
+.page{position:absolute;inset:0;display:none}
+.page.on{display:block}
+.page .lp,.page .band{will-change:transform,opacity}
+.page .n{font-family:Jersey;font-size:56px;line-height:1;white-space:nowrap}
+.page .vrule{position:absolute;left:265px;top:95px;width:1px;height:384px;background:var(--rule)}
+.page .prule{position:absolute;left:28px;width:213px;height:1px;background:var(--rule)}
+.page .credit{position:absolute;left:29px;width:220px;line-height:20px;white-space:normal;color:#c9c3b3}
+.page .row{left:296px;width:638px}
+.page .group{left:308px}
+.page .row.info .lbl{color:#c9c3b3}
+#lictext{position:absolute;left:296px;top:98px;width:612px;height:390px;overflow:hidden;
+  font:12px/18px ui-monospace,Menlo,monospace;color:#d8d2c2}
+#lictext pre{font:inherit;white-space:pre;transition:transform .12s cubic-bezier(.2,.8,.2,1)}
+#lictext::after{content:"";position:absolute;left:0;right:0;bottom:0;height:36px;background:linear-gradient(rgba(0,0,0,0),#000)}
+.track{position:absolute;left:922px;top:98px;width:2px;height:390px;background:#1c1826}
+.thumb{position:absolute;left:921px;width:4px;background:var(--violet);transition:top .12s}
+/* footers per screen, crossfaded by the stage's screen class */
+.pfoot{opacity:0;transition:opacity .2s}
+#footS{transition:opacity .2s}
+#stage.sub #footS{opacity:0!important}
+#stage.scr-about #footAbout,#stage.scr-licenses #footLic,#stage.scr-license #footText{opacity:1}
+#stage.sub #list,#stage.sub #win{visibility:hidden}
+#stage.dd-open #footS{opacity:0!important}
+#stage.dd-open #footD{opacity:1}
+
+/* CRT mode: the native 640x240 raster shown 2x vertically (4:3) */
+#crtvp{position:relative;display:none}
+#crt{position:absolute;left:0;top:0;width:640px;height:480px;image-rendering:pixelated;transform-origin:0 0;box-shadow:0 0 0 1px #1a1a22}
+body.crt #viewport{display:none} body.crt #crtvp{display:block}
+#mode button{min-width:70px}
+</style></head><body>
+<div id="crtvp"><canvas id="crt" width="640" height="240"></canvas></div>
+<div id="viewport"><div id="stage">
+
+  <img id="launcher" src="launcher-settings.png" alt="">
+
+  <div id="win">
+    <img id="cog" src="cog-backdrop.png" alt="">
+    <img id="cardart" src="gear.png" alt="">
+    <div id="band"></div>
+    <div id="cardlabel" class="h">SETTINGS</div>
+  </div>
+
+  <div id="content" class="layer">
+    <div id="desc" class="a m"></div>
+    <div id="list"></div>
+    <div id="dd" class="m"></div>
+  </div>
+
+  <div id="pAbout" class="page">
+    <div class="lp"><div class="a m muted" style="left:29px;top:101px">SETTINGS / ABOUT</div>
+      <div class="a n" style="left:27px;top:132px">0.2.112</div>
+      <div class="a m muted" style="left:29px;top:205px">MISTER MAGIK VERSION</div>
+      <div class="prule" style="top:239px"></div>
+      <div class="credit m" style="top:258px">AN UNINTUITIVE.COM<br>PRODUCTION, CRAFTED<br>IN FINLAND BY<br>NIGEL BRESLAW</div>
+      <div class="prule" style="top:352px"></div>
+      <div class="credit m muted" style="top:370px">THANKS TO THE MISTER<br>PROJECT. MADE WITH<br>SLINT: SLINT.DEV</div>
+      <div class="vrule"></div></div>
+    <div class="group m muted band" style="top:101px">SYSTEM</div>
+    <div class="row info band" style="top:121px"><span class="lbl h">Build</span><span class="val m">0.2.112 &nbsp;DEV &nbsp;311B35A</span><i class="sep"></i></div>
+    <div class="row info band" style="top:157px"><span class="lbl h">Game database</span><span class="val m">V40 &nbsp;26 SEP 2026</span><i class="sep"></i></div>
+    <div class="row info last band" style="top:193px"><span class="lbl h">Kernel</span><span class="val m">6.18.38-MISTER</span><i class="sep"></i></div>
+    <div class="group m muted band" style="top:247px">LEGAL</div>
+    <div class="row focus last band" style="top:267px"><i class="hl"></i><span class="lbl h">Licenses</span><span class="val m">12 &nbsp;<span class="chev">&gt;</span></span><i class="sep"></i></div>
+  </div>
+
+  <div id="pLicenses" class="page">
+    <div class="lp"><div class="a m muted" style="left:29px;top:101px">ABOUT / LICENSES</div>
+      <div class="a n" style="left:27px;top:132px">12</div>
+      <div class="a m muted" style="left:29px;top:205px">OPEN SOURCE LICENSES</div>
+      <div class="prule" style="top:239px"></div>
+      <div class="credit m" style="top:258px">SOFTWARE, FONTS AND<br>ARTWORK THAT MISTER<br>MAGIK IS BUILT ON</div>
+      <div class="vrule"></div></div>
+    <div id="licRows"></div>
+  </div>
+
+  <div id="pLicense" class="page">
+    <div class="lp"><div class="a m muted" id="ltCrumb" style="left:29px;top:101px">LICENSES / MISTER MAGIK</div>
+      <div class="a n" id="ltKind" style="left:27px;top:132px">GPL-3.0</div>
+      <div class="a m muted" style="left:29px;top:205px">LICENSE TEXT</div>
+      <div class="vrule"></div></div>
+    <div id="lictext" class="band"><pre id="ltPre"></pre></div>
+    <div class="track band"></div><div class="thumb band" id="ltThumb"></div>
+  </div>
+
+  <div id="frame"></div>
+
+  <div id="chrome" class="layer">
+    <div class="band" style="top:0;height:76px"></div>
+    <div class="band" style="top:501px;height:39px"></div>
+    <div class="a h" style="left:26px;top:21px">MISTER MAGIK</div>
+    <div class="a h" style="left:874px;top:26px">17:33</div>
+    <div class="rule" style="left:26px;top:76px;width:908px"></div>
+    <div class="rule" style="left:26px;top:500px;width:908px"></div>
+    <div id="footL">
+      <div class="a m foot" style="left:30px">A &nbsp;OPEN</div>
+      <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+      <div class="a m foot" style="left:586px">LEFT RIGHT &nbsp;BROWSE CARDS</div>
+    </div>
+    <div id="footS" style="opacity:0">
+      <div class="a m foot" style="left:30px">A &nbsp;CHANGE</div>
+      <div class="a m foot" style="left:142px">B &nbsp;BACK</div>
+      <div class="a m foot" style="left:612px">UP DOWN &nbsp;MOVE</div>
+      <div class="a m muted foot" style="left:780px">HOME &nbsp;LAUNCHER</div>
+    </div>
+    <div id="footAbout" class="pfoot">
+      <div class="a m foot" style="left:30px">A &nbsp;OPEN</div>
+      <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+    </div>
+    <div id="footLic" class="pfoot">
+      <div class="a m foot" style="left:30px">A &nbsp;READ</div>
+      <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+      <div class="a m foot" style="left:612px">UP DOWN &nbsp;MOVE</div>
+      <div class="a m muted foot" id="licPageLabel" style="left:822px"></div>
+    </div>
+    <div id="footText" class="pfoot">
+      <div class="a m foot" style="left:30px">B &nbsp;BACK</div>
+      <div class="a m foot" style="left:612px">UP DOWN &nbsp;SCROLL</div>
+      <div class="a m muted foot" style="left:780px">LEFT RIGHT &nbsp;PAGE</div>
+    </div>
+    <div id="footArcHub" style="opacity:0">
+      <div class="a m foot" style="left:30px">A &nbsp;OPEN</div>
+      <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+      <div class="a m muted foot" style="left:612px">SELECT &nbsp;GAME LIST</div>
+    </div>
+    <div id="footArc" style="opacity:0">
+      <div class="a m foot" style="left:30px">A &nbsp;PLAY</div>
+      <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+      <div class="a m muted foot" style="left:250px">SELECT &nbsp;OVERVIEW</div>
+      <div class="a m foot" style="left:612px">UP DOWN &nbsp;MOVE</div>
+      <div class="a m muted foot" style="left:780px">Y &nbsp;SEARCH</div>
+    </div>
+    <div id="footSearch" style="opacity:0">
+      <div class="a m foot" style="left:30px">A &nbsp;TYPE</div>
+      <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
+      <div class="a m foot" style="left:612px">DOWN &nbsp;RESULTS</div>
+      <div class="a m muted foot" style="left:780px">X &nbsp;OPTIONS</div>
+    </div>
+    <div id="footD">
+      <div class="a m foot" style="left:30px">A &nbsp;SELECT</div>
+      <div class="a m foot" style="left:142px">B &nbsp;CANCEL</div>
+      <div class="a m foot" style="left:612px">UP DOWN &nbsp;CHOOSE</div>
+    </div>
+  </div>
+</div></div>
+
+<div id="hint">
+  <div id="mode" style="margin-bottom:6px"><button id="bHdmi" aria-pressed="true">HDMI</button><button id="bCrt" aria-pressed="false">CRT 240p</button></div>
+  Launcher: <b>←→</b> Settings, Arcade, Consoles, Computers, Handhelds · <b>Enter/A</b> open / select · <b>Esc/B</b> back · <b>↑↓</b> move · <b>←→</b> Start after, Keep/Revert, licence pages · About is the last Settings row<br>
+  <button id="bReplay">Replay</button><button id="bOpen">Open</button><button id="bBack">Back</button><button id="bSlow" aria-pressed="false">Slow ×5</button><button id="bRM" aria-pressed="false">Reduce motion</button>
+</div>
+
+<script src="crt.js?v=21"></script>
+<script src="arcade.js?v=2"></script>
+<script src="ask.js"></script>
+<script src="hub.js"></script>
+<script src="gamelist.js?v=4"></script>
+<script src="browse.js?v=24"></script>
+<script>
+const $ = s => document.querySelector(s);
+const stage = $('#stage'), vp = $('#viewport');
+function fit(){ const s = Math.min((innerWidth-24)/960, (innerHeight-110)/540, 2); stage.style.transform=`scale(${s})`; vp.style.width=960*s+'px'; vp.style.height=540*s+'px';
+  const c = Math.min((innerWidth-24)/640, (innerHeight-110)/480, 2); $('#crt').style.transform=`scale(${c})`; $('#crtvp').style.width=640*c+'px'; $('#crtvp').style.height=480*c+'px'; }
+addEventListener('resize', fit); fit();
+
+const ROWS = [
+  {g:'DISPLAY', l:'Display resolution', v:'1920X1080 (16:9)', combo:'display'},
+  {l:'Screen orientation', v:'NORMAL', combo:'orientation'},
+  {l:'Reduce motion', toggle:true, last:true},
+  {g:'SCREENSAVER', l:'Start after', stepper:['OFF','1 MIN','2 MIN','3 MIN','4 MIN','5 MIN','6 MIN','7 MIN','8 MIN','9 MIN','10 MIN'], si:5},
+  {l:'Preview screensaver', v:'SHOW NOW', link:true, last:true},
+  {g:'SYSTEM', l:'Exit to MiSTer', v:'UNTIL REBOOT'},
+  {l:'Refresh database', v:'CHANGED SYSTEMS'},
+  {l:'About', v:'MAGIK AND SLINT', link:true, last:true},
+];
+let y = 104; const rowEls = [], groupEls = [];
+ROWS.forEach((r,i)=>{
+  if(r.g){ if(i) y+=18; const g=document.createElement('div'); g.className='group a m muted'; g.style.top=y+'px'; g.textContent=r.g; $('#list').append(g); groupEls.push(g); y+=20; }
+  const e=document.createElement('div'); e.className='row'+(r.last?' last':''); e.style.top=y+'px'; r.top=y;
+  const value=r.toggle?'<span class="pill">OFF</span>'
+    : r.stepper?'<span class="step"><span class="ar l">&lt;</span><span class="vt"></span><span class="ar r">&gt;</span></span>'
+    : '<span class="vt">'+r.v+'</span>'+(r.link?' &nbsp;<span class="chev">&gt;</span>':'');
+  e.innerHTML=`<i class="hl"></i><span class="lbl h">${r.l}</span><span class="val m">${value}</span><i class="sep"></i>`;
+  $('#list').append(e); rowEls.push(e); y+=36;
+});
+$('#desc').style.display='none';
+const listEls=[...groupEls,...rowEls].sort((a,b)=>parseInt(a.style.top)-parseInt(b.style.top));
+
+// ---- geometry (screen px); every value here is what the Rust renderer uses ----
+// Launcher card on screen, and the card's crop inside the backdrop render.
+const CARD={x:521,y:158,w:178,h:251}, CX=CARD.x+CARD.w/2, CY=CARD.y+CARD.h/2;
+const COG={cardX:204, cardY:285.5, cardW:408, cropX:312, cropY:327, endX:-18, endY:97};                                                   // from crop_settings_backdrop.py
+const c0=CARD.w/COG.cardW;                                           // render px -> card px at t=0
+const COG_START={x:CARD.x+(COG.cropX-COG.cardX)*c0, y:CARD.y+(COG.cropY-COG.cardY)*c0, s:c0};
+const COG_END={x:COG.endX, y:COG.endY, s:1};                         // 1:1 at rest, integer position
+const ZMAX=8;
+const COG_REST_ALPHA=0.5;                                              // the cog settles into the background                                                         // outline zoom until well past the edges
+
+// ---- easing ----
+const clamp01=x=>x<0?0:x>1?1:x;
+const inOut=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;                  // cubic in-out
+const out=t=>{ // cubic-bezier(.2,.8,.2,1) approximated by quint out, cheap in fixed point
+  return 1-Math.pow(1-t,4); };
+const win=(t,at,dur)=>clamp01((t-at)/dur);
+
+// ---- the timeline: one pure function of time (ms) ----
+const TOTAL=1000;
+const ROW_AT=560, ROW_STAGGER=30, ROW_DUR=320, ROW_TRAVEL=40;
+function frameAt(t, rm){
+  const f={};
+  if(rm){ // Reduce motion: crossfade only
+    const a=win(t,0,320);
+    f.winZ=ZMAX; f.cog={x:COG_END.x,y:COG_END.y,s:1,a:COG_REST_ALPHA}; f.frame=0; f.cardart=0; f.band=0; f.label=0;
+    f.launcher=1-win(t,0,200); f.footL=1-win(t,0,160); f.footS=win(t,80,200);
+    f.content=win(t,80,220); f.rows=listEls.map(()=>({x:0,o:1})); f.desc={y:0,o:1};
+    return f;
+  }
+  const pw=inOut(win(t,0,760)), pc=inOut(win(t,80,760));
+  f.winZ=Math.exp(Math.log(ZMAX)*pw);
+  f.frameZ=f.winZ; f.frame=Math.max(0,1-Math.pow(win(t,0,760),1.6)*1.25);
+  f.cog={x:COG_START.x+(COG_END.x-COG_START.x)*pc, y:COG_START.y+(COG_END.y-COG_START.y)*pc, s:COG_START.s+(COG_END.s-COG_START.s)*pc,
+    a:1+(COG_REST_ALPHA-1)*win(t,380,320)};                            // dims as it lands
+  f.cardart=1-win(t,60,200); f.band=1-win(t,0,160); f.label=1-win(t,0,120);
+  f.launcher=1-win(t,120,360); f.footL=1-win(t,80,160); f.footS=win(t,640,220);
+  f.content=1;
+  f.rows=listEls.map((_,i)=>{const k=out(win(t,ROW_AT+i*ROW_STAGGER,ROW_DUR)); return {x:Math.round(ROW_TRAVEL*(1-k)), o:k};});
+  const kd=out(win(t,680,300)); f.desc={y:Math.round(8*(1-kd)), o:kd};
+  return f;
+}
+
+// ---- apply: transform and opacity only ----
+const E={win:$('#win'),cog:$('#cog'),frame:$('#frame'),cardart:$('#cardart'),band:$('#band'),label:$('#cardlabel'),
+  launcher:$('#launcher'),footL:$('#footL'),footS:$('#footS'),content:$('#content'),desc:$('#desc')};
+function apply(f){
+  const z=f.winZ;
+  E.win.style.transform=`scale(${z})`;
+  // cog screen transform T+s*Q expressed in the zoomed window's local space
+  const lx=CX+(f.cog.x-CX)/z, ly=CY+(f.cog.y-CY)/z;
+  E.cog.style.transform=`translate(${lx-CARD.x+521}px,${ly-CARD.y+158}px) scale(${f.cog.s/z})`;
+  E.cog.style.opacity=f.cog.a;
+  E.frame.style.transform=`scale(${f.frameZ||1})`; E.frame.style.opacity=f.frame;
+  E.cardart.style.opacity=f.cardart; E.band.style.opacity=f.band; E.label.style.opacity=f.label;
+  E.launcher.style.opacity=f.launcher; E.footL.style.opacity=f.footL; E.footS.style.opacity=f.footS;
+  E.content.style.opacity=f.content;
+  listEls.forEach((e,i)=>{e.style.transform=`translateX(${f.rows[i].x}px)`; e.style.opacity=f.rows[i].o;});
+  E.desc.style.transform=`translateY(${f.desc.y}px)`; E.desc.style.opacity=f.desc.o;
+}
+
+// ---- driver: one sample per display frame, like the device ----
+let open=false, busy=false, sel=0, slow=1, reduce=false, t=0, dir=0, last=0, rmRun=false;
+function tick(now){
+  const dt=Math.min(50,now-last); last=now;
+  const total=rmRun?320:TOTAL;
+  t=Math.max(0,Math.min(total,t+dir*dt/slow));
+  apply(frameAt(t,rmRun));
+  if((dir>0&&t>=total)||(dir<0&&t<=0)){ const back=dir<0; busy=false; dir=0; if(back&&scr==='launcher') BROWSE.open('launcher',0); return; }
+  requestAnimationFrame(tick);
+}
+function run(d){ rmRun=reduce; busy=true; dir=d; last=performance.now(); requestAnimationFrame(tick); }
+function render(){
+  rowEls.forEach((e,i)=>e.classList.toggle('focus',i===sel));
+  const pill=rowEls[2].querySelector('.pill'); pill.textContent=reduce?'ON':'OFF'; pill.classList.toggle('on',reduce);
+  $('#bRM').setAttribute('aria-pressed',reduce);
+  ROWS.forEach((r,i)=>{ if(!r.stepper) return;
+    const el=rowEls[i]; el.querySelector('.vt').textContent=r.stepper[r.si];
+    el.querySelector('.ar.l').classList.toggle('end',r.si===0);
+    el.querySelector('.ar.r').classList.toggle('end',r.si===r.stepper.length-1);
+  });
+}
+function step(d){
+  const r=ROWS[sel]; if(!r.stepper) return false;
+  const n=Math.max(0,Math.min(r.stepper.length-1,r.si+d)); if(n===r.si) return true;
+  r.si=n; render();
+  const v=rowEls[sel].querySelector('.vt'); v.animate([{transform:`translateX(${d*6}px)`,opacity:.3},{transform:'none',opacity:1}],{duration:140,easing:'cubic-bezier(.2,.8,.2,1)'});
+  return true;
+}
+function openSettings(){ if(open||busy) return; open=true; scr='settings'; sel=0; render(); t=0; run(1); }
+function closeSettings(){ if(!open||busy||scr!=='settings') return; open=false; scr='launcher'; t=rmRun?320:TOTAL; run(-1); }
+apply(frameAt(0,false));
+// Warm-up (the device equivalent is preparing buffers before the transition):
+// decode every image and build every layer once, off-screen in time.
+Promise.all([...document.images].map(i=>i.decode().catch(()=>{}))).then(()=>{
+  stage.style.visibility='hidden'; if(scr!=='arcade') apply(frameAt(500,false));
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ if(scr!=='arcade') apply(frameAt(t,rmRun)); stage.style.visibility=''; }));
+});
+
+function move(d){
+  if(!open||busy) return;
+  const n=Math.max(0,Math.min(ROWS.length-1,sel+d)); if(n===sel) return;
+  sel=n; render();
+}
+// ---- combo-box drop-downs for Display resolution and Screen orientation ----
+const CHOICES={
+  display:[{h:'HDMI'},'1280X720 (16:9)','1366X768 (16:9)','1920X1080 (16:9)','1920X1200 (16:10)','2048X1536 (4:3)','2560X1440 (16:9)',
+           {h:'CRT'},'CRT 240P 60HZ NTSC','CRT 288P 50HZ PAL','CRT 480P 60HZ NTSC','CRT 576P 50HZ PAL'],
+  orientation:['NORMAL','MONITOR RIGHT','MONITOR LEFT'],
+};
+const OPT_H=28, HEAD_H=22, CONTENT_BOTTOM=494;
+let dd=null;          // {kind,row,hi,confirm:{choice,focus,left,timer}}
+const DD=$('#dd');
+const itemH=it=>typeof it==='string'?OPT_H:HEAD_H;
+function ddOpen(){
+  const row=ROWS[sel], items=CHOICES[row.combo];
+  const cur=items.indexOf(row.v);
+  dd={kind:row.combo,row,items,hi:cur<0?items.findIndex(i=>typeof i==='string'):cur,confirm:null};
+  rowEls[sel].classList.add('anchor'); stage.classList.add('dd-open');
+  ddRender(); requestAnimationFrame(()=>DD.classList.add('show'));
+}
+function ddClose(){
+  if(!dd) return;
+  clearInterval(dd.confirm?.timer);
+  DD.classList.remove('show'); stage.classList.remove('dd-open');
+  rowEls.forEach(e=>e.classList.remove('anchor'));
+  dd=null;
+}
+function ddPlace(height){
+  const r=dd.row, below=r.top+36+2;
+  const up=below+height>CONTENT_BOTTOM;
+  DD.classList.toggle('up',up);
+  DD.style.top=(up? r.top-2-height : below)+'px';
+}
+function ddRender(){
+  if(dd.confirm){ return cfRender(); }
+  const {items,hi,row}=dd;
+  // Every list fits below its row, so the whole list is always shown.
+  const total=items.reduce((a,i)=>a+itemH(i),0);
+  ddPlace(total+2);
+  DD.innerHTML=`<div class="viewport">`+
+    items.map((it,i)=>typeof it==='string'
+      ? `<div class="opt${i===hi?' hi':''}"><span class="t">${it}</span>${it===row.v?'<i class="cur"></i>':''}</div>`
+      : `<div class="hd"><span class="t">${it.h}</span></div>`).join('')+`</div>`;
+}
+function ddMove(d){
+  let i=dd.hi;
+  do{ i+=d; }while(i>=0&&i<dd.items.length&&typeof dd.items[i]!=='string');
+  if(i<0||i>=dd.items.length) return;
+  dd.hi=i; ddRender();
+}
+function ddSelect(){
+  const choice=dd.items[dd.hi];
+  if(choice===dd.row.v){ ddClose(); return; }
+  // The mode is applied immediately; keep it or it reverts on its own.
+  const row=dd.row, i=sel, display=dd.kind==='display';
+  ddClose();
+  ASK.open({title:display?'Keep this resolution?':'Keep this orientation?', value:choice,
+    msg:display?'It reverts on its own if you cannot see this.':'Is the launcher upright on the rotated monitor?',
+    left:'REVERT', right:'KEEP', countdown:display?15:20, anchor:rowAnchor(i),
+    onChoose:k=>{ if(k===1){ row.v=choice; rowEls[i].querySelector('.vt').textContent=choice; } }});
+}
+function cfRender(){
+  const c=dd.confirm, what=dd.kind==='display'?'KEEP THIS DISPLAY MODE?':'KEEP THIS ORIENTATION?';
+  ddPlace(2+106);
+  DD.innerHTML=`<div id="cf"><div class="q">${what}</div><div class="v">${c.choice}</div>
+    <div class="btns"><div class="btn${c.focus===0?' hi':''}"><span class="t">KEEP</span></div>
+    <div class="btn${c.focus===1?' hi':''}"><span class="t">REVERT ${c.left}</span></div></div></div>`;
+}
+function cfKey(key){
+  const c=dd.confirm;
+  if(key==='ArrowLeft'||key==='ArrowRight'){ c.focus=1-c.focus; cfRender(); return; }
+  if(key==='Enter'||key==='a'){
+    if(c.focus===0){ dd.row.v=c.choice; rowEls[sel].querySelector('.vt').textContent=c.choice; }
+    ddClose(); return;
+  }
+  if(key==='Escape'||key==='b'||key==='Backspace') ddClose();
+}
+
+// ---- pages inside Settings: a page push between screens ----
+const LICENSES=[['MiSTer MagiK','GPL-3.0'],['FFmpeg','LGPL-2.1'],['Slint','GPL-3.0'],['Press Start 2P','OFL-1.1'],
+  ['Commercial fonts','LICENSED'],['Jersey 25','OFL-1.1'],['Jersey 15','OFL-1.1'],['Spleen','BSD-2'],
+  ['Terminus','OFL-1.1'],['Rust standard library','MIT'],['zlib','ZLIB'],['libpng','LIBPNG']];
+const LIC_PAGE=10;
+let scr='launcher', licSel=0, textTop=0;
+const PAGES={about:'#pAbout',licenses:'#pLicenses',license:'#pLicense'};
+function renderLicenses(){
+  const first=Math.floor(licSel/LIC_PAGE)*LIC_PAGE, rows=LICENSES.slice(first,first+LIC_PAGE);
+  $('#licRows').innerHTML=rows.map(([n,k],i)=>`<div class="row band${first+i===licSel?' focus':''}${i===rows.length-1?' last':''}" style="top:${101+i*36}px"><i class="hl"></i><span class="lbl h">${n}</span><span class="val m">${k} &nbsp;<span class="chev">&gt;</span></span><i class="sep"></i></div>`).join('');
+  $('#licPageLabel').textContent=`${first+1} - ${first+rows.length} OF ${LICENSES.length}`;
+}
+const LICENSE_TEXT=(`                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            Preamble
+
+  The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+
+  The licenses for most software and other practical works are designed
+to take away your freedom to share and change the works.  By contrast,
+the GNU General Public License is intended to guarantee your freedom to
+share and change all versions of a program--to make sure it remains free
+software for all its users.  We, the Free Software Foundation, use the
+GNU General Public License for most of our software; it applies also to
+any other work released this way by its authors.  You can apply it to
+your programs, too.
+`).split('\n');
+// The demo repeats the opening to give the reader something to scroll.
+const TEXT_LINES=[].concat(...Array(8).fill(LICENSE_TEXT)), TEXT_VIEW=21;
+function renderText(){
+  const [name,kind]=LICENSES[licSel];
+  $('#ltCrumb').textContent='LICENSES / '+name.toUpperCase(); $('#ltKind').textContent=kind;
+  $('#ltPre').textContent=TEXT_LINES.join('\n');
+  $('#ltPre').style.transform=`translateY(${-textTop*18}px)`;
+  const track=390, h=Math.max(12,track*TEXT_VIEW/TEXT_LINES.length);
+  $('#ltThumb').style.height=h+'px';
+  $('#ltThumb').style.top=(98+(track-h)*textTop/Math.max(1,TEXT_LINES.length-TEXT_VIEW))+'px';
+}
+function scrollText(d){ textTop=Math.max(0,Math.min(TEXT_LINES.length-TEXT_VIEW,textTop+d)); renderText(); }
+
+// Elements that move in a push, per screen: left panel (rises) and bands (slide).
+function parts(name){
+  // The cog window's transform belongs to the card zoom, so it only fades.
+  if(name==='settings') return {fade:[$('#win')], left:[], bands:listEls};
+  const page=$(PAGES[name]);
+  return {fade:[], left:[...page.querySelectorAll('.lp')], bands:[...page.querySelectorAll('.band')].sort((a,b)=>a.offsetTop-b.offsetTop)};
+}
+function setScreen(name){
+  scr=name;
+  stage.classList.toggle('sub',!!PAGES[name]);
+  ['about','licenses','license'].forEach(p=>stage.classList.toggle('scr-'+p,p===name));
+  Object.entries(PAGES).forEach(([p,sel])=>$(sel).classList.toggle('on',p===name));
+}
+const OUT_MS=200, IN_AT=140, IN_MS=320, STAGGER=28, TRAVEL=40;
+function push(to,dir){ // dir 1 = deeper (forward), -1 = back
+  const from=scr; busy=true;
+  if(to==='licenses') renderLicenses();
+  if(to==='license'){ textTop=0; renderText(); }
+  const out=parts(from), anims=[];
+  [...out.left,...out.bands].forEach(el=>anims.push(el.animate(
+    [{transform:'none',opacity:1},{transform:`translateX(${-48*dir}px)`,opacity:0}],
+    {duration:OUT_MS*slow,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards'})));
+  out.fade.forEach(el=>anims.push(el.animate([{opacity:1},{opacity:0}],{duration:OUT_MS*slow,fill:'forwards'})));
+  setTimeout(()=>{
+    anims.forEach(a=>a.cancel());
+    setScreen(to);
+    const inn=parts(to), ease='cubic-bezier(.2,.8,.2,1)';
+    inn.fade.forEach(el=>el.animate([{opacity:0},{opacity:1}],{duration:IN_MS*slow,fill:'backwards'}));
+    inn.left.forEach(el=>el.animate([{opacity:0,transform:'translateY(8px)'},{opacity:1,transform:'none'}],
+      {duration:IN_MS*slow,easing:ease,fill:'backwards'}));
+    let last;
+    inn.bands.forEach((el,i)=>{ last=el.animate([{opacity:0,transform:`translateX(${TRAVEL*dir}px)`},{opacity:1,transform:'none'}],
+      {duration:IN_MS*slow,delay:i*STAGGER*slow,easing:ease,fill:'backwards'}); });
+    (last?last.finished:Promise.resolve()).then(()=>{busy=false;});
+  },(IN_AT)*slow);
+}
+
+// ---- launcher card choice (demo: Settings or Arcade) and the Arcade page ----
+let launcherCard='settings';
+ARCADE.init(stage);
+ASK.init(stage);
+const browseReady=BROWSE.init(stage);
+GLIST.init(stage);
+// The launcher is the card row: Settings and Arcade open through their own zooms.
+BROWSE.hooks.launch=name=>{
+  if(name==='SETTINGS'){ BROWSE.close(); setLauncherCard('settings'); scr='launcher'; openSettings(); }
+  else if(name==='ARCADE'){ BROWSE.close(); setLauncherCard('arcade'); scr='arcade'; ARCADE.run(1,E,slow); }
+};
+if(!location.hash) browseReady.then(()=>BROWSE.open('launcher',0));
+const rowAnchor=i=>({top:ROWS[i].top,h:36});
+function askRow(kind){ ASK.open({kind,anchor:rowAnchor(sel)}); }
+function askGame(){
+  const g=ARCADE.GAMES[ARCADE.sel], fav=/^(1942|720|Action Fighter)/.test(g);
+  ASK.open({kind:fav?'remove-favourite':'add-favourite',title:g.replace(/ [(\[].*/,''),value:null,accent:'red',
+    anchor:{top:124+3*36,h:36,left:26,w:462}});
+}
+function setLauncherCard(c){
+  launcherCard=c;
+  $('#launcher').src = c==='arcade' ? 'launcher-arcade-cabinet.png' : 'launcher-settings.png';
+  $('#win').style.visibility = c==='arcade' ? 'hidden' : '';
+  $('#frame').style.visibility = c==='arcade' ? 'hidden' : '';
+}
+addEventListener('keydown',e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Tab'].includes(e.key)) e.preventDefault();
+  if(busy||ARCADE.busy) return;
+  if(ASK.active){ ASK.key(e.key); return; }
+  if(BROWSE.active){ BROWSE.key(e.key); return; }
+  const isA=e.key==='Enter'||e.key==='a', isB=e.key==='Escape'||e.key==='b'||e.key==='Backspace';
+  if(scr==='arcade'){
+    if(ARCADE.key(e.key)) return;
+    if(e.key==='x'||e.key==='X'){ askGame(); return; }
+    if(e.key==='ArrowDown') ARCADE.move(1); else if(e.key==='ArrowUp') ARCADE.move(-1);
+    else if(e.key==='ArrowRight') ARCADE.move(9); else if(e.key==='ArrowLeft') ARCADE.move(-9);
+    else if(isB) ARCADE.run(-1,E,slow,()=>{ scr='launcher'; BROWSE.open('launcher',1); });
+    return;
+  }
+  if(scr==='launcher' && !open){
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight'){ setLauncherCard(launcherCard==='arcade'?'settings':'arcade'); return; }
+    if(isA && launcherCard==='arcade'){ scr='arcade'; ARCADE.run(1,E,slow); return; }
+  }
+  const A=e.key==='Enter'||e.key==='a', B=e.key==='Escape'||e.key==='b'||e.key==='Backspace';
+  if(scr==='about'){ if(A) push('licenses',1); else if(B) push('settings',-1); return; }
+  if(scr==='licenses'){
+    if(A) push('license',1); else if(B) push('about',-1);
+    else if(e.key==='ArrowDown'||e.key==='ArrowUp'){ licSel=Math.max(0,Math.min(LICENSES.length-1,licSel+(e.key==='ArrowDown'?1:-1))); renderLicenses(); }
+    else if(e.key==='ArrowRight'||e.key==='ArrowLeft'){ licSel=Math.max(0,Math.min(LICENSES.length-1,licSel+(e.key==='ArrowRight'?LIC_PAGE:-LIC_PAGE))); renderLicenses(); }
+    return;
+  }
+  if(scr==='license'){
+    if(A||B) push('licenses',-1);
+    else if(e.key==='ArrowDown') scrollText(1); else if(e.key==='ArrowUp') scrollText(-1);
+    else if(e.key==='ArrowRight') scrollText(TEXT_VIEW); else if(e.key==='ArrowLeft') scrollText(-TEXT_VIEW);
+    return;
+  }
+  if(open && !dd && A && sel===7){ push('about',1); return; }
+  if(dd){
+    if(dd.confirm) return cfKey(e.key);
+    if(e.key==='ArrowDown') ddMove(1); else if(e.key==='ArrowUp') ddMove(-1);
+    else if(e.key==='Enter'||e.key==='a') ddSelect();
+    else if(e.key==='Escape'||e.key==='b'||e.key==='Backspace') ddClose();
+    return;
+  }
+  if(e.key==='Enter'||e.key==='a'){
+    if(!open) openSettings();
+    else if(!busy && ROWS[sel].combo) ddOpen();
+    else if(ROWS[sel].stepper){ const r=ROWS[sel]; r.si=(r.si+1)%r.stepper.length; render(); }
+    else if(sel===2){ reduce=!reduce; render(); }
+    else if(sel===5) askRow('exit-to-mister');
+    else if(sel===6) askRow('refresh-database');
+  }
+  else if(e.key==='Escape'||e.key==='b'||e.key==='Backspace') closeSettings();
+  else if(e.key==='ArrowDown') move(1); else if(e.key==='ArrowUp') move(-1);
+  else if(e.key==='ArrowLeft'&&open) step(-1); else if(e.key==='ArrowRight'&&open) step(1);
+  else if(e.key==='s') toggleSlow();
+});
+function toggleSlow(){ slow=slow===1?5:1; $('#bSlow').setAttribute('aria-pressed',slow>1); }
+$('#bOpen').onclick=openSettings; $('#bBack').onclick=closeSettings; $('#bSlow').onclick=toggleSlow;
+$('#bRM').onclick=()=>{reduce=!reduce; render();};
+stage.addEventListener('click',()=>{ if(!open) openSettings(); });
+render();
+// ---- HDMI / CRT mode ----
+let mode='hdmi';
+function setMode(m){ mode=m; document.body.classList.toggle('crt',m==='crt');
+  $('#bHdmi').setAttribute('aria-pressed',m==='hdmi'); $('#bCrt').setAttribute('aria-pressed',m==='crt'); }
+$('#bHdmi').onclick=()=>setMode('hdmi'); $('#bCrt').onclick=()=>setMode('crt');
+addEventListener('keydown',e=>{
+  if(mode!=='crt') return;
+  e.stopImmediatePropagation();
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Tab'].includes(e.key)) e.preventDefault();
+  if(e.key==='s') return toggleSlow();
+  CRT.key(e.key);
+},true);
+const toggleSlowHdmi=toggleSlow;
+toggleSlow=function(){ toggleSlowHdmi(); CRT.setSlow(slow); };
+$('#bSlow').onclick=toggleSlow;
+CRT.init($('#crt'), TEXT_LINES).then(()=>{
+  const st=location.hash.slice(1);
+  if(st.startsWith('crt')){ setMode('crt'); const sub=st.slice(4); if(sub) CRT.state(sub); }
+});
+$('#bOpen').onclick=()=>mode==='crt'?CRT.key('Enter'):openSettings();
+$('#bBack').onclick=()=>mode==='crt'?CRT.key('Escape'):closeSettings();
+
+$('#bReplay').onclick=()=>{ if(mode==='crt') return CRT.replay(); if(!BROWSE.active) BROWSE.open('launcher'); BROWSE.replay(); };
+{ const st=location.hash.slice(1);
+  if(['consoles','nintendo','system'].includes(st)||st.startsWith('sysat-')||st.startsWith('trick')||st.startsWith('lvl-')||st.startsWith('sys-')||st.startsWith('glist')||st.startsWith('slide')||st.startsWith('back')) browseReady.then(()=>BROWSE.review(st)); }
+// Static review states: #settings, #dd-display, #dd-orientation, #confirm
+(function(){
+  const st=location.hash.slice(1); if(!st||st.startsWith('crt')||['consoles','nintendo','system'].includes(st)||st.startsWith('sysat-')||st.startsWith('trick')||st.startsWith('lvl-')||st.startsWith('sys-')||st.startsWith('glist')||st.startsWith('slide')||st.startsWith('back')) return;
+  open=true; t=TOTAL; apply(frameAt(TOTAL,false)); render();
+  DD.style.transition='none';
+  const k=key=>dispatchEvent(new KeyboardEvent('keydown',{key}));
+  if(st==='dd-orientation'){ sel=1; render(); }
+  if(st==='screensaver'){ sel=3; render(); }
+  scr='settings';
+  if(st==='push-about'){ sel=7; render(); setTimeout(()=>push('about',1),50); }
+  if(st==='push-back'){ sel=7; render(); setScreen('about'); setTimeout(()=>push('settings',-1),50); }
+  if(st==='about'||st==='licenses'||st==='license'){ sel=7; render(); if(st==='licenses') renderLicenses(); if(st==='license'){ renderLicenses(); renderText(); } setScreen(st); }
+  if(st==='arcade-v'){ ARCADE.sel=8; }
+  if(st==='search'||st==='search-results'){ open=false; t=0; apply(frameAt(0,false)); setLauncherCard('arcade'); scr='arcade';
+    document.getElementById('arcade').classList.add('on'); ARCADE.zoomFrame(1000,E); E.launcher.style.visibility='hidden'; $('#footL').style.visibility='hidden';
+    setTimeout(()=>{ ARCADE.openSearch(); setTimeout(()=>{ ['1','9','4'].forEach(k=>ARCADE.key(k)); if(st==='search-results'){ ARCADE.key('ArrowDown'); ARCADE.key('ArrowDown'); ARCADE.key('ArrowDown'); ARCADE.key('ArrowDown'); ARCADE.key('ArrowDown'); ARCADE.key('ArrowDown'); } },1500); },200); return; }
+  if(st.startsWith('arcadeat-')){ const ms=+st.split('-')[1]; t=0; apply(frameAt(0,false)); setLauncherCard('arcade'); scr='arcade';
+    document.getElementById('arcade').classList.add('on'); setInterval(()=>ARCADE.zoomFrame(ms,E),100); return; }
+  if(st==='arcade'||st==='arcade-v'||st==='archub'){ if(st==='archub') ARCADE.setMode('hub'); open=false; t=0; apply(frameAt(0,false)); setLauncherCard('arcade'); scr='arcade';
+    document.getElementById('arcade').classList.add('on'); ARCADE.zoomFrame(1000,E); E.launcher.style.visibility='hidden'; $('#footL').style.visibility='hidden'; return; }
+  if(st==='ask-library'||st==='ask-failed'){ open=false; t=0; apply(frameAt(0,false)); render();
+    $('#content').style.visibility='hidden'; $('#chrome').style.visibility='hidden';
+    setTimeout(()=>ASK.open({kind:st==='ask-library'?'library-changed':'library-update-failed',anchor:null}),50); return; }
+  if(st==='ask-fav'){ open=false; t=0; apply(frameAt(0,false)); setLauncherCard('arcade'); scr='arcade';
+    document.getElementById('arcade').classList.add('on'); ARCADE.zoomFrame(1000,E); E.launcher.style.visibility='hidden'; $('#footL').style.visibility='hidden';
+    setTimeout(askGame,50); return; }
+  if(st==='ask-exit'){ sel=5; render(); setTimeout(()=>askRow('exit-to-mister'),50); }
+  if(st==='ask-refresh'){ sel=6; render(); setTimeout(()=>askRow('refresh-database'),50); }
+  if(st==='ask-unavailable'){ sel=6; render(); setTimeout(()=>askRow('database-refresh-unavailable'),50); }
+  if(st==='ask-restart'){ sel=5; render(); setTimeout(()=>ASK.open({kind:'restart',anchor:null}),50); }
+  if(st==='ask-resolution'){ ddOpen(); k('ArrowDown'); k('ArrowDown'); k('ArrowDown'); setTimeout(()=>k('Enter'),50); }
+  if(st.startsWith('dd-')||st==='confirm'){ ddOpen(); DD.classList.add('show'); }
+  if(st==='dd-display'){ k('ArrowDown'); k('ArrowDown'); k('ArrowDown'); }
+  if(st==='confirm'){ k('ArrowUp'); k('ArrowUp'); k('Enter'); }
+})();
+</script>
+</body></html>

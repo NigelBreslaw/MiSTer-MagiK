@@ -1,8 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Also mounted as `production_launcher_screensaver` for the preview binary,
-// which uses only part of it.
+// Shared with the preview binary through the `production_launcher_screensaver` re-export.
 #![allow(dead_code)]
 
 #[cfg(not(target_os = "macos"))]

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
-import { CatalogActivity, CatalogView, ConfirmationKind, LauncherScreen, LoadingState, MediaView, NavigationView, OverlayView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
+import { CatalogActivity, CatalogView, ConfirmationKind, LauncherScreen, LoadingState, MediaView, NavigationView, SystemPageMode, OverlayView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 import { CrtSettingsBackdrop } from "../components/crt_settings_page.slint";
 import { CrtControllerPanel } from "../views/crt/controller_panel.slint";
@@ -59,7 +59,7 @@ export component CrtLauncherUi inherits Rectangle {
         if NavigationView.screen == LauncherScreen.about : AboutScreen { }
         if NavigationView.screen == LauncherScreen.licenses : LicensesScreen { }
         if NavigationView.screen == LauncherScreen.license-text : LicenseTextScreen { }
-        if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
+        if NavigationView.screen == LauncherScreen.arcade && NavigationView.system-page-mode == SystemPageMode.hub : SystemHubScreen { }
 
         if CatalogView.background-activity-visible : BackgroundScanBadge { }
         if SetupView.phase != SetupPhase.none : SetupOverlay { }

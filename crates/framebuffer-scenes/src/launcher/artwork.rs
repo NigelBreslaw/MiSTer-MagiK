@@ -433,17 +433,22 @@ pub(super) fn surface(
             let left = (width - 16 * scale) / 2;
             let top = height * 22 / 100;
             let shadow = mix_colour(card.colour, BACKGROUND, 150);
+            let glass = mix_colour(rgb(5, 7, 12), card.colour, 128);
             for (offset, colour) in [(3, shadow), (0, ink)] {
                 for (y, row) in bits.iter().enumerate() {
-                    for x in 0..16 {
-                        if row & (1 << (15 - x)) != 0 {
+                    for (x, cell) in row.bytes().enumerate() {
+                        if cell != b'0' {
                             draw_rect(
                                 &mut canvas,
                                 left + x * scale + offset,
                                 top + y * scale + offset,
                                 scale,
                                 scale,
-                                colour,
+                                if offset == 0 && cell == b'2' {
+                                    glass
+                                } else {
+                                    colour
+                                },
                             );
                         }
                     }
@@ -535,51 +540,42 @@ fn lit_body(colour: u16, width: usize, height: usize, x: usize, y: usize) -> u16
 
 /// 16-pixel-wide symbols for generic cards below the Consoles, Computers and
 /// Handhelds root cards. Every group and system in a collection shares one.
-fn category_icon(id: LauncherCardId) -> Option<&'static [u16]> {
-    const GAMEPAD: [u16; 10] = [
-        0b0011111111111100,
-        0b0111111111111110,
-        0b1110111111111011,
-        0b1100011111110101,
-        0b1110111111111011,
-        0b1111111111111111,
-        0b1111110000111111,
-        0b1111100000011111,
-        0b0111000000001110,
-        0b0010000000000100,
+fn category_icon(id: LauncherCardId) -> Option<&'static [&'static str; 10]> {
+    const GAMEPAD: [&str; 10] = [
+        "0011111111111100",
+        "0111111111111110",
+        "1110111111111011",
+        "1100011111110101",
+        "1110111111111011",
+        "1111111111111111",
+        "1111110000111111",
+        "1111100000011111",
+        "0111000000001110",
+        "0010000000000100",
     ];
-    const COMPUTER: [u16; 14] = [
-        0b0111111111111110,
-        0b0100000000000010,
-        0b0101111111111010,
-        0b0101000000001010,
-        0b0101000000001010,
-        0b0101111111111010,
-        0b0100000000000010,
-        0b0111111111111110,
-        0b0000001111000000,
-        0b0000111111110000,
-        0b0000000000000000,
-        0b1111111111111111,
-        0b1010101010101011,
-        0b1111111111111111,
+    const COMPUTER: [&str; 10] = [
+        "0001111111111000",
+        "0001222222221000",
+        "0001222222221000",
+        "0001222222221000",
+        "0001222222221000",
+        "0001222222221000",
+        "0001222222221000",
+        "0001111111101000",
+        "0000001111000000",
+        "0000111111110000",
     ];
-    const HANDHELD: [u16; 15] = [
-        0b0001111111111000,
-        0b0001000000001000,
-        0b0001011111101000,
-        0b0001010000101000,
-        0b0001010000101000,
-        0b0001010000101000,
-        0b0001011111101000,
-        0b0001000000001000,
-        0b0001001000001000,
-        0b0001011100011000,
-        0b0001001000011000,
-        0b0001000000001000,
-        0b0001000011001000,
-        0b0001000000001000,
-        0b0001111111111000,
+    const HANDHELD: [&str; 10] = [
+        "0111111111111110",
+        "1111111111111111",
+        "1111122222211111",
+        "1101122222211011",
+        "1000122222210111",
+        "1101122222211111",
+        "1111122222211111",
+        "1111111111111111",
+        "1111111111111111",
+        "0111111111111110",
     ];
     match id {
         LauncherCardId::Consoles => Some(&GAMEPAD),

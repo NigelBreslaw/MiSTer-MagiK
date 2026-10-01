@@ -960,6 +960,7 @@ pub(super) struct LauncherProjectionKey {
     active_collection_id: Option<String>,
     selected: usize,
     system_hub_selected: usize,
+    system_page_mode: launcher::SystemPageMode,
     arcade_user_list_mode: crate::launcher::ArcadeUserListMode,
     scroll_x: i32,
     home_scroll_repeat_active: bool,
@@ -988,6 +989,7 @@ impl LauncherProjectionKey {
             active_collection_id: nav.active_collection_id().map(str::to_string),
             selected: nav.selected,
             system_hub_selected: nav.system_hub_selected,
+            system_page_mode: nav.system_page_mode,
             arcade_user_list_mode: nav.arcade_user_list_mode(),
             scroll_x: nav.scroll_x,
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
@@ -1632,6 +1634,101 @@ mod tests {
             .get_active_display();
         assert!(active.id.is_empty());
         assert_eq!(active.label.as_str(), "1920x1200");
+    }
+
+    #[test]
+    fn long_hub_titles_keep_native_size_and_clear_the_tiles() {
+        use slint::ComponentHandle;
+        use slint::platform::software_renderer::Rgb565Pixel;
+        let window = install_isolated_test_platform();
+        window.set_size(slint::PhysicalSize::new(960, 540));
+        let app = slint_ui::launcher::Launcher::new().expect("launcher");
+        let navigation = app.global::<slint_ui::launcher::NavigationView>();
+        navigation.set_screen(slint_ui::launcher::LauncherScreen::Arcade);
+        navigation.set_system_page_mode(slint_ui::launcher::SystemPageMode::Hub);
+        navigation.set_system_title_wraps(true);
+        app.show().expect("show launcher");
+        let cream = Rgb565Pixel::from_rgb(0xee, 0xe8, 0xd5);
+        for (name, title_lines) in [("SUPER NINTENDO", 1), ("NINTENDO ENTERTAINMENT SYSTEM", 3)] {
+            navigation.set_system_title(name.into());
+            let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+            window.request_redraw();
+            assert!(
+                window.draw_full_frame_resetting_cache_if_needed(|renderer| {
+                    renderer.render(&mut pixels, 960);
+                })
+            );
+            let mut runs = Vec::new();
+            let mut previous = false;
+            for y in 126..302 {
+                let ink = pixels[y * 960 + 28..y * 960 + 468].contains(&cream);
+                if ink {
+                    if previous {
+                        *runs.last_mut().unwrap() += 1;
+                    } else {
+                        runs.push(1);
+                    }
+                }
+                previous = ink;
+            }
+            assert_eq!(
+                runs.len(),
+                title_lines + 1,
+                "{name}: title and caption rows"
+            );
+            assert!(
+                runs[..title_lines].iter().all(|height| *height == 29),
+                "{name}: {runs:?}"
+            );
+            if let Ok(dir) = std::env::var("MISTER_UI_REVIEW_OUTPUT") {
+                let file = PathBuf::from(dir).join(format!("title-{}.ppm", name.replace(' ', "-")));
+                let mut ppm = b"P6\n960 540\n255\n".to_vec();
+                for pixel in pixels {
+                    let (r, g, b) = (
+                        ((pixel.0 >> 11) & 31) as u8,
+                        ((pixel.0 >> 5) & 63) as u8,
+                        (pixel.0 & 31) as u8,
+                    );
+                    ppm.extend_from_slice(&[
+                        (r << 3) | (r >> 2),
+                        (g << 2) | (g >> 4),
+                        (b << 3) | (b >> 2),
+                    ]);
+                }
+                std::fs::write(file, ppm).expect("write review capture");
+            }
+        }
+    }
+
+    #[test]
+    fn launcher_bridge_key_tracks_system_page_toggle() {
+        let catalog = crate::test_support::arcade_catalog(
+            vec![arcade_game("Arcade One").build()],
+            vec![crate::test_support::arcade_system("arcade", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+        let hub = LauncherProjectionKey::from_nav(&nav);
+        let select = PadState {
+            btn_select: true,
+            ..PadState::default()
+        };
+        let now = Instant::now();
+
+        nav.handle_input(&select, now, &catalog);
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.system_page_mode, launcher::SystemPageMode::List);
+        let list = LauncherProjectionKey::from_nav(&nav);
+        assert!(hub != list);
+
+        nav.handle_input(
+            &PadState::default(),
+            now + Duration::from_millis(16),
+            &catalog,
+        );
+        nav.handle_input(&select, now + Duration::from_millis(32), &catalog);
+        assert!(nav.is_system_hub());
+        assert!(LauncherProjectionKey::from_nav(&nav) != list);
     }
 
     #[test]

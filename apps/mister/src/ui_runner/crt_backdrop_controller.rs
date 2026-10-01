@@ -135,6 +135,7 @@ pub(super) struct CrtBackdropFrame {
 
 pub(super) struct CrtBackdropController {
     state: CrtBackdropState,
+    hub_mode: Option<(usize, Rgb565Pixel)>,
     worker: PrepareWorker,
     cache: VecDeque<PreparedEntry>,
     cache_bytes: usize,
@@ -153,6 +154,7 @@ impl CrtBackdropController {
     pub(super) fn for_display(display: &UiDisplay) -> Option<Self> {
         Some(Self {
             state: CrtBackdropState::for_display(display)?,
+            hub_mode: None,
             worker: PrepareWorker::new(),
             cache: VecDeque::new(),
             cache_bytes: 0,
@@ -168,6 +170,13 @@ impl CrtBackdropController {
         })
     }
 
+    pub(super) fn set_hub_mode(&mut self, hub: Option<(usize, Rgb565Pixel)>) {
+        if self.hub_mode != hub {
+            self.hub_mode = hub;
+            self.was_eligible = false;
+        }
+    }
+
     pub(super) fn width(&self) -> usize {
         self.state.width()
     }
@@ -180,12 +189,19 @@ impl CrtBackdropController {
         self.state.physical_height()
     }
 
-    fn reference_height(&self) -> usize {
+    pub(super) fn reference_height(&self) -> usize {
         self.state.reference_height()
     }
 
     pub(super) fn pixels(&self) -> &[Rgb565Pixel] {
         self.state.pixels()
+    }
+
+    pub(super) fn source_ready(&self, source: &BackdropSource, layout: UiLayoutGeometry) -> bool {
+        let identity = self.prepared_identity(source, layout);
+        self.cache.iter().any(|entry| entry.identity == identity)
+            && self.was_eligible
+            && !self.state.is_transitioning()
     }
 
     pub(super) fn is_transitioning(&self) -> bool {
@@ -379,13 +395,23 @@ impl CrtBackdropController {
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
-            frame.trace = self.state.compose_product_into_layout(
-                now,
-                destination,
-                layout,
-                arcade_layout,
-                metrics,
-            );
+            frame.trace = if let Some(highlight) = self.hub_mode {
+                self.state.compose_system_hub_into_layout(
+                    now,
+                    destination,
+                    layout,
+                    metrics,
+                    highlight,
+                )
+            } else {
+                self.state.compose_product_into_layout(
+                    now,
+                    destination,
+                    layout,
+                    arcade_layout,
+                    metrics,
+                )
+            };
             if prepared_changed {
                 frame.trace.prepare_us = self.pending_prepare_us;
                 frame.trace.prepare_pixels = self

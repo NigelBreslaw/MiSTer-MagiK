@@ -40,6 +40,7 @@ pub enum NavigationTransitionEdge {
     HomeToConsoles,
     HomeToArcade,
     ConsolesToSystem,
+    SystemPanel,
 }
 
 impl NavigationTransitionEdge {
@@ -56,6 +57,7 @@ impl NavigationTransitionEdge {
             Self::HomeToConsoles => "home-consoles",
             Self::HomeToArcade => "home-arcade",
             Self::ConsolesToSystem => "consoles-system",
+            Self::SystemPanel => "system-panel",
         }
     }
 
@@ -65,6 +67,7 @@ impl NavigationTransitionEdge {
             Self::HomeToConsoles,
             Self::HomeToArcade,
             Self::ConsolesToSystem,
+            Self::SystemPanel,
         ]
         .into_iter()
         .find(|edge| edge.label() == normalized)
@@ -84,6 +87,10 @@ enum NavigationTransitionRenderer {
     SettingsPage,
     SettingsCog,
     ArcadeCard,
+    SystemPanel {
+        crt: bool,
+    },
+    DeviceCard(crate::device_card::DeviceCardReveal),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -593,15 +600,12 @@ impl NavigationTransitionRequest {
 
     pub fn settings_page(direction: NavigationTransitionDirection) -> Self {
         Self {
-            edge: NavigationTransitionEdge::HomeToConsoles,
-            direction,
-            geometry: NavigationTransitionGeometry::default(),
-            duration_us: NAVIGATION_TRANSITION_DURATION_US,
-            preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
             renderer: NavigationTransitionRenderer::SettingsPage,
-            settings_axis: SettingsPageTransitionAxis::Horizontal,
-            settings_style: SettingsPageTransitionStyle::WholePage,
-            settings_destination_content_x: 0,
+            ..Self::new(
+                NavigationTransitionEdge::HomeToConsoles,
+                direction,
+                NavigationTransitionGeometry::default(),
+            )
         }
     }
 
@@ -670,15 +674,38 @@ impl NavigationTransitionRequest {
         geometry: NavigationTransitionGeometry,
     ) -> Self {
         Self {
-            edge: NavigationTransitionEdge::HomeToArcade,
-            direction,
-            geometry,
             duration_us: u64::from(crate::arcade_card::ARCADE_CARD_DURATION_MS) * 1_000,
-            preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
             renderer: NavigationTransitionRenderer::ArcadeCard,
-            settings_axis: SettingsPageTransitionAxis::Horizontal,
-            settings_style: SettingsPageTransitionStyle::WholePage,
-            settings_destination_content_x: 0,
+            ..Self::new(NavigationTransitionEdge::HomeToArcade, direction, geometry)
+        }
+    }
+
+    pub fn device_card(
+        direction: NavigationTransitionDirection,
+        edge: NavigationTransitionEdge,
+        geometry: NavigationTransitionGeometry,
+        spec: crate::device_card::DeviceCardReveal,
+    ) -> Self {
+        Self {
+            renderer: NavigationTransitionRenderer::DeviceCard(spec),
+            edge,
+            geometry,
+            duration_us: u64::from(spec.duration_ms()) * 1000,
+            ..Self::settings_page(direction)
+        }
+    }
+
+    pub fn system_panel(crt: bool, to_list: bool) -> Self {
+        Self {
+            renderer: NavigationTransitionRenderer::SystemPanel { crt },
+            edge: NavigationTransitionEdge::SystemPanel,
+            direction: if to_list {
+                NavigationTransitionDirection::Forward
+            } else {
+                NavigationTransitionDirection::Reverse
+            },
+            duration_us: u64::from(crate::system_panel::duration_ms(crt, to_list)) * 1000,
+            ..Self::settings_page(NavigationTransitionDirection::Forward)
         }
     }
 
@@ -693,15 +720,13 @@ impl NavigationTransitionRequest {
             NavigationTransitionRenderer::SettingsPage => "settings-page",
             NavigationTransitionRenderer::SettingsCog => "settings-cog",
             NavigationTransitionRenderer::ArcadeCard => "arcade-card",
+            NavigationTransitionRenderer::SystemPanel { .. } => "system-panel",
+            NavigationTransitionRenderer::DeviceCard(_) => "device-card",
         }
     }
 
-    const fn is_settings_cog(self) -> bool {
-        matches!(self.renderer, NavigationTransitionRenderer::SettingsCog)
-    }
-
-    const fn is_arcade_card(self) -> bool {
-        matches!(self.renderer, NavigationTransitionRenderer::ArcadeCard)
+    pub const fn is_device_card(self) -> bool {
+        matches!(self.renderer, NavigationTransitionRenderer::DeviceCard(_))
     }
 }
 
@@ -781,9 +806,14 @@ impl Default for NavigationTransitionFrame {
 pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
     let forward_cover = match request.renderer {
         NavigationTransitionRenderer::SuperScaler => SUPER_SCALER_COVER_PROGRESS,
+        NavigationTransitionRenderer::SystemPanel { crt } => {
+            return ((if crt { 150_000u64 } else { 120_000u64 }) * PROGRESS_MAX as u64
+                / request.duration_us) as u16;
+        }
         NavigationTransitionRenderer::SettingsPage
         | NavigationTransitionRenderer::SettingsCog
-        | NavigationTransitionRenderer::ArcadeCard => PROGRESS_MAX / 2,
+        | NavigationTransitionRenderer::ArcadeCard
+        | NavigationTransitionRenderer::DeviceCard(_) => PROGRESS_MAX / 2,
     };
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
@@ -828,6 +858,9 @@ pub struct NavigationTransitionBuffers {
     source: Arc<Vec<Rgb565Pixel>>,
     destination: Arc<Vec<Rgb565Pixel>>,
     working: Vec<Rgb565Pixel>,
+    panel_backdrop: Vec<Rgb565Pixel>,
+    reveal_image: Option<crate::device_card::RevealImage>,
+    device_asset: Option<&'static [Rgb565Pixel]>,
     scale_source_x: Vec<usize>,
     scale_source_y: Vec<usize>,
     scale_excluded_x: Vec<bool>,
@@ -918,6 +951,19 @@ impl NavigationTransitionBuffers {
     pub fn destination(&self) -> Option<&[Rgb565Pixel]> {
         self.destination_ready
             .then_some(self.destination.as_slice())
+    }
+
+    pub fn set_device_asset(&mut self, asset: &'static [Rgb565Pixel]) {
+        self.device_asset = Some(asset);
+    }
+
+    pub fn set_reveal_image(&mut self, image: Option<crate::device_card::RevealImage>) {
+        self.reveal_image = image;
+    }
+
+    pub fn capture_panel_backdrop(&mut self, pixels: &[Rgb565Pixel]) {
+        self.panel_backdrop.clear();
+        self.panel_backdrop.extend_from_slice(pixels);
     }
 
     pub fn working_mut(&mut self) -> &mut [Rgb565Pixel] {
@@ -1027,36 +1073,24 @@ pub fn render_navigation_transition(
     frame: NavigationTransitionFrame,
 ) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
     let started = Instant::now();
-    let mut stats = match request.renderer {
-        NavigationTransitionRenderer::SuperScaler => {
-            let mut stats = render_super_scaler_shell(buffers, request, frame)?;
-            render_hero_label_last(buffers, request, frame, &mut stats)?;
-            let overlay_started = Instant::now();
-            apply_crt_scanline_overlay(
-                buffers.working.as_mut_slice(),
-                buffers.width,
-                buffers.height,
-                frame,
-                &mut stats,
-            );
-            stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-            stats
-        }
-        NavigationTransitionRenderer::SettingsPage => {
-            render_settings_page_push(buffers, request, frame)?
-        }
-        NavigationTransitionRenderer::SettingsCog => {
-            let mut working = std::mem::take(&mut buffers.working);
-            let result = render_settings_cog_into(buffers, request, frame, &mut working);
-            buffers.working = working;
-            result?
-        }
-        NavigationTransitionRenderer::ArcadeCard => {
-            let mut working = std::mem::take(&mut buffers.working);
-            let result = render_arcade_card_into(buffers, request, frame, &mut working);
-            buffers.working = working;
-            result?
-        }
+    let mut stats = if request.is_super_scaler() {
+        let mut stats = render_super_scaler_shell(buffers, request, frame)?;
+        render_hero_label_last(buffers, request, frame, &mut stats)?;
+        let overlay_started = Instant::now();
+        apply_crt_scanline_overlay(
+            buffers.working.as_mut_slice(),
+            buffers.width,
+            buffers.height,
+            frame,
+            &mut stats,
+        );
+        stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        stats
+    } else {
+        let mut working = std::mem::take(&mut buffers.working);
+        let result = render_settings_page_transition_into(buffers, request, frame, &mut working);
+        buffers.working = working;
+        result?
     };
     stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
     Ok(stats)
@@ -1424,17 +1458,6 @@ fn render_super_scaler_shell(
     Ok(stats)
 }
 
-fn render_settings_page_push(
-    buffers: &mut NavigationTransitionBuffers,
-    request: NavigationTransitionRequest,
-    frame: NavigationTransitionFrame,
-) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
-    let mut working = std::mem::take(&mut buffers.working);
-    let result = render_settings_page_transition_into(buffers, request, frame, &mut working);
-    buffers.working = working;
-    result
-}
-
 pub fn render_settings_page_transition_into(
     buffers: &NavigationTransitionBuffers,
     request: NavigationTransitionRequest,
@@ -1444,15 +1467,26 @@ pub fn render_settings_page_transition_into(
     if !buffers.source_ready
         || buffers.source.len() != buffers.width.saturating_mul(buffers.height)
         || output.len() != buffers.source.len()
-        || request.is_super_scaler()
     {
         return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
     }
-    if request.is_settings_cog() {
-        return render_settings_cog_into(buffers, request, frame, output);
-    }
-    if request.is_arcade_card() {
-        return render_arcade_card_into(buffers, request, frame, output);
+    match request.renderer {
+        NavigationTransitionRenderer::DeviceCard(spec) => {
+            return render_device_card_into(buffers, request, frame, output, spec);
+        }
+        NavigationTransitionRenderer::SystemPanel { crt } => {
+            return render_system_panel_into(buffers, request, frame, output, crt);
+        }
+        NavigationTransitionRenderer::SettingsCog => {
+            return render_settings_cog_into(buffers, request, frame, output);
+        }
+        NavigationTransitionRenderer::ArcadeCard => {
+            return render_arcade_card_into(buffers, request, frame, output);
+        }
+        NavigationTransitionRenderer::SettingsPage => {}
+        NavigationTransitionRenderer::SuperScaler => {
+            return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+        }
     }
     let source = buffers.source.as_slice();
     let destination = buffers
@@ -1915,6 +1949,85 @@ fn render_settings_cog_into(
     stats.card_scale_us = elapsed_us(started);
     stats.copied_pixels = output.len() as u64;
     Ok(stats)
+}
+
+fn render_device_card_into(
+    buffers: &NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+    spec: crate::device_card::DeviceCardReveal,
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    let Some(destination) = buffers
+        .destination_ready
+        .then_some(buffers.destination.as_slice())
+    else {
+        output.copy_from_slice(&buffers.source);
+        return Ok(NavigationTransitionRenderStats {
+            copied_pixels: output.len() as u64,
+            ..Default::default()
+        });
+    };
+    let elapsed = (u64::from(frame.progress_q16) * u64::from(spec.duration_ms())
+        / PROGRESS_MAX as u64) as u32;
+    let (launcher, page, t) = if request.direction == NavigationTransitionDirection::Forward {
+        (&buffers.source[..], destination, elapsed)
+    } else {
+        (
+            destination,
+            &buffers.source[..],
+            spec.duration_ms() - elapsed,
+        )
+    };
+    if !crate::device_card::render_into(
+        buffers.width,
+        buffers.height,
+        launcher,
+        page,
+        buffers.device_asset.unwrap_or(&[]),
+        &buffers.panel_backdrop,
+        buffers.reveal_image.as_ref(),
+        request.geometry.source_card,
+        spec,
+        t,
+        output,
+    ) {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    Ok(NavigationTransitionRenderStats {
+        copied_pixels: output.len() as u64,
+        ..Default::default()
+    })
+}
+
+fn render_system_panel_into(
+    buffers: &NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+    crt: bool,
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    let t =
+        (u64::from(frame.progress_q16) * request.duration_us / 1000 / PROGRESS_MAX as u64) as u32;
+    if !crate::system_panel::render_into(
+        buffers.width,
+        buffers.height,
+        &buffers.source,
+        buffers
+            .destination_ready
+            .then_some(buffers.destination.as_slice()),
+        &buffers.panel_backdrop,
+        crt,
+        request.direction == NavigationTransitionDirection::Forward,
+        t,
+        output,
+    ) {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    Ok(NavigationTransitionRenderStats {
+        copied_pixels: output.len() as u64,
+        ..Default::default()
+    })
 }
 
 fn render_arcade_card_into(

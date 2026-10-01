@@ -121,7 +121,7 @@ mod macos {
     const PARTICLE_SCENE_SEED: u64 = 0x4d_61_67_69_4b;
     const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
     const CAPTURE_PROVENANCE_SCHEMA: &str = "mister-magik-launcher-capture-v1";
-    const PINNED_SLINT_VERSION: &str = "1.18.0";
+    const PINNED_SLINT_VERSION: &str = "1.18.1";
     const RGB565_CONVERSION_VERSION: &str = "rgb565-le-expand-v1";
     const PREVIEW_RENDERER_ID: &str = "slint-software-rgb565-reused-buffer";
     const PNG_ENCODER_ID: &str = "png-rgb8-filter-none-zlib-best-v1";
@@ -200,13 +200,16 @@ mod macos {
             options.orientation,
             options.cold_start_mode,
             options.navigation_transition_demo.is_some()
+                || options.panel_transition_demo
                 || options.settings_page_transition_demo
                 || options.navigation_transition_duration_ms.is_some(),
         )?;
         application
             .navigation_transition
             .configure_preview(options.navigation_transition_duration_ms);
-        application.select_scenario(if options.settings_page_transition_demo {
+        application.select_scenario(if options.panel_transition_demo {
+            Scenario::SystemHub
+        } else if options.settings_page_transition_demo {
             Scenario::Home
         } else {
             options.scenario
@@ -221,7 +224,8 @@ mod macos {
             let mut demo_origin_selected_id = None;
             let mut demo_origin_frame = None;
             let navigation_demo = options.navigation_transition_demo.is_some()
-                || options.settings_page_transition_demo;
+                || options.settings_page_transition_demo
+                || options.panel_transition_demo;
             if navigation_demo {
                 for _ in 0..36 {
                     application.compose_frame();
@@ -232,7 +236,9 @@ mod macos {
                     .get(application.launcher_nav.selected)
                     .map(|item| item.id.clone());
                 demo_origin_frame = Some(application.frame_target.cached_565().to_vec());
-                if options.settings_page_transition_demo {
+                if options.panel_transition_demo {
+                    application.enqueue_launcher_action(LogicalAction::Select, true);
+                } else if options.settings_page_transition_demo {
                     application.enqueue_launcher_action(LogicalAction::Home, true);
                 } else {
                     application.enqueue_launcher_action(LogicalAction::Activate, true);
@@ -249,12 +255,18 @@ mod macos {
                         if step == 0 {
                             application.enqueue_launcher_action(LogicalAction::Activate, false);
                             application.enqueue_launcher_action(LogicalAction::Home, false);
+                            application.enqueue_launcher_action(LogicalAction::Select, false);
                         }
                     }
                     let reverse_origin = application.frame_target.cached_565().to_vec();
-                    application.enqueue_launcher_action(LogicalAction::Back, true);
+                    let reverse_action = if options.panel_transition_demo {
+                        LogicalAction::Select
+                    } else {
+                        LogicalAction::Back
+                    };
+                    application.enqueue_launcher_action(reverse_action, true);
                     application.compose_frame();
-                    application.enqueue_launcher_action(LogicalAction::Back, false);
+                    application.enqueue_launcher_action(reverse_action, false);
                     if let Some((count, min_x, min_y, max_x, max_y)) = frame_difference(
                         &reverse_origin,
                         application.frame_target.cached_565(),
@@ -426,6 +438,7 @@ mod macos {
     }
 
     struct PreviewApplication {
+        native_cards: Option<mister_magik_fb::ui_runner::NativeCardPreview>,
         launcher: Launcher,
         slint_window: Rc<MisterSoftwareWindow>,
         fixed_time: Rc<Cell<Duration>>,
@@ -513,7 +526,7 @@ mod macos {
         }
         let (owner, directional_policy) = match nav.screen {
             Screen::Home => (1, DirectionalPolicy::HomeContinuous),
-            Screen::SystemHub => (2, DirectionalPolicy::MenuRepeat),
+            Screen::Arcade if nav.is_system_hub() => (2, DirectionalPolicy::MenuRepeat),
             Screen::Controller => (3, DirectionalPolicy::EdgeOnly),
             Screen::Arcade if nav.arcade_uses_menu_repeat() => (4, DirectionalPolicy::MenuRepeat),
             Screen::Arcade => (4, DirectionalPolicy::ArcadeContinuous),
@@ -653,6 +666,7 @@ mod macos {
                 force_navigation_motion || !launcher_nav.settings.reduce_motion;
             let launcher_ui_actions = LauncherUiActionsAdapter::install(&launcher);
             let mut application = Self {
+                native_cards: None,
                 launcher,
                 slint_window,
                 fixed_time,
@@ -1081,12 +1095,17 @@ mod macos {
             match scenario {
                 Scenario::Home => self.launcher_nav.go_root(),
                 Scenario::SystemHub => {
-                    if !self.launcher_nav.open_system(&self.catalog, "snes") {
-                        self.launcher_nav.screen = Screen::SystemHub;
+                    if !self.launcher_nav.open_system(&self.catalog, "snes")
+                        && !self.launcher_nav.open_system(&self.catalog, "atari2600")
+                    {
+                        self.launcher_nav.screen = Screen::Arcade;
+                        self.launcher_nav.system_page_mode =
+                            mister_magik_fb::launcher::SystemPageMode::Hub;
                     }
                 }
                 Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => {
                     self.launcher_nav.open_default_arcade(&self.catalog);
+                    self.launcher_nav.skip_system_page(&self.catalog);
                     match scenario {
                         Scenario::ArcadeSearch => {
                             self.launcher_nav.arcade_filter.active = ArcadeFilter::Search;
@@ -1148,11 +1167,34 @@ mod macos {
             self.scenario = Scenario::Home;
             self.launcher_nav.go_root();
             let target_id = match edge {
+                NavigationTransitionEdge::SystemPanel => {
+                    return Err("use --panel-transition-demo for system-panel motion".into());
+                }
                 NavigationTransitionEdge::HomeToConsoles => CONSOLES_MENU_ID.to_string(),
                 NavigationTransitionEdge::HomeToArcade => MENU_ARCADE_SYSTEM_ID.to_string(),
                 NavigationTransitionEdge::ConsolesToSystem => {
                     if !self.launcher_nav.open_menu(CONSOLES_MENU_ID) {
                         return Err("Consoles menu is unavailable in preview content".into());
+                    }
+                    for _ in 0..4 {
+                        if self
+                            .launcher_nav
+                            .current_menu_items()
+                            .iter()
+                            .any(|item| item.kind == LauncherMenuItemKind::Collection)
+                        {
+                            break;
+                        }
+                        let child = self
+                            .launcher_nav
+                            .current_menu_items()
+                            .iter()
+                            .find(|item| item.kind == LauncherMenuItemKind::Menu)
+                            .map(|item| item.id.clone())
+                            .ok_or("Consoles has no populated child menu")?;
+                        if !self.launcher_nav.open_menu(&child) {
+                            return Err("Could not open console maker menu".into());
+                        }
                     }
                     self.launcher_nav
                         .current_menu_items()
@@ -1188,6 +1230,7 @@ mod macos {
                 }
                 KeyCode::Escape | KeyCode::Backspace => Some(LogicalAction::Back),
                 KeyCode::Home => Some(LogicalAction::Home),
+                KeyCode::Tab => Some(LogicalAction::Select),
                 KeyCode::KeyX => Some(LogicalAction::X),
                 _ => None,
             };
@@ -1389,7 +1432,9 @@ mod macos {
                         LauncherAction::OpenMenu
                         | LauncherAction::OpenCollection
                         | LauncherAction::NavigateBack
-                        | LauncherAction::NavigateHome => {
+                        | LauncherAction::NavigateHome
+                        | LauncherAction::ToggleSystemPage
+                        | LauncherAction::OpenSystemSection => {
                             if self.begin_navigation_transition(event.clone(), now_us) {
                                 self.pending_navigation_source_state =
                                     Some(self.launcher_nav.navigation_transition_state());
@@ -1430,6 +1475,24 @@ mod macos {
         }
 
         fn begin_navigation_transition(&mut self, event: LauncherEvent, now_us: u64) -> bool {
+            if matches!(
+                event.action,
+                LauncherAction::ToggleSystemPage | LauncherAction::OpenSystemSection
+            ) {
+                if self.orientation.is_portrait() {
+                    return false;
+                }
+                return self
+                    .navigation_transition
+                    .begin_system_panel(
+                        self.display_profile.is_crt(),
+                        self.launcher_nav.is_system_hub(),
+                        self.frame_target.cached_565(),
+                        self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
+                        now_us,
+                    )
+                    .unwrap_or(false);
+            }
             let Some((edge, direction)) =
                 navigation_transition_for_intent(&self.launcher_nav, &event)
             else {
@@ -1442,7 +1505,7 @@ mod macos {
                 .map(|item| item.title.as_str())
                 .unwrap_or("")
                 .to_owned();
-            let geometry = match direction {
+            let mut geometry = match direction {
                 NavigationTransitionDirection::Forward => {
                     let root_menu = self.launcher_nav.current_menu_id() == ROOT_MENU_ID;
                     if self.display_profile.is_crt() {
@@ -1493,16 +1556,65 @@ mod macos {
                     geometry
                 }
             };
-            if edge == NavigationTransitionEdge::HomeToArcade && !self.orientation.is_portrait() {
-                self.navigation_transition
-                    .begin_arcade_card(
+            if matches!(
+                edge,
+                NavigationTransitionEdge::HomeToArcade | NavigationTransitionEdge::ConsolesToSystem
+            ) && !self.orientation.is_portrait()
+            {
+                if direction == NavigationTransitionDirection::Forward {
+                    let scene = if self.display_profile.is_crt() {
+                        mister_magik_framebuffer_scenes::launcher::LauncherScene::crt(
+                            self.frame_width,
+                            self.frame_height,
+                        )
+                    } else {
+                        mister_magik_framebuffer_scenes::launcher::LauncherScene::new(
+                            self.frame_width,
+                            self.frame_height,
+                        )
+                    };
+                    geometry.source_card = self.native_cards.as_ref().map_or_else(
+                        || {
+                            scene
+                                .slot_zero(self.launcher_nav.current_menu_id() != ROOT_MENU_ID)
+                                .rect()
+                        },
+                        |cards| cards.selected_card_rect(),
+                    );
+                }
+                let kind = event
+                    .path
+                    .as_deref()
+                    .filter(|_| event.action == LauncherAction::OpenCollection)
+                    .and_then(|id| self.launcher_nav.device_kind_for_collection(id))
+                    .or_else(|| self.launcher_nav.device_kind());
+                let hub = direction == NavigationTransitionDirection::Forward
+                    || self.launcher_nav.is_system_hub();
+                let started = self
+                    .navigation_transition
+                    .begin_device_card(
+                        edge,
                         direction,
                         geometry,
+                        mister_magik_fb::launcher_presentation::device_reveal_spec(
+                            kind,
+                            self.display_profile.is_crt(),
+                            hub,
+                        ),
                         self.frame_target.cached_565(),
-                        mister_magik_fb::launcher_presentation::arcade_cabinet_artwork(),
+                        mister_magik_fb::launcher_presentation::system_device_rgb565(kind),
+                        self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
                         now_us,
                     )
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                if started
+                    && self.display_profile.is_crt()
+                    && direction == NavigationTransitionDirection::Reverse
+                {
+                    self.navigation_transition
+                        .update_device_reveal_image(self.selected_reveal_image());
+                }
+                started
             } else {
                 self.navigation_transition
                     .begin(
@@ -1532,7 +1644,13 @@ mod macos {
                 (Scenario::DisplayChoice, Screen::Settings) => Scenario::DisplayChoice,
                 (Scenario::DisplayConfirm, Screen::Settings) => Scenario::DisplayConfirm,
                 (Scenario::ControllerSetup, Screen::Controller) => Scenario::ControllerSetup,
-                _ => Scenario::from_screen(self.launcher_nav.screen),
+                _ => {
+                    if self.launcher_nav.is_system_hub() {
+                        Scenario::SystemHub
+                    } else {
+                        Scenario::from_screen(self.launcher_nav.screen)
+                    }
+                }
             };
             self.sync_launcher_navigation();
             self.sync_navigation_transition_active();
@@ -1554,6 +1672,46 @@ mod macos {
                 });
         }
 
+        fn selected_reveal_image(
+            &self,
+        ) -> Option<mister_magik_framebuffer_scenes::device_card::RevealImage> {
+            let use_fixtures = matches!(self.content, PreviewContent::Fixtures);
+            let shot = preview_game(
+                &self.launcher_nav,
+                &self.catalog,
+                self.launcher_nav.arcade.selected,
+            )
+            .and_then(|game| {
+                preview_screenshot(
+                    game,
+                    &self.loaded_screenshots,
+                    &self.fixture_screenshots,
+                    use_fixtures,
+                )
+            })
+            .or_else(|| {
+                use_fixtures
+                    .then(|| self.fixture_screenshots.first())
+                    .flatten()
+            });
+            shot.map(
+                |shot| mister_magik_framebuffer_scenes::device_card::RevealImage {
+                    pixels: shot.pixels.iter().map(|p| p.0).collect(),
+                    width: shot.width,
+                    height: shot.height,
+                    stride: shot.stride,
+                    reference_height: self
+                        .crt_backdrop
+                        .as_ref()
+                        .map_or(self.frame_height, |b| b.reference_height()),
+                    integer_scale: self
+                        .crt_backdrop
+                        .as_ref()
+                        .is_some_and(|b| b.reference_height() > b.physical_height()),
+                },
+            )
+        }
+
         fn compose_navigation_transition(&mut self) {
             if !self.navigation_transition.is_active() {
                 return;
@@ -1563,6 +1721,18 @@ mod macos {
             let mut render_transition_frame = true;
             if self.pending_navigation_committed && !self.navigation_transition.destination_ready()
             {
+                if self.display_profile.is_crt()
+                    && self
+                        .navigation_transition
+                        .request()
+                        .is_some_and(|r| r.is_device_card())
+                {
+                    self.navigation_transition
+                        .update_device_reveal_image(self.selected_reveal_image());
+                }
+                self.navigation_transition.update_device_reveal_backdrop(
+                    self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
+                );
                 if self
                     .navigation_transition
                     .capture_destination(self.frame_target.cached_565(), now_us)
@@ -1678,20 +1848,66 @@ mod macos {
             self.poll_card_connection();
             let frame_delta = self.frame_delta();
             self.tick_launcher_navigation();
+            self.launcher.global::<MisterUi>().set_custom_home_base(
+                self.scenario.uses_launcher_navigation()
+                    && self.launcher_nav.screen == Screen::Home,
+            );
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
             self.slint_window.draw_if_needed(|renderer| {
                 self.frame_target.render(renderer);
             });
+            if self.scenario.uses_launcher_navigation() && self.launcher_nav.screen == Screen::Home
+            {
+                let display = self.display_profile.display();
+                let layout = UiLayoutGeometry::for_display(&display, self.orientation);
+                if self
+                    .native_cards
+                    .as_ref()
+                    .is_none_or(|cards| !cards.matches_display(&display, layout))
+                {
+                    self.native_cards = Some(
+                        mister_magik_fb::ui_runner::NativeCardPreview::new(
+                            &self.launcher_nav,
+                            &self.catalog,
+                            &display,
+                            layout,
+                        )
+                        .expect("native preview cards"),
+                    );
+                }
+                let pixels = self
+                    .native_cards
+                    .as_mut()
+                    .expect("prepared preview cards")
+                    .render(
+                        &self.launcher_nav,
+                        &self.catalog,
+                        self.launcher_epoch + self.fixed_time.get(),
+                        self.fixed_time.get(),
+                    );
+                for (dest, src) in self.frame_target.cached_565_mut().iter_mut().zip(pixels) {
+                    *dest = Rgb565Pixel(src.0);
+                }
+            } else if let Some(cards) = self.native_cards.as_mut() {
+                cards.set_inactive();
+            }
             if matches!(
                 self.scenario,
-                Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade
-            ) && self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready
+                Scenario::Arcade
+                    | Scenario::ArcadeSearch
+                    | Scenario::ArcadeCrossfade
+                    | Scenario::SystemHub
+            ) && (self.launcher_nav.is_system_hub()
+                || self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready)
             {
                 let low_resolution_backdrop = self.crt_backdrop.is_some()
-                    && matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade);
+                    && matches!(
+                        self.scenario,
+                        Scenario::Arcade | Scenario::ArcadeCrossfade | Scenario::SystemHub
+                    );
                 if low_resolution_backdrop {
-                    self.sync_crt_backdrop_target(false);
+                    self.sync_crt_backdrop_target(self.navigation_transition.is_active());
                     let display = self.display_profile.display();
                     let layout = UiLayoutGeometry::for_display(&display, self.orientation);
                     let metrics = CrtUiMetrics::for_display(&display);
@@ -1701,13 +1917,33 @@ mod macos {
                         self.scenario == Scenario::ArcadeSearch,
                     );
                     if let Some(backdrop) = self.crt_backdrop.as_mut() {
-                        let _ = backdrop.compose_product_into_layout(
-                            self.fixed_time.get(),
-                            self.frame_target.cached_565_mut(),
-                            layout,
-                            arcade_layout,
-                            metrics,
-                        );
+                        if self.launcher_nav.is_system_hub() {
+                            let _ = backdrop.compose_system_hub_into_layout(
+                                self.fixed_time.get(),
+                                self.frame_target.cached_565_mut(),
+                                layout,
+                                metrics,
+                                (
+                                    self.launcher_nav.system_hub_selected,
+                                    Rgb565Pixel(
+                                        mister_magik_fb::launcher_presentation::device_reveal_spec(
+                                            self.launcher_nav.device_kind(),
+                                            true,
+                                            true,
+                                        )
+                                        .accent,
+                                    ),
+                                ),
+                            );
+                        } else {
+                            let _ = backdrop.compose_product_into_layout(
+                                self.fixed_time.get(),
+                                self.frame_target.cached_565_mut(),
+                                layout,
+                                arcade_layout,
+                                metrics,
+                            );
+                        }
                     }
                 }
                 let games = self
@@ -1718,33 +1954,37 @@ mod macos {
                             .active_arcade_game_view(&self.catalog, collection)
                     })
                     .unwrap_or_else(mister_magik_fb::arcade_catalog::ArcadeGameView::empty);
-                if let Some(backdrop) = self.crt_backdrop.as_ref().filter(|_| {
-                    matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade)
-                }) {
-                    let layout = UiLayoutGeometry::for_display(
-                        &self.display_profile.display(),
-                        self.orientation,
-                    );
-                    self.arcade_layer.compose_over_backdrop(
-                        &mut self.frame_target,
-                        backdrop.pixels(),
-                        layout.output_layout(),
-                        games,
-                        self.launcher_nav.arcade.selected,
-                        self.launcher_nav.arcade.visual_index,
-                        true,
-                    );
-                } else {
-                    self.arcade_layer.compose(
-                        &mut self.frame_target,
-                        games,
-                        self.launcher_nav.arcade.selected,
-                        self.launcher_nav.arcade.visual_index,
-                        true,
-                    );
+                if !self.launcher_nav.is_system_hub() {
+                    if let Some(backdrop) = self.crt_backdrop.as_ref().filter(|_| {
+                        matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade)
+                    }) {
+                        let layout = UiLayoutGeometry::for_display(
+                            &self.display_profile.display(),
+                            self.orientation,
+                        );
+                        self.arcade_layer.compose_over_backdrop(
+                            &mut self.frame_target,
+                            backdrop.pixels(),
+                            layout.output_layout(),
+                            games,
+                            self.launcher_nav.arcade.selected,
+                            self.launcher_nav.arcade.visual_index,
+                            true,
+                        );
+                    } else {
+                        self.arcade_layer.compose(
+                            &mut self.frame_target,
+                            games,
+                            self.launcher_nav.arcade.selected,
+                            self.launcher_nav.arcade.visual_index,
+                            true,
+                        );
+                    }
                 }
-                if matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade)
-                    && !self.display_profile.is_crt()
+                if matches!(
+                    self.scenario,
+                    Scenario::Arcade | Scenario::ArcadeCrossfade | Scenario::SystemHub
+                ) && !self.display_profile.is_crt()
                 {
                     let use_fixtures = matches!(self.content, PreviewContent::Fixtures);
                     let current = self
@@ -1933,7 +2173,7 @@ mod macos {
                 self.preview_current_index = current;
                 self.crt_backdrop_target_key = None;
                 self.sync_crt_backdrop_target(false);
-            } else if scenario == Scenario::Arcade {
+            } else if matches!(scenario, Scenario::Arcade | Scenario::SystemHub) {
                 self.sync_crt_backdrop_target(true);
             } else if let Some(backdrop) = self.crt_backdrop.as_mut() {
                 backdrop.retarget_plain(now);
@@ -2731,7 +2971,6 @@ mod macos {
         fn from_screen(screen: Screen) -> Self {
             match screen {
                 Screen::Home => Self::Home,
-                Screen::SystemHub => Self::SystemHub,
                 Screen::Controller => Self::Controller,
                 Screen::Arcade => Self::Arcade,
                 Screen::Settings => Self::Settings,
@@ -2773,7 +3012,7 @@ mod macos {
         fn label(self) -> &'static str {
             match self {
                 Self::Home => "Home",
-                Self::SystemHub => "SNES System Hub",
+                Self::SystemHub => "System Overview",
                 Self::Arcade => "Arcade",
                 Self::ArcadeSearch => "Arcade Search",
                 Self::ArcadeCrossfade => "Arcade Crossfade",
@@ -3139,6 +3378,7 @@ mod macos {
         orientation: ScreenOrientation,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
         settings_page_transition_demo: bool,
+        panel_transition_demo: bool,
         navigation_transition_demo_reverse: bool,
         navigation_transition_duration_ms: Option<u64>,
         list_scenes: bool,
@@ -3167,6 +3407,7 @@ mod macos {
             let mut orientation = ScreenOrientation::Normal;
             let mut navigation_transition_demo = None;
             let mut settings_page_transition_demo = false;
+            let mut panel_transition_demo = false;
             let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_duration_ms = None;
             let mut list_scenes = false;
@@ -3262,6 +3503,9 @@ mod macos {
                                 )
                             })?);
                     }
+                    "--panel-transition-demo" => {
+                        panel_transition_demo = true;
+                    }
                     "--settings-page-transition-demo" => {
                         settings_page_transition_demo = true;
                     }
@@ -3317,7 +3561,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--list-scenes] [--check-baselines DIR | --matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--cold-start auto|force|skip] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
+                            "usage: mister-magik-ui-preview [--list-scenes] [--check-baselines DIR | --matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--cold-start auto|force|skip] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo | --panel-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-native-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -3355,6 +3599,7 @@ mod macos {
             if navigation_transition_demo_reverse
                 && navigation_transition_demo.is_none()
                 && !settings_page_transition_demo
+                && !panel_transition_demo
             {
                 return Err(
                     "--navigation-transition-demo-reverse requires a navigation transition demo"
@@ -3385,6 +3630,7 @@ mod macos {
                 orientation,
                 navigation_transition_demo,
                 settings_page_transition_demo,
+                panel_transition_demo,
                 navigation_transition_demo_reverse,
                 navigation_transition_duration_ms,
                 list_scenes,
@@ -3401,6 +3647,7 @@ mod macos {
         #[default]
         Hdmi,
         Crt240p,
+        CrtNative240p,
         Crt288p,
         Crt480p,
         Crt576p,
@@ -3411,6 +3658,7 @@ mod macos {
             match value.trim().to_ascii_lowercase().as_str() {
                 "hdmi" => Ok(Self::Hdmi),
                 "crt-240p" | "crt-240p60" => Ok(Self::Crt240p),
+                "crt-native-240p" => Ok(Self::CrtNative240p),
                 "crt-288p" | "crt-288p50" => Ok(Self::Crt288p),
                 "crt" | "crt-480p" | "crt-480p60" => Ok(Self::Crt480p),
                 "crt-576p" | "crt-576p50" => Ok(Self::Crt576p),
@@ -3427,7 +3675,7 @@ mod macos {
         const fn route(self) -> ResolvedOutputRoute {
             match self {
                 Self::Hdmi => ResolvedOutputRoute::Hdmi,
-                Self::Crt240p => ResolvedOutputRoute::Crt240p60,
+                Self::Crt240p | Self::CrtNative240p => ResolvedOutputRoute::Crt240p60,
                 Self::Crt288p => ResolvedOutputRoute::Crt288p50,
                 Self::Crt480p => ResolvedOutputRoute::Crt480p60,
                 Self::Crt576p => ResolvedOutputRoute::Crt576p50,
@@ -3437,7 +3685,7 @@ mod macos {
         const fn framebuffer_size(self) -> (usize, usize) {
             match self {
                 Self::Hdmi => (HDMI_FRAME_WIDTH, HDMI_FRAME_HEIGHT),
-                Self::Crt240p => (640, 240),
+                Self::Crt240p | Self::CrtNative240p => (640, 240),
                 Self::Crt288p => (640, 288),
                 Self::Crt480p => (640, 480),
                 Self::Crt576p => (640, 576),
@@ -3479,7 +3727,7 @@ mod macos {
         fn display_resolution_index(self) -> usize {
             let id = match self {
                 Self::Hdmi => "hdmi-1920x1080p60",
-                Self::Crt240p => "crt-240p60",
+                Self::Crt240p | Self::CrtNative240p => "crt-240p60",
                 Self::Crt288p => "crt-288p50",
                 Self::Crt480p => "crt-480p60",
                 Self::Crt576p => "crt-576p50",
@@ -3501,6 +3749,7 @@ mod macos {
             match self {
                 Self::Hdmi => "display:hdmi",
                 Self::Crt240p => "display:crt-240p",
+                Self::CrtNative240p => "display:crt-native-240p",
                 Self::Crt288p => "display:crt-288p",
                 Self::Crt480p => "display:crt-480p",
                 Self::Crt576p => "display:crt-576p",
@@ -3511,6 +3760,7 @@ mod macos {
             match self {
                 Self::Hdmi => "hdmi",
                 Self::Crt240p => "crt-240p",
+                Self::CrtNative240p => "crt-native-240p",
                 Self::Crt288p => "crt-288p",
                 Self::Crt480p => "crt-480p",
                 Self::Crt576p => "crt-576p",
@@ -3708,8 +3958,8 @@ mod macos {
                         include_bytes!("../../assets/fonts/jersey25-41px.mmbf"),
                     ),
                     (
-                        "cog-backdrop-412x374.rgb565",
-                        include_bytes!("../../assets/ui/settings/cog-backdrop-412x374.rgb565"),
+                        "cog-backdrop-412x374.rgb888",
+                        include_bytes!("../../assets/ui/settings/cog-backdrop-412x374.rgb888"),
                     ),
                 ]),
                 font_bundle_sha256: bundle_sha256(&[
@@ -4074,7 +4324,7 @@ mod macos {
         arcade.set_preview_state(ViewPreviewState::Empty);
         navigation.set_screen(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => LauncherScreen::Controller,
-            Scenario::SystemHub => LauncherScreen::SystemHub,
+            Scenario::SystemHub => LauncherScreen::Arcade,
             Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => {
                 LauncherScreen::Arcade
             }
@@ -4086,6 +4336,11 @@ mod macos {
             Scenario::Licenses => LauncherScreen::Licenses,
             Scenario::LicenseText => LauncherScreen::LicenseText,
             _ => LauncherScreen::Home,
+        });
+        navigation.set_system_page_mode(if scenario == Scenario::SystemHub {
+            mister_magik_ui::launcher::SystemPageMode::Hub
+        } else {
+            mister_magik_ui::launcher::SystemPageMode::List
         });
         navigation.set_menu_title("MiSTer MagiK".into());
         navigation.set_menu_breadcrumb("Systems".into());
@@ -5091,7 +5346,6 @@ mod macos {
                 "controller-setup",
                 "about",
                 "licenses",
-                "startup",
                 "confirm",
                 "catalog-scan",
                 "background-scan",

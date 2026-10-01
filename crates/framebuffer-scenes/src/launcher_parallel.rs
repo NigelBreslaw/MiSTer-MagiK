@@ -12,6 +12,7 @@ use std::{
 };
 
 pub const CAROUSEL_SPLIT: usize = 629;
+#[cfg(test)]
 const CAROUSEL_LEFT: usize = 296;
 const CAROUSEL_RIGHT: usize = 934;
 /// Neither band may shrink below this; a pose change cannot strand one core.
@@ -21,13 +22,13 @@ const SPLIT_ALIGNMENT: usize = 8;
 /// Move the band boundary a quarter of the way to where both bands would
 /// finish together. Each band's measured cost is spread evenly across its
 /// columns; carousel poses change little between consecutive frames.
-fn balanced_split(split: usize, primary_us: u64, secondary_us: u64) -> usize {
+fn balanced_split(left: usize, split: usize, primary_us: u64, secondary_us: u64) -> usize {
     if primary_us == 0 || secondary_us == 0 {
         return split;
     }
-    let primary_rate = primary_us as f64 / (split - CAROUSEL_LEFT) as f64;
+    let primary_rate = primary_us as f64 / (split - left) as f64;
     let secondary_rate = secondary_us as f64 / (CAROUSEL_RIGHT - split) as f64;
-    let ideal = (primary_rate * CAROUSEL_LEFT as f64 + secondary_rate * CAROUSEL_RIGHT as f64)
+    let ideal = (primary_rate * left as f64 + secondary_rate * CAROUSEL_RIGHT as f64)
         / (primary_rate + secondary_rate);
     let error = ideal - split as f64;
     if error.abs() < SPLIT_ALIGNMENT as f64 {
@@ -41,7 +42,7 @@ fn balanced_split(split: usize, primary_us: u64, secondary_us: u64) -> usize {
         .copysign(error);
     let aligned =
         ((split as f64 + step) / SPLIT_ALIGNMENT as f64).round() as usize * SPLIT_ALIGNMENT;
-    aligned.clamp(CAROUSEL_LEFT + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND)
+    aligned.clamp(left + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND)
 }
 /// Optional cumulative per-thread clocks in microseconds, supplied by the
 /// application that owns the OS.
@@ -187,7 +188,10 @@ impl ParallelLauncherRenderer {
         destination: &mut [Rgb565Pixel],
     ) -> Result<ParallelFrameTiming, String> {
         let started = Instant::now();
-        let split = self.split;
+        let left = preparer.carousel_clip().0;
+        let split = self
+            .split
+            .clamp(left + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND);
         self.requests
             .as_ref()
             .ok_or("card renderer stopped")?
@@ -201,12 +205,7 @@ impl ParallelLauncherRenderer {
             .map_err(|e| e.to_string())?;
         let primary_started = Instant::now();
         let sample = ThreadSample::now(self.clocks);
-        preparer.render_tile_into(
-            request,
-            &mut self.primary,
-            destination,
-            (CAROUSEL_LEFT, split),
-        );
+        preparer.render_tile_into(request, &mut self.primary, destination, (left, split));
         let (primary_cpu_us, primary_run_delay_us) = ThreadSample::now(self.clocks).since(sample);
         let primary_us = micros(primary_started);
         let waiting = Instant::now();
@@ -227,6 +226,7 @@ impl ParallelLauncherRenderer {
         // Balance what each band adds to the critical path, including the
         // helper's wake-up; the primary band runs on the presenting thread.
         self.split = balanced_split(
+            left,
             split,
             primary_us,
             completed.wall_us + completed.start_delay_us,
@@ -278,9 +278,9 @@ mod tests {
     #[test]
     fn split_moves_toward_balance_and_stays_bounded() {
         // Equal cost per column leaves a balanced boundary in place.
-        assert_eq!(balanced_split(616, 3200, 3180), 616);
+        assert_eq!(balanced_split(CAROUSEL_LEFT, 616, 3200, 3180), 616);
         // A slower helper band moves the boundary right, by a bounded step.
-        let next = balanced_split(CAROUSEL_SPLIT, 11_300, 13_300);
+        let next = balanced_split(CAROUSEL_LEFT, CAROUSEL_SPLIT, 11_300, 13_300);
         assert!(
             next > CAROUSEL_SPLIT && next <= CAROUSEL_SPLIT + 24,
             "{next}"
@@ -292,7 +292,7 @@ mod tests {
         for _ in 0..40 {
             let primary = ((split - CAROUSEL_LEFT) as f64 * left_rate) as u64;
             let secondary = ((CAROUSEL_RIGHT - split) as f64 * right_rate) as u64;
-            split = balanced_split(split, primary, secondary);
+            split = balanced_split(CAROUSEL_LEFT, split, primary, secondary);
         }
         let ideal = (left_rate * CAROUSEL_LEFT as f64 + right_rate * CAROUSEL_RIGHT as f64)
             / (left_rate + right_rate);
@@ -303,12 +303,15 @@ mod tests {
         // Extremes cannot starve either band.
         let (mut right, mut left) = (CAROUSEL_SPLIT, CAROUSEL_SPLIT);
         for _ in 0..40 {
-            right = balanced_split(right, 1, 1_000_000);
-            left = balanced_split(left, 1_000_000, 1);
+            right = balanced_split(CAROUSEL_LEFT, right, 1, 1_000_000);
+            left = balanced_split(CAROUSEL_LEFT, left, 1_000_000, 1);
         }
         assert_eq!(right, CAROUSEL_RIGHT - MINIMUM_BAND);
         assert_eq!(left, CAROUSEL_LEFT + MINIMUM_BAND);
-        assert_eq!(balanced_split(CAROUSEL_SPLIT, 0, 5_000), CAROUSEL_SPLIT);
+        assert_eq!(
+            balanced_split(CAROUSEL_LEFT, CAROUSEL_SPLIT, 0, 5_000),
+            CAROUSEL_SPLIT
+        );
     }
 
     #[test]
@@ -354,51 +357,67 @@ mod tests {
             clock: "21:37",
             level: LauncherLevel::Root,
         };
-        let mut serial = LauncherScene::new(960, 540).prepare(data);
+        let mut serial;
         let mut parallel = LauncherScene::new(960, 540).prepare(data);
         let preparer = parallel.frame_preparer();
         let mut renderer = ParallelLauncherRenderer::new(preparer.clone(), None, None).unwrap();
         let mut generation = 0;
-        for split in [
-            CAROUSEL_LEFT + MINIMUM_BAND,
-            456,
-            600,
-            CAROUSEL_SPLIT,
-            777,
-            CAROUSEL_RIGHT - MINIMUM_BAND,
+        // One persistent renderer crosses root/nested boundaries in production.
+        for level in [
+            LauncherLevel::Root,
+            LauncherLevel::Nested(crate::launcher::NestedLevel {
+                path: &["CONSOLES"],
+                games: 123,
+                children: 5,
+                children_label: "MAKERS",
+                detail: None,
+                accent: 0x2a7f,
+            }),
+            LauncherLevel::Root,
         ] {
-            for (direction, progress) in [
-                (BrowseDirection::Right, 1),
-                (BrowseDirection::Right, 23_000),
-                (BrowseDirection::Left, 40_000),
-                (BrowseDirection::Left, 65_535),
+            serial = LauncherScene::new(960, 540).prepare(LauncherData { level, ..data });
+            parallel = LauncherScene::new(960, 540).prepare(LauncherData { level, ..data });
+            for split in [
+                CAROUSEL_LEFT + MINIMUM_BAND,
+                456,
+                600,
+                CAROUSEL_SPLIT,
+                777,
+                CAROUSEL_RIGHT - MINIMUM_BAND,
             ] {
-                let frame = BrowseFrame {
-                    selected: 0,
-                    target: 1,
-                    phase: BrowsePhase::Flipping,
-                    direction: Some(direction),
-                    progress_millis: progress,
-                    duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
-                };
-                generation += 1;
-                renderer.split = split;
-                let timing = parallel
-                    .render_parallel_frame(
-                        &mut renderer,
-                        LauncherFrameRequest {
-                            frame,
-                            timestamp_us: 0,
-                            generation,
-                        },
-                    )
-                    .unwrap();
-                assert_eq!(timing.split, split);
-                serial.render_frame(frame);
-                assert!(
-                    parallel.pixels() == serial.pixels(),
-                    "split {split}, {direction:?} {progress}"
-                );
+                for (direction, progress) in [
+                    (BrowseDirection::Right, 1),
+                    (BrowseDirection::Right, 23_000),
+                    (BrowseDirection::Left, 40_000),
+                    (BrowseDirection::Left, 65_535),
+                ] {
+                    let frame = BrowseFrame {
+                        selected: 0,
+                        target: 1,
+                        phase: BrowsePhase::Flipping,
+                        direction: Some(direction),
+                        progress_millis: progress,
+                        duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
+                    };
+                    generation += 1;
+                    renderer.split = split;
+                    let timing = parallel
+                        .render_parallel_frame(
+                            &mut renderer,
+                            LauncherFrameRequest {
+                                frame,
+                                timestamp_us: 0,
+                                generation,
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(timing.split, split);
+                    serial.render_frame(frame);
+                    assert!(
+                        parallel.pixels() == serial.pixels(),
+                        "split {split}, {direction:?} {progress}"
+                    );
+                }
             }
         }
     }
