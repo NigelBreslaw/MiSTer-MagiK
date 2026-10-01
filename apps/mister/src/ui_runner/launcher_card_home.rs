@@ -683,13 +683,16 @@ fn home_renderer(prepared: &PreparedLauncher) -> Box<ParallelLauncherRenderer> {
         };
         apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
     }
-    let clock = std::env::var_os("MISTER_MAGIK2_STATE_ROOT")
+    let clocks = std::env::var_os("MISTER_MAGIK2_STATE_ROOT")
         .is_some()
         .then_some(
-            crate::ui_runner::launcher_frame_accounting::cpu_thread_us as fn() -> Option<u64>,
+            mister_magik_framebuffer_scenes::launcher_parallel::ThreadClocks {
+                cpu_us: crate::ui_runner::launcher_frame_accounting::cpu_thread_us,
+                scheduling: crate::ui_runner::launcher_frame_accounting::thread_scheduling,
+            },
         );
     Box::new(
-        ParallelLauncherRenderer::new(prepared.frame_preparer(), Some(setup), clock)
+        ParallelLauncherRenderer::new(prepared.frame_preparer(), Some(setup), clocks)
             .expect("start current card renderer"),
     )
 }

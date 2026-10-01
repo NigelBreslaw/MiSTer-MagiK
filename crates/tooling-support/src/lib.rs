@@ -3,6 +3,7 @@
 pub mod measurement;
 mod preview;
 mod profile;
+pub mod scheduling;
 use measurement::PresentationMetrics;
 use preview::PreviewProducer;
 pub use profile::CpuProfile;
@@ -14,6 +15,8 @@ use std::{
 
 /// Measurement windows start after this device-clock warmup.
 const MEASUREMENT_WARMUP_MS: u64 = 2_000;
+/// The scheduling baseline is taken this long before the window starts.
+const SCHEDULING_SNAPSHOT_LEAD_MS: u64 = 500;
 
 /// Right taps, then a right hold, timed from the measurement window start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +28,9 @@ struct CarouselSequence {
 
 impl CarouselSequence {
     fn from_request(value: &serde_json::Value) -> Option<Self> {
-        let taps = value["taps"].as_u64().filter(|taps| (1..=20).contains(taps))?;
+        let taps = value["taps"]
+            .as_u64()
+            .filter(|taps| (1..=20).contains(taps))?;
         Some(Self {
             taps: taps as u32,
             tap_interval_ms: value["tap_interval_ms"]
@@ -60,6 +65,8 @@ pub struct Session {
     carousel_hold_active: bool,
     carousel_sequence: Option<CarouselSequence>,
     carousel_taps_sent: u32,
+    /// Device ms and system snapshot taken late in the warmup.
+    scheduling_start: Option<(u64, scheduling::Snapshot)>,
 }
 impl Session {
     pub fn from_environment() -> Option<Self> {
@@ -81,6 +88,7 @@ impl Session {
             carousel_hold_active: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
+            scheduling_start: None,
         })
     }
     pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
@@ -213,6 +221,17 @@ impl Session {
             self.measurement_duration_ms.unwrap_or(5_000)
         };
         let mut completed = false;
+        // Scanning procfs blocks for tens of milliseconds and a helper thread
+        // would compete with rendering, so snapshot inside the warmup instead.
+        if self.metrics.window.is_none()
+            && self.metrics.window_start.is_none()
+            && self.scheduling_start.is_none()
+            && self.metrics.motion_started_ms.is_some_and(|start| {
+                now - start >= MEASUREMENT_WARMUP_MS - SCHEDULING_SNAPSHOT_LEAD_MS
+            })
+        {
+            self.scheduling_start = Some((now, scheduling::snapshot()));
+        }
         if self.metrics.window.is_none() {
             if self.metrics.window_start.is_none()
                 && self
@@ -232,6 +251,16 @@ impl Session {
                 .is_some_and(|(start, _)| now - start >= duration)
             {
                 self.metrics.finish_window(now, width, height, instrumented);
+                if let Some((taken_ms, start)) = self.scheduling_start.take()
+                    && let Some(window) = self.metrics.window.as_mut()
+                {
+                    // Linux reports /proc/stat in USER_HZ, which is 100 on ARM.
+                    let mut report = scheduling::report(&start, &scheduling::snapshot(), 100);
+                    let window_start = window["start_ms"].as_u64().unwrap_or(taken_ms);
+                    report["warmup_ms_included"] =
+                        serde_json::json!(window_start.saturating_sub(taken_ms));
+                    window["scheduling"] = report;
+                }
                 if let Some(profile) = self.profile.take() {
                     profile.finish()?;
                 }
@@ -294,6 +323,7 @@ mod tests {
             carousel_hold_active: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
+            scheduling_start: None,
         };
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());
@@ -385,6 +415,7 @@ mod tests {
             carousel_hold_active: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
+            scheduling_start: None,
         };
         std::fs::write(
             root.join("measure-request"),
@@ -404,7 +435,8 @@ mod tests {
         let mut hold_ended_at = None;
         for ms in (0..14_000).step_by(10) {
             session.metrics.motion_started_ms = Some(
-                (session.start.elapsed().as_millis() as u64).saturating_sub(MEASUREMENT_WARMUP_MS + ms),
+                (session.start.elapsed().as_millis() as u64)
+                    .saturating_sub(MEASUREMENT_WARMUP_MS + ms),
             );
             taps += u32::from(session.carousel_tap_due());
             match session.carousel_hold_change() {
@@ -436,7 +468,10 @@ mod tests {
         .unwrap();
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
-        assert!(session.carousel_sequence.is_none(), "out-of-range sequences are ignored");
+        assert!(
+            session.carousel_sequence.is_none(),
+            "out-of-range sequences are ignored"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

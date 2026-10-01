@@ -10251,6 +10251,16 @@ pub(super) fn run_launcher_loop(
                                 primary_cpu_us: timing.primary_cpu_us,
                                 secondary_cpu_us: timing.secondary_cpu_us,
                                 split: timing.split as u64,
+                                primary_run_delay_us: timing
+                                    .primary_scheduling
+                                    .map(|s| s.run_delay_us),
+                                primary_timeslices: timing.primary_scheduling.map(|s| s.timeslices),
+                                secondary_run_delay_us: timing
+                                    .secondary_scheduling
+                                    .map(|s| s.run_delay_us),
+                                secondary_timeslices: timing
+                                    .secondary_scheduling
+                                    .map(|s| s.timeslices),
                             };
                             card_work_timing = Some(work);
                             if tooling.metrics.window_start.is_some()

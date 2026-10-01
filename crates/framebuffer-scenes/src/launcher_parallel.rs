@@ -43,6 +43,51 @@ pub fn balanced_split(split: usize, primary_us: u64, secondary_us: u64) -> usize
         ((split as f64 + step) / SPLIT_ALIGNMENT as f64).round() as usize * SPLIT_ALIGNMENT;
     aligned.clamp(CAROUSEL_LEFT + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND)
 }
+/// Cumulative scheduler accounting for the calling thread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ThreadScheduling {
+    /// Time spent runnable but waiting for a CPU, in microseconds.
+    pub run_delay_us: u64,
+    /// Times the thread was given a CPU.
+    pub timeslices: u64,
+}
+
+/// Optional per-thread clocks, supplied by the application that owns the OS.
+#[derive(Clone, Copy)]
+pub struct ThreadClocks {
+    pub cpu_us: fn() -> Option<u64>,
+    pub scheduling: fn() -> Option<ThreadScheduling>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ThreadSample {
+    cpu_us: Option<u64>,
+    scheduling: Option<ThreadScheduling>,
+}
+
+impl ThreadSample {
+    fn now(clocks: Option<ThreadClocks>) -> Self {
+        clocks.map_or_else(Self::default, |clocks| Self {
+            cpu_us: (clocks.cpu_us)(),
+            scheduling: (clocks.scheduling)(),
+        })
+    }
+
+    /// CPU time, run delay and timeslices elapsed since `start`.
+    fn since(self, start: Self) -> (Option<u64>, Option<ThreadScheduling>) {
+        (
+            cpu_delta(start.cpu_us, self.cpu_us),
+            start
+                .scheduling
+                .zip(self.scheduling)
+                .map(|(s, e)| ThreadScheduling {
+                    run_delay_us: e.run_delay_us.saturating_sub(s.run_delay_us),
+                    timeslices: e.timeslices.saturating_sub(s.timeslices),
+                }),
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ParallelFrameTiming {
     pub total_us: u64,
@@ -54,6 +99,10 @@ pub struct ParallelFrameTiming {
     pub merge_us: u64,
     pub primary_cpu_us: Option<u64>,
     pub secondary_cpu_us: Option<u64>,
+    /// Scheduler accounting while each band rendered: run delay is time the
+    /// thread was runnable but another task held its CPU.
+    pub primary_scheduling: Option<ThreadScheduling>,
+    pub secondary_scheduling: Option<ThreadScheduling>,
     /// First helper column for this frame.
     pub split: usize,
 }
@@ -68,6 +117,7 @@ struct Completion {
     buffer: PreparedLauncherFrame,
     wall_us: u64,
     cpu_us: Option<u64>,
+    scheduling: Option<ThreadScheduling>,
     start_delay_us: u64,
     finished_at: Instant,
 }
@@ -77,7 +127,7 @@ pub struct ParallelLauncherRenderer {
     requests: Option<SyncSender<Job>>,
     completions: Receiver<Completion>,
     worker: Option<JoinHandle<()>>,
-    cpu_clock: Option<fn() -> Option<u64>>,
+    clocks: Option<ThreadClocks>,
     storage_bytes: usize,
     split: usize,
 }
@@ -91,7 +141,7 @@ impl ParallelLauncherRenderer {
     pub fn new(
         preparer: LauncherFramePreparer,
         worker_setup: Option<fn()>,
-        cpu_clock: Option<fn() -> Option<u64>>,
+        clocks: Option<ThreadClocks>,
     ) -> Result<Self, String> {
         let primary = preparer.new_direct_tile_buffer();
         let helper = preparer.new_tile_buffer();
@@ -106,13 +156,13 @@ impl ParallelLauncherRenderer {
                 }
                 while let Ok(mut job) = received.recv() {
                     let started_at = Instant::now();
-                    let cpu_start = cpu_clock.and_then(|clock| clock());
+                    let sample = ThreadSample::now(clocks);
                     job.preparer.render_tile(
                         job.request,
                         &mut job.buffer,
                         (job.split, CAROUSEL_RIGHT),
                     );
-                    let cpu_us = cpu_delta(cpu_start, cpu_clock.and_then(|clock| clock()));
+                    let (cpu_us, scheduling) = ThreadSample::now(clocks).since(sample);
                     let wall_us = micros(started_at);
                     let finished_at = Instant::now();
                     if completed
@@ -120,6 +170,7 @@ impl ParallelLauncherRenderer {
                             buffer: job.buffer,
                             wall_us,
                             cpu_us,
+                            scheduling,
                             start_delay_us: started_at
                                 .saturating_duration_since(job.dispatched_at)
                                 .as_micros() as u64,
@@ -138,7 +189,7 @@ impl ParallelLauncherRenderer {
             requests: Some(requests),
             completions,
             worker: Some(worker),
-            cpu_clock,
+            clocks,
             storage_bytes,
             split: CAROUSEL_SPLIT,
         })
@@ -163,14 +214,14 @@ impl ParallelLauncherRenderer {
             })
             .map_err(|e| e.to_string())?;
         let primary_started = Instant::now();
-        let cpu_start = self.cpu_clock.and_then(|clock| clock());
+        let sample = ThreadSample::now(self.clocks);
         preparer.render_tile_into(
             request,
             &mut self.primary,
             destination,
             (CAROUSEL_LEFT, split),
         );
-        let primary_cpu_us = cpu_delta(cpu_start, self.cpu_clock.and_then(|clock| clock()));
+        let (primary_cpu_us, primary_scheduling) = ThreadSample::now(self.clocks).since(sample);
         let primary_us = micros(primary_started);
         let waiting = Instant::now();
         let completed = self.completions.recv().map_err(|e| e.to_string())?;
@@ -206,6 +257,8 @@ impl ParallelLauncherRenderer {
             merge_us,
             primary_cpu_us,
             secondary_cpu_us: completed.cpu_us,
+            primary_scheduling,
+            secondary_scheduling: completed.scheduling,
             split,
         })
     }

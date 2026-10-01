@@ -2830,6 +2830,27 @@ pub(super) fn cpu_thread_us() -> Option<u64> {
     clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
+/// Calling thread's cumulative run delay and timeslices. Measurement only:
+/// each call reads procfs.
+#[cfg(target_os = "linux")]
+pub(super) fn thread_scheduling()
+-> Option<mister_magik_framebuffer_scenes::launcher_parallel::ThreadScheduling> {
+    let value = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    let mut fields = value.split_whitespace().skip(1);
+    Some(
+        mister_magik_framebuffer_scenes::launcher_parallel::ThreadScheduling {
+            run_delay_us: fields.next()?.parse::<u64>().ok()? / 1_000,
+            timeslices: fields.next()?.parse().ok()?,
+        },
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn thread_scheduling()
+-> Option<mister_magik_framebuffer_scenes::launcher_parallel::ThreadScheduling> {
+    None
+}
+
 #[cfg(not(target_os = "linux"))]
 pub(super) fn cpu_thread_us() -> Option<u64> {
     None

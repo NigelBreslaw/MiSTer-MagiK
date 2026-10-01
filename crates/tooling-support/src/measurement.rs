@@ -14,6 +14,12 @@ pub struct FrameWorkTiming {
     pub secondary_cpu_us: Option<u64>,
     /// First helper column; zero when the producer has no band split.
     pub split: u64,
+    /// Time each band's thread was runnable while another task held its CPU,
+    /// and how often it was scheduled, while that band rendered.
+    pub primary_run_delay_us: Option<u64>,
+    pub primary_timeslices: Option<u64>,
+    pub secondary_run_delay_us: Option<u64>,
+    pub secondary_timeslices: Option<u64>,
 }
 impl FrameWorkTiming {
     fn json(self) -> Value {
@@ -21,7 +27,9 @@ impl FrameWorkTiming {
             "wait_us":self.wait_us,"helper_start_delay_us":self.helper_start_delay_us,
             "completion_delivery_us":self.completion_delivery_us,"merge_us":self.merge_us,
             "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us,
-            "split":self.split})
+            "split":self.split,
+            "primary_run_delay_us":self.primary_run_delay_us,"primary_timeslices":self.primary_timeslices,
+            "secondary_run_delay_us":self.secondary_run_delay_us,"secondary_timeslices":self.secondary_timeslices})
     }
 }
 
@@ -185,6 +193,8 @@ impl PresentationMetrics {
             "merge",
             "primary_cpu",
             "secondary_cpu",
+            "primary_run_delay",
+            "secondary_run_delay",
         ]
         .into_iter()
         .enumerate()
@@ -201,7 +211,9 @@ impl PresentationMetrics {
                     5 => Some(t.completion_delivery_us),
                     6 => Some(t.merge_us),
                     7 => t.primary_cpu_us,
-                    _ => t.secondary_cpu_us,
+                    8 => t.secondary_cpu_us,
+                    9 => t.primary_run_delay_us,
+                    _ => t.secondary_run_delay_us,
                 })
                 .collect::<Vec<_>>();
             samples.sort_unstable();
