@@ -11,6 +11,7 @@ from actions import (
     launcher_smoke,
     launcher_idle,
     launcher_motion,
+    launcher_screensaver,
     launcher_navigation,
     launcher_catalog,
     launcher_setting,
@@ -132,6 +133,12 @@ def test_motion(application_session, repetition):
         run,
         {"phase": "motion", "outcome": "measured", "repetition": repetition, **result},
     )
+
+
+def test_screensaver(application_session):
+    app, agent, run, _ = application_session
+    result = launcher_screensaver(app, agent)
+    append_event(run, {"phase": "screensaver", "outcome": "measured", **result})
 
 
 def test_motion_held(application_session):

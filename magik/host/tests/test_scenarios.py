@@ -444,3 +444,42 @@ def test_hold_release_waits_for_a_late_window_to_complete(monkeypatch, workload)
     assert calls[-1] == "release"
     assert calls[-2] == "metrics"
     assert calls.count("metrics") == 1 + len(late) + 1
+
+
+def test_screensaver_is_requested_for_the_window_then_woken(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    evidence = {
+        **window(),
+        "elapsed_ms": 10_000,
+        "end_ms": 12_000,
+        "presentations": 600,
+        "screensaver_presentations": 600,
+        "forced_clock_changes": 0,
+    }
+    replies = iter([{"window": None}, {"sha256": "app", "window": evidence}])
+    agent = SimpleNamespace(
+        expected_sha256="app",
+        metrics=lambda: next(replies),
+        _successful=lambda op, fields: calls.append(("measure", fields)),
+    )
+    monkeypatch.setattr(
+        actions, "_press_key", lambda _, key: calls.append(("key", key))
+    )
+    monkeypatch.setattr(actions, "_wait", lambda *_: None)
+    result = actions.launcher_screensaver(
+        SimpleNamespace(first_window=SimpleNamespace()), agent, sleep=lambda _: None
+    )
+    assert calls[1][1]["launcher_screensaver"] is True
+    assert calls[1][1]["duration_ms"] == 10_000
+    assert calls[-2] == ("measure", {"launcher_hold": "release"})
+    assert calls[-1] == ("key", "")
+    assert result["workload"] == "launcher-screensaver"
+
+    partial = {**evidence, "screensaver_presentations": 599}
+    replies = iter([{"window": None}, {"sha256": "app", "window": partial}])
+    with pytest.raises(AssertionError, match="whole window"):
+        actions.launcher_screensaver(
+            SimpleNamespace(first_window=SimpleNamespace()), agent, sleep=lambda _: None
+        )

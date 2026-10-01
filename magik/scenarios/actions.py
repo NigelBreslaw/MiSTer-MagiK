@@ -481,6 +481,64 @@ def launcher_motion(
     }
 
 
+SCREENSAVER_WINDOW_MS = 10_000
+
+
+def launcher_screensaver(application, agent, *, sleep=time.sleep):
+    """Measure the screensaver, started on request and held for the window."""
+    if application.first_window is None:
+        raise AssertionError("real launcher window is unavailable")
+    _press_key(application, "\uf729")  # Slint Key.Home
+    _wait(lambda: not _settings_open(application), "Home did not close Settings")
+    sleep(1)
+    previous = agent.metrics().get("window")
+    seconds = SCREENSAVER_WINDOW_MS / 1000
+    agent._successful(
+        "measure",
+        {
+            "launcher_clock": "fixed",
+            "launcher_fallback": False,
+            "launcher_hold": False,
+            "launcher_screensaver": True,
+            "duration_ms": SCREENSAVER_WINDOW_MS,
+        },
+    )
+    try:
+        sleep(2 + seconds + 0.4)
+        metrics = _completed_window_metrics(agent, sleep)
+    finally:
+        # Cancel the request, then wake the launcher like a user would.
+        agent._successful("measure", {"launcher_hold": "release"})
+        _press_key(application, "\uf729")
+    if metrics.get("sha256") != agent.expected_sha256:
+        raise AssertionError("metrics belong to another application")
+    window = metrics.get("window")
+    if not isinstance(window, dict) or window.get("instrumented") is not False:
+        raise AssertionError(
+            "real launcher returned no matching measurement window "
+            f"(device elapsed_ms={metrics.get('elapsed_ms')}, window={window!r})"
+        )
+    if not seconds * 1000 <= window.get("elapsed_ms", 0) <= (seconds + 1) * 1000:
+        raise AssertionError("real launcher measurement duration is invalid")
+    if isinstance(previous, dict) and window.get("start_ms", -1) <= previous.get(
+        "end_ms", -1
+    ):
+        raise AssertionError("measurement returned a previous window")
+    if window.get("evidence_error"):
+        raise AssertionError(window["evidence_error"])
+    if window.get("presentations", 0) <= 0:
+        raise AssertionError("screensaver produced no measured presentations")
+    if window.get("screensaver_presentations") != window["presentations"]:
+        raise AssertionError("screensaver was not shown for the whole window")
+    return {
+        **window,
+        "workload": "launcher-screensaver",
+        "sha256": agent.expected_sha256,
+        "pid": metrics.get("pid"),
+        "warmup_seconds": 2,
+    }
+
+
 def validate_development_paths(context):
     if not isinstance(context, dict):
         raise AssertionError("application did not report its runtime paths")

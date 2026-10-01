@@ -127,6 +127,8 @@ pub struct PadPool {
     controller_persistence: mister_magik_controller_registry::ControllerPersistence,
     controller_submit_error: Option<String>,
     last_rescan: Instant,
+    /// Hotplug rescans walk /dev and sysfs; they yield to UI motion.
+    rescan_deferral: mister_magik_catalog::ui_motion::Deferral,
     device_discovery: Option<DeviceDiscovery>,
     input_hub: Option<InputHub>,
     next_device_generation: u64,
@@ -182,6 +184,7 @@ impl PadPool {
             controller_persistence,
             controller_submit_error: None,
             last_rescan: Instant::now(),
+            rescan_deferral: mister_magik_catalog::ui_motion::Deferral::default(),
             device_discovery: Some(DeviceDiscovery::start()?),
             input_hub,
             next_device_generation,
@@ -565,7 +568,9 @@ impl PadPool {
     }
 
     fn request_device_discovery_if_due(&mut self) {
-        if self.last_rescan.elapsed() < PAD_RESCAN_INTERVAL {
+        if self.last_rescan.elapsed() < PAD_RESCAN_INTERVAL
+            || !self.rescan_deferral.allows(Instant::now())
+        {
             return;
         }
         if let Some(discovery) = self.device_discovery.as_ref() {
@@ -694,6 +699,7 @@ impl PadPool {
             controller_persistence,
             controller_submit_error: None,
             last_rescan: Instant::now(),
+            rescan_deferral: mister_magik_catalog::ui_motion::Deferral::default(),
             device_discovery: None,
             input_hub: None,
             next_device_generation: 2,
@@ -1696,6 +1702,7 @@ mod tests {
             controller_persistence,
             controller_submit_error: None,
             last_rescan: Instant::now(),
+            rescan_deferral: mister_magik_catalog::ui_motion::Deferral::default(),
             device_discovery: None,
             input_hub: None,
             next_device_generation: 1,

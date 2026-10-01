@@ -1354,6 +1354,12 @@ impl LauncherFrameAccounting {
                 && cpu_profile::screensaver_profile_state() == "complete")
     }
 
+    /// A status write postponed by UI motion for the full motion bound.
+    pub(super) fn status_write_overdue(&self) -> bool {
+        self.last_status_write.elapsed()
+            >= Duration::from_secs(1) + mister_magik_catalog::ui_motion::MAX_DEFERRAL
+    }
+
     pub(super) fn request_status_write(&mut self) {
         self.last_status_write = Instant::now() - Duration::from_secs(2);
     }

@@ -83,6 +83,7 @@ pub struct Counters {
     pub card_prepare_us: u64,
     pub card_fallback_copies: u64,
     pub card_fallback_copy_pixels: u64,
+    pub screensaver_presentations: u64,
 }
 #[derive(Default)]
 pub struct PresentationMetrics {
@@ -252,6 +253,8 @@ impl PresentationMetrics {
             json!(cpu_us.map(|us| us as f64 / ((end_ms - start_ms).max(1) as f64 * 10.0)));
         window["card_fallback_copies"] =
             json!(c.card_fallback_copies - baseline.card_fallback_copies);
+        window["screensaver_presentations"] =
+            json!(c.screensaver_presentations - baseline.screensaver_presentations);
         window["card_fallback_copy_pixels"] =
             json!(c.card_fallback_copy_pixels - baseline.card_fallback_copy_pixels);
     }

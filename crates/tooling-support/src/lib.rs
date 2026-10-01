@@ -15,6 +15,9 @@ use std::{
 
 /// Measurement windows start after this device-clock warmup.
 const MEASUREMENT_WARMUP_MS: u64 = 2_000;
+/// Live metrics refresh while the UI is idle, and at most this often in motion.
+const PERIODIC_WRITE_INTERVAL: Duration = Duration::from_millis(200);
+const MOTION_WRITE_INTERVAL: Duration = Duration::from_secs(5);
 /// The scheduling baseline is taken this long before the window starts.
 const SCHEDULING_SNAPSHOT_LEAD_MS: u64 = 500;
 
@@ -67,6 +70,10 @@ pub struct Session {
     carousel_taps_sent: u32,
     /// Device ms and system snapshot taken late in the warmup.
     scheduling_start: Option<(u64, scheduling::Snapshot)>,
+    /// The application's UI is in motion; periodic writes yield to it.
+    ui_motion: bool,
+    /// The latest request asked for the screensaver during its window.
+    screensaver_requested: bool,
 }
 impl Session {
     pub fn from_environment() -> Option<Self> {
@@ -89,8 +96,17 @@ impl Session {
             carousel_sequence: None,
             carousel_taps_sent: 0,
             scheduling_start: None,
+            ui_motion: false,
+            screensaver_requested: false,
         })
     }
+    /// Report whether the application's UI is in motion. Periodic metric
+    /// writes are postponed while it is, for at most five seconds; completed
+    /// windows and readiness are always written immediately.
+    pub fn set_ui_motion(&mut self, active: bool) {
+        self.ui_motion = active;
+    }
+
     pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
         self.measurement_duration_ms = milliseconds;
     }
@@ -129,6 +145,14 @@ impl Session {
         } else {
             "12:34"
         })
+    }
+
+    /// The screensaver should start immediately and stay up until the
+    /// requested window completes.
+    pub fn screensaver_requested(&self) -> bool {
+        self.screensaver_requested
+            && self.metrics.motion_started_ms.is_some()
+            && self.metrics.window.is_none()
     }
 
     pub fn card_fallback_forced(&self) -> bool {
@@ -192,7 +216,10 @@ impl Session {
                 if value["launcher_hold"] == "release" {
                     self.carousel_hold_requested = false;
                     self.carousel_sequence = None;
+                    self.screensaver_requested = false;
                 } else {
+                    self.screensaver_requested =
+                        value["launcher_screensaver"].as_bool().unwrap_or(false);
                     self.carousel_hold_requested =
                         value["launcher_hold"].as_bool().unwrap_or(false);
                     self.carousel_sequence =
@@ -271,7 +298,10 @@ impl Session {
             self.write("probe-ready.json", &self.metrics.json(width, height, now))?;
             self.ready = true;
         }
-        if completed || self.last_write.elapsed() >= Duration::from_millis(200) {
+        let since_write = self.last_write.elapsed();
+        let periodic_write_due = since_write >= PERIODIC_WRITE_INTERVAL
+            && (!self.ui_motion || since_write >= MOTION_WRITE_INTERVAL);
+        if completed || periodic_write_due {
             self.write("probe-metrics.json", &self.metrics.json(width, height, now))?;
             self.last_write = Instant::now();
         }
@@ -324,6 +354,8 @@ mod tests {
             carousel_sequence: None,
             carousel_taps_sent: 0,
             scheduling_start: None,
+            ui_motion: false,
+            screensaver_requested: false,
         };
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());
@@ -395,6 +427,45 @@ mod tests {
     }
 
     #[test]
+    fn periodic_metric_writes_yield_to_ui_motion_but_completion_does_not() {
+        let root = std::env::temp_dir().join(format!("magik-motion-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = Session {
+            metrics: PresentationMetrics::default(),
+            start: Instant::now(),
+            root: root.clone(),
+            previews: PreviewProducer::new(),
+            profile: None,
+            last_write: Instant::now() - Duration::from_millis(250),
+            last_request: Instant::now(),
+            ready: true,
+            clock_mode: None,
+            measurement_duration_ms: None,
+            clock_advanced: false,
+            force_card_fallback: false,
+            carousel_hold_requested: false,
+            carousel_hold_active: false,
+            carousel_sequence: None,
+            carousel_taps_sent: 0,
+            scheduling_start: None,
+            ui_motion: true,
+            screensaver_requested: false,
+        };
+        let metrics = root.join("probe-metrics.json");
+        session.tick(16, 8).unwrap();
+        assert!(!metrics.exists(), "motion postpones a routine refresh");
+        session.last_write -= MOTION_WRITE_INTERVAL;
+        session.tick(16, 8).unwrap();
+        assert!(metrics.exists(), "but only for a bounded time");
+        std::fs::remove_file(&metrics).unwrap();
+        session.last_write = Instant::now() - Duration::from_millis(250);
+        session.set_ui_motion(false);
+        session.tick(16, 8).unwrap();
+        assert!(metrics.exists(), "idle refreshes keep their cadence");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn carousel_sequence_taps_then_holds_inside_the_measurement_window() {
         let root = std::env::temp_dir().join(format!("magik-sequence-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -416,6 +487,8 @@ mod tests {
             carousel_sequence: None,
             carousel_taps_sent: 0,
             scheduling_start: None,
+            ui_motion: false,
+            screensaver_requested: false,
         };
         std::fs::write(
             root.join("measure-request"),

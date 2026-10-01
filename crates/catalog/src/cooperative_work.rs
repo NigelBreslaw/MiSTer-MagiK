@@ -3,9 +3,10 @@
 
 //! Process-wide permission with thread-local background-work scope.
 //!
-//! Production keeps permission open continuously and constrains background
-//! phases through CPU affinity and nice levels. Tests can close the permission
-//! bit to verify that checkpoints do not restart work or leak scope. Foreground
+//! Production keeps permission open and constrains background phases through
+//! CPU affinity and nice levels; background scopes also park while the UI is
+//! in motion (see [`crate::ui_motion`]). Tests can close the permission bit to
+//! verify that checkpoints do not restart work or leak scope. Foreground
 //! first-visible work never enters a background scope.
 
 use std::cell::Cell;
@@ -110,6 +111,23 @@ impl Drop for BackgroundScope {
     }
 }
 
+fn paused() -> bool {
+    CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire)) == CatalogWorkMode::Paused
+}
+
+/// Background work waits for UI motion to end, for at most the motion bound.
+fn must_park(parked_at: std::time::Instant) -> bool {
+    paused() || crate::ui_motion::active() && parked_at.elapsed() < crate::ui_motion::MAX_DEFERRAL
+}
+
+/// Wake background scopes parked at a checkpoint so they re-check permission.
+pub(crate) fn wake_parked() {
+    let (lock, signal) = PAUSE_SIGNAL.get_or_init(|| (Mutex::new(()), Condvar::new()));
+    // Taking the lock orders this wake after a parking thread's last check.
+    drop(lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    signal.notify_all();
+}
+
 pub(crate) fn checkpoint() {
     let background = in_background_scope();
     if !background {
@@ -118,17 +136,20 @@ pub(crate) fn checkpoint() {
     CHECKPOINTS.fetch_add(1, Ordering::Relaxed);
     let mode = CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire));
     crate::runtime_thread::apply_catalog_work_mode_affinity(mode);
-    if mode != CatalogWorkMode::Paused {
+    let parked_at = std::time::Instant::now();
+    if !must_park(parked_at) {
         return;
     }
     let (lock, signal) = PAUSE_SIGNAL.get_or_init(|| (Mutex::new(()), Condvar::new()));
     let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     PARK_COUNT.fetch_add(1, Ordering::Relaxed);
     PARKED_THREADS.fetch_add(1, Ordering::AcqRel);
-    while CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire)) == CatalogWorkMode::Paused {
+    while must_park(parked_at) {
+        // Time out to re-check the motion bound; permission changes notify.
         guard = signal
-            .wait(guard)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .wait_timeout(guard, std::time::Duration::from_millis(100))
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0;
     }
     PARKED_THREADS.fetch_sub(1, Ordering::AcqRel);
     crate::runtime_thread::apply_catalog_work_mode_affinity(CatalogWorkMode::from_raw(
@@ -146,6 +167,32 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    #[test]
+    fn background_scope_parks_during_ui_motion_and_resumes_when_it_ends() {
+        let _test_lock = super::TEST_LOCK.lock().unwrap();
+        let _motion = crate::ui_motion::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        set_background_allowed(true);
+        crate::ui_motion::set_active(true);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _scope = BackgroundScope::enter();
+            entered_tx.send(()).unwrap();
+            checkpoint();
+            done_tx.send(()).unwrap();
+        });
+        entered_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(250)).is_err());
+        crate::ui_motion::set_active(false);
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        worker.join().unwrap();
+        // Foreground work never waits for motion.
+        crate::ui_motion::set_active(true);
+        checkpoint();
+        crate::ui_motion::set_active(false);
+    }
     #[test]
     fn background_scope_pauses_and_resumes_without_restarting() {
         let _test_lock = super::TEST_LOCK.lock().unwrap();
