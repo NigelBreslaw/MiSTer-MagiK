@@ -86,7 +86,7 @@ fn bands(crt: bool, hub: bool, width: usize, height: usize) -> ([Band; 7], usize
             x0: 26,
             x1: 488,
             y0: 48,
-            y1: 77,
+            y1: 76,
         };
         result[1] = Band {
             x0: 26,
@@ -127,8 +127,8 @@ pub fn render_into(
         return true;
     }
     output.copy_from_slice(source);
-    let (out_bands, out_count) = bands(crt, !to_list, width, height);
-    let (in_bands, in_count) = bands(crt, to_list, width, height);
+    let (out_bands, out_count) = bands(crt, to_list, width, height);
+    let (in_bands, in_count) = bands(crt, !to_list, width, height);
     // Clear only the panel's subjects; retain chrome and the device exactly.
     for band in out_bands[..out_count]
         .iter()
@@ -230,6 +230,34 @@ fn blit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn incoming_list_uses_list_bands_instead_of_tile_crops() {
+        for (w, h, crt, t) in [(960, 540, false, 230), (640, 240, true, 330)] {
+            let source = vec![Rgb565Pixel(0); w * h];
+            let dest = vec![Rgb565Pixel(0xffff); w * h];
+            let backdrop = vec![Rgb565Pixel(0); w * h];
+            let mut out = source.clone();
+            assert!(render_into(
+                w,
+                h,
+                &source,
+                Some(&dest),
+                &backdrop,
+                crt,
+                true,
+                t,
+                &mut out
+            ));
+            if crt {
+                assert_ne!(out[140 * w + 100].0, 0);
+            } else {
+                assert_ne!(out[250 * w + 100].0, 0);
+                assert_eq!(out[250 * w + 100], out[420 * w + 100]);
+                assert_eq!(out[76 * w + 100], source[76 * w + 100]);
+            }
+        }
+    }
+
     #[test]
     fn panel_preserves_device_and_exact_endpoints() {
         for (w, h, crt) in [(960, 540, false), (640, 240, true)] {
