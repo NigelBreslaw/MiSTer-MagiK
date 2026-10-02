@@ -119,6 +119,10 @@ impl Session {
         self.metrics.last_dropped_frame = None;
         self.metrics.dropped_frame_records_omitted = 0;
         self.metrics.dropped_frames_by_workload = [0; 5];
+        self.metrics.moving_cpu_us = None;
+        self.metrics.moving_presentations = 0;
+        self.metrics.moving_cpu_unavailable_intervals = 0;
+        self.metrics.previous_motion_cpu_sample = None;
         self.metrics.dropped_frame_records.reserve(64);
         self.metrics.work_timings.clear();
         self.metrics.work_timings.reserve(3601);
@@ -287,6 +291,7 @@ impl Session {
                 self.metrics.window_cpu_start_us = self.metrics.process_cpu_us;
                 self.profile = CpuProfile::start()?;
             }
+            self.metrics.note_motion_cpu(self.ui_motion);
             if self
                 .metrics
                 .window_start

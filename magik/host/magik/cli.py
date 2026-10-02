@@ -54,6 +54,7 @@ CHECK_SCENARIOS = (
     "motion-fallback",
     "idle",
     "journeys",
+    "animation-roundtrip",
 )
 
 

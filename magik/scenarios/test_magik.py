@@ -271,3 +271,20 @@ def test_journeys_profile(application_session):
             "window": window,
         },
     )
+
+
+@pytest.mark.parametrize("repetition", range(3))
+def test_animation_roundtrip(journey_application_session, repetition):
+    from magik.animation_benchmark import animation_roundtrip
+
+    app, agent, run, _ = journey_application_session
+    result = animation_roundtrip(app, agent, run, repetition)
+    append_event(
+        run,
+        {
+            "phase": "animation-roundtrip",
+            "outcome": "measured",
+            "repetition": repetition,
+            **result,
+        },
+    )
