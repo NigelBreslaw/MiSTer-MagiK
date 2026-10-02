@@ -3,7 +3,9 @@
 
 //! Card-to-system reveal; all text remains at its native raster size.
 use crate::Rgb565Pixel;
-use crate::card_page::{alpha_of, blend, ease_in_out, ease_out, rounded_span, window_q16};
+use crate::card_page::{
+    alpha_of, blend, ease_in_out, ease_out, fade_from_black, rounded_span, window_q16,
+};
 use crate::navigation::NavigationTransitionRect;
 use crate::system_panel::{HDMI_HUB_BANDS, blit, crt_hub_bands};
 
@@ -113,9 +115,7 @@ fn hdmi(
     #[cfg(feature = "launcher-profile")]
     let _stage = crate::launcher_profile::span("device.hdmi.base");
     let source_a = 256 - alpha_of(window_q16(t, 40, 240));
-    for (dst, src) in out.iter_mut().zip(launcher) {
-        *dst = Rgb565Pixel(blend(0, src.0, source_a));
-    }
+    fade_from_black(out, launcher, source_a);
     #[cfg(feature = "launcher-profile")]
     drop(_stage);
     #[cfg(feature = "launcher-profile")]

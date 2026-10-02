@@ -262,3 +262,38 @@ step and visible landing/input ordering, including preparation holds; it must
 not conceal insufficient sustained throughput. The old sparse-copy A/B remains
 historical; the new clean baseline establishes its current cost but does not
 isolate its causal saving under the new clock.
+
+
+## Device-reveal attribution after merge removal (`817f57bd9`)
+
+The complete instrumented route passed with a 45.002-second window, 378 card
+frames and 118 HDMI reveal frames. Evidence:
+`build/magik-results/20261002T224716Z-29293c641aef`; executable SHA256
+`ac06bc258322727d8ebf13229bbc8b056bc741b41e42e085513649593a71e74b`.
+
+| Reveal stage | Total wall time (ms) | Mean per reveal frame (ms) | Maximum (ms) |
+| --- | ---: | ---: | ---: |
+| Background fade | 293.354 | 2.486 | 9.243 |
+| Card-face sampling | 74.516 | 0.631 | 3.830 |
+| Device sampling | 509.503 | 4.318 | 6.903 |
+| Outline | 13.055 | 0.111 | 0.382 |
+| Page bands | 140.838 | 1.194 | 4.162 |
+
+These are diagnostic wall times, including scheduling and instrumentation.
+They identify device sampling and the scalar full-screen fade as useful next
+CPU targets. Slint raster contributed 188.044 ms across 27 calls.
+
+The clean merge-candidate record for sequence 529 (repeat 1) reports 14 us
+`ui_render_us`, but custom drawing spans 14,494 us before the hidden copy and
+post. That counter explicitly excludes custom drawing. This is a borderline
+full-frame deadline, not evidence by itself of a pure pacing/latch bug. Other
+records also show expensive transition starts and endpoint Slint raster; these
+remain in scope and must not be hidden by narrowing the drop gate.
+
+## Exact reveal background fade — awaiting clean comparison
+
+HDMI background fade now reuses the existing RGB565 black-blend kernel with the
+same five-bit alpha buckets as scalar `card_page::blend`. Zero/full opacity uses
+fill/copy. No new kernel, allocation, alpha rounding, artwork, animation step or
+duration is introduced. Scalar and ARM output agree for all 65,536 RGB565 colours
+and all 257 input alpha values. Existing reveal tests and focused Clippy pass.

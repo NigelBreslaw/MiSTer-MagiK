@@ -51,6 +51,33 @@ pub(crate) fn blend(under: u16, over: u16, alpha: u32) -> u16 {
     lerp_rgb565(under, over, (alpha + 4) >> 3)
 }
 
+/// Fade a complete source from black using the same five-bit channel weights
+/// as `blend`; endpoint frames need only a fill or a copy.
+pub(crate) fn fade_from_black(
+    output: &mut [crate::Rgb565Pixel],
+    source: &[crate::Rgb565Pixel],
+    alpha: u32,
+) {
+    assert_eq!(output.len(), source.len());
+    assert!(alpha <= 256);
+    if alpha == 0 {
+        output.fill(crate::Rgb565Pixel(0));
+    } else if alpha == 256 {
+        output.copy_from_slice(source);
+    } else if !crate::blend_rgb565_black_neon_if_available(
+        output,
+        source,
+        0,
+        source.len(),
+        ((alpha + 4) >> 3) as u16,
+        true,
+    ) {
+        for (out, src) in output.iter_mut().zip(source) {
+            out.0 = blend(0, src.0, alpha);
+        }
+    }
+}
+
 /// Blend already rendered UI pixels without changing their native grid.
 pub(crate) fn blend_row(
     output: &mut [crate::Rgb565Pixel],
@@ -117,4 +144,24 @@ pub(crate) fn rounded_span(
     let x0 = ((x + inset + (1 << 15)) >> 16).clamp(0, frame_width as i64) as usize;
     let x1 = ((x + w - inset + (1 << 15)) >> 16).clamp(0, frame_width as i64) as usize;
     (x0 < x1).then_some((x0, x1))
+}
+
+#[cfg(test)]
+mod fade_tests {
+    use super::*;
+    use crate::Rgb565Pixel;
+
+    #[test]
+    fn black_fade_matches_scalar_for_every_colour_and_alpha() {
+        let source = (0..=u16::MAX).map(Rgb565Pixel).collect::<Vec<_>>();
+        let mut output = vec![Rgb565Pixel(0xbeef); source.len() + 2];
+        for alpha in 0..=256 {
+            fade_from_black(&mut output[1..source.len() + 1], &source, alpha);
+            assert_eq!(output[0], Rgb565Pixel(0xbeef));
+            assert_eq!(output[source.len() + 1], Rgb565Pixel(0xbeef));
+            for (actual, source) in output[1..source.len() + 1].iter().zip(&source) {
+                assert_eq!(actual.0, blend(0, source.0, alpha), "alpha={alpha}");
+            }
+        }
+    }
 }
