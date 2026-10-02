@@ -13,7 +13,7 @@ from pathlib import Path
 from collections.abc import Callable
 
 TARGET = "armv7-unknown-linux-gnueabihf"
-RUST_TOOLCHAIN = "1.98.0"
+RUST_TOOLCHAIN = "1.99.0"
 
 
 @dataclass(frozen=True)
