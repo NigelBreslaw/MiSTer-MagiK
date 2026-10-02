@@ -922,45 +922,7 @@ impl NavigationTransitionRuntime {
         } else {
             render_navigation_transition(&mut self.buffers, request, frame)?
         };
-        self.controller.telemetry.overlay_us = self
-            .controller
-            .telemetry
-            .overlay_us
-            .saturating_add(stats.overlay_us);
-        self.controller.telemetry.base_copy_us = self
-            .controller
-            .telemetry
-            .base_copy_us
-            .saturating_add(stats.base_copy_us);
-        self.controller.telemetry.settings_blit_us = self
-            .controller
-            .telemetry
-            .settings_blit_us
-            .saturating_add(stats.settings_blit_us);
-        self.controller.telemetry.card_scale_us = self
-            .controller
-            .telemetry
-            .card_scale_us
-            .saturating_add(stats.card_scale_us);
-        self.controller.telemetry.destination_reveal_us = self
-            .controller
-            .telemetry
-            .destination_reveal_us
-            .saturating_add(stats.destination_reveal_us);
-        self.controller.telemetry.phosphor_pixels = self
-            .controller
-            .telemetry
-            .phosphor_pixels
-            .saturating_add(stats.phosphor_pixels);
-        self.controller.telemetry.scanline_pixels = self
-            .controller
-            .telemetry
-            .scanline_pixels
-            .saturating_add(stats.scanline_pixels);
-        self.controller
-            .telemetry_mut()
-            .note_render(stats.render_us, false);
-        self.last_render_stats = stats;
+        self.record_render(stats);
         Ok(shared_rgb565_as_slint(self.buffers.working()))
     }
 
@@ -1001,11 +963,29 @@ impl NavigationTransitionRuntime {
             render_settings_page_transition_into(&self.buffers, request, frame, output)?
         };
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        self.controller
-            .telemetry_mut()
-            .note_render(stats.render_us, false);
-        self.last_render_stats = stats;
+        self.record_render(stats);
         Ok(())
+    }
+
+    fn record_render(&mut self, stats: NavigationTransitionRenderStats) {
+        let telemetry = self.controller.telemetry_mut();
+        telemetry.overlay_us = telemetry.overlay_us.saturating_add(stats.overlay_us);
+        telemetry.base_copy_us = telemetry.base_copy_us.saturating_add(stats.base_copy_us);
+        telemetry.settings_blit_us = telemetry
+            .settings_blit_us
+            .saturating_add(stats.settings_blit_us);
+        telemetry.card_scale_us = telemetry.card_scale_us.saturating_add(stats.card_scale_us);
+        telemetry.destination_reveal_us = telemetry
+            .destination_reveal_us
+            .saturating_add(stats.destination_reveal_us);
+        telemetry.phosphor_pixels = telemetry
+            .phosphor_pixels
+            .saturating_add(stats.phosphor_pixels);
+        telemetry.scanline_pixels = telemetry
+            .scanline_pixels
+            .saturating_add(stats.scanline_pixels);
+        telemetry.note_render(stats.render_us, false);
+        self.last_render_stats = stats;
     }
 
     pub fn request_reverse(&mut self, now_us: u64) -> bool {
@@ -2341,7 +2321,7 @@ mod tests {
     }
 
     #[test]
-    fn super_scaler_fallback_renders_into_cached_output_through_both_journeys() {
+    fn super_scaler_fallback_renders_into_cached_output_for_all_edges() {
         let (width, height) = (960, 540);
         let source = (0..width * height)
             .map(|i| Rgb565Pixel((i as u16).wrapping_mul(13)))
@@ -2351,7 +2331,9 @@ mod tests {
             .collect::<Vec<_>>();
         for edge in [
             NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionEdge::HomeToArcade,
             NavigationTransitionEdge::ConsolesToSystem,
+            NavigationTransitionEdge::SystemPanel,
         ] {
             for direction in [
                 NavigationTransitionDirection::Forward,
@@ -2407,6 +2389,66 @@ mod tests {
                 }
                 assert_eq!(cached.complete(), legacy.complete());
             }
+        }
+    }
+
+    #[test]
+    fn cached_output_preserves_accumulated_transition_stage_stats() {
+        let (width, height) = (960, 540);
+        let source = vec![Rgb565Pixel(0x1111); width * height];
+        let destination = vec![Rgb565Pixel(0x2222); width * height];
+        let mut runtime = NavigationTransitionRuntime::new(width, height, true);
+        runtime
+            .begin_settings_page_physical(
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionDirection::Forward,
+                SettingsPageTransitionAxis::Vertical,
+                width,
+                height,
+                &source,
+                0,
+            )
+            .unwrap();
+        runtime.capture_destination(&destination, 1).unwrap();
+        let mut output = vec![Rgb565Pixel(0); width * height];
+        for (elapsed, external) in [(100_001, true), (150_001, false), (200_001, true)] {
+            runtime.tick(elapsed);
+            let before = runtime.telemetry();
+            if external {
+                runtime.render_into(&mut output).unwrap();
+            } else {
+                runtime.render().unwrap();
+            }
+            let stats = runtime.last_render_stats();
+            let after = runtime.telemetry();
+            assert!(
+                stats.settings_blit_us > 0,
+                "full-frame blit must produce timing evidence"
+            );
+            assert_eq!(after.frames, before.frames + 1);
+            assert_eq!(after.render_us, before.render_us + stats.render_us);
+            assert_eq!(after.overlay_us, before.overlay_us + stats.overlay_us);
+            assert_eq!(after.base_copy_us, before.base_copy_us + stats.base_copy_us);
+            assert_eq!(
+                after.settings_blit_us,
+                before.settings_blit_us + stats.settings_blit_us
+            );
+            assert_eq!(
+                after.card_scale_us,
+                before.card_scale_us + stats.card_scale_us
+            );
+            assert_eq!(
+                after.destination_reveal_us,
+                before.destination_reveal_us + stats.destination_reveal_us
+            );
+            assert_eq!(
+                after.phosphor_pixels,
+                before.phosphor_pixels + stats.phosphor_pixels
+            );
+            assert_eq!(
+                after.scanline_pixels,
+                before.scanline_pixels + stats.scanline_pixels
+            );
         }
     }
 
