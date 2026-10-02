@@ -315,6 +315,7 @@ fn main() -> Result<(), String> {
             if c.measure {
                 late_frames.clear();
                 c.measure = false;
+                c.animation_window_start_ms = None;
                 session
                     .borrow_mut()
                     .set_measurement_duration(Some(c.measure_duration_ms));
@@ -357,7 +358,7 @@ fn main() -> Result<(), String> {
                 let scene = c.scene.as_mut().unwrap();
                 let d = scene.render()?;
                 probe.set_concept_frame((scene.elapsed().as_millis().min(i32::MAX as u128)) as i32);
-                session.borrow_mut().metrics.context = serde_json::json!({"late_frames":late_frames,"animation_clock":"frame","animation_elapsed_ms":c.scene.as_ref().unwrap().elapsed().as_millis() as u64,"concept":c.name,"concept_generation":c.generation,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes(),"build_profile":env!("MAGIK_MINI_BUILD_PROFILE"),"preparation_ms":c.preparation_ms,"preparation_benchmark":c.preparation_benchmark,"preparation_profile":c.preparation_profile,"preparation_stages_ms":c.scene.as_ref().unwrap().preparation_stages(),"tile_max_us":c.scene.as_ref().unwrap().render_stage_max_us()});
+                session.borrow_mut().metrics.context = serde_json::json!({"late_frames":late_frames,"animation_clock":"frame","animation_period_ns":mister_magik_core::frame_clock::REFERENCE_FRAME_PERIOD.as_nanos() as u64,"animation_window_start_ms":c.animation_window_start_ms,"animation_elapsed_ms":c.scene.as_ref().unwrap().elapsed().as_millis() as u64,"concept":c.name,"concept_generation":c.generation,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes(),"build_profile":env!("MAGIK_MINI_BUILD_PROFILE"),"preparation_ms":c.preparation_ms,"preparation_benchmark":c.preparation_benchmark,"preparation_profile":c.preparation_profile,"preparation_stages_ms":c.scene.as_ref().unwrap().preparation_stages(),"tile_max_us":c.scene.as_ref().unwrap().render_stage_max_us()});
                 DirtyRectList::from_one(DirtyRect {
                     x0: d.x0,
                     y0: d.y0,
@@ -417,6 +418,13 @@ fn main() -> Result<(), String> {
             match framebuffer.presentation_telemetry() {
                 Ok(sample) => evidence.observe(sample, presented.drop_count, metrics),
                 Err(error) => metrics.error = Some(error.to_string()),
+            }
+            if is_concept && metrics.window_start.is_some() && c.animation_window_start_ms.is_none()
+            {
+                c.animation_window_start_ms = c
+                    .scene
+                    .as_ref()
+                    .map(|scene| scene.elapsed().as_millis() as u64);
             }
             metrics.counters.presentations += 1;
             metrics.last_render_us = render_us;

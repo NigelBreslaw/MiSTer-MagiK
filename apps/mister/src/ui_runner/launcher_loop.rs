@@ -10289,6 +10289,9 @@ pub(super) fn run_launcher_loop(
             // Pose time is the frame's animation time, so pacing waits and
             // repeated samples within a frame always agree.
             let pose_at = animation_now;
+            // Wall time is only for measuring pose-to-present lag, never motion.
+            #[cfg(feature = "tooling")]
+            let pose_sampled_at = Instant::now();
             let (selected, visual_index) = nav.home_card_visual_prediction(pose_at);
             session.update(
                 super::launcher_card_home::scene_for_display(ui, layout),
@@ -10331,8 +10334,7 @@ pub(super) fn run_launcher_loop(
                             copy.copy_us,
                             request.timestamp_us,
                             request.generation,
-                            Instant::now().duration_since(run_start).as_micros() as u64
-                                - request.timestamp_us,
+                            pose_sampled_at.elapsed().as_micros() as u64,
                         ));
                         if let (Some(tooling), Some(timing)) = (tooling.as_mut(), timing) {
                             tooling.metrics.counters.card_producer_total_us += timing.total_us;
@@ -11045,7 +11047,7 @@ pub(super) fn run_launcher_loop(
             layer_target.blit_raw_preview_if_needed(
                 &mut preview,
                 &mut preview_transition,
-                loop_start.duration_since(run_start),
+                frame_clock.elapsed(),
                 logical_slint_rect,
                 full_frame_present,
                 preview_compositor.as_mut(),

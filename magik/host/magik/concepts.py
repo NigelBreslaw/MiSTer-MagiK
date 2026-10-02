@@ -151,13 +151,20 @@ def validate(metrics, sha256, effect, preset, profile=False, *, quick=False):
     fps = n * 1000 / w["elapsed_ms"]
     if effect in RENDER_LABS:
         passed = passed and abs(fps - refresh) <= 0.1
+    # Animation is frame-locked: the scene advances one fixed period per
+    # presented frame, so the time it gained across the window must equal the
+    # window's presentations times that period, whatever the wall clock says
+    # (a 59.5 Hz sample is 1,785 frames and 29,750 ms of animation).
     phase_ms = context.get("animation_elapsed_ms")
-    motion_started = metrics.get("motion_started_ms")
+    phase_start_ms = context.get("animation_window_start_ms")
+    period_ns = context.get("animation_period_ns")
     motion_qualified = effect not in RENDER_LABS or (
         context.get("animation_clock") == "frame"
         and type(phase_ms) is int
-        and type(motion_started) is int
-        and abs(phase_ms - (w["end_ms"] - motion_started)) <= 100
+        and type(phase_start_ms) is int
+        and type(period_ns) is int
+        and period_ns > 0
+        and abs((phase_ms - phase_start_ms) - round(n * period_ns / 1_000_000)) <= 100
     )
     build_qualified = (
         effect not in RENDER_LABS or context.get("build_profile") == "release-device"

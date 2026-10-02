@@ -17,6 +17,8 @@ pub struct Concepts {
     pub measure_duration_ms: u64,
     pub generation: i32,
     pub advance_next: bool,
+    /// Animation time when the measurement window opened, once it has.
+    pub animation_window_start_ms: Option<u64>,
     pub stop_at: Option<Duration>,
     pub error: Option<String>,
     pub preparation_ms: u64,
@@ -40,6 +42,7 @@ impl Concepts {
             measure_duration_ms: 30_000,
             generation: 0,
             advance_next: false,
+            animation_window_start_ms: None,
             stop_at: None,
             error: None,
             preparation_ms: 0,
