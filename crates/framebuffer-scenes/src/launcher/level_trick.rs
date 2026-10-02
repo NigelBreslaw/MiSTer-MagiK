@@ -176,7 +176,7 @@ impl PreparedLauncher {
         let mut behind = scaled_pose(hero, BEHIND_SCALE);
         behind.angle = 0;
         behind.brightness = 64;
-        let faces = Arc::clone(&self.faces);
+        let faces = &self.faces;
         let nested = faces.first().is_some_and(|f| f.slides);
         let relatives: &[isize] = if nested {
             &[4, 3, 2, 1]
@@ -189,7 +189,7 @@ impl PreparedLauncher {
             if nested && relative as usize >= faces.len().min(5) {
                 continue;
             }
-            let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
+            let Some(index) = neighbour(faces, self.cyclic, selected, relative) else {
                 continue;
             };
             if t == EDGE_MILLIS {
@@ -240,7 +240,7 @@ impl PreparedLauncher {
         let mut behind = scaled_pose(hero, BEHIND_SCALE);
         behind.angle = 0;
         behind.brightness = 64;
-        let faces = Arc::clone(&self.faces);
+        let faces = &self.faces;
         let nested = faces.first().is_some_and(|f| f.slides);
         let relatives: &[isize] = if nested {
             &[4, 3, 2, 1]
@@ -253,7 +253,7 @@ impl PreparedLauncher {
             if nested && relative as usize >= faces.len().min(5) {
                 continue;
             }
-            let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
+            let Some(index) = neighbour(faces, self.cyclic, selected, relative) else {
                 continue;
             };
             let order = if nested {
@@ -325,8 +325,8 @@ impl PreparedLauncher {
     }
 
     fn draw_trick_plan(&mut self, plan: TrickPlan) {
-        let faces = Arc::clone(&self.faces);
-        let plan = plan.with_faces(&faces);
+        let faces = &self.faces;
+        let plan = plan.with_faces(faces);
         // Both halves already use native poses. Mapping again would move the hero at the swap.
         if let Some(layout) = self.responsive {
             layout.clear_carousel(&mut self.logical);

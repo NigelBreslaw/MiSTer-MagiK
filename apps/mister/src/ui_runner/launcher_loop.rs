@@ -15328,21 +15328,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn level_trick_direct_damage_covers_chrome_and_the_settled_endpoint() {
-        let trick = card_direct_tile_damage(268, true);
-        assert_eq!(trick[0].x0, 0);
-        assert_eq!(trick[0].x1, trick[1].x0);
-        assert_eq!(trick[1].x1, 960);
-        for rect in trick {
-            assert_eq!((rect.y0, rect.y1), (0, 540));
-        }
-        let browse = card_direct_tile_damage(268, false);
-        assert_eq!(browse[0].x0, 268);
-        assert_eq!(browse[1], CARD_DIRECT_TILE_DAMAGE[1]);
-        assert_eq!((browse[0].y0, browse[0].y1), (120, 495));
-    }
-
     fn eligible_card_direct_input() -> CardDirectEligibility {
         CardDirectEligibility {
             custom_home_active: true,

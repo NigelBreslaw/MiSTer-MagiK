@@ -150,9 +150,7 @@ pub(super) struct LauncherCardHomeSession {
     renderer: Option<Box<ParallelLauncherRenderer>>,
     last_rendered: Option<(BrowseFrame, u64)>,
     last_timing: Option<ParallelFrameTiming>,
-    last_request: Option<LauncherFrameRequest>,
-    request_sequence: u64,
-    frame_timestamp_us: u64,
+    last_request: LauncherFrameRequest,
     last_visual_index: f32,
     frame: BrowseFrame,
     active: bool,
@@ -204,9 +202,11 @@ impl LauncherCardHomeSession {
             renderer,
             last_rendered: None,
             last_timing: None,
-            last_request: None,
-            request_sequence: 0,
-            frame_timestamp_us: 0,
+            last_request: LauncherFrameRequest {
+                frame,
+                timestamp_us: 0,
+                generation: 0,
+            },
             last_visual_index: selected as f32,
             frame,
             active: false,
@@ -241,7 +241,6 @@ impl LauncherCardHomeSession {
         let count = level.cards.len().max(1);
         let selected = selected.min(count - 1);
         self.now_ms = now_ms;
-        self.frame_timestamp_us = now_ms.saturating_mul(1_000);
         if self.trick.is_some() {
             if self.active && self.level.menu_id == level.menu_id && self.scene == scene && motion {
                 return;
@@ -606,13 +605,7 @@ impl LauncherCardHomeSession {
         slot: CardSlot,
         gather: bool,
     ) {
-        self.request_sequence = self.request_sequence.wrapping_add(1).max(1);
-        let request = LauncherFrameRequest {
-            frame: settled_frame(selected),
-            timestamp_us: self.frame_timestamp_us,
-            generation: self.request_sequence,
-        };
-        self.last_request = Some(request);
+        let request = self.next_request(settled_frame(selected));
         self.last_timing = if self.scene == LauncherScene::new(960, 540)
             && let Some(renderer) = self.renderer.as_mut()
         {
@@ -660,13 +653,7 @@ impl LauncherCardHomeSession {
             return self.prepared.pixels();
         }
         if self.last_rendered != Some((self.frame, self.content_generation)) {
-            self.request_sequence = self.request_sequence.wrapping_add(1).max(1);
-            let request = LauncherFrameRequest {
-                frame: self.frame,
-                timestamp_us: self.frame_timestamp_us,
-                generation: self.request_sequence,
-            };
-            self.last_request = Some(request);
+            let request = self.next_request(self.frame);
             if self.scene == LauncherScene::new(960, 540)
                 && let Some(renderer) = self.renderer.as_mut()
             {
@@ -746,12 +733,17 @@ impl LauncherCardHomeSession {
                 .as_ref()
                 .is_none_or(|pending| pending.scene == self.scene)
     }
+    fn next_request(&mut self, frame: BrowseFrame) -> LauncherFrameRequest {
+        self.last_request = LauncherFrameRequest {
+            frame,
+            timestamp_us: self.now_ms.saturating_mul(1_000),
+            generation: self.last_request.generation.wrapping_add(1).max(1),
+        };
+        self.last_request
+    }
+
     pub(super) fn current_request(&self) -> LauncherFrameRequest {
-        self.last_request.unwrap_or(LauncherFrameRequest {
-            frame: self.frame,
-            timestamp_us: self.frame_timestamp_us,
-            generation: self.request_sequence,
-        })
+        self.last_request
     }
     pub(super) fn last_timing(&self) -> Option<ParallelFrameTiming> {
         self.last_timing
@@ -1334,7 +1326,8 @@ mod tests {
         };
         session.update(scene, &level, 0, 0.99, "07:28", 230, true, Some(frame));
         assert_eq!(session.frame, frame);
-        assert_eq!(session.frame_timestamp_us, 230_000);
+        session.render();
+        assert_eq!(session.current_request().timestamp_us, 230_000);
         assert!(session.is_animating());
     }
 
@@ -1608,7 +1601,7 @@ mod tests {
             None,
         );
         session.render();
-        let submitted_sequence = session.request_sequence;
+        let submitted_sequence = session.current_request().generation;
 
         session.update(
             LauncherScene::new(960, 540),
@@ -1621,7 +1614,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(session.request_sequence, submitted_sequence);
+        assert_eq!(session.current_request().generation, submitted_sequence);
     }
 
     #[test]
