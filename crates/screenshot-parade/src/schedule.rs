@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::raster::{PreparedScreenshotCard, depth_style};
+use crate::raster::{ALL_SHIFTED_PHASES, PreparedScreenshotCard, depth_style};
 use crate::slack::PreparationSlack;
 use crate::{PARADE_SUBPIXEL_ONE, ScreenshotImage};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
@@ -121,7 +121,6 @@ struct Tile {
     layer: usize,
     speed: usize,
     velocity_fp: i64,
-    velocity_remainder: i64,
     image_index: usize,
     raster: PreparedScreenshotCard,
     active: bool,
@@ -142,6 +141,7 @@ struct ScaleJob {
     image_index: usize,
     speed: usize,
     screen_height: usize,
+    phases: u16,
 }
 
 struct ScaleResult {
@@ -607,6 +607,7 @@ impl ScreenshotParade {
                 let frames_until_exit = phase + rank as u64 * interval_frames;
                 let x_fp =
                     width as i64 * PARADE_SUBPIXEL_ONE - frames_until_exit as i64 * velocity_fp;
+                debug_assert!(on_phase_lattice(x_fp, velocity_fp));
                 let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
                 let y = self
                     .random_tile_y(
@@ -631,7 +632,6 @@ impl ScreenshotParade {
                     layer: speed,
                     speed,
                     velocity_fp,
-                    velocity_remainder: 0,
                     image_index: card.image_index,
                     raster: card.raster,
                     active,
@@ -680,6 +680,11 @@ impl ScreenshotParade {
         Ok(None)
     }
 
+    fn prepared_phases(&self, speed: usize) -> u16 {
+        let layer_index = speed.saturating_sub(MIN_TILE_SPEED);
+        reachable_shifted_phases(card_velocity_fp(layer_index, self.geometry.width()))
+    }
+
     fn push_empty_tile(&mut self, layer_index: usize) -> usize {
         let speed = MIN_TILE_SPEED + layer_index;
         let raster = PreparedScreenshotCard::prepare(
@@ -694,7 +699,6 @@ impl ScreenshotParade {
             layer: speed,
             speed,
             velocity_fp: card_velocity_fp(layer_index, self.geometry.width()),
-            velocity_remainder: 0,
             image_index: usize::MAX,
             raster,
             active: false,
@@ -720,12 +724,9 @@ impl ScreenshotParade {
                 tile.raster_moved_this_frame = false;
                 let previous_x_fp = tile.x_fp;
                 let previous_phase = raster_phase_key(tile.x_fp);
-                let motion = tile
-                    .velocity_fp
-                    .saturating_mul(tick_delta)
-                    .saturating_add(tile.velocity_remainder);
-                tile.x_fp = tile.x_fp.saturating_add(motion / TICK_ONE);
-                tile.velocity_remainder = motion % TICK_ONE;
+                // Ticks are whole, so motion stays on each layer's phase lattice.
+                let motion = tile.velocity_fp.saturating_mul(tick_delta / TICK_ONE);
+                tile.x_fp = tile.x_fp.saturating_add(motion);
                 if tile.x_fp != previous_x_fp {
                     if raster_phase_key(tile.x_fp) == previous_phase {
                         tile.raster_held_this_frame = true;
@@ -772,11 +773,11 @@ impl ScreenshotParade {
             };
             let tile = &mut self.tiles[tile_index];
             tile.x_fp = x as i64 * PARADE_SUBPIXEL_ONE;
+            debug_assert!(on_phase_lattice(tile.x_fp, tile.velocity_fp));
             tile.y = y;
             tile.image_index = next.image_index;
             tile.raster = next.raster;
             tile.active = true;
-            tile.velocity_remainder = 0;
             let interval = self.jittered_interval(self.layers[layer_index].interval_frames);
             self.layers[layer_index].next_spawn_frame = nominal_frame + interval;
             self.layers[layer_index].spawn_count += 1;
@@ -839,6 +840,7 @@ impl ScreenshotParade {
                 image_index,
                 speed,
                 screen_height: self.geometry.height(),
+                phases: self.prepared_phases(speed),
             })
             .map_err(|_| "screenshot parade scale worker disconnected".to_owned())?;
         self.scale_queue_depth += 1;
@@ -1107,6 +1109,7 @@ fn run_scale_worker(
                 &source,
                 job.speed,
                 job.screen_height,
+                job.phases,
                 preparation_slack.as_deref(),
             );
             PreparedCard {
@@ -1177,13 +1180,40 @@ fn card_velocity_fp(layer_index: usize, screen_width: usize) -> i64 {
         .max(1)
 }
 
+/// Shifted sixteenth-pixel phases a tile can occupy when it spawns on phase 0
+/// and advances by whole ticks. A velocity off the lattice may reach any phase.
+fn reachable_shifted_phases(velocity_fp: i64) -> u16 {
+    const SIXTEENTH: i64 = PARADE_SUBPIXEL_ONE / 16;
+    if velocity_fp % SIXTEENTH != 0 {
+        return ALL_SHIFTED_PHASES;
+    }
+    // gcd(step, 16): the coarsest phase spacing whole-tick motion visits.
+    let lattice = 1_u32 << (velocity_fp / SIXTEENTH).trailing_zeros().min(4);
+    (lattice..16)
+        .step_by(lattice as usize)
+        .fold(0, |mask, phase| mask | 1 << phase)
+}
+
+/// Whether a tile placed at `x_fp` and moving whole ticks at `velocity_fp` only
+/// visits phases that `reachable_shifted_phases` prepares. Every place that
+/// positions a tile must satisfy this, or its card draws an unprepared phase.
+fn on_phase_lattice(x_fp: i64, velocity_fp: i64) -> bool {
+    let mask = reachable_shifted_phases(velocity_fp);
+    let phase = raster_phase_key(x_fp).rem_euclid(16);
+    phase == 0 || mask & (1 << phase) != 0
+}
+
+/// Elapsed time in whole reference ticks, as production presents them, so
+/// every caller keeps tiles on the phases their cards prepare.
 fn tick_delta_fp(elapsed: Duration) -> i64 {
+    // Nearest tick: truncated per-frame deltas (1e9/60 ns) would otherwise lag
+    // a tick behind and jitter wall-clock callers between 0- and 2-tick steps.
     let ticks = elapsed
         .as_nanos()
         .saturating_mul(u128::from(REFERENCE_HZ))
-        .saturating_mul(TICK_ONE as u128)
+        .saturating_add(500_000_000)
         / 1_000_000_000_u128;
-    ticks.min(i64::MAX as u128) as i64
+    ticks.min((i64::MAX / TICK_ONE) as u128) as i64 * TICK_ONE
 }
 
 fn layer_interval_frames(
@@ -1401,6 +1431,103 @@ mod tests {
     }
 
     #[test]
+    fn reachable_phases_follow_each_layer_velocity() {
+        let counts = |width| {
+            (0..SPEED_COUNT)
+                .map(|layer| reachable_shifted_phases(card_velocity_fp(layer, width)).count_ones())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(counts(960), [7, 3, 7, 1, 7]);
+        assert_eq!(counts(640), [3, 1, 3, 0, 3]);
+        assert_eq!(reachable_shifted_phases(97), ALL_SHIFTED_PHASES);
+        assert_eq!(reachable_shifted_phases(16), ALL_SHIFTED_PHASES);
+        assert_eq!(reachable_shifted_phases(8 * 16), 1 << 8);
+    }
+
+    #[test]
+    fn whole_tick_motion_never_leaves_the_prepared_phases() {
+        for width in [960, 640] {
+            for layer in 0..SPEED_COUNT {
+                let velocity_fp = card_velocity_fp(layer, width);
+                let mask = reachable_shifted_phases(velocity_fp);
+                let mut x_fp = -(160 * PARADE_SUBPIXEL_ONE);
+                // Confirmed presentation intervals may skip refreshes.
+                for step in 0..4_000_i64 {
+                    x_fp += velocity_fp * (1 + step % 3);
+                    let phase = raster_phase_key(x_fp).rem_euclid(16);
+                    assert!(
+                        phase == 0 || mask & (1 << phase) != 0,
+                        "width={width} layer={layer} phase={phase}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lattice_cards_match_every_phase_cards_along_their_motion() {
+        let source = ScreenshotImage {
+            pixels: (0..48 * 36)
+                .map(|i| Rgb565Pixel((i as u16).wrapping_mul(40_503)))
+                .collect(),
+            width: 48,
+            height: 36,
+            stride: 48,
+        };
+        for (width, height) in [(960, 540), (640, 480)] {
+            let layout =
+                Rgb565OutputLayout::identity(SceneGeometry::new(width, height, width).unwrap());
+            for layer in 0..SPEED_COUNT {
+                let speed = MIN_TILE_SPEED + layer;
+                let velocity_fp = card_velocity_fp(layer, width);
+                let mask = reachable_shifted_phases(velocity_fp);
+                let full = PreparedScreenshotCard::prepare(&source, speed, height);
+                let (lattice, _) =
+                    PreparedScreenshotCard::prepare_timed(&source, speed, height, mask, None);
+                assert!(lattice.phase_resident_bytes() <= full.phase_resident_bytes());
+                let mut x_fp = 0;
+                for _ in 0..64 {
+                    x_fp += velocity_fp;
+                    let mut expected = vec![Rgb565Pixel(0x1234); width * height];
+                    let mut actual = expected.clone();
+                    full.blit(&mut expected, layout, x_fp, 3);
+                    lattice.blit(&mut actual, layout, x_fp, 3);
+                    assert!(expected == actual, "{width} layer={layer} x_fp={x_fp}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn elapsed_time_advances_in_whole_ticks_on_prepared_phases() {
+        assert_eq!(tick_delta_fp(Duration::from_micros(24_000)), TICK_ONE);
+        assert_eq!(tick_delta_fp(Duration::from_millis(50)), 3 * TICK_ONE);
+        // Truncated 60 Hz frame times must not lag a tick behind.
+        let frame = Duration::from_nanos(1_000_000_000 / 60);
+        for n in 0..600_u32 {
+            assert_eq!(
+                tick_delta_fp(frame * n),
+                i64::from(n) * TICK_ONE,
+                "frame {n}"
+            );
+        }
+        let path = std::env::temp_dir().join(format!(
+            "screenshot-parade-lattice-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_archive(&path, 220);
+        let mut scene = prepared_scene(&path, 960, 540);
+        let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+        // Debug builds assert if any tile reaches an unprepared phase.
+        for millis in (0..6_000_u64).step_by(13) {
+            scene
+                .render_at(&mut pixels, Duration::from_millis(millis))
+                .unwrap();
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn card_velocities_use_the_slowed_1080p_reference() {
         for layer_index in 0..SPEED_COUNT {
             assert_eq!(
@@ -1571,7 +1698,6 @@ mod tests {
             layer: 5,
             speed: 5,
             velocity_fp: PARADE_SUBPIXEL_ONE,
-            velocity_remainder: 0,
             image_index: 0,
             raster,
             active: true,
