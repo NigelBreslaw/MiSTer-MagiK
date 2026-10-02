@@ -293,6 +293,7 @@ impl LauncherScreensaver {
                 seed,
                 worker_start: None,
                 preparation_slack: None,
+                presentation_ticks_only: false,
             },
         )?;
         let now = Instant::now();

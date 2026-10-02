@@ -13,6 +13,8 @@ const PARADE_REFERENCE_HEIGHT: usize = 540;
 const CRT_PHASE_COUNT: usize = 16;
 const CRT_SHIFTED_PHASE_COUNT: usize = CRT_PHASE_COUNT - 1;
 const CRT_PHASE_STEP: usize = PARADE_SUBPIXEL_ONE as usize / CRT_PHASE_COUNT;
+/// Bit `p` selects shifted phase `p` (1..=15); phase 0 is always prepared.
+pub(crate) const ALL_SHIFTED_PHASES: u16 = 0xfffe;
 const LANCZOS_RADIUS: f64 = 3.0;
 const LANCZOS_WEIGHT_ONE: i32 = 1 << 14;
 const COVERAGE_SAMPLES_PER_AXIS: usize = 8;
@@ -152,14 +154,14 @@ struct LinearImage {
 pub struct PreparedScreenshotCard {
     image: ScreenshotImage,
     base_coverage: CoveragePlane,
-    shifted_phases: Box<[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT]>,
+    shifted_phases: Box<[Option<PreparedLinearPhase>; CRT_SHIFTED_PHASE_COUNT]>,
     corner_insets: Vec<u8>,
 }
 
 impl PreparedScreenshotCard {
     #[must_use]
     pub fn prepare(source: &ScreenshotImage, speed: usize, screen_height: usize) -> Self {
-        Self::prepare_timed(source, speed, screen_height, None).0
+        Self::prepare_timed(source, speed, screen_height, ALL_SHIFTED_PHASES, None).0
     }
 
     #[cfg(test)]
@@ -169,19 +171,31 @@ impl PreparedScreenshotCard {
         screen_height: usize,
         kernel: LinearPhaseKernel,
     ) -> Self {
-        Self::prepare_timed_with_kernel(source, speed, screen_height, kernel, None).0
+        Self::prepare_timed_with_kernel(
+            source,
+            speed,
+            screen_height,
+            ALL_SHIFTED_PHASES,
+            kernel,
+            None,
+        )
+        .0
     }
 
+    /// Prepare only the shifted phases selected by `phases`. A tile whose
+    /// motion stays on a coarser sixteenth-pixel lattice never samples the rest.
     pub(crate) fn prepare_timed(
         source: &ScreenshotImage,
         speed: usize,
         screen_height: usize,
+        phases: u16,
         preparation_slack: Option<&PreparationSlack>,
     ) -> (Self, u128) {
         Self::prepare_timed_with_kernel(
             source,
             speed,
             screen_height,
+            phases,
             LinearPhaseKernel::Neon,
             preparation_slack,
         )
@@ -191,6 +205,7 @@ impl PreparedScreenshotCard {
         source: &ScreenshotImage,
         speed: usize,
         screen_height: usize,
+        phases: u16,
         kernel: LinearPhaseKernel,
         preparation_slack: Option<&PreparationSlack>,
     ) -> (Self, u128) {
@@ -208,7 +223,7 @@ impl PreparedScreenshotCard {
                 Self {
                     image,
                     base_coverage: empty_phase.coverage.clone(),
-                    shifted_phases: Box::new(std::array::from_fn(|_| empty_phase.clone())),
+                    shifted_phases: Box::new(std::array::from_fn(|_| Some(empty_phase.clone()))),
                     corner_insets: Vec::new(),
                 },
                 0,
@@ -238,15 +253,19 @@ impl PreparedScreenshotCard {
             &coverage,
             &source_opaque_spans,
             &premultiplied,
+            phases,
             kernel,
             preparation_slack,
         )
         .unwrap_or_else(|| {
             std::array::from_fn(|index| {
+                if phases & (1 << (index + 1)) == 0 {
+                    return None;
+                }
                 if let Some(slack) = preparation_slack {
                     slack.checkpoint();
                 }
-                prepare_linear_phase(
+                Some(prepare_linear_phase(
                     &styled,
                     &coverage,
                     &source_opaque_spans,
@@ -254,7 +273,7 @@ impl PreparedScreenshotCard {
                     index + 1,
                     kernel,
                     preparation_slack,
-                )
+                ))
             })
         });
         let phase_us = phase_started.elapsed().as_micros();
@@ -300,6 +319,7 @@ impl PreparedScreenshotCard {
             + self
                 .shifted_phases
                 .iter()
+                .flatten()
                 .map(PreparedLinearPhase::resident_bytes)
                 .sum::<usize>()
     }
@@ -845,9 +865,10 @@ fn prepare_shifted_phases_batched(
     source_coverage: &[u8],
     source_opaque_spans: &[OpaqueSpan],
     premultiplied_source: &[[u16; 4]],
+    phases: u16,
     kernel: LinearPhaseKernel,
     preparation_slack: Option<&PreparationSlack>,
-) -> Option<[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT]> {
+) -> Option<[Option<PreparedLinearPhase>; CRT_SHIFTED_PHASE_COUNT]> {
     let batch = match kernel {
         #[cfg(test)]
         LinearPhaseKernel::Scalar => return None,
@@ -869,12 +890,20 @@ fn prepare_shifted_phases_batched(
             );
         }
         let width = image.width + 1;
-        let mut pixels: [Vec<Rgb565Pixel>; CRT_SHIFTED_PHASE_COUNT] =
-            std::array::from_fn(|_| vec![Rgb565Pixel(0); width * image.height]);
-        let weights: [[i32; 6]; CRT_SHIFTED_PHASE_COUNT] =
-            std::array::from_fn(|i| fractional_delay_weights(i + 1));
-        for first in (0..CRT_SHIFTED_PHASE_COUNT).step_by(batch) {
-            let phases = batch.min(CRT_SHIFTED_PHASE_COUNT - first);
+        let selected: Vec<usize> = (1..CRT_PHASE_COUNT)
+            .filter(|phase| phases & (1 << phase) != 0)
+            .collect();
+        let mut pixels: Vec<Vec<Rgb565Pixel>> = selected
+            .iter()
+            .map(|_| vec![Rgb565Pixel(0); width * image.height])
+            .collect();
+        // The kernel reads each batch's six-tap weights contiguously.
+        let weights: Vec<[i32; 6]> = selected
+            .iter()
+            .map(|&phase| fractional_delay_weights(phase))
+            .collect();
+        for first in (0..selected.len()).step_by(batch) {
+            let phases = batch.min(selected.len() - first);
             for row in (0..image.height).step_by(4) {
                 if let Some(slack) = preparation_slack {
                     slack.checkpoint();
@@ -904,9 +933,10 @@ fn prepare_shifted_phases_batched(
                 }
             }
         }
-        Some(std::array::from_fn(|index| {
+        let mut prepared = std::array::from_fn(|_| None);
+        for (slot, &phase) in selected.iter().enumerate() {
             let phase_image = ScreenshotImage {
-                pixels: std::mem::take(&mut pixels[index]),
+                pixels: std::mem::take(&mut pixels[slot]),
                 width,
                 height: image.height,
                 stride: width,
@@ -917,15 +947,16 @@ fn prepare_shifted_phases_batched(
                 source_coverage,
                 image.width,
                 image.height,
-                index + 1,
+                phase,
                 preparation_slack,
             );
             let coverage = coverage_plane(coverage, &phase_image, preparation_slack);
-            PreparedLinearPhase {
+            prepared[phase - 1] = Some(PreparedLinearPhase {
                 image: phase_image,
                 coverage,
-            }
-        }))
+            });
+        }
+        Some(prepared)
     }
     #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
     {
@@ -934,6 +965,7 @@ fn prepare_shifted_phases_batched(
             source_coverage,
             source_opaque_spans,
             premultiplied_source,
+            phases,
             batch,
             preparation_slack,
         );
@@ -1238,22 +1270,46 @@ fn quantize_phase(x_fp: i64) -> QuantizedPhase {
     QuantizedPhase { x, phase }
 }
 
+/// Tiles prepared for a coarser phase lattice only ever land on prepared
+/// phases. Anything else is a scheduling bug; draw the nearest prepared phase
+/// rather than dropping the card.
+fn prepared_phase(
+    quantized: QuantizedPhase,
+    shifted_phases: &[Option<PreparedLinearPhase>; CRT_SHIFTED_PHASE_COUNT],
+) -> QuantizedPhase {
+    let available = |phase: usize| phase == 0 || shifted_phases[phase - 1].is_some();
+    if available(quantized.phase) {
+        return quantized;
+    }
+    debug_assert!(false, "tile reached unprepared phase {}", quantized.phase);
+    let target = quantized.x as i64 * CRT_PHASE_COUNT as i64 + quantized.phase as i64;
+    let nearest = (0..=CRT_PHASE_COUNT)
+        .filter(|&phase| available(phase % CRT_PHASE_COUNT))
+        .map(|phase| quantized.x as i64 * CRT_PHASE_COUNT as i64 + phase as i64)
+        .min_by_key(|&position| (position - target).abs())
+        .unwrap_or(target);
+    QuantizedPhase {
+        x: nearest.div_euclid(CRT_PHASE_COUNT as i64) as isize,
+        phase: nearest.rem_euclid(CRT_PHASE_COUNT as i64) as usize,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn blit_sixteenth_phase(
     dst: &mut [Rgb565Pixel],
     output_layout: Rgb565OutputLayout,
     image: &ScreenshotImage,
     base_coverage: &CoveragePlane,
-    shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
+    shifted_phases: &[Option<PreparedLinearPhase>; CRT_SHIFTED_PHASE_COUNT],
     x_fp: i64,
     y: isize,
 ) {
-    let quantized = quantize_phase(x_fp);
+    let quantized = prepared_phase(quantize_phase(x_fp), shifted_phases);
     if quantized.phase == 0 {
         blit_coverage_phase(dst, output_layout, image, base_coverage, quantized.x, y);
         return;
     }
-    let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
+    let Some(Some(shifted)) = shifted_phases.get(quantized.phase - 1) else {
         debug_assert!(false, "linear card missing sixteenth-pixel phase");
         return;
     };
@@ -1275,12 +1331,12 @@ fn blit_sixteenth_phase_probed(
     output_layout: Rgb565OutputLayout,
     image: &ScreenshotImage,
     base_coverage: &CoveragePlane,
-    shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
+    shifted_phases: &[Option<PreparedLinearPhase>; CRT_SHIFTED_PHASE_COUNT],
     x_fp: i64,
     y: isize,
     base_background: Rgb565Pixel,
 ) -> CoverageBlitStats {
-    let quantized = quantize_phase(x_fp);
+    let quantized = prepared_phase(quantize_phase(x_fp), shifted_phases);
     if quantized.phase == 0 {
         return blit_coverage_phase_probed(
             dst,
@@ -1292,7 +1348,7 @@ fn blit_sixteenth_phase_probed(
             base_background,
         );
     }
-    let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
+    let Some(Some(shifted)) = shifted_phases.get(quantized.phase - 1) else {
         debug_assert!(false, "linear card missing sixteenth-pixel phase");
         return CoverageBlitStats::default();
     };
@@ -1602,8 +1658,11 @@ mod tests {
         }
     }
 
-    fn linear_phases(card: &PreparedScreenshotCard) -> (&CoveragePlane, &[PreparedLinearPhase]) {
-        (&card.base_coverage, card.shifted_phases.as_slice())
+    fn linear_phases(card: &PreparedScreenshotCard) -> (&CoveragePlane, Vec<&PreparedLinearPhase>) {
+        (
+            &card.base_coverage,
+            card.shifted_phases.iter().flatten().collect(),
+        )
     }
 
     fn coverage_centroid(coverage: &CoveragePlane, width: usize, height: usize) -> f64 {

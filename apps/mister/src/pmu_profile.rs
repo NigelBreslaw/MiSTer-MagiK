@@ -47,6 +47,7 @@ fn profile_screensaver() -> Result<Value, String> {
             seed: SCREENSHOT_SEED,
             worker_start: None,
             preparation_slack: None,
+            presentation_ticks_only: false,
         },
     )?;
     let mut pixels = vec![Rgb565Pixel(0); geometry.len()];

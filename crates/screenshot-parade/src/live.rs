@@ -124,6 +124,7 @@ impl<B: ScreenshotBuffer> LiveScreenshotParade<B> {
                 seed: config.seed,
                 worker_start: config.scale_worker_start,
                 preparation_slack: Some(Arc::clone(&preparation_slack)),
+                presentation_ticks_only: true,
             },
             output_layout,
         )?;
