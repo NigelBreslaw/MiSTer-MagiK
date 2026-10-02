@@ -457,7 +457,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     ]
     if arguments.profile:
         measurements = (
-            {"idle", "motion", "motion-rollover", "motion-held"}
+            {"idle", "motion", "motion-rollover", "motion-held", "animation-roundtrip"}
             if arguments.app == "magik"
             else {"motion"}
         )

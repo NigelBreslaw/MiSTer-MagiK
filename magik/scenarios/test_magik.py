@@ -288,3 +288,11 @@ def test_animation_roundtrip(journey_application_session, repetition):
             **result,
         },
     )
+
+
+@pytest.mark.magik_profile
+def test_animation_roundtrip_profile(journey_application_session):
+    from magik.animation_benchmark import animation_roundtrip
+
+    app, agent, run, _ = journey_application_session
+    animation_roundtrip(app, agent, run, 0, instrumented=True)

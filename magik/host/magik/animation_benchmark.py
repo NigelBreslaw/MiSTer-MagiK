@@ -77,7 +77,7 @@ def _settled_metrics(metrics, before_ms, deadline):
         time.sleep(0.2)
 
 
-def animation_roundtrip(app, agent, run: Path, repetition: int):
+def animation_roundtrip(app, agent, run: Path, repetition: int, *, instrumented=False):
     prefix = f"animation-roundtrip-{repetition}"
     _key(app, "\uf729")
     time.sleep(1.2)
@@ -178,7 +178,9 @@ def animation_roundtrip(app, agent, run: Path, repetition: int):
     )
     while True:
         end = metrics()
-        if end.get("window") is not None:
+        if end.get("window") is not None and (
+            not instrumented or "renderer_profile" in end["window"]
+        ):
             break
         if time.monotonic() >= requested_at + 55:
             (run / f"{prefix}-incomplete.json").write_text(json.dumps(end, indent=2))
@@ -189,7 +191,21 @@ def animation_roundtrip(app, agent, run: Path, repetition: int):
     assert 45_000 <= window["elapsed_ms"] < 46_000
     assert window["start_ms"] <= rows[0]["device_before_ms"]
     assert window["end_ms"] >= rows[-1]["device_after_ms"]
-    assert not window["instrumented"] and not window.get("evidence_error")
+    assert window["instrumented"] is instrumented and not window.get("evidence_error")
+    if instrumented:
+        assert window["renderer_profile"]["worker_frames"] > 0, (
+            "Missing helper stage evidence"
+        )
+        stages = window["renderer_profile"]["stages"]
+        assert all(
+            stages.get(label, {}).get("calls", 0) > 0
+            for label in (
+                "flip.geometry-filter",
+                "flip.compose",
+                "reflection.prepare",
+                "flip.reflection",
+            )
+        ), "Missing renderer stage evidence"
     route_drops = sum(row["dropped_frames"] for row in rows)
     assert route_drops == window["dropped_frames"], "Route and window counts differ"
     assert sum(window["dropped_frames_by_workload"].values()) == route_drops

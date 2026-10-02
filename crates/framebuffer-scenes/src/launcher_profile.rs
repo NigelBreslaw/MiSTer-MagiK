@@ -20,7 +20,8 @@ pub fn enabled() -> bool {
 
 /// Transfer a drained worker report to the consumer's next measurement window.
 /// Only explicit instrumented runs call this; normal frames allocate nothing.
-pub fn absorb_worker(report: Report) {
+pub fn absorb_worker(mut report: Report) {
+    report.worker_frames += 1;
     WORKER.with(|slot| {
         let mut slot = slot.borrow_mut();
         if let Some(total) = slot.as_mut() {
@@ -87,6 +88,7 @@ impl Drop for Span {
 
 #[derive(serde::Serialize)]
 pub struct Report {
+    pub worker_frames: u64,
     pub stages: BTreeMap<&'static str, Stage>,
     pub hardware: pmu::ThreadProfile,
     pub hardware_stages: BTreeMap<String, HardwareStage>,
@@ -102,6 +104,7 @@ pub struct HardwareStage {
 
 impl Report {
     fn merge(&mut self, other: Self) {
+        self.worker_frames += other.worker_frames;
         for (label, source) in other.stages {
             let target = self.stages.entry(label).or_default();
             target.calls += source.calls;
@@ -144,6 +147,7 @@ pub fn take() -> Report {
         }
     }
     let mut report = Report {
+        worker_frames: 0,
         stages: TOTALS.with(|totals| std::mem::take(&mut *totals.borrow_mut())),
         hardware,
         hardware_stages,

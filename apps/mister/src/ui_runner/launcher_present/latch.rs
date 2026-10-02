@@ -398,6 +398,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.direct_slot_tile_damage[slot] = None;
         let buffer = self.buffers.buffer_mut(grant.slot_index);
         let started = Instant::now();
+        #[cfg(feature = "tooling")]
+        let _copy = mister_magik_framebuffer_scenes::launcher_profile::span("frame.hidden-copy");
         let result = (|| {
             let mut bytes = 0;
             // A complete tile pair seeds every pixel itself. Partial carousel

@@ -333,6 +333,12 @@ impl Session {
         }
         Ok(completed)
     }
+    /// Republish completed evidence after the app attaches its renderer report.
+    pub fn publish_metrics(&mut self, width: usize, height: usize) -> Result<(), String> {
+        let now = self.start.elapsed().as_millis() as u64;
+        self.write("probe-metrics.json", &self.metrics_json(width, height, now))
+    }
+
     fn metrics_json(&self, width: usize, height: usize, now: u64) -> serde_json::Value {
         let mut value = self.metrics.json(width, height, now);
         value["ui_motion"] = serde_json::json!(self.ui_motion);

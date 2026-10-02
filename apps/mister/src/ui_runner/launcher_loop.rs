@@ -6339,6 +6339,8 @@ pub(super) fn run_launcher_loop(
     #[cfg(feature = "tooling")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
     #[cfg(feature = "tooling")]
+    let renderer_profile_requested = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
+    #[cfg(feature = "tooling")]
     let mut tooling_carousel_release: Option<crate::input_event::InputEvent> = None;
     // Count repeated artwork in ordinary measurement sessions too. A confirmed
     // 60 Hz post does not imply a fresh carousel pose; CPU sampling is separate.
@@ -6406,8 +6408,29 @@ pub(super) fn run_launcher_loop(
             }
             session.set_ui_motion(mister_magik_catalog::ui_motion::active());
             let tooling_tick_start = Instant::now();
+            let window_was_open =
+                session.metrics.window_start.is_some() && session.metrics.window.is_none();
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
+            }
+            let window_is_open =
+                session.metrics.window_start.is_some() && session.metrics.window.is_none();
+            if renderer_profile_requested && !window_was_open && window_is_open {
+                let _ = mister_magik_framebuffer_scenes::launcher_profile::take();
+                mister_magik_framebuffer_scenes::launcher_profile::enable_wall_time();
+            } else if renderer_profile_requested && window_was_open && !window_is_open {
+                mister_magik_framebuffer_scenes::launcher_profile::disable();
+                let report = mister_magik_framebuffer_scenes::launcher_profile::take();
+                if let Some(window) = session.metrics.window.as_mut() {
+                    window["renderer_profile"] =
+                        serde_json::to_value(report).expect("renderer profile JSON");
+                    window["renderer_profile_scope"] = serde_json::json!(
+                        "summed primary/helper stage wall time; not elapsed critical path or stage CPU time"
+                    );
+                }
+                if let Err(error) = session.publish_metrics(ui.render_w(), ui.render_h()) {
+                    session.metrics.error = Some(error);
+                }
             }
             tooling_tick_us = duration_us(tooling_tick_start, Instant::now());
             launcher_presenter.tooling_preview(session);

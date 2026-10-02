@@ -81,3 +81,11 @@ only on wall time. CPU, measurement windows and supervision deadlines still
 use real elapsed time. These checks do not change motion or force extra renders.
 Re-run parent and candidate under this same contract before comparing results
 with the new app timing. Earlier wall-clock-animation figures are historical.
+
+Use `scripts/magik check animation-roundtrip --profile --installed-sha256 SHA`
+for one diagnostic route. This enables CPU sampling plus renderer stage spans
+only inside the measurement window; ordinary runs do not enable span clocks.
+The report includes helper frames and aggregates both bands' stage wall time.
+Those totals are neither elapsed critical-path time nor stage CPU time. Compare
+them with per-band CPU/run-delay, producer/merge, hidden-copy and actual Slint
+raster evidence; profile-run drop counts are not acceptance measurements.

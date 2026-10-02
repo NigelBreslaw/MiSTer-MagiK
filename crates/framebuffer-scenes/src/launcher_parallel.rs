@@ -101,6 +101,8 @@ struct Job {
     split: usize,
 }
 struct Completion {
+    #[cfg(feature = "launcher-profile")]
+    profile: Option<crate::launcher_profile::Report>,
     buffer: PreparedLauncherFrame,
     wall_us: u64,
     cpu_us: Option<u64>,
@@ -152,8 +154,13 @@ impl ParallelLauncherRenderer {
                     let (cpu_us, run_delay_us) = ThreadSample::now(clocks).since(sample);
                     let wall_us = micros(started_at);
                     let finished_at = Instant::now();
+                    #[cfg(feature = "launcher-profile")]
+                    let profile =
+                        crate::launcher_profile::enabled().then(crate::launcher_profile::take);
                     if completed
                         .send(Completion {
+                            #[cfg(feature = "launcher-profile")]
+                            profile,
                             buffer: job.buffer,
                             wall_us,
                             cpu_us,
@@ -216,12 +223,20 @@ impl ParallelLauncherRenderer {
             return Err("mismatched current card pose".into());
         }
         let merge_started = Instant::now();
-        for y in 120..495 {
-            destination[y * 960 + split..y * 960 + CAROUSEL_RIGHT].copy_from_slice(
-                &completed.buffer.pixels()[y * 960 + split..y * 960 + CAROUSEL_RIGHT],
-            );
+        {
+            #[cfg(feature = "launcher-profile")]
+            let _merge = crate::launcher_profile::span("frame.helper-merge");
+            for y in 120..495 {
+                destination[y * 960 + split..y * 960 + CAROUSEL_RIGHT].copy_from_slice(
+                    &completed.buffer.pixels()[y * 960 + split..y * 960 + CAROUSEL_RIGHT],
+                );
+            }
         }
         let merge_us = micros(merge_started);
+        #[cfg(feature = "launcher-profile")]
+        if let Some(profile) = completed.profile {
+            crate::launcher_profile::absorb_worker(profile);
+        }
         self.helper = Some(completed.buffer);
         // Balance what each band adds to the critical path, including the
         // helper's wake-up; the primary band runs on the presenting thread.
@@ -312,6 +327,59 @@ mod tests {
             balanced_split(CAROUSEL_LEFT, CAROUSEL_SPLIT, 0, 5_000),
             CAROUSEL_SPLIT
         );
+    }
+
+    #[test]
+    #[cfg(feature = "launcher-profile")]
+    fn instrumented_frame_collects_and_drains_helper_stages() {
+        let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+            id: LauncherCardId::Consoles,
+            name,
+            games: Some(12),
+            colour: 0x2a7f,
+        });
+        let mut scene = LauncherScene::new(960, 540).prepare(LauncherData {
+            cards: &cards,
+            selected: 0,
+            library_games: 72,
+            collections: 6,
+            favourites: 1,
+            clock: "12:00",
+            level: LauncherLevel::Root,
+        });
+        let preparer = scene.frame_preparer();
+        let mut renderer = ParallelLauncherRenderer::new(preparer.clone(), None, None).unwrap();
+        let _ = crate::launcher_profile::take();
+        crate::launcher_profile::enable_wall_time();
+        let request = LauncherFrameRequest {
+            frame: BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: BrowsePhase::Flipping,
+                direction: Some(BrowseDirection::Right),
+                progress_millis: 60,
+                duration_millis: 180,
+            },
+            timestamp_us: 60_000,
+            generation: 1,
+        };
+        scene.render_parallel_frame(&mut renderer, request).unwrap();
+        crate::launcher_profile::disable();
+        let report = crate::launcher_profile::take();
+        assert_eq!(report.worker_frames, 1);
+        for label in [
+            "flip.clear",
+            "flip.geometry-filter",
+            "flip.compose",
+            "reflection.prepare",
+            "flip.reflection",
+            "frame.helper-merge",
+        ] {
+            assert!(report.stages.contains_key(label), "missing {label}");
+        }
+        let drained = crate::launcher_profile::take();
+        assert_eq!(drained.worker_frames, 0);
+        assert!(drained.stages.is_empty());
     }
 
     #[test]

@@ -535,8 +535,12 @@ impl LauncherFramePreparer {
         clip: (usize, usize),
     ) {
         assert!(clip.0 >= self.carousel_clip().0 && clip.0 <= clip.1 && clip.1 <= 934);
-        for y in 120..495 {
-            pixels[y * 960 + clip.0..y * 960 + clip.1].fill(Rgb565Pixel(0));
+        {
+            #[cfg(feature = "launcher-profile")]
+            let _clear = crate::launcher_profile::span("flip.clear");
+            for y in 120..495 {
+                pixels[y * 960 + clip.0..y * 960 + clip.1].fill(Rgb565Pixel(0));
+            }
         }
         if !self.faces.is_empty() {
             let plan = self.trick.map_or_else(

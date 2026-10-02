@@ -112,6 +112,9 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
         window.draw_if_needed(|renderer| {
+            #[cfg(feature = "tooling")]
+            let _slint =
+                mister_magik_framebuffer_scenes::launcher_profile::span("frame.slint-raster");
             let region = self.target.render(renderer);
             slint_dirty = dirty_rect(
                 &region,
@@ -188,6 +191,9 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut damage = DirtyRectList::new();
         let rendered = window.draw_if_needed(|renderer| {
+            #[cfg(feature = "tooling")]
+            let _slint =
+                mister_magik_framebuffer_scenes::launcher_profile::span("frame.slint-raster");
             use i_slint_core::renderer::RendererSealed;
 
             // Include native damage in Slint's raster so unchanged overlays
