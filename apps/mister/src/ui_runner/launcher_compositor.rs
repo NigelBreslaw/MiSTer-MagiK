@@ -140,6 +140,13 @@ impl<'a> LayerTarget<'a> {
             self.layout.logical_w(),
             self.layout.logical_h(),
             |renderer| {
+                #[cfg(feature = "tooling")]
+                let _slint =
+                    mister_magik_framebuffer_scenes::launcher_profile::span("frame.slint-raster");
+                #[cfg(feature = "tooling")]
+                let _full = mister_magik_framebuffer_scenes::launcher_profile::span(
+                    "frame.slint-full-raster",
+                );
                 let region = self.target.render(renderer);
                 slint_dirty = dirty_rect(
                     &region,

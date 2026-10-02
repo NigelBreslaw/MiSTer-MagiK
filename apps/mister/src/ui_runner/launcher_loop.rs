@@ -9275,6 +9275,9 @@ pub(super) fn run_launcher_loop(
         let mut bridge_model_projection_us = 0u128;
         match bridge_sync_plan {
             LauncherBridgeSyncPlan::Full => {
+                #[cfg(feature = "tooling")]
+                let _profile =
+                    mister_magik_framebuffer_scenes::launcher_profile::span("bridge.full-sync");
                 bridge_model_projection_us = sync_bridge_launcher(
                     &app,
                     &pad,
@@ -11222,6 +11225,10 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = !navigation_capture_source_carrier_rendered;
             if destination_committed && !navigation_transition.destination_ready() {
+                #[cfg(feature = "tooling")]
+                let _profile = mister_magik_framebuffer_scenes::launcher_profile::span(
+                    "transition.destination-layers",
+                );
                 let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
                     || (full_screen_transition.owner()
                         == Some(FullScreenTransitionOwner::Navigation)

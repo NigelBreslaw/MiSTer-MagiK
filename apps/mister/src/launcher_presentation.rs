@@ -626,6 +626,8 @@ fn settings_cog_backdrop_image() -> slint::Image {
 /// half-height rows on the native 15 kHz rasters. Portrait has no room for it.
 /// A generic TV, monitor or handheld backdrop, or the cabinet for `None`.
 fn device_image(kind: Option<crate::device_art::DeviceKind>) -> slint::Image {
+    #[cfg(feature = "tooling")]
+    let _profile = mister_magik_framebuffer_scenes::launcher_profile::span("bridge.device-image");
     let Some(kind) = kind else {
         return arcade_cabinet_image();
     };
