@@ -39,6 +39,7 @@ REQUIRED_AGENT_CAPABILITIES = {
 }
 CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
     "metrics-v1",
+    "metrics-body-v1",
     "test-bridge-v1",
     "test-session",
 }

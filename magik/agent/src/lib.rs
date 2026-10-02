@@ -6,8 +6,8 @@ mod capture;
 mod catalog_operations;
 mod desktop;
 mod device;
-mod fpga_evidence;
 mod device_identity;
+mod fpga_evidence;
 mod input_probe;
 mod main_control;
 mod managed_launcher;
@@ -215,6 +215,7 @@ impl Agent {
             "test-bridge-v1",
             "test-session",
             "metrics-v1",
+            "metrics-body-v1",
             "watch-v1",
             "capture-framebuffer",
             "artifacts-v1",
@@ -316,6 +317,12 @@ impl Agent {
             );
         }
 
+        if request.op == "metrics-body" {
+            if body_length != 0 {
+                return Err(FrameError::BodyTooLarge);
+            }
+            return self.metrics_body(stream, &request);
+        }
         if matches!(
             request.op.as_str(),
             "service-boot-state" | "service-boot-install"
@@ -887,9 +894,57 @@ impl Agent {
         )))
     }
 
+    fn metrics_body(&self, stream: &mut TcpStream, request: &Envelope) -> Result<(), FrameError> {
+        match self.read_metrics() {
+            Ok(value) if value.is_object() => {
+                let body = serde_json::to_vec(&value).map_err(|e| FrameError::Io(e.to_string()))?;
+                if body.len() > 1024 * 1024 {
+                    return write_frame(
+                        stream,
+                        &response(
+                            &request.id,
+                            "error",
+                            serde_json::json!({"code":"metrics-too-large"}),
+                        ),
+                        &[],
+                    );
+                }
+                write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "metrics",
+                        serde_json::json!({"encoding":"json"}),
+                    ),
+                    &body,
+                )
+            }
+            _ => write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"metrics-unavailable"}),
+                ),
+                &[],
+            ),
+        }
+    }
+
     fn metrics(&self, request: &Envelope) -> Envelope {
         match self.read_metrics() {
-            Ok(value) if value.is_object() => response(&request.id, "metrics", value),
+            Ok(value) if value.is_object() => {
+                let reply = response(&request.id, "metrics", value);
+                if serde_json::to_vec(&reply).is_ok_and(|bytes| bytes.len() <= MAX_HEADER_BYTES) {
+                    reply
+                } else {
+                    response(
+                        &request.id,
+                        "error",
+                        serde_json::json!({"code":"metrics-too-large","detail":"use metrics-body"}),
+                    )
+                }
+            }
             Ok(_) => response(
                 &request.id,
                 "error",
@@ -2065,6 +2120,42 @@ mod tests {
             ),
             Err(FrameError::Io(message)) if message.contains("application exited")
         ));
+    }
+
+    #[test]
+    fn large_metrics_use_the_body_and_legacy_requests_get_a_bounded_error() {
+        let directory =
+            std::env::temp_dir().join(format!("magik-metrics-body-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let value = serde_json::json!({"window":{"evidence":"x".repeat(MAX_HEADER_BYTES+1024)}});
+        std::fs::write(
+            directory.join("probe-metrics.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        let agent = Agent::with_state_root(
+            "test".into(),
+            "token".into(),
+            directory.join("install"),
+            directory.clone(),
+        );
+        let request = response("test-id", "metrics-body", serde_json::json!({}));
+        assert_eq!(agent.metrics(&request).op, "error");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            agent.metrics_body(&mut stream, &request).unwrap();
+        });
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        let (header, body) = read_frame(&mut stream).unwrap();
+        assert_eq!(header.op, "metrics");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            value
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

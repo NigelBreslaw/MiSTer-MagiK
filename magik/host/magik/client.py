@@ -110,7 +110,22 @@ class NativeAgent:
         return self._successful("diagnostics")
 
     def metrics(self) -> Mapping[str, object]:
-        return self._successful("metrics")
+        import json
+
+        response, body = self._request("metrics-body")
+        if (
+            response.operation == "error"
+            and response.fields.get("code") == "unsupported-operation"
+        ):
+            return self._successful("metrics")
+        if response.operation == "error":
+            raise AgentError.from_fields(response.fields)
+        if response.operation != "metrics" or response.fields.get("encoding") != "json":
+            raise ProtocolError("invalid metrics body response")
+        value = json.loads(body)
+        if not isinstance(value, dict):
+            raise ProtocolError("metrics body must be an object")
+        return value
 
     def read_profile_artifact(self, profile_id: str, name: str) -> bytes:
         response, body = self._request(
