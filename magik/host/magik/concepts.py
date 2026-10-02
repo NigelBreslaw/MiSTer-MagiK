@@ -154,7 +154,7 @@ def validate(metrics, sha256, effect, preset, profile=False, *, quick=False):
     phase_ms = context.get("animation_elapsed_ms")
     motion_started = metrics.get("motion_started_ms")
     motion_qualified = effect not in RENDER_LABS or (
-        context.get("animation_clock") == "monotonic"
+        context.get("animation_clock") == "frame"
         and type(phase_ms) is int
         and type(motion_started) is int
         and abs(phase_ms - (w["end_ms"] - motion_started)) <= 100

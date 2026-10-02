@@ -17,7 +17,7 @@ def sample():
                 "concept": "diagnostic",
                 "preset": "default",
                 "route": "hdmi",
-                "animation_clock": "monotonic",
+                "animation_clock": "frame",
                 "animation_elapsed_ms": 30000,
             },
             process_cpu_percent=75,

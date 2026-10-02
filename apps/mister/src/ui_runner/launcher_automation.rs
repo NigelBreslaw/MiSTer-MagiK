@@ -239,7 +239,7 @@ pub(super) struct LauncherAutomation {
     socket_path: PathBuf,
     failure_path: PathBuf,
     session: Option<ActiveSession>,
-    last_descriptor_poll: Instant,
+    last_descriptor_poll: Option<Instant>,
     semantic: AutomationSemanticState,
     state_revision: u64,
     presented_state_revision: u64,
@@ -264,7 +264,7 @@ impl LauncherAutomation {
             socket_path,
             failure_path,
             session: None,
-            last_descriptor_poll: Instant::now() - Duration::from_secs(1),
+            last_descriptor_poll: None,
             semantic: AutomationSemanticState::default(),
             state_revision: 0,
             presented_state_revision: 0,
@@ -378,11 +378,13 @@ impl LauncherAutomation {
 
     fn refresh_session(&mut self, now: Instant) {
         if self.session.is_some()
-            || now.duration_since(self.last_descriptor_poll) < Duration::from_millis(100)
+            || self
+                .last_descriptor_poll
+                .is_some_and(|last| now.duration_since(last) < Duration::from_millis(100))
         {
             return;
         }
-        self.last_descriptor_poll = now;
+        self.last_descriptor_poll = Some(now);
         let Ok(descriptor) = read_valid_descriptor(&self.descriptor_path, BuildIdentity::current())
         else {
             return;

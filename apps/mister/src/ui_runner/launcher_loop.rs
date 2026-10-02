@@ -534,18 +534,6 @@ fn launcher_input_focus(
     }
 }
 
-fn main_proxy_event_instant(
-    frame_now: Instant,
-    frame_clock_us: u64,
-    captured_at_us: u64,
-) -> Instant {
-    frame_now
-        .checked_sub(Duration::from_micros(
-            frame_clock_us.saturating_sub(captured_at_us),
-        ))
-        .unwrap_or(frame_now)
-}
-
 fn orientation_transition_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV)
         .filter(|value| !value.is_empty())
@@ -4862,7 +4850,7 @@ struct ScreensaverControl {
     preview_active: bool,
     waiting_for_input_release: bool,
     restore_full_frame: bool,
-    preview_fade_started: Option<Instant>,
+    preview_fade: PreviewFade,
     reactivation_suppressed: bool,
     timeline: ScreensaverStartupTimeline,
 }
@@ -4876,7 +4864,7 @@ impl ScreensaverControl {
             preview_active: false,
             waiting_for_input_release: false,
             restore_full_frame: false,
-            preview_fade_started: None,
+            preview_fade: PreviewFade::Off,
             reactivation_suppressed: false,
             timeline: ScreensaverStartupTimeline::default(),
         }
@@ -4914,7 +4902,7 @@ impl ScreensaverControl {
                     self.restore_full_frame |= self.active;
                     self.last_activity = now;
                     self.active = false;
-                    self.preview_fade_started = None;
+                    self.preview_fade = PreviewFade::Off;
                 } else if enabled
                     && !self.reactivation_suppressed
                     && now.saturating_duration_since(self.last_activity) >= delay
@@ -4950,7 +4938,7 @@ impl ScreensaverControl {
         self.preview_active = true;
         self.waiting_for_input_release = true;
         self.last_activity = now;
-        self.preview_fade_started = Some(now);
+        self.preview_fade = PreviewFade::Armed;
         self.reactivation_suppressed = false;
         self.timeline.begin(now);
     }
@@ -4970,7 +4958,7 @@ impl ScreensaverControl {
         self.start_mode = ScreensaverStartMode::Inactive;
         self.preview_active = false;
         self.waiting_for_input_release = false;
-        self.preview_fade_started = None;
+        self.preview_fade = PreviewFade::Off;
         self.last_activity = now;
         was_active
     }
@@ -4988,7 +4976,7 @@ impl ScreensaverControl {
             self.preview_active = false;
             self.restore_full_frame = true;
             self.last_activity = now;
-            self.preview_fade_started = None;
+            self.preview_fade = PreviewFade::Off;
             return true;
         }
         if user_activity {
@@ -5004,7 +4992,7 @@ impl ScreensaverControl {
         self.start_mode = ScreensaverStartMode::Inactive;
         self.preview_active = false;
         self.waiting_for_input_release = false;
-        self.preview_fade_started = None;
+        self.preview_fade = PreviewFade::Off;
         self.reactivation_suppressed = true;
         self.last_activity = now;
     }
@@ -5013,15 +5001,31 @@ impl ScreensaverControl {
         std::mem::take(&mut self.restore_full_frame)
     }
 
-    fn preview_fade_alpha(&self, now: Instant) -> Option<u8> {
+    /// Fade opacity for the frame being produced. The fade starts on the first
+    /// frame that asks and advances one display period per frame after that.
+    fn preview_fade_alpha(&mut self, frame: u64, frame_period: Duration) -> Option<u8> {
         const PREVIEW_FADE_DURATION: Duration = Duration::from_millis(200);
-        let started = self.preview_fade_started?;
-        let elapsed = now.saturating_duration_since(started);
+        let started = match self.preview_fade {
+            PreviewFade::Off => return None,
+            PreviewFade::Armed => {
+                self.preview_fade = PreviewFade::Started(frame);
+                frame
+            }
+            PreviewFade::Started(started) => started,
+        };
+        let elapsed = frame_period.saturating_mul(frame.saturating_sub(started) as u32);
         Some(
             (elapsed.as_micros().min(PREVIEW_FADE_DURATION.as_micros()) * 255
                 / PREVIEW_FADE_DURATION.as_micros()) as u8,
         )
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewFade {
+    Off,
+    Armed,
+    Started(u64),
 }
 
 const fn screensaver_catalog_busy(worker_running: bool, refresh_done: bool) -> bool {
@@ -5215,6 +5219,13 @@ pub(super) fn run_launcher_loop(
     #[cfg(feature = "tooling")]
     app.set_development_keyboard_input(true);
     let start = Instant::now();
+    // The only animation time in the launcher: one display period per produced
+    // frame, on the same step Slint uses. Nothing animated may read a real clock.
+    let mut frame_clock =
+        mister_magik_core::frame_clock::FrameClock::new(start, animation_clock.fixed_step());
+    crate::launcher::set_frame_period(frame_clock.period());
+    let mut idle_slept_last_iteration = false;
+    let mut previous_loop_start = start;
     #[cfg(feature = "ui-device-tests")]
     let ui_test_fixture = std::env::var(crate::ui_test_support::FIXTURE_ENV)
         .ok()
@@ -6296,7 +6307,7 @@ pub(super) fn run_launcher_loop(
         } else {
             start
         };
-    launcher_bench_next_step = run_start;
+    launcher_bench_next_step = frame_clock.now();
     // Post-navigation benchmarks do not begin until their target UI state is
     // active. A boot-time deadline would otherwise accept an inactive trace.
     let mut preview_scroll_exit_at = if launcher_bench_after_input_script {
@@ -6429,6 +6440,15 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
+        // A launcher that slept with nothing to animate counts that sleep in
+        // whole display periods so gaps and holds span it. Produced frames
+        // always advance exactly one period (see `FrameClock`).
+        if std::mem::take(&mut idle_slept_last_iteration) {
+            frame_clock.advance_idle(loop_start.saturating_duration_since(previous_loop_start));
+        }
+        previous_loop_start = loop_start;
+        let animation_now = frame_clock.now();
+        let animation_us = frame_clock.elapsed_us();
         match library_reset.poll(loop_start) {
             Ok(true) => {
                 let _pace = pacer.wait();
@@ -6514,7 +6534,7 @@ pub(super) fn run_launcher_loop(
             full_bridge_dirty = true;
             request_launcher_redraw!();
         }
-        if bridge_models.expire_selection_feedback(loop_start) {
+        if bridge_models.expire_selection_feedback(animation_now) {
             full_bridge_dirty = true;
             request_launcher_redraw!();
         }
@@ -6537,7 +6557,7 @@ pub(super) fn run_launcher_loop(
                 target,
                 leg.from,
                 leg.to,
-                loop_start,
+                animation_now,
                 false,
                 &mut nav,
                 &mut layout,
@@ -6587,7 +6607,7 @@ pub(super) fn run_launcher_loop(
                     target,
                     from,
                     previous,
-                    loop_start,
+                    animation_now,
                     nav.settings.reduce_motion,
                     &mut nav,
                     &mut layout,
@@ -7261,19 +7281,13 @@ pub(super) fn run_launcher_loop(
             arcade_entry_latency.cancel_enter();
             full_bridge_dirty = true;
             if navigation_transition.is_active() {
-                let now_us = loop_start
-                    .saturating_duration_since(start)
-                    .as_micros()
-                    .min(u64::MAX as u128) as u64;
+                let now_us = animation_us;
                 navigation_transition.request_reverse(now_us);
             }
         }
 
         if navigation_transition.is_active() {
-            let now_us = loop_start
-                .saturating_duration_since(start)
-                .as_micros()
-                .min(u64::MAX as u128) as u64;
+            let now_us = animation_us;
             navigation_transition.tick(now_us);
             let should_commit = pending_navigation_transition
                 .as_ref()
@@ -7480,7 +7494,7 @@ pub(super) fn run_launcher_loop(
                 );
                 launcher_bench_active = true;
                 launcher_bench_waiting_for_initial_preview = false;
-                launcher_bench_next_step = run_start;
+                launcher_bench_next_step = animation_now;
                 preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
                 arcade_entry_latency
                     .record_first_nav_input(start, run_start, &lifecycle, &catalog, &nav);
@@ -7505,7 +7519,7 @@ pub(super) fn run_launcher_loop(
                 if launcher_bench_initial_preview_ready(scenario, cache_state, selected_has_preview)
                 {
                     launcher_bench_waiting_for_initial_preview = false;
-                    launcher_bench_next_step = Instant::now();
+                    launcher_bench_next_step = animation_now;
                     print_startup_event(
                         start,
                         "launcher_bench_preview_ready",
@@ -7517,7 +7531,8 @@ pub(super) fn run_launcher_loop(
                 && !latch_failure_active
                 && catalog_ready_for_bench
                 && !launcher_bench_waiting_for_initial_preview
-                && launcher_bench_next_step.elapsed() >= scenario.period()
+                && animation_now.saturating_duration_since(launcher_bench_next_step)
+                    >= scenario.period()
             {
                 let before = LauncherProjectionKey::from_nav(&nav);
                 let bench_step_ran = launcher_bench_step(
@@ -7527,7 +7542,7 @@ pub(super) fn run_launcher_loop(
                     &catalog,
                     None,
                     &mut launcher_bench_state,
-                    Instant::now(),
+                    animation_now,
                 );
                 if bench_step_ran {
                     let after = LauncherProjectionKey::from_nav(&nav);
@@ -7544,7 +7559,7 @@ pub(super) fn run_launcher_loop(
                     }
                 }
                 launcher_bench_state.advance_if(bench_step_ran);
-                launcher_bench_next_step = Instant::now();
+                launcher_bench_next_step = animation_now;
             }
         }
 
@@ -7624,7 +7639,6 @@ pub(super) fn run_launcher_loop(
                 .take()
                 .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
             let frame_now = Instant::now();
-            let frame_clock_us = crate::input_hub::monotonic_us();
             let mut incoming_input_events = VecDeque::new();
             let mut screensaver_wake = false;
             let input_batch_result =
@@ -7656,29 +7670,23 @@ pub(super) fn run_launcher_loop(
                     &physical_for_automation,
                     effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
                     setup.is_active(),
-                    frame_now,
+                    animation_now,
                 ));
                 if let Some(event) = settings_navigation_benchmark.event_for(
                     nav.screen,
                     nav.selected,
                     nav.settings_selected,
                     full_screen_transition.state() == FullScreenTransitionState::Live,
-                    frame_now
-                        .saturating_duration_since(start)
-                        .as_micros()
-                        .min(u64::MAX as u128) as u64,
+                    animation_us,
                 ) {
                     incoming_input_events.push_back(event);
                 }
-                if let Some(event) = library_changed_dialog_test.event_for(&nav, frame_now, start) {
+                if let Some(event) =
+                    library_changed_dialog_test.event_for(&nav, animation_now, start)
+                {
                     incoming_input_events.push_back(event);
                 }
-                if let Some(event) = launcher_input_script.event_for(
-                    frame_now
-                        .saturating_duration_since(start)
-                        .as_micros()
-                        .min(u64::MAX as u128) as u64,
-                ) {
+                if let Some(event) = launcher_input_script.event_for(animation_us) {
                     incoming_input_events.push_back(event);
                 }
             }
@@ -7752,7 +7760,7 @@ pub(super) fn run_launcher_loop(
             if screensaver.active {
                 while let Some(event) = incoming_input_events.pop_front() {
                     let focus = launcher_input_focus(true, true, false, false, false, false, &nav);
-                    let outcome = input_router.route_event(event, focus, frame_now);
+                    let outcome = input_router.route_event(event, focus, animation_now);
                     launcher_response_trace.record_route(event, outcome);
                     if matches!(outcome, InputOutcome::WakeScreensaver { .. }) {
                         latency_critical_input_pending = true;
@@ -7805,7 +7813,7 @@ pub(super) fn run_launcher_loop(
                 let disabled = launcher_input_focus(false, false, false, false, false, false, &nav);
                 input_router.set_focus(disabled);
                 for event in incoming_input_events.drain(..) {
-                    let outcome = input_router.route_event(event, disabled, frame_now);
+                    let outcome = input_router.route_event(event, disabled, animation_now);
                     launcher_response_trace.record_route(event, outcome);
                 }
             }
@@ -7877,19 +7885,12 @@ pub(super) fn run_launcher_loop(
                     );
                     input_router.set_focus(focus);
                     let mut final_input_tick = false;
-                    let mut input_dispatch_now = frame_now;
+                    let input_dispatch_now = animation_now;
                     let mut direct_ui_action_this_loop = None;
                     let mut routed_event_this_loop = if let Some(event) = deferred_settings_event {
                         Some(event)
                     } else if let Some(event) = incoming_input_events.pop_front() {
-                        if event.source.kind == InputSourceKind::MainProxy {
-                            input_dispatch_now = main_proxy_event_instant(
-                                frame_now,
-                                frame_clock_us,
-                                event.captured_at_us,
-                            );
-                        }
-                        let outcome = input_router.route_event(event, focus, frame_now);
+                        let outcome = input_router.route_event(event, focus, animation_now);
                         input_integrity_trace.record_outcome(outcome);
                         launcher_response_trace.record_route(event, outcome);
                         latency_critical_input_pending |= matches!(
@@ -7928,7 +7929,7 @@ pub(super) fn run_launcher_loop(
                         }
                     } else if focus.target.kind != InputContextKind::Transition
                         && let Some(outcome @ InputOutcome::Dispatch { event, .. }) =
-                            input_router.tick_repeat(frame_now)
+                            input_router.tick_repeat(animation_now)
                     {
                         input_integrity_trace.record_outcome(outcome);
                         launcher_response_trace.record_route(event, outcome);
@@ -7968,9 +7969,9 @@ pub(super) fn run_launcher_loop(
                         {
                             setup.list_index = *index;
                         }
-                        let setup_action = routed_event_this_loop
-                            .map_or(SetupAction::None, |event| {
-                                setup.handle_action(&event, frame_now, &setup_info, pad.db())
+                        let setup_action =
+                            routed_event_this_loop.map_or(SetupAction::None, |event| {
+                                setup.handle_action(&event, animation_now, &setup_info, pad.db())
                             });
                         match setup_action {
                             SetupAction::None => {}
@@ -8042,8 +8043,7 @@ pub(super) fn run_launcher_loop(
                                 if changed {
                                     crate::ui_logln!(
                                         "preview_transition_picker={}",
-                                        preview_transition
-                                            .current_label(frame_now.duration_since(run_start))
+                                        preview_transition.current_label(frame_clock.elapsed())
                                     );
                                     request_launcher_redraw!();
                                 }
@@ -8091,11 +8091,7 @@ pub(super) fn run_launcher_loop(
                                 preview.cancel_system_entry_preview();
                                 arcade_entry_latency.cancel_enter();
                                 if navigation_transition.is_active() {
-                                    let now_us = frame_now
-                                        .saturating_duration_since(start)
-                                        .as_micros()
-                                        .min(u64::MAX as u128)
-                                        as u64;
+                                    let now_us = animation_us;
                                     navigation_transition.request_reverse(now_us);
                                 }
                             }
@@ -8199,7 +8195,7 @@ pub(super) fn run_launcher_loop(
                             } else if final_input_tick {
                                 nav.handle_held_tick_with_navigation_intents(
                                     &launcher_state,
-                                    frame_now,
+                                    animation_now,
                                     &catalog,
                                 )
                             } else {
@@ -8222,11 +8218,7 @@ pub(super) fn run_launcher_loop(
                                 && let Some((route, direction)) =
                                     settings_page_transition(source_screen, nav.screen)
                             {
-                                let now_us = frame_now
-                                    .saturating_duration_since(start)
-                                    .as_micros()
-                                    .min(u64::MAX as u128)
-                                    as u64;
+                                let now_us = animation_us;
                                 let axis = match nav.settings.screen_orientation {
                                     ScreenOrientation::Normal => {
                                         SettingsPageTransitionAxis::Horizontal
@@ -8396,11 +8388,7 @@ pub(super) fn run_launcher_loop(
                                                     if layout.is_portrait() {
                                                         return false;
                                                     }
-                                                    let now_us = frame_now
-                                                        .saturating_duration_since(start)
-                                                        .as_micros()
-                                                        .min(u64::MAX as u128)
-                                                        as u64;
+                                                    let now_us = animation_us;
                                                     return navigation_transition
                                                         .begin_system_panel(
                                                             crt_layout,
@@ -8492,11 +8480,7 @@ pub(super) fn run_launcher_loop(
                                                     }
                                                 };
                                                 geometry.is_some_and(|mut geometry| {
-                                                    let now_us = frame_now
-                                                        .saturating_duration_since(start)
-                                                        .as_micros()
-                                                        .min(u64::MAX as u128)
-                                                        as u64;
+                                                    let now_us = animation_us;
                                                     let started = if matches!(
                                                         edge,
                                                         NavigationTransitionEdge::HomeToArcade
@@ -8885,7 +8869,7 @@ pub(super) fn run_launcher_loop(
                                                 target,
                                                 previous,
                                                 orientation,
-                                                frame_now,
+                                                animation_now,
                                                 nav.settings.reduce_motion,
                                                 &mut nav,
                                                 &mut layout,
@@ -8922,7 +8906,7 @@ pub(super) fn run_launcher_loop(
                                                 target,
                                                 from,
                                                 previous,
-                                                frame_now,
+                                                animation_now,
                                                 nav.settings.reduce_motion,
                                                 &mut nav,
                                                 &mut layout,
@@ -9434,7 +9418,7 @@ pub(super) fn run_launcher_loop(
             catalog_view.get_activity() == slint_ui::launcher::CatalogActivity::Foreground;
         let catalog_scan_percent = catalog_view.get_percent();
         let catalog_background_scan_visible = catalog_view.get_background_activity_visible();
-        if let Some(dot_visible) = catalog_scan_blink.update(catalog_scan_visible, loop_start) {
+        if let Some(dot_visible) = catalog_scan_blink.update(catalog_scan_visible, animation_now) {
             catalog_view.set_progress_dot_visible(dot_visible);
             request_launcher_redraw!();
         }
@@ -9841,9 +9825,9 @@ pub(super) fn run_launcher_loop(
                     predicted_selected,
                     predicted_visual_index,
                     &last_clock_text,
-                    loop_start.duration_since(run_start).as_millis() as u64,
+                    animation_us / 1_000,
                     !nav.settings.reduce_motion,
-                    nav.home_card_browse_prediction(loop_start),
+                    nav.home_card_browse_prediction(animation_now),
                 );
                 // Idle on a card: prepare the level it opens and the parent, so
                 // the level trick never waits on preparation.
@@ -10098,7 +10082,7 @@ pub(super) fn run_launcher_loop(
                 nav.arcade.selected,
                 nav.arcade.visual_index,
                 preview.trace_cache_state(),
-                preview_transition.current_label(loop_start.duration_since(run_start)),
+                preview_transition.current_label(frame_clock.elapsed()),
                 1.0,
                 &composition_status,
                 launcher_bench_scenario,
@@ -10119,7 +10103,7 @@ pub(super) fn run_launcher_loop(
                 |lab| launcher_idle_sleep_duration(&pacer).min(lab),
             );
             let idle_sleep = catalog_scan_blink
-                .time_until_toggle(loop_start)
+                .time_until_toggle(animation_now)
                 .map_or(idle_sleep, |blink| idle_sleep.min(blink));
             #[cfg(feature = "tooling")]
             let idle_sleep = if tooling.is_some() {
@@ -10128,6 +10112,7 @@ pub(super) fn run_launcher_loop(
                 idle_sleep
             };
             let _ = pad.wait_for_input(input_observation, idle_sleep);
+            idle_slept_last_iteration = true;
             let _ = launcher_response_trace
                 .record_scheduler_interval("idle-input-wait", scheduler_phase);
             record_launcher_frame_phase!(LauncherFramePhase::Yielded);
@@ -10270,7 +10255,8 @@ pub(super) fn run_launcher_loop(
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
         }
-        let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
+        let screensaver_fade_alpha =
+            screensaver.preview_fade_alpha(frame_clock.frame(), frame_clock.period());
         let mut frame_production_trace = FrameProductionTrace {
             class: scheduled_frame_class,
             ..FrameProductionTrace::default()
@@ -10326,11 +10312,11 @@ pub(super) fn run_launcher_loop(
             && let Some(session) = launcher_card_home.as_mut()
             && session.can_render_native()
         {
-            // Pacing can wait after model maintenance. Sample the current pose
-            // here so that waiting never freezes animation at an older phase.
-            let pose_at = Instant::now();
+            // Pose time is the frame's animation time, so pacing waits and
+            // repeated samples within a frame always agree.
+            let pose_at = animation_now;
             let (selected, visual_index) = nav.home_card_visual_prediction(pose_at);
-            let now_us = pose_at.duration_since(run_start).as_micros() as u64;
+            let now_us = animation_us;
             session.update(
                 super::launcher_card_home::scene_for_display(ui, layout),
                 &card_level,
@@ -11162,7 +11148,7 @@ pub(super) fn run_launcher_loop(
                 (preview_cache_state_before_composition == "exact")
                     .then(|| preview.selected_backdrop_source())
                     .flatten(),
-                loop_start.saturating_duration_since(run_start),
+                frame_clock.elapsed(),
                 layer_target.presentation_pixels_mut(),
                 layout,
                 crt_arcade_layout,
@@ -11377,10 +11363,7 @@ pub(super) fn run_launcher_loop(
                     // The first Slint destination raster can be expensive.
                     // Start animation at readiness, never at the stale frame
                     // start before that preparation: cold work is not motion.
-                    let now_us = Instant::now()
-                        .saturating_duration_since(start)
-                        .as_micros()
-                        .min(u64::MAX as u128) as u64;
+                    let now_us = animation_us;
                     if navigation_transition
                         .capture_destination(
                             if navigation_transition.settings_physical_space() {
@@ -11993,7 +11976,7 @@ pub(super) fn run_launcher_loop(
                 gui_profiling.phase_span(gui_custom_selection.orientation_transition_raster);
             let orientation_rendered = (!orientation_capture_source_carrier_rendered).then(|| {
                 orientation_transition
-                    .render_into(layer_target.presentation_pixels_mut(), Instant::now())
+                    .render_into(layer_target.presentation_pixels_mut(), animation_now)
             });
             drop(gui_orientation_pmu);
             if let Some(Some((done, render_stats, transition_damage))) = orientation_rendered {
@@ -12460,7 +12443,7 @@ pub(super) fn run_launcher_loop(
         let mut confirmed_present_sequence = 0u16;
         let mut confirmed_direct_layer_receipt = None;
         let mut selection_feedback_confirmed_at =
-            (!latch_trace_flush_deferred && visible_frame_presented).then_some(frame_t4);
+            (!latch_trace_flush_deferred && visible_frame_presented).then_some(animation_now);
         let runtime_status_sequence_before_frame = if settings_navigation_benchmark.enabled() {
             frame_accounting.runtime_status_submitted_sequence()
         } else {
@@ -12560,6 +12543,8 @@ pub(super) fn run_launcher_loop(
                     record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
                     request_launcher_redraw!();
                     record_launcher_frame_phase!(LauncherFramePhase::Yielded);
+                    // No vsync has passed, so the next frame reuses this frame's
+                    // time and replaces the posted one in the same refresh slot.
                     continue 'launcher;
                 }
             };
@@ -12649,9 +12634,13 @@ pub(super) fn run_launcher_loop(
                 record_launcher_frame_phase!(LauncherFramePhase::ActiveConfirmed);
                 confirmed_present_sequence = presented_frame.main_present_sequence;
                 let confirmed_at = pace.hit_at.unwrap_or(wait_done);
-                selection_feedback_confirmed_at = Some(confirmed_at);
+                // Feedback dwell is counted in frames: the frame that carried
+                // the highlight is the one that confirmed it.
+                selection_feedback_confirmed_at = Some(animation_now);
                 if orientation_capture_source_carrier_rendered {
-                    if !orientation_transition.restart_animation(Instant::now()) {
+                    if !orientation_transition
+                        .restart_animation(animation_now + frame_clock.period())
+                    {
                         orientation_benchmark.fail("orientation-carrier-restart-failed");
                     } else if orientation_benchmark.enabled() {
                         orientation_benchmark.capture_presentation_start(
@@ -13313,6 +13302,7 @@ pub(super) fn run_launcher_loop(
             latency_critical_input_pending = false;
         }
         frames += 1;
+        frame_clock.advance();
         if settings_navigation_benchmark.complete()
             && settings_navigation_benchmark_completed_at.is_none()
         {
@@ -16713,16 +16703,6 @@ mod tests {
     }
 
     #[test]
-    fn main_proxy_event_time_preserves_short_press_across_delayed_frames() {
-        let first_frame = Instant::now();
-        let press = main_proxy_event_instant(first_frame, 1_000_000, 900_000);
-        let later_frame = first_frame + Duration::from_millis(300);
-        let release = main_proxy_event_instant(later_frame, 1_300_000, 1_050_000);
-
-        assert_eq!(release.duration_since(press), Duration::from_millis(150));
-    }
-
-    #[test]
     fn main_proxy_press_moves_root_card_after_idle() {
         let catalog = empty_arcade_catalog("/tmp");
         let mut nav = LauncherNav::new();
@@ -19849,15 +19829,11 @@ mod tests {
         saver.preview(start);
         saver.update(start, true, Duration::from_secs(300), true, true);
         assert!(saver.active);
-        assert_eq!(saver.preview_fade_alpha(start), Some(0));
-        assert_eq!(
-            saver.preview_fade_alpha(start + Duration::from_millis(100)),
-            Some(127)
-        );
-        assert_eq!(
-            saver.preview_fade_alpha(start + Duration::from_millis(200)),
-            Some(255)
-        );
+        let period = Duration::from_millis(20);
+        assert_eq!(saver.preview_fade_alpha(7, period), Some(0));
+        assert_eq!(saver.preview_fade_alpha(7 + 5, period), Some(127));
+        assert_eq!(saver.preview_fade_alpha(7 + 10, period), Some(255));
+        assert_eq!(saver.preview_fade_alpha(7 + 11, period), Some(255));
         let activation_held =
             saver.input_held_for_control(false, pad_state_has_active_input(&physical_input));
         assert!(saver.handle_input(start, activation_held, true));

@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 type EventLoopCallback = Box<dyn FnOnce() + Send + 'static>;
 
@@ -194,23 +194,23 @@ impl std::ops::Deref for MisterSoftwareWindow {
 
 pub struct MisterPlatform {
     window: Rc<MisterSoftwareWindow>,
-    start: Instant,
-    fixed_time: Option<Rc<Cell<Duration>>>,
+    animation_time: Rc<Cell<Duration>>,
 }
 
 impl MisterPlatform {
-    pub fn new(window: Rc<MisterSoftwareWindow>, fixed_time: Option<Rc<Cell<Duration>>>) -> Self {
+    /// `animation_time` is the only time Slint ever sees. It moves only when a
+    /// frame advances it, never with the wall clock.
+    pub fn new(window: Rc<MisterSoftwareWindow>, animation_time: Rc<Cell<Duration>>) -> Self {
         Self {
             window,
-            start: Instant::now(),
-            fixed_time,
+            animation_time,
         }
     }
 }
 
 #[derive(Clone)]
 pub struct AnimationClock {
-    fixed_time: Option<Rc<Cell<Duration>>>,
+    fixed_time: Rc<Cell<Duration>>,
     fixed_step: Duration,
 }
 
@@ -249,6 +249,9 @@ impl AnimationClock {
         config: &AnimationClockConfig,
         fixed_step: Duration,
     ) -> Self {
+        // Animation time is always the display period times produced frames.
+        // Wall-clock animation is not offered, so a stale or mistyped token
+        // cannot reintroduce it.
         match config
             .mode
             .as_deref()
@@ -256,41 +259,35 @@ impl AnimationClock {
             .as_deref()
         {
             None | Some("") | Some("fixed60") | Some("fixed-60") | Some("frame")
-            | Some("frame-clock") => Self {
-                fixed_time: Some(Rc::new(Cell::new(Duration::ZERO))),
-                fixed_step,
-            },
-            Some("wall") | Some("wall-clock") => Self {
-                fixed_time: None,
-                fixed_step,
-            },
+            | Some("frame-clock") => {}
             other => {
-                crate::ui_errln!("ui: unknown MISTER_ANIMATION_CLOCK={other:?}; use wall|fixed60");
-                Self {
-                    fixed_time: None,
-                    fixed_step,
-                }
+                crate::ui_errln!(
+                    "ui: unsupported MISTER_ANIMATION_CLOCK={other:?}; animation is frame-locked"
+                );
             }
+        }
+        Self {
+            fixed_time: Rc::new(Cell::new(Duration::ZERO)),
+            fixed_step,
         }
     }
 
-    pub fn platform_time(&self) -> Option<Rc<Cell<Duration>>> {
-        self.fixed_time.clone()
+    pub fn platform_time(&self) -> Rc<Cell<Duration>> {
+        Rc::clone(&self.fixed_time)
+    }
+
+    /// The display period that one frame of animation represents.
+    pub fn fixed_step(&self) -> Duration {
+        self.fixed_step
     }
 
     #[cfg(any(mister_bench_scenes, all(target_os = "linux", target_arch = "arm")))]
     pub fn label(&self) -> &'static str {
-        if self.fixed_time.is_some() {
-            "fixed60"
-        } else {
-            "wall"
-        }
+        "fixed60"
     }
 
     pub fn advance(&self) {
-        if let Some(t) = &self.fixed_time {
-            t.set(t.get() + self.fixed_step);
-        }
+        self.fixed_time.set(self.fixed_time.get() + self.fixed_step);
     }
 }
 
@@ -398,10 +395,7 @@ impl Platform for MisterPlatform {
     }
 
     fn duration_since_start(&self) -> core::time::Duration {
-        self.fixed_time
-            .as_ref()
-            .map(|t| t.get())
-            .unwrap_or_else(|| self.start.elapsed())
+        self.animation_time.get()
     }
 }
 
@@ -438,7 +432,7 @@ impl Platform for IsolatedTestPlatform {
 pub(crate) fn install_isolated_test_platform() -> Rc<MisterSoftwareWindow> {
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     TEST_WINDOW.with(|current| *current.borrow_mut() = Some(window.clone()));
-    let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+    let fixed_time = Rc::new(Cell::new(Duration::ZERO));
     let result = slint::platform::set_platform(Box::new(IsolatedTestPlatform(
         MisterPlatform::new(window.clone(), fixed_time),
     )));
@@ -539,7 +533,7 @@ mod tests {
         let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
         slint::platform::set_platform(Box::new(MisterPlatform::new(
             window.clone(),
-            Some(Rc::new(Cell::new(Duration::ZERO))),
+            Rc::new(Cell::new(Duration::ZERO)),
         )))
         .expect("exclusive test platform");
         let ui = ReusedRasterProbe::new().expect("probe component");

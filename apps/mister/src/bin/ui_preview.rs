@@ -175,7 +175,7 @@ mod macos {
         let fixed_time = Rc::new(Cell::new(Duration::ZERO));
         slint::platform::set_platform(Box::new(MisterPlatform::new(
             Rc::clone(&slint_window),
-            Some(Rc::clone(&fixed_time)),
+            Rc::clone(&fixed_time),
         )))?;
         slint_window.set_size(PhysicalSize::new(frame_width as u32, frame_height as u32));
 
@@ -4944,7 +4944,7 @@ mod macos {
 
         fn init_test_slint_platform() {
             let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-            let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+            let fixed_time = Rc::new(Cell::new(Duration::ZERO));
             let result = slint::platform::set_platform(Box::new(IsolatedTestPlatform(
                 MisterPlatform::new(window, fixed_time),
             )));

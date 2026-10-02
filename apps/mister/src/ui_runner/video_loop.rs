@@ -493,6 +493,8 @@ pub(super) fn run_video_playback_loop(
     let mut audio_stats = AudioWindowStats::default();
     let mut video_cpu = VideoCpuSampler::new();
     let mut size_animation = VideoSizeAnimation::new(initial_doubled);
+    // UI animation time: one display period per loop iteration, never wall time.
+    let mut ui_time = Duration::ZERO;
     let mut button_edge = VideoButtonEdge::default();
     let mut auto_toggle = VideoAutoToggle::from_env();
     let mut retained_frame: Option<crate::video_player::VideoRgb565Frame> = None;
@@ -541,11 +543,12 @@ pub(super) fn run_video_playback_loop(
             ..Default::default()
         };
         let now = start.elapsed();
+        ui_time = ui_time.saturating_add(animation_clock.fixed_step());
         let _ = pad.poll();
         let controller_toggle = button_edge.a_pressed(pad.state().btn_a);
         let automatic_toggle = auto_toggle.due(now);
         if controller_toggle || automatic_toggle {
-            size_animation.toggle(now);
+            size_animation.toggle(ui_time);
             let (width, height) = size_animation.dimensions();
             let (target_width, target_height) = size_animation.target_dimensions();
             crate::ui_logln!(
@@ -562,7 +565,7 @@ pub(super) fn run_video_playback_loop(
                 VIDEO_SCALE_ANIMATION_RESPONSE.as_millis()
             );
         }
-        if size_animation.update(now) {
+        if size_animation.update(ui_time) {
             let (width, height) = size_animation.dimensions();
             crate::ui_logln!("video_size_transition complete={}x{}", width, height);
         }

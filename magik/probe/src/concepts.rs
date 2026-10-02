@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
+use mister_magik_core::frame_clock::REFERENCE_FRAME_PERIOD;
 use mister_magik_visual_concepts::{Preset, Scene};
 use std::time::{Duration, Instant};
 fn configure_card_worker() {
@@ -16,7 +17,6 @@ pub struct Concepts {
     pub measure_duration_ms: u64,
     pub generation: i32,
     pub advance_next: bool,
-    animation_at: Option<Instant>,
     pub stop_at: Option<Duration>,
     pub error: Option<String>,
     pub preparation_ms: u64,
@@ -40,7 +40,6 @@ impl Concepts {
             measure_duration_ms: 30_000,
             generation: 0,
             advance_next: false,
-            animation_at: None,
             stop_at: None,
             error: None,
             preparation_ms: 0,
@@ -54,7 +53,6 @@ impl Concepts {
         }
     }
     pub fn select(&mut self, name: &str, preset: Preset) {
-        self.animation_at = None;
         self.stop_at = None;
         self.generation = self.generation.wrapping_add(1);
         let previous_time = self.scene.as_ref().map(Scene::elapsed);
@@ -156,22 +154,18 @@ impl Concepts {
             }
         }
     }
-    /// Live motion follows monotonic time even when a render misses a refresh.
-    /// Bookmarks retain deterministic stepping and clamp to the exact pose.
-    pub fn advance_frame(&mut self, now: Instant) {
-        if self.paused {
-            self.animation_at = None;
-            return;
-        }
-        let previous = self.animation_at.replace(now);
-        if !self.advance_next {
+    /// Live motion advances one display period per rendered frame, so a render
+    /// that misses a refresh slows the scene down instead of stretching a step.
+    /// Bookmarks clamp to their exact pose.
+    pub fn advance_frame(&mut self) {
+        if self.paused || !self.advance_next {
             return;
         }
         if let Some(scene) = &mut self.scene {
             let delta = if let Some(target) = self.stop_at {
-                Duration::from_nanos(16_666_667).min(target.saturating_sub(scene.elapsed()))
+                REFERENCE_FRAME_PERIOD.min(target.saturating_sub(scene.elapsed()))
             } else {
-                previous.map_or(Duration::ZERO, |at| now.saturating_duration_since(at))
+                REFERENCE_FRAME_PERIOD
             };
             scene.advance(delta);
         }
@@ -185,7 +179,6 @@ impl Concepts {
             self.profile_preparation = true;
             return;
         }
-        self.animation_at = None;
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {
                 "launcher-cards" => (210, 420),
@@ -220,7 +213,6 @@ impl Concepts {
             }
             return;
         }
-        self.animation_at = None;
         self.stop_at = None;
         match action {
             "pause" => self.paused = true,
@@ -246,7 +238,7 @@ impl Concepts {
             "step" => {
                 self.paused = true;
                 if let Some(s) = &mut self.scene {
-                    s.advance(Duration::from_nanos(16_666_667));
+                    s.advance(REFERENCE_FRAME_PERIOD);
                     self.dirty = true;
                 }
             }
@@ -285,10 +277,7 @@ mod tests {
         c.advance_next = true;
         c.action("pause");
         c.action("step");
-        assert_eq!(
-            c.scene.as_ref().unwrap().elapsed(),
-            Duration::from_nanos(16_666_667)
-        );
+        assert_eq!(c.scene.as_ref().unwrap().elapsed(), REFERENCE_FRAME_PERIOD);
         assert!(c.paused && c.dirty);
         c.action("restart");
         assert_eq!(c.scene.as_ref().unwrap().elapsed(), Duration::ZERO);
@@ -305,29 +294,32 @@ mod tests {
         assert_eq!(c.preset, Preset::Reduced);
     }
     #[test]
-    fn live_clock_follows_time_without_including_paused_time() {
+    fn live_clock_advances_one_period_per_rendered_frame() {
         let mut c = Concepts::new(960, 540);
         c.select("diagnostic", Preset::Default);
-        let start = Instant::now();
-        c.advance_frame(start);
+        c.advance_frame();
+        assert_eq!(c.scene.as_ref().unwrap().elapsed(), Duration::ZERO);
         c.advance_next = true;
-        c.advance_frame(start + Duration::from_millis(47));
+        for _ in 0..3 {
+            c.advance_frame();
+        }
         assert_eq!(
             c.scene.as_ref().unwrap().elapsed(),
-            Duration::from_millis(47)
+            REFERENCE_FRAME_PERIOD * 3
         );
         c.action("pause");
-        c.advance_frame(start + Duration::from_secs(5));
+        for _ in 0..300 {
+            c.advance_frame();
+        }
         c.action("resume");
-        c.advance_frame(start + Duration::from_secs(6));
-        c.advance_frame(start + Duration::from_millis(6019));
+        c.advance_frame();
         assert_eq!(
             c.scene.as_ref().unwrap().elapsed(),
-            Duration::from_millis(66)
+            REFERENCE_FRAME_PERIOD * 4
         );
         c.action("capture-midpoint");
-        for frame in 0..200 {
-            c.advance_frame(start + Duration::from_secs(7) + Duration::from_millis(frame * 29));
+        for _ in 0..200 {
+            c.advance_frame();
         }
         assert_eq!(
             c.scene.as_ref().unwrap().elapsed(),

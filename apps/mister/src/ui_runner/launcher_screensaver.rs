@@ -31,7 +31,6 @@ pub struct LauncherScreensaver {
     parade: Option<ScreenshotParade>,
     startup_started_at: Option<Instant>,
     frame: u64,
-    motion_started_at: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -166,21 +165,6 @@ impl ScreenshotBuffer for LauncherScreenshotBuffer {
 pub(crate) type LauncherScreenshotRuntime = LiveScreenshotParade<LauncherScreenshotBuffer>;
 
 impl LauncherScreensaver {
-    pub fn render(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-    ) -> ScreensaverRenderTrace {
-        let now = Instant::now();
-        self.render_at(
-            dst,
-            w,
-            h,
-            now.saturating_duration_since(self.motion_started_at),
-        )
-    }
-
     pub fn render_at(
         &mut self,
         dst: &mut [Rgb565Pixel],
@@ -295,12 +279,10 @@ impl LauncherScreensaver {
                 preparation_slack: None,
             },
         )?;
-        let now = Instant::now();
         Ok(Self {
             parade: Some(parade),
             startup_started_at: None,
             frame: 0,
-            motion_started_at: now,
         })
     }
 }

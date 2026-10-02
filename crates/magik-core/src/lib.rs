@@ -8,6 +8,7 @@
 //! declared by the portable domain modules.
 
 pub mod display;
+pub mod frame_clock;
 pub mod input_event;
 pub mod input_info;
 pub mod input_repeat;
