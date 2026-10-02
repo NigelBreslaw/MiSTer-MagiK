@@ -359,3 +359,33 @@ subviews. No animation steps, durations, source artwork or drop gates were
 changed. Roughly 21 drops per route remain. The next work must address card tail
 scheduling/render-ahead and cold destination/endpoint Slint preparation; cheaper
 steady-state reveal drawing does not resolve those first-frame costs.
+
+
+## Locked-trick helper render-ahead — awaiting hardware comparison
+
+The helper band can now be prepared for exactly the next `FrameClock` step after
+the current native frame is copied and posted. One spare 960x540 RGB565 buffer
+keeps the current helper pixels immutable while projection scratch moves with
+the worker. The UI still renders the current primary band synchronously. This
+is an intermediate buffering experiment, not complete full-frame render-ahead.
+
+Read-only card plans leave chrome, destination readiness, navigation and the
+visible landing on their current-frame paths. No work is queued across the
+edge/swap or landing boundary. Consumption requires matching request/time and
+artwork/pose configuration. A mismatch drains and reports discarded work, then
+renders the required current frame. Current full-frame fallback pixels remain
+available while a future band is in flight; shutdown safely retires that band.
+
+Serial parity covers both directions and root/nested gather/deal phases, including
+edge-on and landing frames. Ownership tests cover source changes, current-frame
+access, one-buffer storage and shutdown. The app sequence verifies unchanged
+current time/request/input lock before consuming the next helper, then the same
+pixels and landing. The existing animation time-source test passes. Frontend
+Clippy, measurement and host tests pass; semantic diagnostics are clean.
+
+Native context advertises `native-tricks-v1`; the route requires actual reused
+helper frames and positive lead time when that mode is enabled. Reuse/lead and
+discarded wall/CPU work are visible in timing records. Producer time remains the
+current UI critical path; a longer completion-delivery interval can now represent
+intentional prepared-buffer waiting. Process CPU and the physical/fresh-pose drop
+gates are unchanged. Compare clean routes to the clip parent before retaining.

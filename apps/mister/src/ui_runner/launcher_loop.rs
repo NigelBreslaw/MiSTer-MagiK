@@ -6360,6 +6360,9 @@ pub(super) fn run_launcher_loop(
             "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
             "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
             "animation_clock": {"mode":"vsync-locked-v1", "period_ns":frame_clock.period().as_nanos()},
+            "card_helper_ahead": if !layout.is_portrait() && !ui.output_route().is_crt()
+                && (layout.logical_w(), layout.logical_h()) == (960, 540)
+                { "native-tricks-v1" } else { "disabled" },
         });
         crate::ui_logln!("magik_context {}", session.metrics.context);
     }
@@ -10372,6 +10375,10 @@ pub(super) fn run_launcher_loop(
                             tooling.metrics.counters.card_rendered_frames += 1;
                             let work = mister_magik_tooling_support::measurement::FrameWorkTiming {
                                 producer_us: timing.total_us,
+                                helper_ahead: timing.helper_ahead,
+                                helper_ahead_lead_us: timing.helper_ahead_lead_us,
+                                discarded_helper_us: timing.discarded_helper_us,
+                                discarded_helper_cpu_us: timing.discarded_helper_cpu_us,
                                 primary_us: timing.primary_us,
                                 secondary_us: timing.secondary_us,
                                 wait_us: timing.wait_us,
@@ -12508,6 +12515,14 @@ pub(super) fn run_launcher_loop(
             // Latch mode posts the hidden buffer first, then spends the slack before
             // vblank on normal per-frame accounting. The final wait is only the
             // pacing boundary for the next frame.
+            if card_direct_frame_rendered
+                && visible_frame_presented
+                && let Some(session) = launcher_card_home.as_mut()
+            {
+                let mut next_clock = frame_clock;
+                next_clock.advance();
+                session.prepare_helper_ahead(next_clock.elapsed_us() / 1_000);
+            }
             let wait_start = Instant::now();
             scheduler_phase = launcher_response_trace
                 .record_scheduler_interval("post-submit-accounting", scheduler_phase);

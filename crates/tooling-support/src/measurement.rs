@@ -4,6 +4,10 @@ use serde_json::{Value, json};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameWorkTiming {
     pub producer_us: u64,
+    pub helper_ahead: bool,
+    pub helper_ahead_lead_us: u64,
+    pub discarded_helper_us: u64,
+    pub discarded_helper_cpu_us: Option<u64>,
     pub primary_us: u64,
     pub secondary_us: u64,
     pub wait_us: u64,
@@ -20,7 +24,10 @@ pub struct FrameWorkTiming {
 }
 impl FrameWorkTiming {
     fn json(self) -> Value {
-        json!({"producer_us":self.producer_us,"primary_us":self.primary_us,"secondary_us":self.secondary_us,
+        json!({"producer_us":self.producer_us,
+            "helper_ahead":self.helper_ahead,"helper_ahead_lead_us":self.helper_ahead_lead_us,
+            "discarded_helper_us":self.discarded_helper_us,
+            "discarded_helper_cpu_us":self.discarded_helper_cpu_us,"primary_us":self.primary_us,"secondary_us":self.secondary_us,
             "wait_us":self.wait_us,"helper_start_delay_us":self.helper_start_delay_us,
             "completion_delivery_us":self.completion_delivery_us,"merge_us":self.merge_us,
             "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us,
@@ -272,6 +279,9 @@ impl PresentationMetrics {
             "owned_refresh_dropped_frames":c.drops-baseline.drops,"latch_rejections":c.rejections-baseline.rejections,
 
             "card_rendered_frames":c.card_rendered_frames-baseline.card_rendered_frames,
+            "helper_ahead_frames": self.work_timings.iter().filter(|t| t.helper_ahead).count(),
+            "helper_ahead_lead_us_total": self.work_timings.iter().filter(|t| t.helper_ahead).map(|t| t.helper_ahead_lead_us).sum::<u64>(),
+            "discarded_helper_us_total": self.work_timings.iter().map(|t| t.discarded_helper_us).sum::<u64>(),
 
             "card_delivered_frames":c.card_delivered_frames-baseline.card_delivered_frames,
 

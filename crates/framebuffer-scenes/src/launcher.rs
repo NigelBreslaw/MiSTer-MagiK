@@ -466,6 +466,18 @@ pub struct PreparedLauncherFrame {
 }
 
 impl PreparedLauncherFrame {
+    pub(super) fn spare_pixels() -> Self {
+        Self {
+            request: None,
+            scratch: Vec::new(),
+            pixels: vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT],
+        }
+    }
+
+    pub(super) fn swap_scratch(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.scratch, &mut other.scratch);
+    }
+
     pub fn pixels(&self) -> &[Rgb565Pixel] {
         &self.pixels
     }
@@ -490,6 +502,12 @@ pub struct LauncherFramePreparer {
 }
 
 impl LauncherFramePreparer {
+    pub(super) fn same_source(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.faces, &other.faces)
+            && self.cyclic == other.cyclic
+            && self.trick == other.trick
+    }
+
     pub fn carousel_clip(&self) -> (usize, usize) {
         if self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides) {
             (268, 934)

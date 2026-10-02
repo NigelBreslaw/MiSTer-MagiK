@@ -192,6 +192,12 @@ def animation_roundtrip(app, agent, run: Path, repetition: int, *, instrumented=
     assert window["start_ms"] <= rows[0]["device_before_ms"]
     assert window["end_ms"] >= rows[-1]["device_after_ms"]
     assert window["instrumented"] is instrumented and not window.get("evidence_error")
+    if window.get("context", {}).get("card_helper_ahead") == "native-tricks-v1":
+        assert window["helper_ahead_frames"] > 0, (
+            "Helper render-ahead was not exercised"
+        )
+        assert window["helper_ahead_frames"] <= window["card_rendered_frames"]
+        assert window["helper_ahead_lead_us_total"] > 0
     if instrumented:
         assert window["renderer_profile"]["worker_frames"] > 0, (
             "Missing helper stage evidence"

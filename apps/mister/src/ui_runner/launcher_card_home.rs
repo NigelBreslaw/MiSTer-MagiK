@@ -631,6 +631,53 @@ impl LauncherCardHomeSession {
         };
     }
 
+    /// Queue a helper band for exactly the next FrameClock step. Do not cross
+    /// the preparation/swap or landing boundaries, where state may change.
+    pub(super) fn prepare_helper_ahead(&mut self, next_ms: u64) {
+        if !self.can_render_native() || next_ms <= self.now_ms {
+            return;
+        }
+        let Some(trick) = self.trick.as_ref() else {
+            return;
+        };
+        let elapsed = next_ms.saturating_sub(trick.started_ms);
+        let (selected, t, slot, gather) = if let Some(delay) = trick.deal_delay_ms {
+            let t = elapsed.saturating_sub(delay);
+            if t >= u64::from(LEVEL_TRICK_MILLIS) {
+                return;
+            }
+            (
+                trick.destination_selected,
+                t as u32,
+                trick.source_slot,
+                false,
+            )
+        } else {
+            if elapsed >= u64::from(LEVEL_TRICK_EDGE_MILLIS) {
+                return;
+            }
+            (
+                trick.source_selected,
+                elapsed as u32,
+                trick.destination_slot,
+                true,
+            )
+        };
+        let request = LauncherFrameRequest {
+            frame: settled_frame(selected),
+            timestamp_us: next_ms.saturating_mul(1_000),
+            generation: self.last_request.generation.wrapping_add(1).max(1),
+        };
+        let preparer = self
+            .prepared
+            .level_frame_preparer(selected, trick.change, t, slot, gather);
+        if let Some(renderer) = self.renderer.as_mut()
+            && let Err(error) = renderer.prepare_helper_ahead(&preparer, request)
+        {
+            crate::ui_errln!("card helper render-ahead failed: {error}");
+        }
+    }
+
     /// A level change is playing. The carousel shows neither level's real
     /// selection, so the launcher must not act on input until it lands.
     pub(super) fn is_level_trick_active(&self) -> bool {
@@ -1710,6 +1757,24 @@ mod tests {
         assert_eq!(session.current_request().frame.selected, 1);
         assert_eq!(session.current_request().timestamp_us, 200_000);
         assert!(session.current_request().generation > source_generation);
+        let current = session.current_request();
+        let helper = session.current_helper_pixels().to_vec();
+        session.prepare_helper_ahead(216);
+        assert_eq!(session.now_ms, 200);
+        assert_eq!(session.current_request(), current);
+        assert_eq!(session.current_helper_pixels(), helper);
+        assert!(session.is_level_trick_active());
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 216, true, None);
+        let produced = session.render().to_vec();
+        assert!(session.last_timing().unwrap().helper_ahead);
+        let mut expected = prepare(scene, &snapshot(), 1, "21:37", &session.fonts);
+        expected.render_level_gather_to(
+            1,
+            LevelChange::Descend,
+            200,
+            session.trick.as_ref().unwrap().destination_slot,
+        );
+        assert_eq!(produced, expected.pixels());
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut now = 400;
         while session
