@@ -272,7 +272,9 @@ def test_motion_follows_rendered_frames_not_wall_time():
     for key in ("animation_period_ns", "animation_window_start_ms"):
         w["context"]["animation_elapsed_ms"] = 29750
         w["context"].pop(key)
-        assert not validate(data, "abc", "launcher-cards", "default")["motion_qualified"]
+        assert not validate(data, "abc", "launcher-cards", "default")[
+            "motion_qualified"
+        ]
         w["context"][key] = 16_666_667 if key == "animation_period_ns" else 0
 
 
