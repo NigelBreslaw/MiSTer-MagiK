@@ -16,6 +16,7 @@
 //! reflection path and allocates nothing.
 use super::*;
 use crate::launcher_flip::Pose;
+use crate::launcher_parallel::{ParallelFrameTiming, ParallelLauncherRenderer};
 
 /// Complete duration of a level change.
 pub const LEVEL_TRICK_MILLIS: u32 = 920;
@@ -47,6 +48,43 @@ impl LevelChange {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TrickCard {
+    index: usize,
+    detail: bool,
+    pose: Pose,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TrickPlan {
+    items: [Option<TrickCard>; CAROUSEL_CAPACITY],
+}
+
+impl TrickPlan {
+    pub(super) fn with_faces(self, faces: &[Arc<CardFaces>]) -> CarouselPlan<'_> {
+        CarouselPlan {
+            items: self.items.map(|item| {
+                item.map(|item| CarouselItem {
+                    face: if item.detail {
+                        &faces[item.index].detail
+                    } else {
+                        &faces[item.index].compact
+                    },
+                    blend: None,
+                    pose: item.pose,
+                })
+            }),
+            row: false,
+        }
+    }
+}
+
+pub(super) struct ChromeSpan {
+    start: usize,
+    end: usize,
+    title: bool,
+}
+
 impl PreparedLauncher {
     pub fn render_level_gather_to(
         &mut self,
@@ -55,11 +93,81 @@ impl PreparedLauncher {
         elapsed_millis: u32,
         destination: CardSlot,
     ) {
+        if let Some(plan) = self.level_gather_plan(selected, change, elapsed_millis, destination) {
+            self.draw_trick_plan(plan);
+        } else {
+            self.render_frame(settled(selected));
+        }
+    }
+
+    pub fn render_level_deal_from(
+        &mut self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        source: CardSlot,
+    ) {
+        if let Some(plan) = self.level_deal_plan(selected, change, elapsed_millis, source) {
+            self.draw_trick_plan(plan);
+        } else {
+            self.render_frame(settled(selected));
+        }
+    }
+
+    pub fn render_level_gather_to_parallel(
+        &mut self,
+        request: LauncherFrameRequest,
+        change: LevelChange,
+        elapsed_millis: u32,
+        destination: CardSlot,
+        renderer: &mut ParallelLauncherRenderer,
+    ) -> Result<ParallelFrameTiming, String> {
+        let plan =
+            self.level_gather_plan(request.frame.selected, change, elapsed_millis, destination);
+        self.render_parallel_trick_plan(renderer, request, plan)
+    }
+
+    pub fn render_level_deal_from_parallel(
+        &mut self,
+        request: LauncherFrameRequest,
+        change: LevelChange,
+        elapsed_millis: u32,
+        source: CardSlot,
+        renderer: &mut ParallelLauncherRenderer,
+    ) -> Result<ParallelFrameTiming, String> {
+        let plan = self.level_deal_plan(request.frame.selected, change, elapsed_millis, source);
+        self.render_parallel_trick_plan(renderer, request, plan)
+    }
+
+    fn render_parallel_trick_plan(
+        &mut self,
+        renderer: &mut ParallelLauncherRenderer,
+        request: LauncherFrameRequest,
+        plan: Option<TrickPlan>,
+    ) -> Result<ParallelFrameTiming, String> {
+        if self.scene != LauncherScene::new(960, 540) {
+            return Err("parallel cards require native geometry".into());
+        }
+        if let Some(plan) = plan {
+            let mut preparer = self.frame_preparer();
+            preparer.trick = Some(plan);
+            renderer.render(&preparer, request, &mut self.logical)
+        } else {
+            self.render_parallel_frame(renderer, request)
+        }
+    }
+
+    fn level_gather_plan(
+        &mut self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        destination: CardSlot,
+    ) -> Option<TrickPlan> {
         let t = elapsed_millis.min(EDGE_MILLIS);
         if t == 0 {
             self.restore_chrome();
-            self.render_frame(settled(selected));
-            return;
+            return None;
         }
         self.fade_level_chrome(GEOMETRY_ONE - ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS)));
         let hero = hero_pose(self.slot_zero(), destination, change, t);
@@ -68,7 +176,7 @@ impl PreparedLauncher {
         let mut behind = scaled_pose(hero, BEHIND_SCALE);
         behind.angle = 0;
         behind.brightness = 64;
-        let faces = Arc::clone(&self.faces);
+        let faces = &self.faces;
         let nested = faces.first().is_some_and(|f| f.slides);
         let relatives: &[isize] = if nested {
             &[4, 3, 2, 1]
@@ -81,7 +189,7 @@ impl PreparedLauncher {
             if nested && relative as usize >= faces.len().min(5) {
                 continue;
             }
-            let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
+            let Some(index) = neighbour(faces, self.cyclic, selected, relative) else {
                 continue;
             };
             if t == EDGE_MILLIS {
@@ -94,35 +202,34 @@ impl PreparedLauncher {
                     / GEOMETRY_ONE
                     / GEOMETRY_ONE;
             pose.brightness = pose.brightness * ((EDGE_MILLIS - t).min(20) * 256 / 20) / 256;
-            items[count] = Some(CarouselItem {
-                face: &faces[index].compact,
-                blend: None,
+            items[count] = Some(TrickCard {
+                index,
+                detail: false,
                 pose,
             });
             count += 1;
         }
-        if let Some(card) = faces.get(selected) {
-            items[count] = Some(CarouselItem {
-                face: &card.detail,
-                blend: None,
+        if faces.get(selected).is_some() {
+            items[count] = Some(TrickCard {
+                index: selected,
+                detail: true,
                 pose: hero,
             });
         }
-        self.draw_trick_plan(&mut CarouselPlan { items, row: false });
+        Some(TrickPlan { items })
     }
 
-    pub fn render_level_deal_from(
+    fn level_deal_plan(
         &mut self,
         selected: usize,
         change: LevelChange,
         elapsed_millis: u32,
         source: CardSlot,
-    ) {
+    ) -> Option<TrickPlan> {
         let t = elapsed_millis.clamp(EDGE_MILLIS, LEVEL_TRICK_MILLIS);
         if t == LEVEL_TRICK_MILLIS {
             self.restore_chrome();
-            self.render_frame(settled(selected));
-            return;
+            return None;
         }
         self.fade_level_chrome(ease_out_quart(window(
             t,
@@ -133,7 +240,7 @@ impl PreparedLauncher {
         let mut behind = scaled_pose(hero, BEHIND_SCALE);
         behind.angle = 0;
         behind.brightness = 64;
-        let faces = Arc::clone(&self.faces);
+        let faces = &self.faces;
         let nested = faces.first().is_some_and(|f| f.slides);
         let relatives: &[isize] = if nested {
             &[4, 3, 2, 1]
@@ -146,7 +253,7 @@ impl PreparedLauncher {
             if nested && relative as usize >= faces.len().min(5) {
                 continue;
             }
-            let Some(index) = neighbour(&faces, self.cyclic, selected, relative) else {
+            let Some(index) = neighbour(faces, self.cyclic, selected, relative) else {
                 continue;
             };
             let order = if nested {
@@ -166,21 +273,21 @@ impl PreparedLauncher {
             let mut pose = lerp_pose(behind, rest, dealt);
             pose.angle = rest.angle * dealt / GEOMETRY_ONE
                 - relative.signum() as i64 * EDGE_ON * (GEOMETRY_ONE - dealt) / GEOMETRY_ONE;
-            items[count] = Some(CarouselItem {
-                face: &faces[index].compact,
-                blend: None,
+            items[count] = Some(TrickCard {
+                index,
+                detail: false,
                 pose,
             });
             count += 1;
         }
-        if let Some(card) = faces.get(selected) {
-            items[count] = Some(CarouselItem {
-                face: &card.detail,
-                blend: None,
+        if faces.get(selected).is_some() {
+            items[count] = Some(TrickCard {
+                index: selected,
+                detail: true,
                 pose: hero,
             });
         }
-        self.draw_trick_plan(&mut CarouselPlan { items, row: false });
+        Some(TrickPlan { items })
     }
 
     /// The target breadcrumb swaps at 45% of the timeline while both panels are dim.
@@ -206,19 +313,24 @@ impl PreparedLauncher {
                 self.logical[at] = Rgb565Pixel(scale_rgb565(target.chrome[at].0, alpha));
             }
         }
+        self.level_foreign_title = true;
         self.fit_output();
     }
 
     pub fn restore_chrome(&mut self) {
         self.logical.copy_from_slice(&self.chrome);
+        self.level_chrome_alpha = None;
+        self.level_foreign_title = false;
         self.fit_output();
     }
 
-    fn draw_trick_plan(&mut self, plan: &mut CarouselPlan<'_>) {
+    fn draw_trick_plan(&mut self, plan: TrickPlan) {
+        let faces = &self.faces;
+        let plan = plan.with_faces(faces);
         // Both halves already use native poses. Mapping again would move the hero at the swap.
         if let Some(layout) = self.responsive {
             layout.clear_carousel(&mut self.logical);
-            layout.draw_plan(&mut self.logical, plan, &mut self.flip_columns);
+            layout.draw_plan(&mut self.logical, &plan, &mut self.flip_columns);
             return;
         }
         for y in 120..495 {
@@ -230,50 +342,97 @@ impl PreparedLauncher {
                 &mut self.logical,
                 LOGICAL_WIDTH,
                 (0, 0),
-                plan,
+                &plan,
                 &mut self.flip_columns,
                 (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
             );
         }
         self.fit_output();
     }
-    fn fade_level_chrome(&mut self, alpha: i64) {
-        let alpha = (alpha * 256 / GEOMETRY_ONE) as u32;
+    fn level_chrome_regions(&self) -> [((usize, usize, usize, usize), bool); 3] {
         let width = if self.responsive.is_some() {
             self.scene.width
         } else {
             LOGICAL_WIDTH
         };
-        let (logical, chrome) = (&mut self.logical, &self.chrome);
-        let mut fade = |x0: usize, y0: usize, x1: usize, y1: usize| {
+        let (summary, panel) = if let Some(layout) = self.responsive {
+            let (_, title_end) = layout.level_chrome_rows()[0];
+            let (_, _, _, rule_y) = layout.title_rect();
+            let (y0, y1) = layout.level_chrome_rows()[1];
+            ((0, rule_y + 1, width, title_end), (0, y0, width, y1))
+        } else {
+            ((0, 77, 265, 500), (296, 77, LOGICAL_WIDTH, 120))
+        };
+        let title = self.responsive.map_or((26, 0, 826, 76), |l| l.title_rect());
+        [(summary, false), (panel, false), (title, true)]
+    }
+
+    pub(super) fn rebuild_level_chrome_spans(&mut self) {
+        self.level_chrome_spans.clear();
+        self.level_chrome_alpha = None;
+        self.level_foreign_title = false;
+        let width = if self.responsive.is_some() {
+            self.scene.width
+        } else {
+            LOGICAL_WIDTH
+        };
+        for ((x0, y0, x1, y1), title) in self.level_chrome_regions() {
             for y in y0..y1 {
-                let row = y * width;
-                for (out, pixel) in logical[row + x0..row + x1]
-                    .iter_mut()
-                    .zip(&chrome[row + x0..row + x1])
-                {
+                let start = y * width + x0;
+                let row = &self.chrome[start..y * width + x1];
+                if let Some(first) = row.iter().position(|p| p.0 != BACKGROUND) {
+                    let last = row.iter().rposition(|p| p.0 != BACKGROUND).unwrap();
+                    self.level_chrome_spans.push(ChromeSpan {
+                        start: start + first,
+                        end: start + last + 1,
+                        title,
+                    });
+                }
+            }
+        }
+    }
+
+    fn fade_level_chrome(&mut self, alpha: i64) {
+        let alpha = (alpha * 256 / GEOMETRY_ONE) as u32;
+        let foreign_title = std::mem::take(&mut self.level_foreign_title);
+        if self.level_chrome_alpha == Some(alpha) && !foreign_title {
+            return;
+        }
+        // A target breadcrumb may occupy pixels that are black in our source.
+        // Clear that overlay before restoring this level's sparse title rows.
+        if foreign_title {
+            let ((x0, y0, x1, y1), _) = self.level_chrome_regions()[2];
+            let width = if self.responsive.is_some() {
+                self.scene.width
+            } else {
+                LOGICAL_WIDTH
+            };
+            for y in y0..y1 {
+                self.logical[y * width + x0..y * width + x1].fill(Rgb565Pixel(BACKGROUND));
+            }
+        }
+        for span in &self.level_chrome_spans {
+            if self.level_chrome_alpha == Some(alpha) && !span.title {
+                continue;
+            }
+            let alpha = if span.title {
+                76 + 180 * alpha / 256
+            } else {
+                alpha
+            };
+            let output = &mut self.logical[span.start..span.end];
+            let source = &self.chrome[span.start..span.end];
+            if alpha == 0 {
+                output.fill(Rgb565Pixel(0));
+            } else if alpha >= 256 {
+                output.copy_from_slice(source);
+            } else {
+                for (out, pixel) in output.iter_mut().zip(source) {
                     *out = Rgb565Pixel(scale_rgb565(pixel.0, alpha));
                 }
             }
-        };
-        if let Some(layout) = self.responsive {
-            let (_, title_end) = layout.level_chrome_rows()[0];
-            let (_, _, _, rule_y) = layout.title_rect();
-            fade(0, rule_y + 1, width, title_end);
-            let (y0, y1) = layout.level_chrome_rows()[1];
-            fade(0, y0, width, y1);
-        } else {
-            fade(0, 77, 265, 500);
-            fade(296, 77, LOGICAL_WIDTH, 120);
         }
-        let title_alpha = 76 + 180 * alpha / 256;
-        let (x0, y0, x1, y1) = self.responsive.map_or((26, 0, 826, 76), |l| l.title_rect());
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let at = y * width + x;
-                self.logical[at] = Rgb565Pixel(scale_rgb565(self.chrome[at].0, title_alpha));
-            }
-        }
+        self.level_chrome_alpha = Some(alpha);
     }
 }
 
@@ -515,6 +674,166 @@ mod tests {
             );
         }
         assert!(from.pixels()[76 * 960..77 * 960] == from.chrome[76 * 960..77 * 960]);
+    }
+
+    #[test]
+    fn parallel_tricks_match_serial_pixels_and_reuse_the_current_worker() {
+        let cards = cards(6);
+        let scene = LauncherScene::new(960, 540);
+        let mut initial_data = level(&cards, 3, &["CONSOLES"]);
+        initial_data.level = LauncherLevel::Root;
+        let initial = scene.prepare(initial_data);
+        let mut renderer =
+            ParallelLauncherRenderer::new(initial.frame_preparer(), None, None).unwrap();
+        let mut generation = 0;
+        for root in [true, false] {
+            let mut data = level(&cards, 3, &["CONSOLES"]);
+            if root {
+                data.level = LauncherLevel::Root;
+            }
+            let mut serial = scene.prepare(data);
+            let mut parallel = scene.prepare(data);
+            let mut target_data = level(&cards, 0, &["CONSOLES", "NINTENDO"]);
+            if !root {
+                target_data.level = LauncherLevel::Root;
+            }
+            let target = scene.prepare(target_data);
+            for change in [LevelChange::Descend, LevelChange::Ascend] {
+                serial.restore_chrome();
+                parallel.restore_chrome();
+                for t in [0, 1, 150, 260, 414, 459, 460] {
+                    generation += 1;
+                    let request = LauncherFrameRequest {
+                        frame: settled(3),
+                        timestamp_us: t as u64 * 1000,
+                        generation,
+                    };
+                    serial.render_level_gather_to(3, change, t, target.slot_zero());
+                    parallel
+                        .render_level_gather_to_parallel(
+                            request,
+                            change,
+                            t,
+                            target.slot_zero(),
+                            &mut renderer,
+                        )
+                        .unwrap();
+                    serial.render_transition_title_from(&target, t);
+                    parallel.render_transition_title_from(&target, t);
+                    assert!(
+                        serial.pixels() == parallel.pixels(),
+                        "root={root} {change:?} gather {t}"
+                    );
+                }
+                for t in [460, 461, 600, 750, 866, 899, 919, 920] {
+                    generation += 1;
+                    let request = LauncherFrameRequest {
+                        frame: settled(3),
+                        timestamp_us: t as u64 * 1000,
+                        generation,
+                    };
+                    serial.render_level_deal_from(3, change, t, target.slot_zero());
+                    parallel
+                        .render_level_deal_from_parallel(
+                            request,
+                            change,
+                            t,
+                            target.slot_zero(),
+                            &mut renderer,
+                        )
+                        .unwrap();
+                    assert!(
+                        serial.pixels() == parallel.pixels(),
+                        "root={root} {change:?} deal {t}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_chrome_matches_dense_fade_through_breadcrumbs_and_interruptions() {
+        let source_cards = cards(6);
+        let target_cards = cards(4);
+        for scene in [
+            LauncherScene::new(960, 540),
+            LauncherScene::crt(640, 240),
+            LauncherScene::new(540, 960),
+        ] {
+            for root in [false, true] {
+                let mut data = level(&source_cards, 3, &["CONSOLES"]);
+                if root {
+                    data.level = LauncherLevel::Root;
+                }
+                let mut sparse = scene.prepare(data);
+                let mut dense = scene.prepare(data);
+                let target = scene.prepare(level(&target_cards, 0, &["CONSOLES", "NINTENDO"]));
+                for change in [LevelChange::Descend, LevelChange::Ascend] {
+                    sparse.restore_chrome();
+                    dense.restore_chrome();
+                    for t in [1, 130, 260, 280, 414, 459, 460, 260, 200, 459] {
+                        sparse.render_level_gather_to(3, change, t, target.slot_zero());
+                        dense.render_level_gather_to(3, change, t, target.slot_zero());
+                        let alpha = ((GEOMETRY_ONE
+                            - ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS)))
+                            * 256
+                            / GEOMETRY_ONE) as u32;
+                        let width = if dense.responsive.is_some() {
+                            dense.scene.width
+                        } else {
+                            LOGICAL_WIDTH
+                        };
+                        // Previous implementation: repaint every pixel, including black.
+                        for ((x0, y0, x1, y1), title) in dense.level_chrome_regions() {
+                            let alpha = if title { 76 + 180 * alpha / 256 } else { alpha };
+                            for y in y0..y1 {
+                                for x in x0..x1 {
+                                    let at = y * width + x;
+                                    dense.logical[at] =
+                                        Rgb565Pixel(scale_rgb565(dense.chrome[at].0, alpha));
+                                }
+                            }
+                        }
+                        dense.fit_output();
+                        sparse.render_transition_title_from(&target, t);
+                        dense.render_transition_title_from(&target, t);
+                        assert!(
+                            sparse.pixels() == dense.pixels(),
+                            "scene={scene:?} root={root} change={change:?} t={t}"
+                        );
+                    }
+                    for t in [460, 490, 600, 760, 866, 880, 900, 919, 790, 920] {
+                        sparse.render_level_deal_from(3, change, t, target.slot_zero());
+                        dense.render_level_deal_from(3, change, t, target.slot_zero());
+                        let alpha =
+                            (ease_out_quart(window(t, CHROME_IN_AT_MILLIS, CHROME_IN_MILLIS)) * 256
+                                / GEOMETRY_ONE) as u32;
+                        let width = if dense.responsive.is_some() {
+                            dense.scene.width
+                        } else {
+                            LOGICAL_WIDTH
+                        };
+                        for ((x0, y0, x1, y1), title) in dense.level_chrome_regions() {
+                            let alpha = if title { 76 + 180 * alpha / 256 } else { alpha };
+                            for y in y0..y1 {
+                                for x in x0..x1 {
+                                    let at = y * width + x;
+                                    dense.logical[at] =
+                                        Rgb565Pixel(scale_rgb565(dense.chrome[at].0, alpha));
+                                }
+                            }
+                        }
+                        dense.fit_output();
+                        assert!(
+                            sparse.pixels() == dense.pixels(),
+                            "scene={scene:?} root={root} change={change:?} deal t={t}"
+                        );
+                    }
+                    sparse.refresh_chrome(data, None);
+                    dense.refresh_chrome(data, None);
+                }
+            }
+        }
     }
 
     #[test]
