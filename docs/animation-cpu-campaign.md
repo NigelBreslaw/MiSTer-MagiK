@@ -56,3 +56,7 @@ four clipped source starts against the same 960x540 destination. Each reports
 two wall-time and thread-CPU samples; repeat in reverse order to check drift.
 This isolates compose and excludes filtering, reflections, copy and presentation.
 Use the full application round trips to judge the effect on CPU and dropped frames.
+
+The same fixture supports `card-flat-generic` for the
+flat-card experiment (the neutral-route opacity trial was discarded). Its output comparison uses projected generic compose as
+an independent reference before timing the contiguous flat strip kernel.

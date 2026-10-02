@@ -76,6 +76,20 @@ int main(void) {
     magik_launcher_project_dithered_opaque(b+3,pitch,src,height,rows,q,step,x,y,top,bottom);
     if(memcmp(a,b,sizeof a)) {fprintf(stderr,"opaque project mismatch trial %zu\n",trial);return 6;}
   }
+  for(size_t trial=0;trial<4000;++trial) {
+    size_t height=1+next()%273,width=1+next()%32,rows=next()%513;
+    size_t pitch=width+next()%12,x=next()%960,y=next()%540;
+    uint32_t src[32*273];uint16_t a[24000],b[24000];
+    for(size_t c=0;c<width;++c)for(size_t j=0;j<height;++j) {
+      uint32_t alpha=trial%3==0?next()%255:j>=8&&j+8<height?255:next()%256;
+      src[c*height+j]=(next()%(alpha+1))|((next()%(alpha+1))<<8)|((next()%(alpha+1))<<16)|(alpha<<24);
+    }
+    for(size_t j=0;j<24000;++j)a[j]=b[j]=(uint16_t)next();
+    int32_t q=(int32_t)(next()%1048577)-131072,step=1+next()%196608;
+    for(size_t c=0;c<width;++c)reference_project_dithered(a+3+c,pitch,src+c*height,height,rows,q,step,x+c,y);
+    magik_launcher_flat_dithered(b+3,pitch,src,height,height,width,rows,q,step,x,y);
+    if(memcmp(a,b,sizeof a)){fprintf(stderr,"flat reference mismatch %zu\n",trial);return 7;}
+  }
   for(uint32_t a=0;a<256;++a)for(uint32_t b=0;b<256;++b)for(uint32_t w=0;w<256;w+=4) {
     uint32_t ws[4]={w,w+1,w+2,w+3},aa=a*0x01010101u,bb=b*0x01010101u,got[4];
     vst1q_u32(got,cabinet_mix4(vdupq_n_u32(aa),vdupq_n_u32(bb),vld1q_u32(ws)));

@@ -59,4 +59,21 @@ Trial source, executable and raw results are retained locally in ignored
 measured four-column implementation; an eight-column or different layout remains
 unmeasured. It does not establish that every row-store approach is slower.
 
+## Flat opaque compose — production change discarded
+
+Four native fixture samples measured 34.805–35.049 ns/pixel for the opacity trial
+versus 50.850–50.892 for generic flat compose (about 31% faster). The integrated
+trial also passed 4,000 randomized flat-strip cases and the existing ARM parity
+suite. Its three complete routes recorded 25/23/19 drops versus 21/26/23 for its
+opaque-projected parent. Mean moving CPU was 19.806 versus 19.787 ms/presentation;
+mean summed band wall time was 18.788 versus 18.866 ms/card frame. These small
+route differences do not establish an improvement.
+
+The fast path was removed instead of retaining production complexity for an
+unproven benefit on the target route. The `card-flat-generic` native fixture and
+independent projected-reference parity checks remain for future flat-kernel
+work. Trial Dev SHA256 was
+`466d96ee1e0843e4184373d5834cf39d47a6ce487db71e92374559b28b954ba1`;
+route evidence is `build/magik-results/20261002T191612Z-bd8dc35a2a54`.
+
 Further campaign items remain in `animation-cpu-campaign.md`.
