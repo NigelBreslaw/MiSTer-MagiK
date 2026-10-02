@@ -392,6 +392,22 @@ impl PreparedLauncher {
         }
     }
 
+    /// Rows that can change during a level trick, excluding the carousel.
+    /// Copy the full title region: a wider target breadcrumb and its later
+    /// clearing can change pixels that are black in the source title.
+    pub fn level_chrome_copy_spans(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let width = self.responsive.map_or(LOGICAL_WIDTH, |_| self.scene.width);
+        let ((x0, y0, x1, y1), _) = self.level_chrome_regions()[2];
+        (y0..y1)
+            .map(move |y| (y * width + x0, y * width + x1))
+            .chain(
+                self.level_chrome_spans
+                    .iter()
+                    .filter(|s| !s.title)
+                    .map(|s| (s.start, s.end)),
+            )
+    }
+
     fn fade_level_chrome(&mut self, alpha: i64) {
         let alpha = (alpha * 256 / GEOMETRY_ONE) as u32;
         let foreign_title = std::mem::take(&mut self.level_foreign_title);
@@ -674,6 +690,49 @@ mod tests {
             );
         }
         assert!(from.pixels()[76 * 960..77 * 960] == from.chrome[76 * 960..77 * 960]);
+    }
+
+    #[test]
+    fn sparse_copy_spans_cover_tricks_and_interrupted_foreign_titles() {
+        let cards = cards(6);
+        let scene = LauncherScene::new(960, 540);
+        for root in [false, true] {
+            let mut data = level(&cards, 3, &["CONSOLES"]);
+            if root {
+                data.level = LauncherLevel::Root;
+            }
+            let mut from = scene.prepare(data);
+            let target = scene.prepare(level(
+                &cards,
+                0,
+                &["CONSOLES", "NINTENDO ENTERTAINMENT SYSTEM"],
+            ));
+            for change in [LevelChange::Descend, LevelChange::Ascend] {
+                let mut slots = [from.pixels().to_vec(), from.pixels().to_vec()];
+                for (frame, t) in [
+                    0, 1, 150, 260, 414, 459, 75, 460, 461, 600, 750, 866, 899, 919, 920,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if t <= EDGE_MILLIS {
+                        from.render_level_gather_to(3, change, t, target.slot_zero());
+                        from.render_transition_title_from(&target, t);
+                    } else {
+                        from.render_level_deal_from(3, change, t, target.slot_zero());
+                    }
+                    let slot = &mut slots[frame % 2];
+                    for (start, end) in from.level_chrome_copy_spans() {
+                        slot[start..end].copy_from_slice(&from.pixels()[start..end]);
+                    }
+                    for y in 120..495 {
+                        let range = y * 960 + 268..y * 960 + 934;
+                        slot[range.clone()].copy_from_slice(&from.pixels()[range]);
+                    }
+                    assert!(slot == from.pixels(), "root={root} {change:?} phase={t}");
+                }
+            }
+        }
     }
 
     #[test]

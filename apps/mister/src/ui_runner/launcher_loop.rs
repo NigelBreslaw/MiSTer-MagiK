@@ -111,18 +111,9 @@ const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
 
 fn card_direct_tile_damage(left: usize, level_trick: bool) -> [DirtyRect; 2] {
     let mut damage = CARD_DIRECT_TILE_DAMAGE;
-    if level_trick {
-        // The trick fades chrome outside the carousel. Include the endpoint,
-        // whose render clears the active trick before the frame is copied.
-        damage[0].x0 = 0;
-        damage[1].x1 = 960;
-        for rect in &mut damage {
-            rect.y0 = 0;
-            rect.y1 = 540;
-        }
-    } else {
-        damage[0].x0 = left;
-    }
+    // Trick rendering clears from x=268, including root cards whose ordinary
+    // carousel starts at x=296. Keep that width on the landing frame as well.
+    damage[0].x0 = if level_trick { 268 } else { left };
     damage
 }
 
@@ -10307,6 +10298,7 @@ pub(super) fn run_launcher_loop(
             session.render();
             let request = session.current_request();
             let timing = session.last_timing();
+            let chrome_damage = session.chrome_copy_damage(level_trick);
             let cached = card_cached_frame_view(
                 session.current_pixels(),
                 layout.logical_w(),
@@ -10316,6 +10308,7 @@ pub(super) fn run_launcher_loop(
                 f,
                 display_session,
                 cached,
+                &chrome_damage,
                 [cached, cached],
                 card_direct_tile_damage(session.carousel_clip().0, level_trick),
                 mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(

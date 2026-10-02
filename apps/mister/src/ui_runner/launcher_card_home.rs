@@ -4,7 +4,7 @@
 //! Production owner for the custom RGB565 card launcher: the root cards and
 //! every nested hierarchy level, including the level-change card trick.
 
-use super::DirtyRect;
+use super::{DirtyRect, DirtyRectList};
 use crate::bitmap_font_resource::{
     jersey_25_console_bitmap_font, launcher_bitmap_font, nocive_15_console_bitmap_font,
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
@@ -700,6 +700,39 @@ impl LauncherCardHomeSession {
 
     pub(super) fn invalidate_compositor(&mut self) {
         self.compositor_content_generation = None;
+    }
+
+    pub(super) fn chrome_copy_damage(&self, level_trick: bool) -> DirtyRectList {
+        let mut damage = DirtyRectList::new();
+        if !level_trick {
+            return damage;
+        }
+        assert_eq!(self.scene, LauncherScene::new(960, 540));
+        // Coalesce sparse rows in bounded 32-row bands. Separate sidebar and
+        // panel runs; native chrome geometry needs at most 19 rectangles.
+        let mut pending: Option<((usize, bool), DirtyRect)> = None;
+        for (start, end) in self.prepared.level_chrome_copy_spans() {
+            let y = start / 960;
+            let key = (y / 32, start % 960 >= 268);
+            let row = DirtyRect {
+                x0: start % 960,
+                y0: y,
+                x1: (end - 1) % 960 + 1,
+                y1: y + 1,
+            };
+            if let Some((previous, rect)) = pending.as_mut() {
+                if *previous == key {
+                    *rect = rect.union(row);
+                    continue;
+                }
+                damage.push(*rect);
+            }
+            pending = Some((key, row));
+        }
+        if let Some((_, rect)) = pending {
+            damage.push(rect);
+        }
+        damage
     }
 
     pub(super) fn compositor_copy_damage(&self, motion_only: bool) -> Option<DirtyRect> {

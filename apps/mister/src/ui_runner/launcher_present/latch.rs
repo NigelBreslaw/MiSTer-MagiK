@@ -353,11 +353,13 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.try_render_hidden_frame(hardware, display_session, true, render)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::ui_runner) fn try_copy_direct_hidden_tiles<H: LatchHardware>(
         &mut self,
         hardware: &mut H,
         display_session: &mut LauncherDisplaySession,
         chrome: CachedFrameView<'_>,
+        chrome_damage: &DirtyRectList,
         tiles: [CachedFrameView<'_>; 2],
         damage: [DirtyRect; 2],
         content_generation: impl Into<TileImageIdentity>,
@@ -402,6 +404,13 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             // tiles still need the chrome copy when this slot is unseeded.
             if seed && !whole_frame_tiles {
                 bytes += B::copy_rect(buffer, chrome, full, self.vertical_sampling)?.bytes;
+            }
+            // Each slot catches up to the current chrome independently.
+            // Tile residency cannot suppress a fading header/summary copy.
+            if !seed && !whole_frame_tiles {
+                for rect in chrome_damage.iter() {
+                    bytes += B::copy_rect(buffer, chrome, rect, self.vertical_sampling)?.bytes;
+                }
             }
             bytes += self
                 .direct_retained_tiles
@@ -1947,6 +1956,7 @@ mod tests {
             &mut hardware,
             &mut display,
             CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+            &DirtyRectList::new(),
             [CachedFrameView::new(&pixels, WIDTH, HEIGHT); 2],
             [
                 DirtyRect {
@@ -2042,6 +2052,7 @@ mod tests {
                     &mut hardware,
                     &mut display,
                     CachedFrameView::new(&chrome, W, H),
+                    &DirtyRectList::new(),
                     [
                         CachedFrameView::new(&left, W, H),
                         CachedFrameView::new(&right, W, H),
@@ -2090,6 +2101,7 @@ mod tests {
                 hardware,
                 display,
                 CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                &DirtyRectList::new(),
                 [
                     CachedFrameView::new(&left, WIDTH, HEIGHT),
                     CachedFrameView::new(&right, WIDTH, HEIGHT),
@@ -2249,6 +2261,7 @@ mod tests {
             &mut hardware,
             &mut display,
             CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+            &DirtyRectList::new(),
             [
                 CachedFrameView::new(&left, WIDTH, HEIGHT),
                 CachedFrameView::new(&right, WIDTH, HEIGHT),
@@ -2381,6 +2394,7 @@ mod tests {
                     &mut hardware,
                     &mut display,
                     CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                    &DirtyRectList::new(),
                     [
                         CachedFrameView::new(&left, WIDTH, HEIGHT),
                         CachedFrameView::new(&right, WIDTH, HEIGHT),
@@ -2438,6 +2452,154 @@ mod tests {
     }
 
     #[test]
+    fn fading_chrome_catches_up_in_both_slots_when_tiles_are_resident() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        let mut statuses = Vec::new();
+        for frame in 0..6 {
+            let (front, next) = if frame % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
+        }
+        let mut hardware = FakeHardware {
+            statuses,
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+        let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+        let damage = [
+            DirtyRect {
+                x0: 0,
+                y0: 1,
+                x1: 2,
+                y1: 2,
+            },
+            DirtyRect {
+                x0: 2,
+                y0: 1,
+                x1: WIDTH,
+                y1: 2,
+            },
+        ];
+        let chrome_damage = DirtyRectList::from_one(DirtyRect {
+            x0: 1,
+            y0: 0,
+            x1: 3,
+            y1: 1,
+        });
+        for frame in 0..6 {
+            let mut chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+            chrome[1..3].fill(Rgb565Pixel(20 + frame));
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                    &chrome_damage,
+                    [
+                        CachedFrameView::new(&left, WIDTH, HEIGHT),
+                        CachedFrameView::new(&right, WIDTH, HEIGHT),
+                    ],
+                    damage,
+                    TileImageIdentity::new(7, 19),
+                )
+                .unwrap()
+                .unwrap();
+            let slot = copy.completed.grant.slot_index;
+            let mut expected = chrome;
+            expected[WIDTH..WIDTH + 2].fill(Rgb565Pixel(11));
+            expected[WIDTH + 2..2 * WIDTH].fill(Rgb565Pixel(13));
+            assert_eq!(presenter.buffers.buffer_mut(slot).pixels, expected);
+            assert_eq!(
+                copy.copy.bytes,
+                if frame < 2 { WIDTH * HEIGHT * 2 + 8 } else { 4 }
+            );
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
+                .unwrap();
+        }
+        assert_eq!(hardware.post_bases.len(), 6);
+    }
+
+    #[test]
+    fn partial_chrome_failure_requires_full_slot_reseeding() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        let mut statuses = Vec::new();
+        for (front, next) in [(BASE1, BASE2), (BASE2, BASE1)] {
+            statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
+        }
+        statuses.push(Ok(status(BASE1, 0x0001)));
+        statuses.extend([BASE1, BASE1, BASE1, BASE2].map(|base| Ok(status(base, 0x0001))));
+        let mut hardware = FakeHardware {
+            statuses,
+            ..Default::default()
+        };
+        let mut display = display_session();
+        for _ in 0..2 {
+            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
+                .unwrap();
+        }
+        let buffer = presenter.buffers.buffer_mut(2);
+        buffer.fail_on_copy = Some(buffer.copy_count + 2);
+        let pixels = vec![Rgb565Pixel(20); WIDTH * HEIGHT];
+        let mut chrome_damage = DirtyRectList::new();
+        chrome_damage.push(DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 1,
+            y1: 1,
+        });
+        chrome_damage.push(DirtyRect {
+            x0: 1,
+            y0: 0,
+            x1: 2,
+            y1: 1,
+        });
+        let result = presenter.try_copy_direct_hidden_tiles(
+            &mut hardware,
+            &mut display,
+            CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+            &chrome_damage,
+            [CachedFrameView::new(&pixels, WIDTH, HEIGHT); 2],
+            [
+                DirtyRect {
+                    x0: 0,
+                    y0: 1,
+                    x1: 2,
+                    y1: 2,
+                },
+                DirtyRect {
+                    x0: 2,
+                    y0: 1,
+                    x1: 4,
+                    y1: 2,
+                },
+            ],
+            TileImageIdentity::new(7, 19),
+        );
+        assert!(result.is_err());
+        assert_eq!(hardware.post_bases.len(), 2);
+        assert_eq!(presenter.direct_slot_content_generation[1], None);
+        assert!(presenter.outstanding_direct_grant.is_none());
+        let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2 + 8);
+        let mut expected = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+        expected[WIDTH..WIDTH + 2].fill(Rgb565Pixel(11));
+        expected[WIDTH + 2..2 * WIDTH].fill(Rgb565Pixel(13));
+        assert_eq!(presenter.buffers.buffer_mut(2).pixels, expected);
+        presenter
+            .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
+            .unwrap();
+    }
+
+    #[test]
     fn full_frame_tiles_seed_both_slots_once_but_gapped_tiles_keep_the_chrome_seed() {
         for full_frame in [false, true] {
             let events = EventLog::default();
@@ -2476,6 +2638,7 @@ mod tests {
                         &mut hardware,
                         &mut display,
                         CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                        &DirtyRectList::new(),
                         [
                             CachedFrameView::new(&left, WIDTH, HEIGHT),
                             CachedFrameView::new(&right, WIDTH, HEIGHT),

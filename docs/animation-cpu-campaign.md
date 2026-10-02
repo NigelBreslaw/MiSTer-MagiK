@@ -60,3 +60,12 @@ Use the full application round trips to judge the effect on CPU and dropped fram
 The same fixture supports `card-flat-generic` for the
 flat-card experiment (the neutral-route opacity trial was discarded). Its output comparison uses projected generic compose as
 an independent reference before timing the contiguous flat strip kernel.
+
+Progress: projected opacity is retained; the four-column transpose and flat
+opacity trials were rejected after measurement. Sparse hidden-slot copy is next:
+its measured parent cost is approximately 1.6 ms/card frame. The reflection and
+filter/shade trials remain local while this larger route cost is qualified.
+Sparse copy preserves full seeding on each slot's content-generation change,
+then copies the carousel and current chrome on every relevant frame. Full title
+rows also cover wider destination breadcrumbs and their clearing. Partial-copy
+failure makes the slot unknown and forces complete reseeding before reuse.
