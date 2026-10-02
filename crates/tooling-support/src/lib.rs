@@ -215,6 +215,14 @@ impl Session {
         (self.start.elapsed().as_millis() as u64).checked_sub(window_start)
     }
 
+    fn measurement_duration(&self, instrumented: bool) -> u64 {
+        // Preserve the legacy ten-second profile minimum; explicit longer
+        // windows must cover the whole requested diagnostic workload.
+        self.measurement_duration_ms
+            .unwrap_or(5_000)
+            .max(if instrumented { 10_000 } else { 0 })
+    }
+
     /// Device-clock warmup and measurement boundaries, independent of host polling.
     pub fn tick(&mut self, width: usize, height: usize) -> Result<bool, String> {
         if self.last_request.elapsed() >= Duration::from_millis(100) {
@@ -261,11 +269,7 @@ impl Session {
         }
         let now = self.start.elapsed().as_millis() as u64;
         let instrumented = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
-        let duration = if instrumented {
-            10_000
-        } else {
-            self.measurement_duration_ms.unwrap_or(5_000)
-        };
+        let duration = self.measurement_duration(instrumented);
         let mut completed = false;
         // Scanning procfs blocks for tens of milliseconds and a helper thread
         // would compete with rendering, so snapshot inside the warmup instead.
@@ -442,6 +446,7 @@ mod tests {
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
         assert_eq!(session.measurement_duration_ms, Some(8000));
+        assert_eq!(session.measurement_duration(true), 10_000);
         assert_eq!(session.carousel_hold_change(), Some(true));
         assert_eq!(session.carousel_hold_change(), None);
         session.start -= Duration::from_secs(3);
@@ -494,6 +499,7 @@ mod tests {
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
         assert_eq!(session.measurement_duration_ms, Some(45000));
+        assert_eq!(session.measurement_duration(true), 45_000);
         session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
         session.tick(16, 8).unwrap();
         session.start -= Duration::from_millis(45_000);
