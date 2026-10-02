@@ -110,12 +110,22 @@ fn hdmi(
     let hh = card.height as f64 * z;
     let wx = cx - ww / 2.0;
     let wy = cy - hh / 2.0;
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.base");
     let source_a = 256 - alpha_of(window_q16(t, 40, 240));
     for (dst, src) in out.iter_mut().zip(launcher) {
         *dst = Rgb565Pixel(blend(0, src.0, source_a));
     }
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.face");
     let face_a = 256 - alpha_of(window_q16(t, 60, 200));
     sample_rect(w, h, launcher, out, card, (wx, wy, ww, hh), face_a, None);
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.device");
     let pc = ease_in_out(window_q16(t, 80, 760)) as f64 / 65536.0;
     let s0 = card.width as f64 / spec.region.width.max(1) as f64;
     let sc = s0 + (1.0 - s0) * pc;
@@ -149,6 +159,10 @@ fn hdmi(
             }
         }
     }
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.outline");
     outline(
         w,
         h,
@@ -160,6 +174,10 @@ fn hdmi(
         77,
         500,
     );
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.page");
     blit(
         w,
         h,
