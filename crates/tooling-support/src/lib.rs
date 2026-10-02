@@ -220,24 +220,21 @@ impl Session {
                 let value: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&request).map_err(|e| e.to_string())?)
                         .unwrap_or_default();
+                std::fs::remove_file(&request).map_err(|e| e.to_string())?;
                 if value["launcher_hold"] == "release" {
                     self.carousel_hold_requested = false;
                     self.carousel_sequence = None;
                     self.screensaver_requested = false;
                 } else {
-                    let requested_duration_ms = match value.get("duration_ms") {
-                        None | Some(serde_json::Value::Null) => None,
-                        Some(duration) => match duration.as_u64() {
-                            Some(duration) if (1_000..=45_000).contains(&duration) => {
-                                Some(duration)
-                            }
-                            _ => {
-                                std::fs::remove_file(&request).map_err(|e| e.to_string())?;
-                                return Err(
-                                    "duration_ms must be an integer between 1000 and 45000".into(),
-                                );
-                            }
-                        },
+                    let requested_duration_ms = if value["duration_ms"].is_null() {
+                        None
+                    } else {
+                        Some(
+                            value["duration_ms"]
+                                .as_u64()
+                                .filter(|duration| (1_000..=45_000).contains(duration))
+                                .ok_or("duration_ms must be an integer between 1000 and 45000")?,
+                        )
                     };
                     self.screensaver_requested =
                         value["launcher_screensaver"].as_bool().unwrap_or(false);
@@ -256,7 +253,6 @@ impl Session {
                     self.measurement_duration_ms = requested_duration_ms;
                     self.begin();
                 }
-                std::fs::remove_file(request).map_err(|e| e.to_string())?;
             }
         }
         let now = self.start.elapsed().as_millis() as u64;

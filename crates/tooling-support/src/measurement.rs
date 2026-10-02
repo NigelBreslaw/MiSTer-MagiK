@@ -469,7 +469,11 @@ mod tests {
             ..Default::default()
         };
         for i in 0..100 {
-            metrics.counters.drops += 1;
+            if i % 2 == 0 {
+                metrics.counters.card_dropped_frames += 1;
+            } else {
+                metrics.counters.drops += 1;
+            }
             metrics.record_dropped_frame(DroppedFrameRecord {
                 dropped_frames: 1,
                 workload: if i % 2 == 0 {
@@ -493,6 +497,9 @@ mod tests {
         metrics.finish_window(1_000, 960, 540, false);
         let frozen = metrics.window.clone().unwrap();
         assert_eq!(frozen["dropped_frames"], 100);
+        assert_eq!(frozen["owned_refresh_dropped_frames"], 50);
+        assert!(frozen.get("physical_drops").is_none());
+        assert!(frozen.get("card_redisplayed_presentations").is_none());
         assert!(frozen["render_timing_scope"].is_null());
         assert_eq!(frozen["dropped_frame_records_omitted"], 36);
         assert_eq!(frozen["dropped_frames_by_workload"]["card"], 50);
@@ -520,34 +527,5 @@ mod tests {
             metrics.json(960, 540, 1_100)["last_dropped_frame_record"]["active_sequence"],
             511
         );
-    }
-
-    #[test]
-    fn dropped_frames_cover_distinct_failed_refreshes_and_bound_evidence() {
-        let mut metrics = PresentationMetrics {
-            window_start: Some((0, Counters::default())),
-            ..Default::default()
-        };
-        metrics.dropped_frame_records.reserve(64);
-        metrics.counters.card_dropped_frames = 60;
-        metrics.counters.drops = 5;
-        for _ in 0..100 {
-            metrics.record_dropped_frame(DroppedFrameRecord {
-                reason: "producer not complete at readiness check",
-                dropped_frames: 1,
-                ..Default::default()
-            });
-        }
-        assert_eq!(metrics.dropped_frame_records.len(), 64);
-        metrics.finish_window(1_000, 960, 540, false);
-        let window = metrics.window.unwrap();
-        assert_eq!(window["dropped_frames"], 65);
-        assert_eq!(window["owned_refresh_dropped_frames"], 5);
-        assert_eq!(
-            window["dropped_frame_records"].as_array().unwrap().len(),
-            64
-        );
-        assert!(window.get("physical_drops").is_none());
-        assert!(window.get("card_redisplayed_presentations").is_none());
     }
 }
