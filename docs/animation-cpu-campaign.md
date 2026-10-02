@@ -1,6 +1,8 @@
 # Animation CPU campaign
 
-Base: merged reporting PR #214 (`13a12fd9e`). Work alone on
+Current base: `origin/main` at `d3dd4522b` (app-wide vsync-locked frame clock,
+PR #216). Original hardware measurements used reporting PR #214 (`13a12fd9e`).
+Work alone on
 `nigel/animation-cpu-round-2`; reuse the managed reporting worktree and build cache.
 Each numbered experiment is one commit followed by its relevant benchmark.
 
@@ -69,3 +71,13 @@ Sparse copy preserves full seeding on each slot's content-generation change,
 then copies the carousel and current chrome on every relevant frame. Full title
 rows cover wider destination breadcrumbs and their clearing. Partial-copy
 failure makes the slot unknown and forces complete reseeding before reuse.
+
+After the frame-clock rebase, the native context records
+`animation_clock.mode = vsync-locked-v1` and its period in nanoseconds. Route
+steps retain a minimum two-second wall-time observation pause, then require
+fresh metrics with `ui_motion = false` before the next input. A slow transition
+must settle within the bounded route window; the host must not advance based
+only on wall time. CPU, measurement windows and supervision deadlines still
+use real elapsed time. These checks do not change motion or force extra renders.
+Re-run parent and candidate under this same contract before comparing results
+with the new app timing. Earlier wall-clock-animation figures are historical.

@@ -1,5 +1,12 @@
 # Animation CPU campaign results
 
+These hardware results were collected before PR #216's app-wide frame clock.
+The branch is now rebased onto `d3dd4522b`; no post-rebase device comparison has
+been collected. Late frames now slow motion instead of skipping ahead in time,
+so do not treat the numbers below as results for the current branch. Fresh
+parent/candidate runs must share the vsync-locked clock and settled-input route
+contract documented in `animation-cpu-campaign.md`.
+
 The campaign uses the merged reporting contract and the complete 45-second
 Root → Consoles → Nintendo → SNES hub → Games → Root route. Every route below
 used a fresh native Dev lease and completed all three repetitions. CPU is
@@ -158,3 +165,9 @@ Clippy, Ruff and bounded Rust LSP diagnostics passed. ARM compilation and exact
 NEON parity passed in local emulation; the retained benchmark also passed its
 output check. Emulation timing is excluded from performance evidence. The audit
 performed no MiSTer deployment or device control.
+
+Post-rebase validation: 24 card-session, 42 latch, 14 tooling, four frame-clock,
+seven trick/pixel, five host-wait/selection tests and the animation-time source
+check passed (97 tests). Frontend Clippy passed and the Cortex-A9
+`release-device-ui-tests` application built successfully. No device deployment
+or post-rebase performance measurement was performed.

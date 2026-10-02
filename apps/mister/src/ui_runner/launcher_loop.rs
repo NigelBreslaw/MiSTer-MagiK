@@ -6355,6 +6355,7 @@ pub(super) fn run_launcher_loop(
             "settings":paths.app_path("settings.json"), "controllers":paths.app_path("controllers.json"),
             "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
             "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
+            "animation_clock": {"mode":"vsync-locked-v1", "period_ns":frame_clock.period().as_nanos()},
         });
         crate::ui_logln!("magik_context {}", session.metrics.context);
     }

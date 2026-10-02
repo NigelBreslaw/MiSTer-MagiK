@@ -321,18 +321,24 @@ impl Session {
             }
         }
         if !self.ready && self.metrics.counters.presentations > 0 {
-            self.write("probe-ready.json", &self.metrics.json(width, height, now))?;
+            self.write("probe-ready.json", &self.metrics_json(width, height, now))?;
             self.ready = true;
         }
         let since_write = self.last_write.elapsed();
         let periodic_write_due = since_write >= PERIODIC_WRITE_INTERVAL
             && (!self.ui_motion || since_write >= MOTION_WRITE_INTERVAL);
         if completed || periodic_write_due {
-            self.write("probe-metrics.json", &self.metrics.json(width, height, now))?;
+            self.write("probe-metrics.json", &self.metrics_json(width, height, now))?;
             self.last_write = Instant::now();
         }
         Ok(completed)
     }
+    fn metrics_json(&self, width: usize, height: usize, now: u64) -> serde_json::Value {
+        let mut value = self.metrics.json(width, height, now);
+        value["ui_motion"] = serde_json::json!(self.ui_motion);
+        value
+    }
+
     pub fn preview(&mut self, pixels: &[Rgb565Pixel], width: usize, height: usize) {
         self.previews
             .publish_if_watched(pixels, width, height, self.start.elapsed());
@@ -542,11 +548,17 @@ mod tests {
         session.last_write -= MOTION_WRITE_INTERVAL;
         session.tick(16, 8).unwrap();
         assert!(metrics.exists(), "but only for a bounded time");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&metrics).unwrap()).unwrap();
+        assert_eq!(value["ui_motion"], true);
         std::fs::remove_file(&metrics).unwrap();
         session.last_write = Instant::now() - Duration::from_millis(250);
         session.set_ui_motion(false);
         session.tick(16, 8).unwrap();
         assert!(metrics.exists(), "idle refreshes keep their cadence");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&metrics).unwrap()).unwrap();
+        assert_eq!(value["ui_motion"], false);
         std::fs::remove_dir_all(root).unwrap();
     }
 

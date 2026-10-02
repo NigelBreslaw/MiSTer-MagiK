@@ -64,6 +64,19 @@ def _focus(app, pattern):
     raise AssertionError(f"Cannot focus {pattern}: {_tree(app)}")
 
 
+def _settled_metrics(metrics, before_ms, deadline):
+    """A fresh wall-time sample must report idle; late frame-locked motion may take longer."""
+    while True:
+        value = metrics()
+        assert type(value.get("ui_motion")) is bool, "Missing UI motion evidence"
+        assert time.monotonic() < deadline, (
+            "Animation did not settle inside the route window"
+        )
+        if value["elapsed_ms"] >= before_ms + 2_000 and not value["ui_motion"]:
+            return value
+        time.sleep(0.2)
+
+
 def animation_roundtrip(app, agent, run: Path, repetition: int):
     prefix = f"animation-roundtrip-{repetition}"
     _key(app, "\uf729")
@@ -73,20 +86,33 @@ def animation_roundtrip(app, agent, run: Path, repetition: int):
     requested_at = time.monotonic()
     time.sleep(3.5)
 
+    animation_clock = None
+
     def metrics():
+        nonlocal animation_clock
         value = agent.metrics()
         assert value["sha256"] == agent.expected_sha256
         assert not value.get("evidence_error"), value.get("evidence_error")
+        clock = value.get("context", {}).get("animation_clock", {})
+        assert clock.get("mode") == "vsync-locked-v1", (
+            "Rebuild with the frame-clock benchmark contract"
+        )
+        assert type(clock.get("period_ns")) is int and clock["period_ns"] > 0
+        if animation_clock is None:
+            animation_clock = clock
+        assert clock == animation_clock, "Animation clock changed during the route"
         return value
 
     before = metrics()
     assert before.get("window") is None, "No fresh measurement window"
+    assert before.get("ui_motion") is False, "Initial selection has not settled"
     rows = []
 
     def step(name, action, expected=None, menu=None, games=False, browsing=False):
         nonlocal before
         action()
         time.sleep(2)
+        after = _settled_metrics(metrics, before["elapsed_ms"], requested_at + 43)
         tree = _tree(app)
         if expected:
             assert _selected(tree, expected), (name, tree)
@@ -102,7 +128,6 @@ def animation_roundtrip(app, agent, run: Path, repetition: int):
                 e == {"label": "Collections", "description": "Ready"}
                 for e in tree["elements"]
             ), (name, tree)
-        after = metrics()
         assert after["elapsed_ms"] > before["elapsed_ms"], "Stale metrics"
         row = {
             "name": name,
@@ -170,6 +195,11 @@ def animation_roundtrip(app, agent, run: Path, repetition: int):
     assert sum(window["dropped_frames_by_workload"].values()) == route_drops
     assert window["moving_cpu_unavailable_intervals"] == 0
     assert window["moving_cpu_us"] > 0 and window["moving_presentations"] > 0
-    result = {"sha256": agent.expected_sha256, "steps": rows, "window": window}
+    result = {
+        "sha256": agent.expected_sha256,
+        "animation_clock": animation_clock,
+        "steps": rows,
+        "window": window,
+    }
     (run / f"{prefix}.json").write_text(json.dumps(result, indent=2))
     return result
