@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -481,7 +482,8 @@ def launcher_motion(
     }
 
 
-SCREENSAVER_WINDOW_MS = 10_000
+# The device accepts measurement windows of 1-45 s.
+SCREENSAVER_WINDOW_MS = int(os.environ.get("MAGIK_SCREENSAVER_WINDOW_MS", "10000"))
 
 
 def launcher_screensaver(application, agent, *, sleep=time.sleep):
