@@ -1279,8 +1279,8 @@ fn blit_sixteenth_phase(
 }
 
 /// The prepared image and coverage for `phase`. A phase the tile's lattice
-/// should never reach draws the base phase, within a sixteenth of a pixel,
-/// rather than making the card vanish in release builds.
+/// should never reach draws the base phase at the unchanged integer origin,
+/// within one pixel, rather than making the card vanish in release builds.
 fn phase_source<'a>(
     phase: usize,
     image: &'a ScreenshotImage,
