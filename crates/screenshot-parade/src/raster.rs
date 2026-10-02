@@ -169,17 +169,10 @@ impl PreparedScreenshotCard {
         source: &ScreenshotImage,
         speed: usize,
         screen_height: usize,
+        phases: u16,
         kernel: LinearPhaseKernel,
     ) -> Self {
-        Self::prepare_timed_with_kernel(
-            source,
-            speed,
-            screen_height,
-            ALL_SHIFTED_PHASES,
-            kernel,
-            None,
-        )
-        .0
+        Self::prepare_timed_with_kernel(source, speed, screen_height, phases, kernel, None).0
     }
 
     /// Prepare only the shifted phases selected by `phases`. A tile whose
@@ -1281,22 +1274,29 @@ fn blit_sixteenth_phase(
     y: isize,
 ) {
     let quantized = quantize_phase(x_fp);
-    if quantized.phase == 0 {
-        blit_coverage_phase(dst, output_layout, image, base_coverage, quantized.x, y);
-        return;
+    let (image, coverage) = phase_source(quantized.phase, image, base_coverage, shifted_phases);
+    blit_coverage_phase(dst, output_layout, image, coverage, quantized.x, y);
+}
+
+/// The prepared image and coverage for `phase`. A phase the tile's lattice
+/// should never reach draws the base phase, within a sixteenth of a pixel,
+/// rather than making the card vanish in release builds.
+fn phase_source<'a>(
+    phase: usize,
+    image: &'a ScreenshotImage,
+    base_coverage: &'a CoveragePlane,
+    shifted_phases: &'a [Option<PreparedLinearPhase>; CRT_SHIFTED_PHASE_COUNT],
+) -> (&'a ScreenshotImage, &'a CoveragePlane) {
+    match phase
+        .checked_sub(1)
+        .and_then(|index| shifted_phases[index].as_ref())
+    {
+        Some(shifted) => (&shifted.image, &shifted.coverage),
+        None => {
+            debug_assert!(phase == 0, "card missing sixteenth-pixel phase {phase}");
+            (image, base_coverage)
+        }
     }
-    let Some(Some(shifted)) = shifted_phases.get(quantized.phase - 1) else {
-        debug_assert!(false, "linear card missing sixteenth-pixel phase");
-        return;
-    };
-    blit_coverage_phase(
-        dst,
-        output_layout,
-        &shifted.image,
-        &shifted.coverage,
-        quantized.x,
-        y,
-    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1313,26 +1313,12 @@ fn blit_sixteenth_phase_probed(
     base_background: Rgb565Pixel,
 ) -> CoverageBlitStats {
     let quantized = quantize_phase(x_fp);
-    if quantized.phase == 0 {
-        return blit_coverage_phase_probed(
-            dst,
-            output_layout,
-            image,
-            base_coverage,
-            quantized.x,
-            y,
-            base_background,
-        );
-    }
-    let Some(Some(shifted)) = shifted_phases.get(quantized.phase - 1) else {
-        debug_assert!(false, "linear card missing sixteenth-pixel phase");
-        return CoverageBlitStats::default();
-    };
+    let (image, coverage) = phase_source(quantized.phase, image, base_coverage, shifted_phases);
     blit_coverage_phase_probed(
         dst,
         output_layout,
-        &shifted.image,
-        &shifted.coverage,
+        image,
+        coverage,
         quantized.x,
         y,
         base_background,
@@ -2047,16 +2033,37 @@ mod tests {
     #[test]
     fn neon_linear_lanczos_backend_is_pixel_identical_to_scalar() {
         let source = test_image(32, 24);
-        let prepare = |kernel| PreparedScreenshotCard::prepare_with_kernel(&source, 4, 270, kernel);
-        let scalar = prepare(LinearPhaseKernel::Scalar);
-        let neon = prepare(LinearPhaseKernel::Neon);
-        assert_eq!(scalar.image, neon.image);
-        let (scalar_base, scalar_shifted) = linear_phases(&scalar);
-        let (neon_base, neon_shifted) = linear_phases(&neon);
-        assert_eq!(scalar_base, neon_base);
-        for (scalar, neon) in scalar_shifted.iter().zip(neon_shifted) {
+        let prepare = |phases, kernel| {
+            PreparedScreenshotCard::prepare_with_kernel(&source, 4, 270, phases, kernel)
+        };
+        let full = prepare(ALL_SHIFTED_PHASES, LinearPhaseKernel::Scalar);
+        // Sparse masks pack phases and six-tap weights per batch; every
+        // selected phase must equal the same phase of the full scalar card.
+        for mask in [
+            ALL_SHIFTED_PHASES,
+            1 << 8,
+            0x5554,
+            0x0102,
+            0x8004,
+            0b0000_0000_0010_1010,
+        ] {
+            let scalar = prepare(mask, LinearPhaseKernel::Scalar);
+            let neon = prepare(mask, LinearPhaseKernel::Neon);
             assert_eq!(scalar.image, neon.image);
-            assert_eq!(scalar.coverage, neon.coverage);
+            assert_eq!(scalar.base_coverage, neon.base_coverage);
+            for phase in 1..CRT_PHASE_COUNT {
+                let selected = mask & (1 << phase) != 0;
+                let expected = full.shifted_phases[phase - 1].as_ref();
+                for card in [&scalar, &neon] {
+                    let actual = card.shifted_phases[phase - 1].as_ref();
+                    assert_eq!(actual.is_some(), selected, "mask {mask:#x} phase {phase}");
+                    if let (Some(actual), Some(expected)) = (actual, expected.filter(|_| selected))
+                    {
+                        assert_eq!(actual.image, expected.image, "mask {mask:#x} phase {phase}");
+                        assert_eq!(actual.coverage, expected.coverage);
+                    }
+                }
+            }
         }
     }
 

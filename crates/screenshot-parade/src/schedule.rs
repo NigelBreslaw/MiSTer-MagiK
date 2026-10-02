@@ -607,6 +607,7 @@ impl ScreenshotParade {
                 let frames_until_exit = phase + rank as u64 * interval_frames;
                 let x_fp =
                     width as i64 * PARADE_SUBPIXEL_ONE - frames_until_exit as i64 * velocity_fp;
+                debug_assert!(on_phase_lattice(x_fp, velocity_fp));
                 let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
                 let y = self
                     .random_tile_y(
@@ -772,6 +773,7 @@ impl ScreenshotParade {
             };
             let tile = &mut self.tiles[tile_index];
             tile.x_fp = x as i64 * PARADE_SUBPIXEL_ONE;
+            debug_assert!(on_phase_lattice(tile.x_fp, tile.velocity_fp));
             tile.y = y;
             tile.image_index = next.image_index;
             tile.raster = next.raster;
@@ -1192,10 +1194,25 @@ fn reachable_shifted_phases(velocity_fp: i64) -> u16 {
         .fold(0, |mask, phase| mask | 1 << phase)
 }
 
+/// Whether a tile placed at `x_fp` and moving whole ticks at `velocity_fp` only
+/// visits phases that `reachable_shifted_phases` prepares. Every place that
+/// positions a tile must satisfy this, or its card draws an unprepared phase.
+fn on_phase_lattice(x_fp: i64, velocity_fp: i64) -> bool {
+    let mask = reachable_shifted_phases(velocity_fp);
+    let phase = raster_phase_key(x_fp).rem_euclid(16);
+    phase == 0 || mask & (1 << phase) != 0
+}
+
 /// Elapsed time in whole reference ticks, as production presents them, so
 /// every caller keeps tiles on the phases their cards prepare.
 fn tick_delta_fp(elapsed: Duration) -> i64 {
-    let ticks = elapsed.as_nanos().saturating_mul(u128::from(REFERENCE_HZ)) / 1_000_000_000_u128;
+    // Nearest tick: truncated per-frame deltas (1e9/60 ns) would otherwise lag
+    // a tick behind and jitter wall-clock callers between 0- and 2-tick steps.
+    let ticks = elapsed
+        .as_nanos()
+        .saturating_mul(u128::from(REFERENCE_HZ))
+        .saturating_add(500_000_000)
+        / 1_000_000_000_u128;
     ticks.min((i64::MAX / TICK_ONE) as u128) as i64 * TICK_ONE
 }
 
@@ -1483,8 +1500,17 @@ mod tests {
 
     #[test]
     fn elapsed_time_advances_in_whole_ticks_on_prepared_phases() {
-        assert_eq!(tick_delta_fp(Duration::from_micros(33_000)), TICK_ONE);
+        assert_eq!(tick_delta_fp(Duration::from_micros(24_000)), TICK_ONE);
         assert_eq!(tick_delta_fp(Duration::from_millis(50)), 3 * TICK_ONE);
+        // Truncated 60 Hz frame times must not lag a tick behind.
+        let frame = Duration::from_nanos(1_000_000_000 / 60);
+        for n in 0..600_u32 {
+            assert_eq!(
+                tick_delta_fp(frame * n),
+                i64::from(n) * TICK_ONE,
+                "frame {n}"
+            );
+        }
         let path = std::env::temp_dir().join(format!(
             "screenshot-parade-lattice-{}.mmlz4b",
             std::process::id()

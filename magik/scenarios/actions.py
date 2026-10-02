@@ -482,8 +482,17 @@ def launcher_motion(
     }
 
 
-# The device accepts measurement windows of 1-45 s.
-SCREENSAVER_WINDOW_MS = int(os.environ.get("MAGIK_SCREENSAVER_WINDOW_MS", "10000"))
+def _screensaver_window_ms() -> int:
+    """Window length, overridable for longer runs; the device accepts 1-45 s."""
+    text = os.environ.get("MAGIK_SCREENSAVER_WINDOW_MS", "10000")
+    if not text.isdecimal() or not 1_000 <= int(text) <= 45_000:
+        raise SystemExit(
+            f"MAGIK_SCREENSAVER_WINDOW_MS must be 1000-45000, not {text!r}"
+        )
+    return int(text)
+
+
+SCREENSAVER_WINDOW_MS = _screensaver_window_ms()
 
 
 def launcher_screensaver(application, agent, *, sleep=time.sleep):
