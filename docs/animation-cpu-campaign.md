@@ -89,3 +89,11 @@ The report includes helper frames and aggregates both bands' stage wall time.
 Those totals are neither elapsed critical-path time nor stage CPU time. Compare
 them with per-band CPU/run-delay, producer/merge, hidden-copy and actual Slint
 raster evidence; profile-run drop counts are not acceptance measurements.
+
+
+The first post-clock profile and clean comparisons are complete. Native retained
+band publication (#8) removes the 0.715 ms helper merge without another buffer;
+its clean routes reduced moving CPU by 2.76%. See `animation-cpu-results.md` for
+all repetitions and the limited cadence conclusion. Next priority is bounded
+render-ahead (#14), followed by clean sparse-copy and scoped-scheduler A/B. Keep
+those separate from further kernels and from Slint/system pacing investigations.

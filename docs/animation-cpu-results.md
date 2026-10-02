@@ -213,7 +213,7 @@ current sparse-copy baseline after the app-wide clock change; earlier route
 numbers cannot establish a current improvement. Slint/system misses remain
 outside card composition and require separate pacing analysis.
 
-## Helper merge elimination (#8) — awaiting clean device comparison
+## Helper merge elimination (#8) — kept (`6f9f89475`)
 
 Native publication now takes the primary and helper buffers as separate immutable
 tile sources, using the actual rendered split before adaptive balancing chooses
@@ -225,5 +225,40 @@ The seeded hidden slot receives both current bands before publication.
 Serial pixel parity covers changing splits, ordinary poses and both directions
 of root/nested tricks through landing. Card-session, retained-latch, motion-clock
 and full-frame fallback checks pass; frontend tooling Clippy passes. Compare
-three clean candidate routes against the baseline above before retaining this
-experiment. Rendering, animation timing and input behavior are unchanged.
+three clean candidate routes against the baseline above. Rendering, animation
+timing and input behavior are unchanged.
+
+
+The clean candidate check passed all three routes and teardown. Executable SHA256:
+`7be5c9a060c45d64d21a37214f3da819b845962d5a7c2b05b348e6998c9491a5`.
+Deployment: `build/magik-results/20261002T223644Z-01fef60554be`.
+Route evidence: `build/magik-results/20261002T223829Z-85f17e8e5da0`.
+
+| Repeat | Drops | Process CPU / moving presentation (ms) | Hidden copy / card (ms) | Producer p99 (ms) | Card / Slint / system drops |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 0 | 23 | 19.2965 | 1.2781 | 13.336 | 13 / 1 / 9 |
+| 1 | 23 | 19.2938 | 1.2693 | 14.740 | 13 / 1 / 9 |
+| 2 | 20 | 19.2770 | 1.2662 | 13.504 | 11 / 1 / 8 |
+
+Mean moving CPU fell from 19.8372 to 19.2891 ms/presentation: 0.5481 ms, or 2.76%.
+Every route had 521 moving presentations. Mean producer time fell from 10.9370
+to 10.2066 ms/card (0.7304 ms). Mean merge time fell from 0.7149 ms to zero.
+Summed band wall time was effectively unchanged (19.0999 to 19.0445 ms/card),
+consistent with removing the intermediate copy rather than changing raster work.
+The clean route consistently saved CPU; retain the change on that evidence.
+
+Drops fell from 28/26/25 to 23/23/20 (mean 26.33 to 22.00, 16.5%). Card-attributed
+records fell from 20/19/15 to 13/13/11. Three repetitions do not establish a
+precise cadence effect or zero-drop qualification. System transitions still
+recorded 9/9/8 misses and Slint one per route. Workload attribution describes
+activity at observation, not proven cause. Latch rejections were zero; posted
+and flipped counts matched in every route. Full-frame fallback copies still
+occurred and the route reached all expected endpoints.
+
+Next experiments remain one-frame-ahead tricks (#14), then a fresh scheduler
+comparison against sparse copy with explicit policy activation evidence. Neither
+has a post-frame-clock verdict. Buffering must preserve every virtual-clock
+step and visible landing/input ordering, including preparation holds; it must
+not conceal insufficient sustained throughput. The old sparse-copy A/B remains
+historical; the new clean baseline establishes its current cost but does not
+isolate its causal saving under the new clock.
