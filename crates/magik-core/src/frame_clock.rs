@@ -26,7 +26,6 @@ pub struct FrameClock {
     epoch: Instant,
     period: Duration,
     elapsed: Duration,
-    frame: u64,
     idle_remainder: Duration,
 }
 
@@ -37,7 +36,6 @@ impl FrameClock {
             epoch,
             period,
             elapsed: Duration::ZERO,
-            frame: 0,
             idle_remainder: Duration::ZERO,
         }
     }
@@ -46,12 +44,7 @@ impl FrameClock {
         self.period
     }
 
-    pub const fn frame(&self) -> u64 {
-        self.frame
-    }
-
-    /// Animation time since the epoch. Equal to `frame * period` while the
-    /// period is unchanged.
+    /// Animation time since the epoch.
     pub const fn elapsed(&self) -> Duration {
         self.elapsed
     }
@@ -85,7 +78,6 @@ impl FrameClock {
     }
 
     fn step(&mut self) {
-        self.frame = self.frame.saturating_add(1);
         self.elapsed = self.elapsed.saturating_add(self.period);
     }
 }
@@ -109,7 +101,6 @@ mod tests {
             assert_eq!(clock.elapsed(), Duration::from_micros(16_667) * frame);
             previous = clock.now();
         }
-        assert_eq!(clock.frame(), 600);
     }
 
     #[test]
@@ -125,7 +116,7 @@ mod tests {
     fn idle_wall_time_counts_whole_periods_and_carries_the_remainder() {
         let mut clock = FrameClock::new(Instant::now(), Duration::from_millis(20));
         clock.advance_idle(Duration::from_millis(15));
-        assert_eq!(clock.frame(), 0);
+        assert_eq!(clock.elapsed(), Duration::ZERO);
         clock.advance_idle(Duration::from_millis(30));
         assert_eq!(clock.elapsed(), Duration::from_millis(40));
         // 5 ms was left over; 15 more completes the next period.

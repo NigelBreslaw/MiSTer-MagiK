@@ -4850,7 +4850,8 @@ struct ScreensaverControl {
     preview_active: bool,
     waiting_for_input_release: bool,
     restore_full_frame: bool,
-    preview_fade: PreviewFade,
+    /// Frames the preview fade has been shown for; `None` when no fade runs.
+    preview_fade_frames: Option<u32>,
     reactivation_suppressed: bool,
     timeline: ScreensaverStartupTimeline,
 }
@@ -4864,7 +4865,7 @@ impl ScreensaverControl {
             preview_active: false,
             waiting_for_input_release: false,
             restore_full_frame: false,
-            preview_fade: PreviewFade::Off,
+            preview_fade_frames: None,
             reactivation_suppressed: false,
             timeline: ScreensaverStartupTimeline::default(),
         }
@@ -4902,7 +4903,7 @@ impl ScreensaverControl {
                     self.restore_full_frame |= self.active;
                     self.last_activity = now;
                     self.active = false;
-                    self.preview_fade = PreviewFade::Off;
+                    self.preview_fade_frames = None;
                 } else if enabled
                     && !self.reactivation_suppressed
                     && now.saturating_duration_since(self.last_activity) >= delay
@@ -4938,7 +4939,7 @@ impl ScreensaverControl {
         self.preview_active = true;
         self.waiting_for_input_release = true;
         self.last_activity = now;
-        self.preview_fade = PreviewFade::Armed;
+        self.preview_fade_frames = Some(0);
         self.reactivation_suppressed = false;
         self.timeline.begin(now);
     }
@@ -4958,7 +4959,7 @@ impl ScreensaverControl {
         self.start_mode = ScreensaverStartMode::Inactive;
         self.preview_active = false;
         self.waiting_for_input_release = false;
-        self.preview_fade = PreviewFade::Off;
+        self.preview_fade_frames = None;
         self.last_activity = now;
         was_active
     }
@@ -4976,7 +4977,7 @@ impl ScreensaverControl {
             self.preview_active = false;
             self.restore_full_frame = true;
             self.last_activity = now;
-            self.preview_fade = PreviewFade::Off;
+            self.preview_fade_frames = None;
             return true;
         }
         if user_activity {
@@ -4992,7 +4993,7 @@ impl ScreensaverControl {
         self.start_mode = ScreensaverStartMode::Inactive;
         self.preview_active = false;
         self.waiting_for_input_release = false;
-        self.preview_fade = PreviewFade::Off;
+        self.preview_fade_frames = None;
         self.reactivation_suppressed = true;
         self.last_activity = now;
     }
@@ -5001,31 +5002,18 @@ impl ScreensaverControl {
         std::mem::take(&mut self.restore_full_frame)
     }
 
-    /// Fade opacity for the frame being produced. The fade starts on the first
-    /// frame that asks and advances one display period per frame after that.
-    fn preview_fade_alpha(&mut self, frame: u64, frame_period: Duration) -> Option<u8> {
+    /// Fade opacity for the frame being produced. Call once per produced
+    /// frame: each call is one display period further into the fade.
+    fn preview_fade_alpha(&mut self, frame_period: Duration) -> Option<u8> {
         const PREVIEW_FADE_DURATION: Duration = Duration::from_millis(200);
-        let started = match self.preview_fade {
-            PreviewFade::Off => return None,
-            PreviewFade::Armed => {
-                self.preview_fade = PreviewFade::Started(frame);
-                frame
-            }
-            PreviewFade::Started(started) => started,
-        };
-        let elapsed = frame_period.saturating_mul(frame.saturating_sub(started) as u32);
+        let frames = self.preview_fade_frames.as_mut()?;
+        let elapsed = frame_period.saturating_mul(*frames);
+        *frames = frames.saturating_add(1);
         Some(
             (elapsed.as_micros().min(PREVIEW_FADE_DURATION.as_micros()) * 255
                 / PREVIEW_FADE_DURATION.as_micros()) as u8,
         )
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PreviewFade {
-    Off,
-    Armed,
-    Started(u64),
 }
 
 const fn screensaver_catalog_busy(worker_running: bool, refresh_done: bool) -> bool {
@@ -5224,8 +5212,8 @@ pub(super) fn run_launcher_loop(
     let mut frame_clock =
         mister_magik_core::frame_clock::FrameClock::new(start, animation_clock.fixed_step());
     crate::launcher::set_frame_period(frame_clock.period());
-    let mut idle_slept_last_iteration = false;
-    let mut previous_loop_start = start;
+    // When the previous iteration slept with nothing to animate, when it began.
+    let mut idle_slept_since: Option<Instant> = None;
     #[cfg(feature = "ui-device-tests")]
     let ui_test_fixture = std::env::var(crate::ui_test_support::FIXTURE_ENV)
         .ok()
@@ -6443,10 +6431,9 @@ pub(super) fn run_launcher_loop(
         // A launcher that slept with nothing to animate counts that sleep in
         // whole display periods so gaps and holds span it. Produced frames
         // always advance exactly one period (see `FrameClock`).
-        if std::mem::take(&mut idle_slept_last_iteration) {
-            frame_clock.advance_idle(loop_start.saturating_duration_since(previous_loop_start));
+        if let Some(slept_since) = idle_slept_since.take() {
+            frame_clock.advance_idle(loop_start.saturating_duration_since(slept_since));
         }
-        previous_loop_start = loop_start;
         let animation_now = frame_clock.now();
         let animation_us = frame_clock.elapsed_us();
         match library_reset.poll(loop_start) {
@@ -10100,7 +10087,7 @@ pub(super) fn run_launcher_loop(
                 idle_sleep
             };
             let _ = pad.wait_for_input(input_observation, idle_sleep);
-            idle_slept_last_iteration = true;
+            idle_slept_since = Some(loop_start);
             let _ = launcher_response_trace
                 .record_scheduler_interval("idle-input-wait", scheduler_phase);
             record_launcher_frame_phase!(LauncherFramePhase::Yielded);
@@ -10243,8 +10230,7 @@ pub(super) fn run_launcher_loop(
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
         }
-        let screensaver_fade_alpha =
-            screensaver.preview_fade_alpha(frame_clock.frame(), frame_clock.period());
+        let screensaver_fade_alpha = screensaver.preview_fade_alpha(frame_clock.period());
         let mut frame_production_trace = FrameProductionTrace {
             class: scheduled_frame_class,
             ..FrameProductionTrace::default()
@@ -19816,10 +19802,11 @@ mod tests {
         saver.update(start, true, Duration::from_secs(300), true, true);
         assert!(saver.active);
         let period = Duration::from_millis(20);
-        assert_eq!(saver.preview_fade_alpha(7, period), Some(0));
-        assert_eq!(saver.preview_fade_alpha(7 + 5, period), Some(127));
-        assert_eq!(saver.preview_fade_alpha(7 + 10, period), Some(255));
-        assert_eq!(saver.preview_fade_alpha(7 + 11, period), Some(255));
+        let fade: Vec<_> = (0..12).map(|_| saver.preview_fade_alpha(period)).collect();
+        assert_eq!(fade[0], Some(0));
+        assert_eq!(fade[5], Some(127));
+        assert_eq!(fade[10], Some(255));
+        assert_eq!(fade[11], Some(255));
         let activation_held =
             saver.input_held_for_control(false, pad_state_has_active_input(&physical_input));
         assert!(saver.handle_input(start, activation_held, true));
