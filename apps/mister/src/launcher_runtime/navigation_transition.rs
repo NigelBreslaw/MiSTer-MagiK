@@ -968,6 +968,18 @@ impl NavigationTransitionRuntime {
         &mut self,
         output: &mut [Rgb565Pixel],
     ) -> Result<(), NavigationTransitionFailure> {
+        if self
+            .request()
+            .is_some_and(NavigationTransitionRequest::is_super_scaler)
+        {
+            if output.len() != self.buffers.working().len() {
+                return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+            }
+            // SuperScaler uses mutable projection scratch and its legacy
+            // overlays. Retain that renderer for the card-session fallback.
+            output.copy_from_slice(self.render()?);
+            return Ok(());
+        }
         let output = slint_rgb565_as_shared_mut(output);
         let started = Instant::now();
         let Some(request) = self.request() else {
@@ -2326,6 +2338,76 @@ mod tests {
             runtime.tick(100_000).phase,
             NavigationTransitionPhase::Expand
         );
+    }
+
+    #[test]
+    fn super_scaler_fallback_renders_into_cached_output_through_both_journeys() {
+        let (width, height) = (960, 540);
+        let source = (0..width * height)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(13)))
+            .collect::<Vec<_>>();
+        let destination = (0..width * height)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(29)))
+            .collect::<Vec<_>>();
+        for edge in [
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionEdge::ConsolesToSystem,
+        ] {
+            for direction in [
+                NavigationTransitionDirection::Forward,
+                NavigationTransitionDirection::Reverse,
+            ] {
+                let mut cached = NavigationTransitionRuntime::new(width, height, true);
+                let mut legacy = NavigationTransitionRuntime::new(width, height, true);
+                for runtime in [&mut cached, &mut legacy] {
+                    assert!(
+                        runtime
+                            .begin(
+                                edge,
+                                direction,
+                                NavigationTransitionGeometry::default(),
+                                &source,
+                                0
+                            )
+                            .unwrap()
+                    );
+                    assert!(runtime.request().unwrap().is_super_scaler());
+                }
+                let mut output = vec![Rgb565Pixel(0xffff); width * height];
+                cached.render_into(&mut output).unwrap();
+                assert_eq!(output, legacy.render().unwrap());
+                let working = cached.buffers.working().as_ptr();
+                assert_eq!(
+                    cached.render_into(&mut output[..1]),
+                    Err(NavigationTransitionFailure::SnapshotSizeMismatch)
+                );
+                for runtime in [&mut cached, &mut legacy] {
+                    runtime.capture_destination(&destination, 1).unwrap();
+                }
+                for elapsed in [1, 75_000, 150_000, 225_000, 350_000] {
+                    cached.tick(elapsed);
+                    legacy.tick(elapsed);
+                    cached.render_into(&mut output).unwrap();
+                    assert!(
+                        output
+                            .iter()
+                            .zip(legacy.render().unwrap())
+                            .all(|(a, b)| a.0 == b.0),
+                        "{edge:?} {direction:?} at {elapsed}"
+                    );
+                    assert_eq!(cached.buffers.working().as_ptr(), working);
+                    assert_eq!(
+                        cached.last_render_stats().scanline_pixels,
+                        legacy.last_render_stats().scanline_pixels
+                    );
+                    assert_eq!(
+                        cached.last_render_stats().phosphor_pixels,
+                        legacy.last_render_stats().phosphor_pixels
+                    );
+                }
+                assert_eq!(cached.complete(), legacy.complete());
+            }
+        }
     }
 
     #[test]
