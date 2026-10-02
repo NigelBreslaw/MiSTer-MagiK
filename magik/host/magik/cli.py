@@ -56,6 +56,7 @@ CHECK_SCENARIOS = (
     "idle",
     "journeys",
     "animation-roundtrip",
+    "helper-scheduler",
 )
 
 

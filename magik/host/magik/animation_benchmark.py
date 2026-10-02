@@ -155,7 +155,9 @@ def animation_roundtrip(app, agent, run: Path, repetition: int):
         end = metrics()
         if end.get("window") is not None:
             break
-        assert time.monotonic() < requested_at + 55, "Measurement did not complete"
+        if time.monotonic() >= requested_at + 55:
+            (run / f"{prefix}-incomplete.json").write_text(json.dumps(end, indent=2))
+            raise AssertionError("Measurement did not complete")
         time.sleep(0.3)
     window = end["window"]
     assert window["target_duration_ms"] == 45_000

@@ -288,3 +288,56 @@ def test_animation_roundtrip(journey_application_session, repetition):
             **result,
         },
     )
+
+
+def test_helper_scheduler(journey_application_session):
+    """Instrumented policy diagnostic, separate from cadence acceptance runs."""
+    import json
+    import time
+    from slint_testing import KeyPressedEvent, KeyReleasedEvent
+
+    app, agent, run, _ = journey_application_session
+    app.first_window.dispatch_event(KeyPressedEvent("\uf703"))
+    observed = []
+    try:
+        time.sleep(0.4)
+        for _ in range(3):
+            report = agent.device_operation("input-probe", {"seconds": 2, "events": []})
+            observed.append(report)
+            snapshots = [report["runtime_before"], report["runtime"]]
+            if any(
+                t.get("policy") == 2 and t.get("rt_priority") == 1
+                for snap in snapshots
+                for p in snap["processes"]
+                for t in p["threads"]
+                if "card-tile" in t.get("name", "")
+            ):
+                break
+    finally:
+        app.first_window.dispatch_event(KeyReleasedEvent("\uf703"))
+    time.sleep(1)
+    settled = agent.device_operation("input-probe", {"seconds": 0, "events": []})
+    (run / "helper-scheduler.json").write_text(
+        json.dumps({"active": observed, "settled": settled}, indent=2)
+    )
+    snapshots = [s for r in observed for s in [r["runtime_before"], r["runtime"]]]
+    assert any(
+        t.get("policy") == 2 and t.get("rt_priority") == 1
+        for s in snapshots
+        for p in s["processes"]
+        for t in p["threads"]
+        if "card-tile" in t.get("name", "")
+    ), "helper real-time policy never observed"
+    for snap in snapshots + [settled["runtime"]]:
+        for process in snap["processes"]:
+            assert all(
+                t.get("policy") == 0
+                for t in process["threads"]
+                if t["tid"] == str(process["pid"])
+            )
+    assert all(
+        t.get("policy") == 0
+        for p in settled["runtime"]["processes"]
+        for t in p["threads"]
+        if "card-tile" in t.get("name", "")
+    )

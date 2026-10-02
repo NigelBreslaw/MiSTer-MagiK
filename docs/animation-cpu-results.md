@@ -111,3 +111,30 @@ Local trial source and evidence remain ignored in
 The reflection reordering trial measured a small native kernel gain but remains
 unqualified on the complete route. Further campaign items remain in
 `animation-cpu-campaign.md`.
+
+## Helper real-time scheduling — Dev trial, not production-qualified
+
+`7dac6c9d3` temporarily gives the helper round-robin priority 1 while it renders
+an active trick/carousel frame. The scope restores its captured calling-thread
+policy before the helper waits or reports completion. Production defaults and
+the UI/Main policy remain unchanged. Initial wake delay before entering the
+scope is outside this trial's effect.
+
+One valid route recorded 28 drops before a second route's measurement window
+failed to finish. A full repeat passed with 20/23/25 drops and 19.583/19.740/19.642
+ms moving CPU per presentation. The parent recorded 24/26/24 drops and averaged
+19.683 ms/presentation. The overlapping ranges, small CPU difference and earlier
+28-drop sample do not establish a useful whole-route improvement.
+
+Evidence: `build/magik-results/20261002T200633Z-c148ad834ba9` and
+`build/magik-results/20261002T201139Z-c6d21a38e2fa`; trial Dev SHA256:
+`d584e649cc9b90d31223d3a8bdacdc1fb679ebd92e5453b8dbc032a2fc5c373b`.
+The native policy diagnostic is still required before claiming activation or
+promoting this experiment. A later diagnostic found Dev had been replaced by
+SHA256 `4081d563837504e238668791fa956ef6c4b8022986d68b5050b9a4ad2df928dc`;
+its scheduler snapshots are excluded from trial evidence. Reserve Dev for the
+remaining matched measurements; do not overwrite another task's executable.
+
+The timeout remains unexplained; the route completed and Main reported zero
+crashes/invariants afterward. Timeout handling now preserves the final metrics
+for diagnosis. Do not mix incomplete windows into the performance comparison.
