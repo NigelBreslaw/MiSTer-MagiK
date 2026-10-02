@@ -508,9 +508,8 @@ pub(super) fn run_video_playback_loop(
         format!("{secs}s")
     };
     crate::ui_logln!(
-        "video_playback running {label} playlist={playlist_label} frame-order={} animation-clock={} video-render-mode=direct-blit",
-        frame_order.label(),
-        animation_clock.label()
+        "video_playback running {label} playlist={playlist_label} frame-order={} video-render-mode=direct-blit",
+        frame_order.label()
     );
     crate::ui_logln!("video_render_mode=direct-blit");
     crate::ui_logln!(

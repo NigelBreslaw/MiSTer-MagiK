@@ -450,12 +450,11 @@ pub fn run_ui(
     }
 
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-    let animation_clock = AnimationClock::from_config_with_fixed_step(
-        launcher_config.display_pacing().animation_clock(),
+    let animation_clock = AnimationClock::new(
         ui.output_route()
             .nominal_period_us()
             .map(Duration::from_micros)
-            .unwrap_or(Duration::from_nanos(16_666_667)),
+            .unwrap_or(mister_magik_core::frame_clock::REFERENCE_FRAME_PERIOD),
     );
     slint::platform::set_platform(Box::new(MisterPlatform::new(
         window.clone(),

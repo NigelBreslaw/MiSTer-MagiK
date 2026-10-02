@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Current controls: 256. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Current controls: 255. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -13,7 +13,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Current controls: 256. H
 | `MISTER_AMIGACD32_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls amigacd32 preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_AMIGA_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls amiga preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_AMSTRAD_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls amstrad preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
-| `MISTER_ANIMATION_CLOCK` | production | enum token | uses the owner-defined mode when unset or unrecognized | enum | — | command | — | public | — | Controls animation clock behavior; value policy: document | internal runtime | `apps/mister/src/visual_platform.rs` |
 | `MISTER_APPLE_IIGS_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls apple-iigs preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_APPLE_II_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls apple-ii preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_ARCADE_BENCHMARK_ORIENTATION` | benchmark | enum token | uses persisted launcher orientation when unset or invalid | enum | — | instrumentation | — | public | — | Selects a one-shot in-memory launcher orientation for Arcade benchmarks; values: normal, monitor-clockwise, monitor-counterclockwise; value policy: document | benchmark only | `apps/mister/src/ui_runner/launcher_bench.rs` |

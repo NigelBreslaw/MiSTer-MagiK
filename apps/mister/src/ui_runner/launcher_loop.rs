@@ -7281,14 +7281,12 @@ pub(super) fn run_launcher_loop(
             arcade_entry_latency.cancel_enter();
             full_bridge_dirty = true;
             if navigation_transition.is_active() {
-                let now_us = animation_us;
-                navigation_transition.request_reverse(now_us);
+                navigation_transition.request_reverse(animation_us);
             }
         }
 
         if navigation_transition.is_active() {
-            let now_us = animation_us;
-            navigation_transition.tick(now_us);
+            navigation_transition.tick(animation_us);
             let should_commit = pending_navigation_transition
                 .as_ref()
                 .is_some_and(|pending| {
@@ -7336,7 +7334,7 @@ pub(super) fn run_launcher_loop(
                 } else if event.action != LauncherAction::OpenCollection
                     || pending_collection_entry.is_none()
                 {
-                    navigation_transition.request_reverse(now_us);
+                    navigation_transition.request_reverse(animation_us);
                 }
                 prepare_trace.navigation_commit_us = prepare_trace
                     .navigation_commit_us
@@ -7885,7 +7883,6 @@ pub(super) fn run_launcher_loop(
                     );
                     input_router.set_focus(focus);
                     let mut final_input_tick = false;
-                    let input_dispatch_now = animation_now;
                     let mut direct_ui_action_this_loop = None;
                     let mut routed_event_this_loop = if let Some(event) = deferred_settings_event {
                         Some(event)
@@ -8091,8 +8088,7 @@ pub(super) fn run_launcher_loop(
                                 preview.cancel_system_entry_preview();
                                 arcade_entry_latency.cancel_enter();
                                 if navigation_transition.is_active() {
-                                    let now_us = animation_us;
-                                    navigation_transition.request_reverse(now_us);
+                                    navigation_transition.request_reverse(animation_us);
                                 }
                             }
                             let settings_transition_source = (!launch_failure_visible
@@ -8182,16 +8178,11 @@ pub(super) fn run_launcher_loop(
                             } else if let Some(input_event) = routed_event_this_loop.as_ref() {
                                 nav.handle_action_with_navigation_intents(
                                     input_event,
-                                    input_dispatch_now,
+                                    animation_now,
                                     &catalog,
                                 )
                             } else if let Some(action) = direct_ui_action_this_loop.take() {
-                                apply_navigation_action(
-                                    action,
-                                    &mut nav,
-                                    &catalog,
-                                    input_dispatch_now,
-                                )
+                                apply_navigation_action(action, &mut nav, &catalog, animation_now)
                             } else if final_input_tick {
                                 nav.handle_held_tick_with_navigation_intents(
                                     &launcher_state,
@@ -8207,7 +8198,7 @@ pub(super) fn run_launcher_loop(
                                 event.or_else(|| {
                                     nav.handle_held_tick_with_navigation_intents(
                                         &launcher_state,
-                                        input_dispatch_now,
+                                        animation_now,
                                         &catalog,
                                     )
                                 })
@@ -8218,7 +8209,6 @@ pub(super) fn run_launcher_loop(
                                 && let Some((route, direction)) =
                                     settings_page_transition(source_screen, nav.screen)
                             {
-                                let now_us = animation_us;
                                 let axis = match nav.settings.screen_orientation {
                                     ScreenOrientation::Normal => {
                                         SettingsPageTransitionAxis::Horizontal
@@ -8271,7 +8261,7 @@ pub(super) fn run_launcher_loop(
                                         ui.render_h(),
                                         source,
                                         cog,
-                                        now_us,
+                                        animation_us,
                                     )
                                 } else {
                                     navigation_transition.begin_settings_page_physical(
@@ -8281,7 +8271,7 @@ pub(super) fn run_launcher_loop(
                                         ui.render_w(),
                                         ui.render_h(),
                                         target.cached_565(),
-                                        now_us,
+                                        animation_us,
                                     )
                                 };
                                 let started = started.unwrap_or(false);
@@ -8388,7 +8378,6 @@ pub(super) fn run_launcher_loop(
                                                     if layout.is_portrait() {
                                                         return false;
                                                     }
-                                                    let now_us = animation_us;
                                                     return navigation_transition
                                                         .begin_system_panel(
                                                             crt_layout,
@@ -8397,7 +8386,7 @@ pub(super) fn run_launcher_loop(
                                                             crt_backdrop
                                                                 .as_ref()
                                                                 .map_or(&[], |b| b.pixels()),
-                                                            now_us,
+                                                            animation_us,
                                                         )
                                                         .unwrap_or(false);
                                                 }
@@ -8480,7 +8469,6 @@ pub(super) fn run_launcher_loop(
                                                     }
                                                 };
                                                 geometry.is_some_and(|mut geometry| {
-                                                    let now_us = animation_us;
                                                     let started = if matches!(
                                                         edge,
                                                         NavigationTransitionEdge::HomeToArcade
@@ -8506,7 +8494,7 @@ pub(super) fn run_launcher_loop(
                                                             target.cached_565(),
                                                             crate::launcher_presentation::system_device_rgb565(kind),
                                                             crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
-                                                            now_us,
+                                                            animation_us,
                                                         )
                                                     } else if layout.is_portrait() {
                                                         navigation_transition.begin_physical(
@@ -8519,7 +8507,7 @@ pub(super) fn run_launcher_loop(
                                                             layout.composition_w(),
                                                             layout.composition_h(),
                                                             target.cached_565(),
-                                                            now_us,
+                                                            animation_us,
                                                         )
                                                     } else {
                                                         navigation_transition.begin(
@@ -8527,7 +8515,7 @@ pub(super) fn run_launcher_loop(
                                                             direction,
                                                             geometry,
                                                             target.cached_565(),
-                                                            now_us,
+                                                            animation_us,
                                                         )
                                                     };
                                                     if started.as_ref().is_ok_and(|started| *started)
@@ -10316,14 +10304,13 @@ pub(super) fn run_launcher_loop(
             // repeated samples within a frame always agree.
             let pose_at = animation_now;
             let (selected, visual_index) = nav.home_card_visual_prediction(pose_at);
-            let now_us = animation_us;
             session.update(
                 super::launcher_card_home::scene_for_display(ui, layout),
                 &card_level,
                 selected,
                 visual_index,
                 &last_clock_text,
-                now_us / 1_000,
+                animation_us / 1_000,
                 !nav.settings.reduce_motion,
                 nav.home_card_browse_prediction(pose_at),
             );
@@ -11360,10 +11347,9 @@ pub(super) fn run_launcher_loop(
                     navigation_transition.update_device_reveal_backdrop(
                         crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
                     );
-                    // The first Slint destination raster can be expensive.
-                    // Start animation at readiness, never at the stale frame
-                    // start before that preparation: cold work is not motion.
-                    let now_us = animation_us;
+                    // The first Slint destination raster can be expensive, but
+                    // animation time only moves per produced frame, so cold
+                    // preparation is never spent as motion.
                     if navigation_transition
                         .capture_destination(
                             if navigation_transition.settings_physical_space() {
@@ -11371,7 +11357,7 @@ pub(super) fn run_launcher_loop(
                             } else {
                                 layer_target.cached_frame_view().pixels()
                             },
-                            now_us,
+                            animation_us,
                         )
                         .is_err()
                         || navigation_transition_generation.is_some_and(|generation| {
@@ -11383,7 +11369,7 @@ pub(super) fn run_launcher_loop(
                         navigation_transition.settle_at_destination();
                         render_transition_frame = false;
                     }
-                    navigation_transition.tick(now_us);
+                    navigation_transition.tick(animation_us);
                 }
             }
             if render_transition_frame {

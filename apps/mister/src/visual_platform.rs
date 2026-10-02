@@ -214,58 +214,10 @@ pub struct AnimationClock {
     fixed_step: Duration,
 }
 
-const ANIMATION_CLOCK_ENV: &str = "MISTER_ANIMATION_CLOCK";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AnimationClockConfig {
-    mode: Option<String>,
-}
-
-impl AnimationClockConfig {
-    pub fn capture_with(value: Option<&str>) -> Self {
-        Self {
-            mode: value.map(str::to_owned),
-        }
-    }
-
-    pub fn capture_environment_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
-        Self::capture_with(get(ANIMATION_CLOCK_ENV))
-    }
-}
-
 impl AnimationClock {
-    pub fn from_env() -> Self {
-        Self::from_env_with_fixed_step(Duration::from_nanos(16_666_667))
-    }
-
-    pub fn from_env_with_fixed_step(fixed_step: Duration) -> Self {
-        Self::from_config_with_fixed_step(
-            &AnimationClockConfig::capture_with(std::env::var(ANIMATION_CLOCK_ENV).ok().as_deref()),
-            fixed_step,
-        )
-    }
-
-    pub fn from_config_with_fixed_step(
-        config: &AnimationClockConfig,
-        fixed_step: Duration,
-    ) -> Self {
-        // Animation time is always the display period times produced frames.
-        // Wall-clock animation is not offered, so a stale or mistyped token
-        // cannot reintroduce it.
-        match config
-            .mode
-            .as_deref()
-            .map(|s| s.to_ascii_lowercase().replace('_', "-"))
-            .as_deref()
-        {
-            None | Some("") | Some("fixed60") | Some("fixed-60") | Some("frame")
-            | Some("frame-clock") => {}
-            other => {
-                crate::ui_errln!(
-                    "ui: unsupported MISTER_ANIMATION_CLOCK={other:?}; animation is frame-locked"
-                );
-            }
-        }
+    /// Slint's animation time, advanced by one display period per call to
+    /// `advance`. It never follows the wall clock.
+    pub fn new(fixed_step: Duration) -> Self {
         Self {
             fixed_time: Rc::new(Cell::new(Duration::ZERO)),
             fixed_step,
@@ -279,11 +231,6 @@ impl AnimationClock {
     /// The display period that one frame of animation represents.
     pub fn fixed_step(&self) -> Duration {
         self.fixed_step
-    }
-
-    #[cfg(any(mister_bench_scenes, all(target_os = "linux", target_arch = "arm")))]
-    pub fn label(&self) -> &'static str {
-        "fixed60"
     }
 
     pub fn advance(&self) {

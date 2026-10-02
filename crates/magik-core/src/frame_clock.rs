@@ -42,17 +42,6 @@ impl FrameClock {
         }
     }
 
-    pub fn from_period_us(epoch: Instant, period_us: u64) -> Self {
-        Self::new(
-            epoch,
-            if period_us == 0 {
-                REFERENCE_FRAME_PERIOD
-            } else {
-                Duration::from_micros(period_us)
-            },
-        )
-    }
-
     pub const fn period(&self) -> Duration {
         self.period
     }
@@ -76,12 +65,6 @@ impl FrameClock {
         self.epoch + self.elapsed
     }
 
-    /// Changes the per-frame step without moving time backwards or forwards.
-    pub fn set_period(&mut self, period: Duration) {
-        assert!(!period.is_zero(), "frame period must be positive");
-        self.period = period;
-    }
-
     /// Moves to the next frame. Call once per produced frame, never per
     /// wake-up, so a repeated or missed refresh does not create time.
     pub fn advance(&mut self) {
@@ -91,15 +74,14 @@ impl FrameClock {
 
     /// Accounts for wall time that passed without a produced frame, in whole
     /// display periods. The sub-period remainder carries into the next call
-    /// and is dropped once a real frame is produced. Returns the periods added.
-    pub fn advance_idle(&mut self, wall: Duration) -> u64 {
+    /// and is dropped once a real frame is produced.
+    pub fn advance_idle(&mut self, wall: Duration) {
         let total = self.idle_remainder.saturating_add(wall);
         let periods = (total.as_nanos() / self.period.as_nanos()).min(u128::from(u32::MAX)) as u32;
         self.idle_remainder = total.saturating_sub(self.period.saturating_mul(periods));
         for _ in 0..periods {
             self.step();
         }
-        u64::from(periods)
     }
 
     fn step(&mut self) {
@@ -140,37 +122,14 @@ mod tests {
     }
 
     #[test]
-    fn fifty_hertz_steps_are_twenty_milliseconds() {
-        let mut clock = FrameClock::from_period_us(Instant::now(), 20_000);
-        for _ in 0..50 {
-            clock.advance();
-        }
-        assert_eq!(clock.elapsed(), Duration::from_secs(1));
-    }
-
-    #[test]
-    fn changing_period_keeps_time_continuous() {
-        let mut clock = FrameClock::new(Instant::now(), Duration::from_millis(20));
-        clock.advance();
-        let before = clock.now();
-        clock.set_period(Duration::from_micros(16_667));
-        assert_eq!(clock.now(), before);
-        clock.advance();
-        assert_eq!(
-            clock.now().duration_since(before),
-            Duration::from_micros(16_667)
-        );
-    }
-
-    #[test]
     fn idle_wall_time_counts_whole_periods_and_carries_the_remainder() {
         let mut clock = FrameClock::new(Instant::now(), Duration::from_millis(20));
-        assert_eq!(clock.advance_idle(Duration::from_millis(15)), 0);
+        clock.advance_idle(Duration::from_millis(15));
         assert_eq!(clock.frame(), 0);
-        assert_eq!(clock.advance_idle(Duration::from_millis(30)), 2);
+        clock.advance_idle(Duration::from_millis(30));
         assert_eq!(clock.elapsed(), Duration::from_millis(40));
         // 5 ms was left over; 15 more completes the next period.
-        assert_eq!(clock.advance_idle(Duration::from_millis(15)), 1);
+        clock.advance_idle(Duration::from_millis(15));
         assert_eq!(clock.elapsed(), Duration::from_millis(60));
     }
 
@@ -179,13 +138,7 @@ mod tests {
         let mut clock = FrameClock::new(Instant::now(), Duration::from_millis(20));
         clock.advance_idle(Duration::from_millis(19));
         clock.advance();
-        assert_eq!(clock.advance_idle(Duration::from_millis(1)), 0);
+        clock.advance_idle(Duration::from_millis(1));
         assert_eq!(clock.elapsed(), Duration::from_millis(20));
-    }
-
-    #[test]
-    fn zero_period_falls_back_to_the_sixty_hertz_reference() {
-        let clock = FrameClock::from_period_us(Instant::now(), 0);
-        assert_eq!(clock.period(), REFERENCE_FRAME_PERIOD);
     }
 }
