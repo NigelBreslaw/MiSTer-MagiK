@@ -791,6 +791,35 @@ impl LauncherCardHomeSession {
     }
 }
 
+#[cfg(feature = "tooling")]
+fn worker_animation_scheduler(active: bool) {
+    use mister_magik_catalog::runtime_thread::{ThreadScheduler, ThreadSchedulerScope};
+    thread_local! {
+        static SCOPE: std::cell::RefCell<Option<ThreadSchedulerScope>> = const { std::cell::RefCell::new(None) };
+        static REPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if active {
+        let result = ThreadSchedulerScope::enter(ThreadScheduler::RoundRobin { priority: 1 });
+        REPORTED.with(|reported| {
+            if !reported.replace(true) {
+                eprintln!(
+                    "card-helper-scheduler-trial: round-robin priority=1 scope={}",
+                    if result.is_ok() {
+                        "active"
+                    } else {
+                        "unavailable"
+                    }
+                );
+            }
+        });
+        SCOPE.with(|slot| *slot.borrow_mut() = result.ok());
+    } else {
+        SCOPE.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+
 fn home_renderer(prepared: &PreparedLauncher) -> Box<ParallelLauncherRenderer> {
     fn setup() {
         use mister_magik_catalog::runtime_thread::{
@@ -806,9 +835,21 @@ fn home_renderer(prepared: &PreparedLauncher) -> Box<ParallelLauncherRenderer> {
                 run_delay_us: crate::ui_runner::launcher_frame_accounting::thread_run_delay_us,
             },
         );
+    // Dev-only qualification: production defaults remain ordinary scheduling.
+    #[cfg(feature = "tooling")]
+    let activity = clocks
+        .is_some()
+        .then_some(worker_animation_scheduler as fn(bool));
+    #[cfg(not(feature = "tooling"))]
+    let activity = None;
     Box::new(
-        ParallelLauncherRenderer::new(prepared.frame_preparer(), Some(setup), clocks)
-            .expect("start current card renderer"),
+        ParallelLauncherRenderer::new_with_worker_activity(
+            prepared.frame_preparer(),
+            Some(setup),
+            clocks,
+            activity,
+        )
+        .expect("start current card renderer"),
     )
 }
 

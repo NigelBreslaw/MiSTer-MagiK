@@ -352,6 +352,61 @@ fn apply_runtime_thread_policy_with(
     report
 }
 
+/// Calling-thread scheduler scope. Never move restoration to another thread.
+pub struct ThreadSchedulerScope {
+    #[cfg(target_os = "linux")]
+    previous: (i32, i32),
+    _calling_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl ThreadSchedulerScope {
+    pub fn enter(scheduler: ThreadScheduler) -> Result<Self, &'static str> {
+        #[cfg(target_os = "linux")]
+        {
+            let mut parameter = libc::sched_param { sched_priority: 0 };
+            // SAFETY: initialized parameter; pid=0 reads only the calling thread.
+            let policy = unsafe { libc::sched_getscheduler(0) };
+            if policy < 0 || unsafe { libc::sched_getparam(0, &mut parameter) } != 0 {
+                return Err("scheduler capture failed");
+            }
+            // DEADLINE requires sched_attr, so do not enter a scope we cannot restore.
+            if !matches!(
+                policy,
+                libc::SCHED_OTHER | libc::SCHED_RR | libc::SCHED_FIFO
+            ) {
+                return Err("unsupported prior scheduler");
+            }
+            if apply_scheduler(scheduler) != "ok" {
+                return Err("scheduler change failed");
+            }
+            Ok(Self {
+                previous: (policy, parameter.sched_priority),
+                _calling_thread: std::marker::PhantomData,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = scheduler;
+            Err("thread scheduler scopes unsupported")
+        }
+    }
+}
+
+impl Drop for ThreadSchedulerScope {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            let parameter = libc::sched_param {
+                sched_priority: self.previous.1,
+            };
+            // SAFETY: this !Send scope restores the thread that entered it.
+            if unsafe { libc::sched_setscheduler(0, self.previous.0, &parameter) } != 0 {
+                crate::catalog_logln!("thread_scheduler_scope_restore_failed");
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn apply_scheduler(scheduler: ThreadScheduler) -> &'static str {
     let (policy, priority) = match scheduler {
@@ -614,6 +669,28 @@ fn current_processor() -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn failed_scheduler_scope_preserves_calling_thread_policy() {
+        let before = (
+            super::current_scheduler_policy(),
+            super::current_scheduler_priority(),
+        );
+        assert!(
+            super::ThreadSchedulerScope::enter(super::ThreadScheduler::RoundRobin {
+                priority: 999
+            })
+            .is_err()
+        );
+        assert_eq!(
+            (
+                super::current_scheduler_policy(),
+                super::current_scheduler_priority()
+            ),
+            before
+        );
+    }
+
     use super::*;
 
     #[test]
