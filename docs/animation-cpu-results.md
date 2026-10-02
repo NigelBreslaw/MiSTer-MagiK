@@ -290,10 +290,72 @@ full-frame deadline, not evidence by itself of a pure pacing/latch bug. Other
 records also show expensive transition starts and endpoint Slint raster; these
 remain in scope and must not be hidden by narrowing the drop gate.
 
-## Exact reveal background fade — awaiting clean comparison
+## Exact reveal background fade — kept (`32e19d82f`)
 
 HDMI background fade now reuses the existing RGB565 black-blend kernel with the
 same five-bit alpha buckets as scalar `card_page::blend`. Zero/full opacity uses
 fill/copy. No new kernel, allocation, alpha rounding, artwork, animation step or
 duration is introduced. Scalar and ARM output agree for all 65,536 RGB565 colours
 and all 257 input alpha values. Existing reveal tests and focused Clippy pass.
+
+
+All three clean fade-only routes passed with zero latch rejections. Evidence:
+`build/magik-results/20261002T225257Z-1b9aadc53226`; executable SHA256
+`f829db83fba8ee937c8e85add34f5aa378458f041b149de9ad7dd1f0cebe62d9`.
+Drops were 22/21/20, with CPU 19.0023/18.9740/19.0313 ms/moving presentation.
+Mean CPU fell 19.2891 -> 19.0025 ms (1.49%) versus its merge-only parent.
+The one-drop mean difference (22 -> 21) does not establish a cadence improvement.
+
+## Exact device sampling clip (#11) — kept (`489a79f91`)
+
+Device sampling intersects the rounded card span with the valid source-column
+interval and rejects invalid source rows before the pixel loop. The interval
+comes from the existing floor-mapped coordinates; no independently rounded
+floating-point bounds or approximation replaces the projection. Positive scale
+makes those columns monotonic. Transparent pixels and opaque black screen pixels
+keep their original behavior. There is no new storage or unsafe code.
+
+Forty-eight full-frame hashes captured before clipping match afterward for four
+card positions and twelve fade/scaling boundary times, including hub and list
+pages. All seven reveal tests also pass on the ARM backend, including this
+matrix; exhaustive black-fade parity and NEON offset/tail/alpha checks passed.
+Focused Clippy and semantic diagnostics are clean.
+
+The three clean clip-candidate routes passed with zero latch rejections.
+Evidence: `build/magik-results/20261002T225843Z-08d56ff3a48a`.
+Executable SHA256:
+`dd10a45529be4e5a7535f8f0895d683a478caa87c0682f1b5af32a77a519626e`.
+
+| Repeat | Drops | CPU / moving presentation (ms) | Card / Slint / system drops |
+| --- | ---: | ---: | --- |
+| 0 | 21 | 19.0729 | 12 / 1 / 8 |
+| 1 | 19 | 18.6820 | 13 / 1 / 5 |
+| 2 | 24 | 18.7062 | 15 / 1 / 8 |
+
+Mean CPU is 18.8203 ms, 0.1822 ms (0.96%) below its fade-only parent. Card CPU
+averages remain close: the clip changes reveal work, not card raster. The first
+repeat is slower than the parent samples; do not treat a sub-percent route
+average alone as decisive evidence. Drops are effectively neutral: 21/19/24
+versus 22/21/20. Producer tails vary with helper run delay and remain unresolved.
+
+A second complete diagnostic route passed with the same 118 reveal frames and
+378 card frames. Evidence: `build/magik-results/20261002T230617Z-37726dfb8867`.
+Its 45.010-second window confirms substantial savings in the intended stages:
+
+| Reveal stage | Before both changes (ms/frame) | After (ms/frame) |
+| --- | ---: | ---: |
+| Background fade | 2.486 | 1.288 |
+| Device sampling | 4.318 | 3.179 |
+| Card-face sampling | 0.631 | 0.623 |
+| Outline | 0.111 | 0.107 |
+| Page bands | 1.194 | 1.188 |
+
+Keep the clip on exact pixel parity, directly attributed sampling savings and
+the consistent direction of route CPU totals, with no cadence claim. Diagnostic
+wall times are not stage CPU estimates, and their drops are not acceptance runs.
+
+The goal remains perfect moving-refresh cadence throughout the launcher and
+subviews. No animation steps, durations, source artwork or drop gates were
+changed. Roughly 21 drops per route remain. The next work must address card tail
+scheduling/render-ahead and cold destination/endpoint Slint preparation; cheaper
+steady-state reveal drawing does not resolve those first-frame costs.

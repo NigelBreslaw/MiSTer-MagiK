@@ -97,3 +97,11 @@ its clean routes reduced moving CPU by 2.76%. See `animation-cpu-results.md` for
 all repetitions and the limited cadence conclusion. Next priority is bounded
 render-ahead (#14), followed by clean sparse-copy and scoped-scheduler A/B. Keep
 those separate from further kernels and from Slint/system pacing investigations.
+
+
+Explicit reveal-stage profiling identified the scalar background fade and
+sampling outside valid device coordinates. Separate commits now preserve exact
+pixels while reducing those stage wall times by approximately 48% and 26%.
+Clean route CPU is 18.82 ms/moving presentation, but drops remain about 21 per
+route; this is CPU progress, not 60 FPS qualification. Cold transition starts,
+endpoint Slint raster and card scheduling tails remain part of the full goal.
