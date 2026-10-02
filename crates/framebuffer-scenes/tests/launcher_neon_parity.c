@@ -68,6 +68,13 @@ int main(void) {
     reference_project_dithered(a+3,pitch,src,height,rows,q,step,x,y);
     magik_launcher_project_dithered(b+3,pitch,src,height,rows,q,step,x,y);
     if(memcmp(a,b,sizeof a)) {fprintf(stderr,"project mismatch trial %zu\n",trial);return 1;}
+    // Reinitialize reference and candidate with the same arbitrary background.
+    for(size_t j=0;j<10000;++j)a[j]=b[j]=(uint16_t)next();
+    reference_project_dithered(a+3,pitch,src,height,rows,q,step,x,y);
+    size_t top=trial%3==0 && height>16?8:0;
+    size_t bottom=top?height-8:0;
+    magik_launcher_project_dithered_opaque(b+3,pitch,src,height,rows,q,step,x,y,top,bottom);
+    if(memcmp(a,b,sizeof a)) {fprintf(stderr,"opaque project mismatch trial %zu\n",trial);return 6;}
   }
   for(uint32_t a=0;a<256;++a)for(uint32_t b=0;b<256;++b)for(uint32_t w=0;w<256;w+=4) {
     uint32_t ws[4]={w,w+1,w+2,w+3},aa=a*0x01010101u,bb=b*0x01010101u,got[4];

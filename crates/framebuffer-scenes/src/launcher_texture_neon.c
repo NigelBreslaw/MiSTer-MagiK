@@ -626,6 +626,64 @@ void magik_launcher_project_dithered(uint16_t *out,size_t pitch,const uint32_t *
   }
 }
 
+// Canonical card columns have an opaque source interior. The two bilinear
+// inputs must both lie in it; rounded caps and arbitrary-alpha callers retain
+// the generic kernel above. Work out output intervals once, not per vector.
+static size_t projected_row_boundary(int64_t boundary,int32_t q,int32_t step,size_t rows) {
+  int64_t delta=boundary-q;
+  if(delta<=0)return 0;
+  if(delta>=(int64_t)rows*step)return rows;
+  // Coordinate progression fits i32 at the Rust boundary, so the positive
+  // numerator is below 2^33. Double precision retains the exact ceil quotient
+  // here, matching geometry_quotient while avoiding ARM software i64 division.
+  return (size_t)((double)(delta+step-1)/(double)step);
+}
+void magik_launcher_project_dithered_opaque(uint16_t *out,size_t pitch,
+    const uint32_t *src,size_t height,size_t rows,int32_t q,int32_t step,
+    size_t x,size_t y0,size_t opaque_top,size_t opaque_bottom) {
+  if (!rows) return;
+  if (step<=0 || opaque_top>=opaque_bottom || opaque_bottom>height ||
+      (src[opaque_top]>>24)!=255 || (src[opaque_bottom-1]>>24)!=255) {
+    magik_launcher_project_dithered(out,pitch,src,height,rows,q,step,x,y0);
+    return;
+  }
+  size_t first=projected_row_boundary((int64_t)opaque_top<<16,q,step,rows);
+  size_t end=projected_row_boundary((int64_t)(opaque_bottom-1)<<16,q,step,rows);
+  if(first>=end) {
+    magik_launcher_project_dithered(out,pitch,src,height,rows,q,step,x,y0);
+    return;
+  }
+  magik_launcher_project_dithered(out,pitch,src,height,first,q,step,x,y0);
+  int32_t sample=(int32_t)((int64_t)q+(int64_t)first*step);
+  uint16_t offsets[4];
+  for(size_t j=0;j<4;++j)offsets[j]=(uint16_t)(256-image_threshold[(y0+first+j)&3][x&3]);
+  const uint16x4_t phase=vld1_u16(offsets);
+  size_t y=first;
+  for(;y+3<end;y+=4) {
+    int32_t q1=sample+step,q2=q1+step,q3=q2+step;
+    uint32x4_t p=vcombine_u32(interpolate2(src,sample,q1),interpolate2(src,q2,q3));
+    uint16x4_t packed=pack_dithered16(p,phase);
+    out[y*pitch]=vget_lane_u16(packed,0);
+    out[(y+1)*pitch]=vget_lane_u16(packed,1);
+    out[(y+2)*pitch]=vget_lane_u16(packed,2);
+    out[(y+3)*pitch]=vget_lane_u16(packed,3);
+    sample=q3+step;
+  }
+  if(y+1<end) {
+    uint32x2_t p=interpolate2(src,sample,sample+step);
+    uint32x2_t packed=pack_dithered2(p,x,y0+y);
+    out[y*pitch]=(uint16_t)vget_lane_u32(packed,0);
+    out[(y+1)*pitch]=(uint16_t)vget_lane_u32(packed,1);
+    y+=2;sample+=2*step;
+  }
+  if(y<end) {
+    uint32x2_t packed=pack_dithered2(interpolate2(src,sample,sample),x,y0+y);
+    out[y*pitch]=(uint16_t)vget_lane_u32(packed,0);
+  }
+  if(end<rows) magik_launcher_project_dithered(out+end*pitch,pitch,src,height,rows-end,
+    (int32_t)((int64_t)q+(int64_t)end*step),step,x,y0+end);
+}
+
 // Flat cards use contiguous four-pixel stores, as in the production flat path.
 static inline uint16x4_t pack_dithered4(uint32x4_t p,size_t x,size_t y) {
   uint16_t offsets[4];

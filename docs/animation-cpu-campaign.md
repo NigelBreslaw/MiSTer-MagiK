@@ -43,3 +43,16 @@ Measurements and trial decisions live in ignored `outputs/animation-cpu-round-2`
 Do not stage raw logs, captures or benchmark artifacts. Publish a final comparison
 once the campaign is complete; neither a lower microbenchmark cost nor fewer
 cache events alone establishes 60 FPS with zero fresh-pose or physical drops.
+
+The projected compose experiment includes a standalone native C fixture in
+`crates/framebuffer-scenes/tests/launcher_column_bench.c`. Compile it as a
+separate translation unit alongside `launcher_texture_neon.c`, using the same
+`-O3 -std=c11 -mtune=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard
+-ffp-contract=off` flags as the production build. Run the resulting executable
+through `MISTER_MAGIK2_PREBUILT_ARTIFACT=ABSOLUTE_PATH scripts/magik bench
+card-column-generic` and `card-column-opaque`. Both workloads compare full output
+before timing, then exercise a 32-column strip, four positive source strides and
+four clipped source starts against the same 960x540 destination. Each reports
+two wall-time and thread-CPU samples; repeat in reverse order to check drift.
+This isolates compose and excludes filtering, reflections, copy and presentation.
+Use the full application round trips to judge the effect on CPU and dropped frames.
