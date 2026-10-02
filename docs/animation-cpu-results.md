@@ -76,4 +76,38 @@ work. Trial Dev SHA256 was
 `466d96ee1e0843e4184373d5834cf39d47a6ce487db71e92374559b28b954ba1`;
 route evidence is `build/magik-results/20261002T191612Z-bd8dc35a2a54`.
 
-Further campaign items remain in `animation-cpu-campaign.md`.
+## Sparse hidden-slot copy — kept (`4078b36aa`)
+
+The native path now copies the carousel and bounded chrome bands during a trick,
+with full title coverage for wider breadcrumbs and their clearing. Each slot is
+fully seeded when its content generation changes. Chrome updates still run when
+the tile image is resident; a partial write makes the slot unknown.
+
+Three native routes passed with 24/26/24 drops. Mean hidden copy time fell from
+1.616 to 1.293 ms/card frame (20%). Moving process CPU averaged 19.683 versus
+19.787 ms/presentation. That small CPU change and the overlapping drop ranges
+do not establish a cadence improvement. The measured copy reduction is real;
+60 FPS with zero drops remains unmet.
+
+Validation: a full-pixel alternating-slot test covers both trick directions,
+foreign breadcrumbs, interruption and landing. All 42 latch tests passed,
+including independently fading chrome and partial-write reseeding. Focused
+frontend and scene Clippy passed. Route evidence:
+`build/magik-results/20261002T194313Z-bde78ed8112f`; Dev SHA256:
+`c9672f1d71e40d4285a07af6b47ec133775a15b5d9f2ea315f21abb5b9eb494a`.
+
+## Filter/shade fusion — rejected
+
+A standalone trial kept the horizontal and mip interpolation floors, then shaded
+the result in registers before its final store. Twenty thousand randomized
+combinations of lengths, interpolation/mip weights and light factors matched
+the separate kernels exactly in ARM emulation. Native timing used 64 fixed
+combinations and the production compiler flags, reversing execution order for
+confirmation. Separate kernels measured 16.281–16.300 ns/pixel; fusion measured
+16.483–16.535, about 1.3% slower. No production integration was made.
+
+Local trial source and evidence remain ignored in
+`outputs/animation-cpu-round-2/fused-*` and `filter-*`.
+The reflection reordering trial measured a small native kernel gain but remains
+unqualified on the complete route. Further campaign items remain in
+`animation-cpu-campaign.md`.
