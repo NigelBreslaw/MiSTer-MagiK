@@ -17,7 +17,9 @@ def sample():
                 "concept": "diagnostic",
                 "preset": "default",
                 "route": "hdmi",
-                "animation_clock": "monotonic",
+                "animation_clock": "frame",
+                "animation_period_ns": 16_666_667,
+                "animation_window_start_ms": 0,
                 "animation_elapsed_ms": 30000,
             },
             process_cpu_percent=75,
@@ -234,13 +236,46 @@ def test_installed_concept_requires_the_requested_ready_artifact(field):
 
 def test_motion_evidence_accounts_for_device_warmup():
     data = sample()
-    data["motion_started_ms"] = 0
     data["window"]["context"].update(
         concept="launcher-cards",
         build_profile="release-device",
+        animation_window_start_ms=2000,
         animation_elapsed_ms=32000,
     )
     assert validate(data, "abc", "launcher-cards", "default")["motion_qualified"]
+
+
+def test_motion_follows_rendered_frames_not_wall_time():
+    # 59.5 Hz for 30 s is 1,785 frames and 29,750 ms of animation: valid.
+    data = sample()
+    w = data["window"]
+    w.update(
+        refresh_hz=59.5,
+        presentations=1785,
+        physical_latch_posts=1785,
+        physical_latch_flips=1785,
+        presented_vblanks=1785,
+        owned_vblanks=1785,
+    )
+    w["context"].update(
+        concept="launcher-cards",
+        build_profile="release-device",
+        animation_elapsed_ms=29750,
+    )
+    fps = 1785 * 1000 / 30000
+    assert abs(fps - 59.5) <= 0.1
+    assert validate(data, "abc", "launcher-cards", "default")["qualified"]
+    # The same frames with animation that fell behind them are not.
+    w["context"]["animation_elapsed_ms"] = 29750 - 200
+    assert not validate(data, "abc", "launcher-cards", "default")["motion_qualified"]
+    # A missing frame period or window start cannot qualify.
+    for key in ("animation_period_ns", "animation_window_start_ms"):
+        w["context"]["animation_elapsed_ms"] = 29750
+        w["context"].pop(key)
+        assert not validate(data, "abc", "launcher-cards", "default")[
+            "motion_qualified"
+        ]
+        w["context"][key] = 16_666_667 if key == "animation_period_ns" else 0
 
 
 @pytest.mark.parametrize("sampled", [True, False])

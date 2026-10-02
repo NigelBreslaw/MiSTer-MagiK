@@ -188,7 +188,8 @@ pub struct OrientationTransitionRuntime {
     height: usize,
     from: ScreenOrientation,
     to: ScreenOrientation,
-    started_at: Instant,
+    /// Frame-clock time the animation began; never a wall-clock sample.
+    started_at: Option<Instant>,
     duration: Duration,
     effect: OrientationTransitionEffect,
     source: Vec<Rgb565Pixel>,
@@ -288,7 +289,7 @@ impl OrientationTransitionRuntime {
             height,
             from: ScreenOrientation::Normal,
             to: ScreenOrientation::Normal,
-            started_at: Instant::now(),
+            started_at: None,
             duration: ORIENTATION_WAVE_TOTAL_DURATION,
             effect,
             source: vec![Rgb565Pixel(0); len],
@@ -318,7 +319,7 @@ impl OrientationTransitionRuntime {
         }
         self.from = from;
         self.to = to;
-        self.started_at = now;
+        self.started_at = Some(now);
         self.duration = ORIENTATION_WAVE_TOTAL_DURATION;
         self.source.copy_from_slice(source);
         self.destination.fill(Rgb565Pixel(0));
@@ -363,7 +364,7 @@ impl OrientationTransitionRuntime {
         if !self.active || !self.destination_ready {
             return false;
         }
-        self.started_at = now;
+        self.started_at = Some(now);
         self.previous_levels_valid = false;
         self.previous_revealing = false;
         true
@@ -424,8 +425,11 @@ impl OrientationTransitionRuntime {
             ));
         }
         let render_started = Instant::now();
-        let elapsed = now
-            .saturating_duration_since(self.started_at)
+        let elapsed = self
+            .started_at
+            .map_or(Duration::ZERO, |started| {
+                now.saturating_duration_since(started)
+            })
             .min(self.duration);
         let fill_started = Instant::now();
         let fill_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(

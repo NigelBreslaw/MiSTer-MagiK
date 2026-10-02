@@ -394,6 +394,9 @@ impl ScreenshotParade {
         pixels: &mut [Rgb565Pixel],
         presentation_tick: u64,
     ) -> Result<ScreenshotParadeStats, String> {
+        // One presented frame is one tick at any refresh rate, as on
+        // frame-locked arcade hardware: a 50 Hz display runs the motion at
+        // 50 ticks per second rather than skipping ticks to hold real-time speed.
         let motion_ticks_fp = presentation_tick
             .checked_mul(TICK_ONE as u64)
             .ok_or_else(|| "screenshot parade presentation tick overflowed".to_owned())?;

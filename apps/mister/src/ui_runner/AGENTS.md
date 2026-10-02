@@ -14,3 +14,7 @@ For unresolved ordering, read the matching `docs/architecture.md` section:
 Boot And Process Model, Launcher Composition, Game Launch Handoff, or Launcher
 Navigation Model. Physical scan-out, timing, input hardware, and Main handoff
 claims require device evidence.
+
+Animation time comes only from the launcher loop's `FrameClock` (one display
+period per produced frame); never read `Instant::now()` for motion. See
+`docs/architecture.md` Animation Time.

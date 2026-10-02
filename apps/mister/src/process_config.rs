@@ -22,7 +22,7 @@ use crate::ui_runner::launcher_bench::LauncherBenchmarkConfig;
 #[cfg(feature = "ui")]
 use crate::ui_runner::launcher_gui_profile::GuiProfileConfig;
 #[cfg(feature = "ui")]
-use crate::visual_platform::{AnimationClockConfig, PresentTiming};
+use crate::visual_platform::PresentTiming;
 use mister_magik_catalog::catalog_config::ArchiveCacheConfig;
 use mister_magik_catalog::device_layout::{CatalogPathOverrides, CatalogPaths, DevicePaths};
 use mister_magik_catalog::fs_fault::FaultConfig;
@@ -457,7 +457,6 @@ fn present_backend_is_retired(value: &str) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisplayPacingConfig {
     display_inputs: UiDisplayInputs,
-    animation_clock: AnimationClockConfig,
     present_timing: PresentTiming,
     vsync: VsyncPacerConfig,
     dirty_region: DirtyRegionConfig,
@@ -469,9 +468,6 @@ impl DisplayPacingConfig {
     fn capture(environment: &EnvironmentSnapshot) -> Self {
         Self {
             display_inputs: UiDisplayInputs::capture_with(|name| environment.get(name)),
-            animation_clock: AnimationClockConfig::capture_environment_with(|name| {
-                environment.get(name)
-            }),
             present_timing: PresentTiming::capture_with(|name| environment.get(name)),
             vsync: VsyncPacerConfig::capture_with(|name| environment.get(name)),
             dirty_region: DirtyRegionConfig::capture_with(|name| environment.get(name)),
@@ -481,10 +477,6 @@ impl DisplayPacingConfig {
 
     pub fn display_inputs(&self) -> &UiDisplayInputs {
         &self.display_inputs
-    }
-
-    pub fn animation_clock(&self) -> &AnimationClockConfig {
-        &self.animation_clock
     }
 
     pub fn present_timing(&self) -> PresentTiming {

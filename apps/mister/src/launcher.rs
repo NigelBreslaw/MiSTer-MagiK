@@ -76,6 +76,25 @@ fn library_rebuild_on_next_boot_path() -> PathBuf {
 }
 #[cfg(test)]
 const STATE_FILENAME: &str = mister_magik_catalog::media_identity::SCREENSHOT_MEDIA_STATE_FILENAME;
+static FRAME_PERIOD_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
+    mister_magik_core::frame_clock::REFERENCE_FRAME_PERIOD.as_nanos() as u64,
+);
+
+/// Declares the display period one animation frame represents. The launcher
+/// loop sets it once from the output route; it only sizes the first step of a
+/// motion that has no previous frame, since later steps are measured on the
+/// frame clock.
+pub fn set_frame_period(period: Duration) {
+    FRAME_PERIOD_NANOS.store(
+        period.as_nanos().clamp(1, u128::from(u64::MAX)) as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+fn frame_period() -> Duration {
+    Duration::from_nanos(FRAME_PERIOD_NANOS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 const ARCADE_NORMAL_PX_PER_SECOND: f64 = 360.0;
 const ARCADE_TURBO_PX_PER_SECOND: f64 = 720.0;
 const ROOT_CARD_SCROLL_SPEED_FACTOR: f64 = 0.7;
@@ -697,7 +716,7 @@ impl ArcadeNav {
         let delta = self
             .scroll
             .last_frame_at
-            .map_or(Duration::from_secs_f64(1.0 / 60.0), |previous| {
+            .map_or(frame_period(), |previous| {
                 now.saturating_duration_since(previous)
             });
         self.scroll.last_frame_at = Some(now);
@@ -800,14 +819,12 @@ impl ArcadeNav {
             return;
         }
         if let Some(step) = self.nested_step {
-            let elapsed = now
-                .saturating_duration_since(step.started)
-                .as_millis()
-                .min(u128::from(NESTED_STEP_MILLIS)) as u32;
+            let total = Duration::from_millis(u64::from(NESTED_STEP_MILLIS));
+            let elapsed = now.saturating_duration_since(step.started).min(total);
             self.visual_index = step.from as f32
-                + step.direction as f32 * elapsed as f32 / NESTED_STEP_MILLIS as f32;
+                + step.direction as f32 * (elapsed.as_secs_f64() / total.as_secs_f64()) as f32;
             self.scroll_y = (self.visual_index * self.row_height as f32).round() as i32;
-            if elapsed == NESTED_STEP_MILLIS {
+            if elapsed == total {
                 self.selected =
                     (step.from + i64::from(step.direction)).rem_euclid(count as i64) as usize;
                 self.scroll.target_index = self.selected;
@@ -849,9 +866,8 @@ impl ArcadeNav {
                 duration_millis: NESTED_STEP_MILLIS,
             };
         };
-        let elapsed = at
-            .saturating_duration_since(step.started)
-            .as_millis()
+        let elapsed = (at.saturating_duration_since(step.started).as_micros() + 500)
+            .div_euclid(1_000)
             .min(u128::from(NESTED_STEP_MILLIS)) as u32;
         BrowseFrame {
             selected: step.from.rem_euclid(count.max(1) as i64) as usize,
@@ -7059,6 +7075,38 @@ mod tests {
             .expect("spring should look settled before its velocity reaches zero");
         nav.handle_direction_input(1, 0, visually_settled_at, count);
         assert_eq!(nav.selected, 2);
+    }
+
+    #[test]
+    fn root_card_motion_advances_exactly_one_frame_period_per_frame() {
+        use mister_magik_core::frame_clock::{FrameClock, REFERENCE_FRAME_PERIOD};
+        let count = ROOT_HOME_CARDS.len();
+        let mut clock = FrameClock::new(Instant::now(), REFERENCE_FRAME_PERIOD);
+        let mut nav = ArcadeNav::new_cyclic();
+        let mut reference = SpringAnimation::new(
+            0.0,
+            SpringConfiguration::smooth_with_response(ROOT_CARD_SPRING_RESPONSE),
+        );
+        reference.set_target(f64::from(ARCADE_ROW_HEIGHT));
+
+        nav.handle_direction_input(1, 0, clock.now(), count);
+        nav.tick(count, clock.now());
+        reference.advance(REFERENCE_FRAME_PERIOD);
+        assert_eq!(nav.scroll_y, reference.value().round() as i32);
+
+        for frame in 1..=40 {
+            // Real time passing between frames must not change the motion.
+            std::thread::sleep(Duration::from_micros(200 * (frame % 5)));
+            clock.advance();
+            nav.handle_direction_input(0, i32::from(frame == 1), clock.now(), count);
+            nav.tick(count, clock.now());
+            reference.advance(REFERENCE_FRAME_PERIOD);
+            assert_eq!(
+                nav.scroll_y,
+                reference.value().round() as i32,
+                "frame {frame}"
+            );
+        }
     }
 
     #[test]

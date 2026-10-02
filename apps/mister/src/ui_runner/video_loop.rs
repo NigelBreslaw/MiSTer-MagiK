@@ -506,9 +506,8 @@ pub(super) fn run_video_playback_loop(
         format!("{secs}s")
     };
     crate::ui_logln!(
-        "video_playback running {label} playlist={playlist_label} frame-order={} animation-clock={} video-render-mode=direct-blit",
-        frame_order.label(),
-        animation_clock.label()
+        "video_playback running {label} playlist={playlist_label} frame-order={} video-render-mode=direct-blit",
+        frame_order.label()
     );
     crate::ui_logln!("video_render_mode=direct-blit");
     crate::ui_logln!(
@@ -541,11 +540,15 @@ pub(super) fn run_video_playback_loop(
             ..Default::default()
         };
         let now = start.elapsed();
+        // UI animation time: one display period per loop iteration, never wall time.
+        let ui_time = animation_clock
+            .fixed_step()
+            .saturating_mul(u32::try_from(frames).unwrap_or(u32::MAX));
         let _ = pad.poll();
         let controller_toggle = button_edge.a_pressed(pad.state().btn_a);
         let automatic_toggle = auto_toggle.due(now);
         if controller_toggle || automatic_toggle {
-            size_animation.toggle(now);
+            size_animation.toggle(ui_time);
             let (width, height) = size_animation.dimensions();
             let (target_width, target_height) = size_animation.target_dimensions();
             crate::ui_logln!(
@@ -562,7 +565,7 @@ pub(super) fn run_video_playback_loop(
                 VIDEO_SCALE_ANIMATION_RESPONSE.as_millis()
             );
         }
-        if size_animation.update(now) {
+        if size_animation.update(ui_time) {
             let (width, height) = size_animation.dimensions();
             crate::ui_logln!("video_size_transition complete={}x{}", width, height);
         }

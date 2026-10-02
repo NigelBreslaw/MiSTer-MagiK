@@ -31,7 +31,6 @@ pub struct LauncherScreensaver {
     parade: Option<ScreenshotParade>,
     startup_started_at: Option<Instant>,
     frame: u64,
-    motion_started_at: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -166,57 +165,15 @@ impl ScreenshotBuffer for LauncherScreenshotBuffer {
 pub(crate) type LauncherScreenshotRuntime = LiveScreenshotParade<LauncherScreenshotBuffer>;
 
 impl LauncherScreensaver {
-    pub fn render(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-    ) -> ScreensaverRenderTrace {
-        let now = Instant::now();
-        self.render_at(
-            dst,
-            w,
-            h,
-            now.saturating_duration_since(self.motion_started_at),
-        )
-    }
-
     pub fn render_at(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-        elapsed: Duration,
-    ) -> ScreensaverRenderTrace {
-        self.render_at_target(dst, w, h, elapsed, None)
-    }
-
-    pub fn render_at_presentation_tick(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-        presentation_tick: u64,
-        fallback_elapsed: Duration,
-    ) -> ScreensaverRenderTrace {
-        self.render_at_target(dst, w, h, fallback_elapsed, Some(presentation_tick))
-    }
-
-    fn render_at_target(
         &mut self,
         dst: &mut [Rgb565Pixel],
         _w: usize,
         _h: usize,
         elapsed: Duration,
-        presentation_tick: Option<u64>,
     ) -> ScreensaverRenderTrace {
         let mut trace = if let Some(parade) = self.parade.as_mut() {
-            let render_result = match presentation_tick {
-                Some(tick) => {
-                    parade.render_at_presentation_tick(slint_rgb565_as_shared_mut(dst), tick)
-                }
-                None => parade.render_at(slint_rgb565_as_shared_mut(dst), elapsed),
-            };
+            let render_result = parade.render_at(slint_rgb565_as_shared_mut(dst), elapsed);
             match render_result {
                 Ok(stats) => {
                     if parade.is_ready()
@@ -295,12 +252,10 @@ impl LauncherScreensaver {
                 preparation_slack: None,
             },
         )?;
-        let now = Instant::now();
         Ok(Self {
             parade: Some(parade),
             startup_started_at: None,
             frame: 0,
-            motion_started_at: now,
         })
     }
 }

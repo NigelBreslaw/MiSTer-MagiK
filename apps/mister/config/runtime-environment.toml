@@ -59,20 +59,6 @@ sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls amiga preview archive behavior", accepted_values = [], value_policy = "document" }
 [[control]]
-name = "MISTER_ANIMATION_CLOCK"
-owner = "apps/mister/src/visual_platform.rs"
-classification = "production"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "internal runtime"
-parser = "enum"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls animation clock behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_ARCADE_BENCHMARK_ORIENTATION"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "benchmark"

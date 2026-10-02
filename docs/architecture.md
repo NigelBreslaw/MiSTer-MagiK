@@ -921,6 +921,32 @@ cache, or builder journal.
 See `docs/catalog.md` for the current catalog lifecycle, worker request modes,
 root stamp semantics, SQLite publish model, and benchmark gates.
 
+## Animation Time
+
+Animation is vsync-locked, as on frame-locked arcade hardware: one produced
+frame is exactly one display period (1/60 s on HDMI and 60 Hz CRT, 1/50 s on
+PAL CRT) and no animation reads a real clock. `mister_magik_core::frame_clock::FrameClock`
+holds that time as `epoch + frames * period`. The launcher loop advances it once
+per produced frame, so a late frame slows motion down instead of enlarging the
+next step, and cold preparation or a stalled worker cannot consume animation
+time. Slint animations use `AnimationClock`, which steps the same period once
+per frame; there is no wall-clock mode.
+
+Code that moves, fades, holds or repeats takes its `Instant` from the frame
+clock: scroll springs, nested card steps, the level trick, navigation and
+orientation transitions, the CRT backdrop fade, the screensaver preview fade,
+selection-feedback dwell, hold/repeat gates and benchmark pacing. The screensaver
+parade counts presentation ticks, one per presented frame at any refresh rate, so a
+50 Hz display runs its motion at 50 ticks per second.
+
+One bounded exception keeps gaps correct across sleep. A launcher with nothing
+to animate sleeps instead of producing frames, so `FrameClock::advance_idle`
+counts that sleep in whole display periods; "released, then pressed again within
+350 ms" therefore still spans an idle gap. It never applies to a produced frame.
+Wall clocks remain correct for profiling, timeouts, process supervision and
+user-visible countdowns. `apps/mister/tests/animation_time_sources.rs` pins the
+wall-clock reads allowed in each animation-owning file.
+
 ## Launcher Navigation Model
 
 The Home launcher presents six cyclic cards in this order: `Arcade`,

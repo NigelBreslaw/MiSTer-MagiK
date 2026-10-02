@@ -1843,6 +1843,8 @@ fn run_window(
     let mut status_started = started;
     let mut cpu_started = process_cpu_time();
     let mut status_frames = 0_u64;
+    // Scene time is frames rendered times the frame period, never wall time.
+    let mut scene_frames = 0_u64;
     let mut presentation_tick = 0_u64;
     let mut pending_screenshot_tick = None::<u64>;
     let mut render_samples_us = Vec::with_capacity(64);
@@ -2021,12 +2023,13 @@ fn run_window(
                 }
             }
         }
-        let wall_elapsed = Instant::now().saturating_duration_since(started);
-        let elapsed = if case.is_some() {
-            Duration::from_nanos((1_000_000_000 / FRAME_RATE).saturating_mul(status_frames))
-        } else {
-            wall_elapsed
-        };
+        let elapsed = Duration::from_nanos((1_000_000_000 / FRAME_RATE).saturating_mul(
+            if case.is_some() {
+                status_frames
+            } else {
+                scene_frames
+            },
+        ));
         if let Some(controls) = controls.as_mut() {
             controls.poll_direction(input.poll());
             renderer
@@ -2261,6 +2264,7 @@ fn run_window(
             next_rss_sample = Some(Instant::now() + Duration::from_secs(1));
         }
         status_frames = status_frames.saturating_add(1);
+        scene_frames = scene_frames.saturating_add(1);
         if bounded.is_some_and(|bounded| {
             measurement_started.is_some_and(|started| started.elapsed() >= bounded.duration)
         }) {
