@@ -744,6 +744,7 @@ mod tests {
         let initial = scene.prepare(initial_data);
         let mut renderer =
             ParallelLauncherRenderer::new(initial.frame_preparer(), None, None).unwrap();
+        renderer.retain_bands(true);
         let mut generation = 0;
         for root in [true, false] {
             let mut data = level(&cards, 3, &["CONSOLES"]);
@@ -779,6 +780,7 @@ mod tests {
                         .unwrap();
                     serial.render_transition_title_from(&target, t);
                     parallel.render_transition_title_from(&target, t);
+                    parallel.merge_retained_helper(&mut renderer);
                     assert!(
                         serial.pixels() == parallel.pixels(),
                         "root={root} {change:?} gather {t}"
@@ -801,6 +803,7 @@ mod tests {
                             &mut renderer,
                         )
                         .unwrap();
+                    parallel.merge_retained_helper(&mut renderer);
                     assert!(
                         serial.pixels() == parallel.pixels(),
                         "root={root} {change:?} deal {t}"

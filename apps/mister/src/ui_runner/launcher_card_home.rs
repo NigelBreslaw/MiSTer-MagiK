@@ -646,6 +646,17 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
+        self.render_output(false)
+    }
+
+    pub(super) fn render_direct_bands(&mut self) {
+        let _ = self.render_output(true);
+    }
+
+    fn render_output(&mut self, retain_bands: bool) -> &[Rgb565Pixel] {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.retain_bands(retain_bands);
+        }
         if self.render_trick() {
             self.last_rendered = None;
             self.content_dirty = true;
@@ -668,6 +679,12 @@ impl LauncherCardHomeSession {
             }
             self.last_rendered = Some((self.frame, self.content_generation));
         } else {
+            if !retain_bands
+                && self.scene == LauncherScene::new(960, 540)
+                && let Some(renderer) = self.renderer.as_mut()
+            {
+                self.prepared.merge_retained_helper(renderer);
+            }
             self.last_timing = None;
         }
         self.content_dirty = false;
@@ -781,8 +798,22 @@ impl LauncherCardHomeSession {
     pub(super) fn last_timing(&self) -> Option<ParallelFrameTiming> {
         self.last_timing
     }
-    pub(super) fn current_pixels(&self) -> &[Rgb565Pixel] {
+    pub(super) fn current_primary_pixels(&self) -> &[Rgb565Pixel] {
         self.prepared.pixels()
+    }
+
+    pub(super) fn current_helper_pixels(&self) -> &[Rgb565Pixel] {
+        self.renderer
+            .as_ref()
+            .and_then(|renderer| renderer.helper_pixels(self.last_request))
+            .expect("matching current helper band")
+    }
+
+    pub(super) fn rendered_split(&self) -> usize {
+        self.renderer
+            .as_ref()
+            .expect("native renderer")
+            .rendered_split()
     }
 
     #[cfg(feature = "tooling")]
@@ -1472,8 +1503,18 @@ mod tests {
         let scene = LauncherScene::new(960, 540);
         let level = snapshot();
         let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        let mut reference = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        reference.update(scene, &level, 0, 0.25, "07:28", 16, false, None);
+        let captured = reference.render().to_vec();
         session.update(scene, &level, 0, 0.25, "07:28", 16, false, None);
-        let captured = session.render().to_vec();
+        session.render_direct_bands();
+        assert_eq!(session.last_timing().unwrap().merge_us, 0);
+        let mut published = session.current_primary_pixels().to_vec();
+        for y in 120..495 {
+            let range = y * 960 + session.rendered_split()..y * 960 + 934;
+            published[range.clone()].copy_from_slice(&session.current_helper_pixels()[range]);
+        }
+        assert_eq!(published, captured);
         let generation = session.current_request().generation;
         session.note_direct_presented();
         assert!(session.compositor_stale());

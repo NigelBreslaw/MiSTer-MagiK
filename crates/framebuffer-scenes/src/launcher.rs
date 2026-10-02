@@ -847,6 +847,13 @@ impl PreparedLauncher {
         prepared
     }
 
+    pub fn merge_retained_helper(
+        &mut self,
+        renderer: &mut crate::launcher_parallel::ParallelLauncherRenderer,
+    ) {
+        renderer.merge_retained_helper(&mut self.logical);
+    }
+
     pub fn render_parallel_frame(
         &mut self,
         renderer: &mut crate::launcher_parallel::ParallelLauncherRenderer,

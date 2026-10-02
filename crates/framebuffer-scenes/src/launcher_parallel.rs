@@ -119,7 +119,21 @@ pub struct ParallelLauncherRenderer {
     clocks: Option<ThreadClocks>,
     storage_bytes: usize,
     split: usize,
+    rendered_split: usize,
+    retain_bands: bool,
+    helper_unmerged: bool,
 }
+fn copy_helper_band(destination: &mut [Rgb565Pixel], source: &[Rgb565Pixel], split: usize) -> u64 {
+    let started = Instant::now();
+    #[cfg(feature = "launcher-profile")]
+    let _merge = crate::launcher_profile::span("frame.helper-merge");
+    for y in 120..495 {
+        let range = y * 960 + split..y * 960 + CAROUSEL_RIGHT;
+        destination[range.clone()].copy_from_slice(&source[range]);
+    }
+    micros(started)
+}
+
 fn micros(start: Instant) -> u64 {
     start.elapsed().as_micros() as u64
 }
@@ -186,6 +200,9 @@ impl ParallelLauncherRenderer {
             clocks,
             storage_bytes,
             split: CAROUSEL_SPLIT,
+            rendered_split: CAROUSEL_SPLIT,
+            retain_bands: false,
+            helper_unmerged: false,
         })
     }
     pub fn render(
@@ -222,17 +239,13 @@ impl ParallelLauncherRenderer {
         if completed.buffer.request() != Some(request) {
             return Err("mismatched current card pose".into());
         }
-        let merge_started = Instant::now();
-        {
-            #[cfg(feature = "launcher-profile")]
-            let _merge = crate::launcher_profile::span("frame.helper-merge");
-            for y in 120..495 {
-                destination[y * 960 + split..y * 960 + CAROUSEL_RIGHT].copy_from_slice(
-                    &completed.buffer.pixels()[y * 960 + split..y * 960 + CAROUSEL_RIGHT],
-                );
-            }
-        }
-        let merge_us = micros(merge_started);
+        self.rendered_split = split;
+        self.helper_unmerged = self.retain_bands;
+        let merge_us = if self.retain_bands {
+            0
+        } else {
+            copy_helper_band(destination, completed.buffer.pixels(), split)
+        };
         #[cfg(feature = "launcher-profile")]
         if let Some(profile) = completed.profile {
             crate::launcher_profile::absorb_worker(profile);
@@ -263,6 +276,34 @@ impl ParallelLauncherRenderer {
             split,
         })
     }
+    /// Retain separate immutable sources for the native two-tile publisher.
+    /// Full-frame consumers keep the default merged output.
+    pub fn retain_bands(&mut self, retain: bool) {
+        self.retain_bands = retain;
+    }
+
+    pub const fn rendered_split(&self) -> usize {
+        self.rendered_split
+    }
+
+    pub fn helper_pixels(&self, request: LauncherFrameRequest) -> Option<&[Rgb565Pixel]> {
+        self.helper
+            .as_ref()
+            .filter(|buffer| buffer.request() == Some(request))
+            .map(PreparedLauncherFrame::pixels)
+    }
+
+    pub fn merge_retained_helper(&mut self, destination: &mut [Rgb565Pixel]) {
+        if self.helper_unmerged {
+            copy_helper_band(
+                destination,
+                self.helper.as_ref().expect("completed helper").pixels(),
+                self.rendered_split,
+            );
+            self.helper_unmerged = false;
+        }
+    }
+
     pub const fn storage_bytes(&self) -> usize {
         self.storage_bytes
     }
@@ -485,6 +526,39 @@ mod tests {
                         parallel.pixels() == serial.pixels(),
                         "split {split}, {direction:?} {progress}"
                     );
+                    // A native publisher combines the two immutable sources,
+                    // including when the adaptive boundary changes each frame.
+                    renderer.retain_bands(true);
+                    renderer.split = split;
+                    generation += 1;
+                    let retained_frame = BrowseFrame {
+                        progress_millis: progress ^ 0x8000,
+                        ..frame
+                    };
+                    let request = LauncherFrameRequest {
+                        frame: retained_frame,
+                        timestamp_us: 0,
+                        generation,
+                    };
+                    let timing = parallel
+                        .render_parallel_frame(&mut renderer, request)
+                        .unwrap();
+                    assert_eq!(timing.merge_us, 0);
+                    assert_eq!(renderer.rendered_split(), split);
+                    let mut published = parallel.pixels().to_vec();
+                    let helper = renderer.helper_pixels(request).unwrap();
+                    for y in 120..495 {
+                        let range = y * 960 + split..y * 960 + CAROUSEL_RIGHT;
+                        published[range.clone()].copy_from_slice(&helper[range]);
+                    }
+                    serial.render_frame(retained_frame);
+                    assert!(published == serial.pixels(), "retained split {split}");
+                    parallel.merge_retained_helper(&mut renderer);
+                    assert!(
+                        parallel.pixels() == serial.pixels(),
+                        "full consumer after retained bands"
+                    );
+                    renderer.retain_bands(false);
                 }
             }
         }

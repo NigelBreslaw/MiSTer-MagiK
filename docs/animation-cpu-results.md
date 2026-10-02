@@ -171,3 +171,59 @@ seven trick/pixel, five host-wait/selection tests and the animation-time source
 check passed (97 tests). Frontend Clippy passed and the Cortex-A9
 `release-device-ui-tests` application built successfully. No device deployment
 or post-rebase performance measurement was performed.
+
+
+## Fresh frame-clock profile and clean baseline (`8fe628a72`)
+
+Dev was explicitly reserved for this session. The complete instrumented SNES
+round trip passed with a 45.005-second window, 378 card frames, 378 collected
+helper frames and matching `vsync-locked-v1` context (16,666,667 ns/period).
+The sampled executable SHA256 was
+`c0b542563734611d2b88984b994c007ed7589e9b273c0d52768b5d61d2fc879b`.
+Evidence: `build/magik-results/20261002T220830Z-93e66a7f17c6`.
+
+| Stage | Total wall time (ms) | ms per parallel card frame |
+| --- | ---: | ---: |
+| Compose | 2703.71 | 7.153 |
+| Geometry/filter | 2367.43 | 6.263 |
+| Reflection draw | 828.32 | 2.191 |
+| Reflection preparation | 525.97 | 1.391 |
+| Clear | 317.71 | 0.840 |
+| Helper merge | 265.60 | 0.703 |
+| Hidden-slot copy | 493.18 | 1.305 |
+
+Renderer stages sum both threads' wall time; they are neither critical-path
+elapsed time nor stage CPU time. Slint raster contributed 182.90 ms across 27
+calls (6.774 ms/call, maximum 15.338 ms). The CPU sampler collected 1,313 stacks;
+compose and filtering lead the sampled renderer leaves. Profiling increased
+cost: its 43 drops are diagnostic evidence, not an acceptance result. An earlier
+10-second profiled window was rejected and excluded from whole-route attribution.
+
+Three clean routes of the same executable passed. Evidence:
+`build/magik-results/20261002T221025Z-891d1ca3da50`.
+
+| Repeat | Drops | Process CPU / moving presentation (ms) | Hidden copy / card (ms) | Producer p99 (ms) | Card / Slint / system drops |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 0 | 28 | 19.9417 | 1.3146 | 14.457 | 20 / 1 / 7 |
+| 1 | 26 | 19.6447 | 1.2721 | 15.335 | 19 / 1 / 6 |
+| 2 | 25 | 19.9250 | 1.2968 | 15.799 | 15 / 1 / 9 |
+
+Mean drops: 26.33. Mean process CPU: 19.8371 ms/moving presentation. This is the
+current sparse-copy baseline after the app-wide clock change; earlier route
+numbers cannot establish a current improvement. Slint/system misses remain
+outside card composition and require separate pacing analysis.
+
+## Helper merge elimination (#8) — awaiting clean device comparison
+
+Native publication now takes the primary and helper buffers as separate immutable
+tile sources, using the actual rendered split before adaptive balancing chooses
+the next one. This removes the intermediate helper-to-primary copy without
+sharing mutable framebuffer storage or allocating another frame. Full-frame
+consumers merge a retained helper on demand, including after direct publication.
+The seeded hidden slot receives both current bands before publication.
+
+Serial pixel parity covers changing splits, ordinary poses and both directions
+of root/nested tricks through landing. Card-session, retained-latch, motion-clock
+and full-frame fallback checks pass; frontend tooling Clippy passes. Compare
+three clean candidate routes against the baseline above before retaining this
+experiment. Rendering, animation timing and input behavior are unchanged.

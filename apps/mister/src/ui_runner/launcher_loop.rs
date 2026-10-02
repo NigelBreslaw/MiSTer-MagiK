@@ -109,11 +109,13 @@ const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
     },
 ];
 
-fn card_direct_tile_damage(left: usize, level_trick: bool) -> [DirtyRect; 2] {
+fn card_direct_tile_damage(left: usize, level_trick: bool, split: usize) -> [DirtyRect; 2] {
     let mut damage = CARD_DIRECT_TILE_DAMAGE;
     // Trick rendering clears from x=268, including root cards whose ordinary
     // carousel starts at x=296. Keep that width on the landing frame as well.
     damage[0].x0 = if level_trick { 268 } else { left };
+    damage[0].x1 = split;
+    damage[1].x0 = split;
     damage
 }
 
@@ -10319,12 +10321,17 @@ pub(super) fn run_launcher_loop(
                 nav.home_card_browse_prediction(pose_at),
             );
             let level_trick = session.is_level_trick_active();
-            session.render();
+            session.render_direct_bands();
             let request = session.current_request();
             let timing = session.last_timing();
             let chrome_damage = session.chrome_copy_damage(level_trick);
             let cached = card_cached_frame_view(
-                session.current_pixels(),
+                session.current_primary_pixels(),
+                layout.logical_w(),
+                layout.logical_h(),
+            );
+            let helper = card_cached_frame_view(
+                session.current_helper_pixels(),
                 layout.logical_w(),
                 layout.logical_h(),
             );
@@ -10333,8 +10340,12 @@ pub(super) fn run_launcher_loop(
                 display_session,
                 cached,
                 &chrome_damage,
-                [cached, cached],
-                card_direct_tile_damage(session.carousel_clip().0, level_trick),
+                [cached, helper],
+                card_direct_tile_damage(
+                    session.carousel_clip().0,
+                    level_trick,
+                    session.rendered_split(),
+                ),
                 mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
                     session.content_generation(),
                     request.generation,
