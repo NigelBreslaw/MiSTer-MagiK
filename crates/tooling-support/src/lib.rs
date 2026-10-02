@@ -225,6 +225,20 @@ impl Session {
                     self.carousel_sequence = None;
                     self.screensaver_requested = false;
                 } else {
+                    let requested_duration_ms = match value.get("duration_ms") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(duration) => match duration.as_u64() {
+                            Some(duration) if (1_000..=45_000).contains(&duration) => {
+                                Some(duration)
+                            }
+                            _ => {
+                                std::fs::remove_file(&request).map_err(|e| e.to_string())?;
+                                return Err(
+                                    "duration_ms must be an integer between 1000 and 45000".into(),
+                                );
+                            }
+                        },
+                    };
                     self.screensaver_requested =
                         value["launcher_screensaver"].as_bool().unwrap_or(false);
                     self.carousel_hold_requested =
@@ -239,9 +253,7 @@ impl Session {
                     };
                     self.force_card_fallback =
                         value["launcher_fallback"].as_bool().unwrap_or(false);
-                    self.measurement_duration_ms = value["duration_ms"]
-                        .as_u64()
-                        .filter(|duration| (1_000..=30_000).contains(duration));
+                    self.measurement_duration_ms = requested_duration_ms;
                     self.begin();
                 }
                 std::fs::remove_file(request).map_err(|e| e.to_string())?;
@@ -286,6 +298,11 @@ impl Session {
                 .is_some_and(|(start, _)| now - start >= duration)
             {
                 self.metrics.finish_window(now, width, height, instrumented);
+                if let Some(window) = self.metrics.window.as_mut() {
+                    window["requested_duration_ms"] =
+                        serde_json::json!(self.measurement_duration_ms);
+                    window["target_duration_ms"] = serde_json::json!(duration);
+                }
                 if let Some((taken_ms, start)) = self.scheduling_start.take()
                     && let Some(window) = self.metrics.window.as_mut()
                 {
@@ -437,6 +454,41 @@ mod tests {
         session.tick(16, 8).unwrap();
         assert_eq!(session.carousel_hold_change(), Some(false));
         assert_eq!(session.metrics.motion_started_ms, started);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn long_requested_window_is_honoured_and_invalid_durations_do_not_start_measurement() {
+        let root = std::env::temp_dir().join(format!("magik-duration-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = test_session(root.clone());
+        for invalid in [
+            serde_json::json!(45001),
+            serde_json::json!(-1),
+            serde_json::json!("45000"),
+        ] {
+            std::fs::write(
+                root.join("measure-request"),
+                serde_json::json!({"duration_ms":invalid}).to_string(),
+            )
+            .unwrap();
+            session.last_request -= Duration::from_millis(101);
+            assert!(session.tick(16, 8).unwrap_err().contains("duration_ms"));
+            assert!(session.metrics.motion_started_ms.is_none());
+            assert!(!root.join("measure-request").exists());
+        }
+        std::fs::write(root.join("measure-request"), r#"{"duration_ms":45000}"#).unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert_eq!(session.measurement_duration_ms, Some(45000));
+        session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
+        session.tick(16, 8).unwrap();
+        session.start -= Duration::from_millis(45_000);
+        session.tick(16, 8).unwrap();
+        let window = session.metrics.window.as_ref().unwrap();
+        assert_eq!(window["requested_duration_ms"], 45000);
+        assert_eq!(window["target_duration_ms"], 45000);
+        assert!(window["elapsed_ms"].as_u64().unwrap() >= 45000);
         std::fs::remove_dir_all(root).unwrap();
     }
 

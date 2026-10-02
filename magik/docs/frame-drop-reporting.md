@@ -53,3 +53,9 @@ from the frozen window. Older 28-second route measurements can finish during ret
 animations; their synchronous finalisation may add workload that affects subsequent
 cumulative step counts. Preserve those samples and their original contract, but do
 not treat them as production-only measurements or invent missing phase timestamps.
+
+Native request durations accept integer milliseconds from 1,000 to 45,000;
+missing/null durations retain the five-second default. Unsupported durations
+produce a measurement error rather than silently switching to that default.
+Completed windows retain `requested_duration_ms` and `target_duration_ms` beside
+actual `elapsed_ms`. Profile windows still use their existing ten-second target.
