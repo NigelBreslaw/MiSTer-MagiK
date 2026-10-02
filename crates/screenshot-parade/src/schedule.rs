@@ -39,10 +39,6 @@ pub struct ScreenshotParadeConfig {
     pub seed: u64,
     pub worker_start: Option<WorkerStartCallback>,
     pub preparation_slack: Option<Arc<PreparationSlack>>,
-    /// Motion advances only in whole presentation ticks, so each layer stays on
-    /// its sixteenth-pixel lattice and cards need only the phases it reaches.
-    /// Elapsed-time rendering is then rejected.
-    pub presentation_ticks_only: bool,
 }
 
 impl std::fmt::Debug for ScreenshotParadeConfig {
@@ -59,7 +55,6 @@ impl std::fmt::Debug for ScreenshotParadeConfig {
                 "preparation_slack",
                 &self.preparation_slack.as_ref().map(|_| "checkpoint"),
             )
-            .field("presentation_ticks_only", &self.presentation_ticks_only)
             .finish()
     }
 }
@@ -126,7 +121,6 @@ struct Tile {
     layer: usize,
     speed: usize,
     velocity_fp: i64,
-    velocity_remainder: i64,
     image_index: usize,
     raster: PreparedScreenshotCard,
     active: bool,
@@ -205,7 +199,6 @@ pub struct ScreenshotParade {
     layers: [LayerSchedule; SPEED_COUNT],
     previous_motion_ticks_fp: u64,
     last_elapsed: Duration,
-    presentation_ticks_only: bool,
     stats: ScreenshotParadeStats,
 }
 
@@ -324,7 +317,6 @@ impl ScreenshotParade {
             }; SPEED_COUNT],
             previous_motion_ticks_fp: 0,
             last_elapsed: Duration::ZERO,
-            presentation_ticks_only: config.presentation_ticks_only,
             stats: ScreenshotParadeStats::default(),
         };
         shuffle(&mut parade.deck, &mut parade.rng);
@@ -388,9 +380,6 @@ impl ScreenshotParade {
         pixels: &mut [Rgb565Pixel],
         elapsed: Duration,
     ) -> Result<ScreenshotParadeStats, String> {
-        if self.presentation_ticks_only {
-            return Err("screenshot parade is driven by presentation ticks".to_owned());
-        }
         if elapsed < self.last_elapsed {
             return Err("screenshot parade elapsed time must be monotonic".to_owned());
         }
@@ -642,7 +631,6 @@ impl ScreenshotParade {
                     layer: speed,
                     speed,
                     velocity_fp,
-                    velocity_remainder: 0,
                     image_index: card.image_index,
                     raster: card.raster,
                     active,
@@ -692,9 +680,6 @@ impl ScreenshotParade {
     }
 
     fn prepared_phases(&self, speed: usize) -> u16 {
-        if !self.presentation_ticks_only {
-            return ALL_SHIFTED_PHASES;
-        }
         let layer_index = speed.saturating_sub(MIN_TILE_SPEED);
         reachable_shifted_phases(card_velocity_fp(layer_index, self.geometry.width()))
     }
@@ -713,7 +698,6 @@ impl ScreenshotParade {
             layer: speed,
             speed,
             velocity_fp: card_velocity_fp(layer_index, self.geometry.width()),
-            velocity_remainder: 0,
             image_index: usize::MAX,
             raster,
             active: false,
@@ -739,12 +723,9 @@ impl ScreenshotParade {
                 tile.raster_moved_this_frame = false;
                 let previous_x_fp = tile.x_fp;
                 let previous_phase = raster_phase_key(tile.x_fp);
-                let motion = tile
-                    .velocity_fp
-                    .saturating_mul(tick_delta)
-                    .saturating_add(tile.velocity_remainder);
-                tile.x_fp = tile.x_fp.saturating_add(motion / TICK_ONE);
-                tile.velocity_remainder = motion % TICK_ONE;
+                // Ticks are whole, so motion stays on each layer's phase lattice.
+                let motion = tile.velocity_fp.saturating_mul(tick_delta / TICK_ONE);
+                tile.x_fp = tile.x_fp.saturating_add(motion);
                 if tile.x_fp != previous_x_fp {
                     if raster_phase_key(tile.x_fp) == previous_phase {
                         tile.raster_held_this_frame = true;
@@ -795,7 +776,6 @@ impl ScreenshotParade {
             tile.image_index = next.image_index;
             tile.raster = next.raster;
             tile.active = true;
-            tile.velocity_remainder = 0;
             let interval = self.jittered_interval(self.layers[layer_index].interval_frames);
             self.layers[layer_index].next_spawn_frame = nominal_frame + interval;
             self.layers[layer_index].spawn_count += 1;
@@ -1205,24 +1185,18 @@ fn reachable_shifted_phases(velocity_fp: i64) -> u16 {
     if velocity_fp % SIXTEENTH != 0 {
         return ALL_SHIFTED_PHASES;
     }
-    let step = (velocity_fp / SIXTEENTH).rem_euclid(16) as u32;
-    let lattice = if step == 0 {
-        16
-    } else {
-        1 << step.trailing_zeros()
-    };
+    // gcd(step, 16): the coarsest phase spacing whole-tick motion visits.
+    let lattice = 1_u32 << (velocity_fp / SIXTEENTH).trailing_zeros().min(4);
     (lattice..16)
         .step_by(lattice as usize)
         .fold(0, |mask, phase| mask | 1 << phase)
 }
 
+/// Elapsed time in whole reference ticks, as production presents them, so
+/// every caller keeps tiles on the phases their cards prepare.
 fn tick_delta_fp(elapsed: Duration) -> i64 {
-    let ticks = elapsed
-        .as_nanos()
-        .saturating_mul(u128::from(REFERENCE_HZ))
-        .saturating_mul(TICK_ONE as u128)
-        / 1_000_000_000_u128;
-    ticks.min(i64::MAX as u128) as i64
+    let ticks = elapsed.as_nanos().saturating_mul(u128::from(REFERENCE_HZ)) / 1_000_000_000_u128;
+    ticks.min((i64::MAX / TICK_ONE) as u128) as i64 * TICK_ONE
 }
 
 fn layer_interval_frames(
@@ -1426,15 +1400,6 @@ mod tests {
     }
 
     fn prepared_scene(path: &Path, width: usize, height: usize) -> ScreenshotParade {
-        prepared_scene_with(path, width, height, false)
-    }
-
-    fn prepared_scene_with(
-        path: &Path,
-        width: usize,
-        height: usize,
-        presentation_ticks_only: bool,
-    ) -> ScreenshotParade {
         let archive = ResidentPreviewArchive::open(path).expect("open fixture archive");
         ScreenshotParade::new_offline_prepared(
             archive,
@@ -1443,7 +1408,6 @@ mod tests {
                 seed: 0x4d61_6769_4b54_696c,
                 worker_start: None,
                 preparation_slack: None,
-                presentation_ticks_only,
             },
         )
         .expect("prepare screenshot parade")
@@ -1518,30 +1482,22 @@ mod tests {
     }
 
     #[test]
-    fn lattice_parade_renders_whole_ticks_and_rejects_elapsed_time() {
+    fn elapsed_time_advances_in_whole_ticks_on_prepared_phases() {
+        assert_eq!(tick_delta_fp(Duration::from_micros(33_000)), TICK_ONE);
+        assert_eq!(tick_delta_fp(Duration::from_millis(50)), 3 * TICK_ONE);
         let path = std::env::temp_dir().join(format!(
             "screenshot-parade-lattice-{}.mmlz4b",
             std::process::id()
         ));
         write_archive(&path, 220);
-        let mut full = prepared_scene_with(&path, 960, 540, false);
-        let mut lattice = prepared_scene_with(&path, 960, 540, true);
-        assert!(lattice.phase_bank_resident_bytes() < full.phase_bank_resident_bytes());
+        let mut scene = prepared_scene(&path, 960, 540);
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
-        let mut tick = 0;
         // Debug builds assert if any tile reaches an unprepared phase.
-        for step in 0..400_u64 {
-            tick += 1 + step % 3;
-            lattice
-                .render_at_presentation_tick(&mut pixels, tick)
+        for millis in (0..6_000_u64).step_by(13) {
+            scene
+                .render_at(&mut pixels, Duration::from_millis(millis))
                 .unwrap();
         }
-        full.render_at_presentation_tick(&mut pixels, tick).unwrap();
-        assert!(
-            lattice
-                .render_at(&mut pixels, Duration::from_secs(60))
-                .is_err()
-        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -1610,7 +1566,6 @@ mod tests {
                 seed: 7,
                 worker_start: None,
                 preparation_slack: None,
-                presentation_ticks_only: false,
             },
         )
         .unwrap();
@@ -1717,7 +1672,6 @@ mod tests {
             layer: 5,
             speed: 5,
             velocity_fp: PARADE_SUBPIXEL_ONE,
-            velocity_remainder: 0,
             image_index: 0,
             raster,
             active: true,

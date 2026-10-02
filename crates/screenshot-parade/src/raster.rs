@@ -1270,30 +1270,6 @@ fn quantize_phase(x_fp: i64) -> QuantizedPhase {
     QuantizedPhase { x, phase }
 }
 
-/// Tiles prepared for a coarser phase lattice only ever land on prepared
-/// phases. Anything else is a scheduling bug; draw the nearest prepared phase
-/// rather than dropping the card.
-fn prepared_phase(
-    quantized: QuantizedPhase,
-    shifted_phases: &[Option<PreparedLinearPhase>; CRT_SHIFTED_PHASE_COUNT],
-) -> QuantizedPhase {
-    let available = |phase: usize| phase == 0 || shifted_phases[phase - 1].is_some();
-    if available(quantized.phase) {
-        return quantized;
-    }
-    debug_assert!(false, "tile reached unprepared phase {}", quantized.phase);
-    let target = quantized.x as i64 * CRT_PHASE_COUNT as i64 + quantized.phase as i64;
-    let nearest = (0..=CRT_PHASE_COUNT)
-        .filter(|&phase| available(phase % CRT_PHASE_COUNT))
-        .map(|phase| quantized.x as i64 * CRT_PHASE_COUNT as i64 + phase as i64)
-        .min_by_key(|&position| (position - target).abs())
-        .unwrap_or(target);
-    QuantizedPhase {
-        x: nearest.div_euclid(CRT_PHASE_COUNT as i64) as isize,
-        phase: nearest.rem_euclid(CRT_PHASE_COUNT as i64) as usize,
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn blit_sixteenth_phase(
     dst: &mut [Rgb565Pixel],
@@ -1304,7 +1280,7 @@ fn blit_sixteenth_phase(
     x_fp: i64,
     y: isize,
 ) {
-    let quantized = prepared_phase(quantize_phase(x_fp), shifted_phases);
+    let quantized = quantize_phase(x_fp);
     if quantized.phase == 0 {
         blit_coverage_phase(dst, output_layout, image, base_coverage, quantized.x, y);
         return;
@@ -1336,7 +1312,7 @@ fn blit_sixteenth_phase_probed(
     y: isize,
     base_background: Rgb565Pixel,
 ) -> CoverageBlitStats {
-    let quantized = prepared_phase(quantize_phase(x_fp), shifted_phases);
+    let quantized = quantize_phase(x_fp);
     if quantized.phase == 0 {
         return blit_coverage_phase_probed(
             dst,

@@ -717,7 +717,6 @@ fn screenshot_scene(
             );
         })),
         preparation_slack: Some(std::sync::Arc::new(PreparationSlack::new())),
-        presentation_ticks_only: false,
     };
     if offline_prepared {
         ScreenshotParade::new_offline_prepared(archive, config)
@@ -777,7 +776,6 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
             seed: SCREENSHOT_PMU_SEED,
             worker_start: None,
             preparation_slack: None,
-            presentation_ticks_only: false,
         },
     )?;
     let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
