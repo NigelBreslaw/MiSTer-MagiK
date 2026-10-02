@@ -361,7 +361,7 @@ scheduling/render-ahead and cold destination/endpoint Slint preparation; cheaper
 steady-state reveal drawing does not resolve those first-frame costs.
 
 
-## Locked-trick helper render-ahead — awaiting hardware comparison
+## Locked-trick helper render-ahead — kept (`608d86c2d`)
 
 The helper band can now be prepared for exactly the next `FrameClock` step after
 the current native frame is copied and posted. One spare 960x540 RGB565 buffer
@@ -389,3 +389,41 @@ discarded wall/CPU work are visible in timing records. Producer time remains the
 current UI critical path; a longer completion-delivery interval can now represent
 intentional prepared-buffer waiting. Process CPU and the physical/fresh-pose drop
 gates are unchanged. Compare clean routes to the clip parent before retaining.
+
+
+The ARM ownership test and queued trick pixel matrix also pass. The clean native
+check passed all three routes and teardown. Deployment:
+`build/magik-results/20261002T233453Z-934892270265`; route evidence:
+`build/magik-results/20261002T233816Z-ef213c1ebf2e`. Executable SHA256:
+`37bcd2eaab6625383af182cee4acee78b617dec92311d06ac5c8ccd993f56b66`.
+
+| Repeat | Drops | CPU / moving presentation (ms) | Producer p99 (ms) | Ahead bands | Mean lead (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 | 19 | 18.4900 | 13.411 | 216 | 6.278 |
+| 1 | 19 | 18.5229 | 13.384 | 216 | 6.203 |
+| 2 | 20 | 18.5610 | 14.274 | 216 | 6.259 |
+
+No discarded work or latch rejection was recorded; post and flip counts matched.
+The parent recorded 21/19/24 drops and mean CPU 18.8203 ms. Candidate mean CPU is
+18.5246 ms (1.57% lower); mean producer time is 9.6151 rather than 10.1824 ms.
+Mean per-route producer p99 fell from 16.074 to 13.6897 ms. Mean helper wait fell
+from approximately 0.610 to 0.231 ms/card. Summed band CPU also fell slightly,
+consistent with less concurrent memory traffic; the timing data do not establish
+that mechanism conclusively. Buffer storage grows by exactly 1,036,800 bytes in
+the ownership test, with no second projection scratch allocation.
+
+Retain the experiment on verified reuse, exact pixels, lower critical-path wait
+and consistent clean CPU savings. Drops remain within a small-sample noise band:
+mean 21.33 -> 19.33 is not a precise cadence verdict or zero-drop qualification.
+These three warm routes do not qualify arbitrary contention or every physical
+input timing boundary; correctness under source changes/shutdown is tested,
+but further input/contention journeys remain in the full campaign.
+
+A useful residual: all retained card drop records in the three candidate routes
+have `helper_ahead = false`. No record attributes a miss to a reused ahead band.
+The remaining card observations cluster at ordinary browsing and the first
+frames of hierarchy changes; system transitions and the endpoint Slint raster
+also remain. This narrows the next action: cold source/destination preparation
+and ordinary-browse scheduling matter more than adding another primary worker
+to the already clean sampled interior trick frames. It does not prove those
+causes or exclude a problem outside the sampled routes.

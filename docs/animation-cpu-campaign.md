@@ -105,3 +105,12 @@ pixels while reducing those stage wall times by approximately 48% and 26%.
 Clean route CPU is 18.82 ms/moving presentation, but drops remain about 21 per
 route; this is CPU progress, not 60 FPS qualification. Cold transition starts,
 endpoint Slint raster and card scheduling tails remain part of the full goal.
+
+
+A bounded helper-band stage of #14 is retained after exact ARM pixels and native
+reuse evidence: 216 ahead bands per route, zero discarded work, CPU 18.52 ms.
+The primary still renders synchronously; this is not full-frame render-ahead.
+All retained card miss records in these runs are outside the reused ahead bands.
+Prioritize cold transition starts/endpoint raster and ordinary-browse scheduler
+attribution next, while keeping physical input/contention qualification in scope.
+The full launcher/subview goal is still unachieved at 19/19/20 route drops.
