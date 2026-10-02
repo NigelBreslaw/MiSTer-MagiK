@@ -30,6 +30,90 @@ impl FrameWorkTiming {
     }
 }
 
+/// Activity when a missed refresh was observed, not a causal attribution.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum FrameWorkload {
+    Card,
+    SystemTransition,
+    Slint,
+    Screensaver,
+    #[default]
+    Unknown,
+}
+impl FrameWorkload {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Card => "card",
+            Self::SystemTransition => "system-transition",
+            Self::Slint => "slint",
+            Self::Screensaver => "screensaver",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Host observations in microseconds from the same process-monotonic epoch.
+/// The interval can contain earlier frame work; it is not one frame's CPU time.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FramePhaseTimeline {
+    pub previous_observation_us: u64,
+    pub frame_begin_us: u64,
+    pub render_start_us: u64,
+    pub render_end_us: u64,
+    pub custom_draw_start_us: u64,
+    pub custom_draw_end_us: u64,
+    pub present_start_us: u64,
+    pub post_returned_us: u64,
+    pub post_request_start_us: Option<u64>,
+    pub post_verified_us: Option<u64>,
+    pub confirmation_wait_start_us: u64,
+    pub active_observed_us: u64,
+    pub telemetry_observed_us: u64,
+    pub refresh_period_us: u64,
+    pub frame_start_phase_us: u64,
+    pub present_start_phase_us: u64,
+    pub tooling_tick_us: u64,
+    pub pre_render_wait_us: u64,
+    pub hidden_copy_us: u64,
+    pub hidden_publish_us: u64,
+    pub latch_request_us: u64,
+    pub post_status_us: u64,
+    pub completion_poll_us: u64,
+    pub previous_active_sequence: u16,
+    pub posted_sequence: u16,
+    pub post_active_sequence: u16,
+    pub post_pending_sequence: u16,
+    pub post_pending: bool,
+    pub previous_owned_refresh: u32,
+    pub owned_refresh_delta: u32,
+    pub repeated_refresh_delta: u32,
+}
+impl FramePhaseTimeline {
+    fn json(self) -> Value {
+        json!({
+            "clock":"process-monotonic-us",
+            "previous_observation_us":self.previous_observation_us,
+            "frame_begin_us":self.frame_begin_us,
+            "render_start_us":self.render_start_us,"render_end_us":self.render_end_us,
+            "custom_draw_start_us":self.custom_draw_start_us,"custom_draw_end_us":self.custom_draw_end_us,
+            "present_start_us":self.present_start_us,"post_returned_us":self.post_returned_us,
+            "post_request_start_us":self.post_request_start_us,"post_verified_us":self.post_verified_us,
+            "confirmation_wait_start_us":self.confirmation_wait_start_us,
+            "active_observed_us":self.active_observed_us,"telemetry_observed_us":self.telemetry_observed_us,
+            "refresh_period_us":self.refresh_period_us,"frame_start_phase_us":self.frame_start_phase_us,
+            "present_start_phase_us":self.present_start_phase_us,"tooling_tick_us":self.tooling_tick_us,
+            "pre_render_wait_us":self.pre_render_wait_us,"hidden_copy_us":self.hidden_copy_us,
+            "hidden_publish_us":self.hidden_publish_us,"latch_request_us":self.latch_request_us,
+            "post_status_us":self.post_status_us,"completion_poll_us":self.completion_poll_us,
+            "previous_active_sequence":self.previous_active_sequence,"posted_sequence":self.posted_sequence,
+            "post_active_sequence":self.post_active_sequence,"post_pending_sequence":self.post_pending_sequence,
+            "post_pending":self.post_pending,
+            "previous_owned_refresh":self.previous_owned_refresh,"owned_refresh_delta":self.owned_refresh_delta,
+            "repeated_refresh_delta":self.repeated_refresh_delta
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DroppedFrameRecord {
     pub reason: &'static str,
@@ -40,6 +124,10 @@ pub struct DroppedFrameRecord {
     pub active_sequence: Option<u16>,
     pub ui_render_us: u64,
     pub work: Option<FrameWorkTiming>,
+    pub workload: FrameWorkload,
+    pub transition_route: &'static str,
+    pub transition_renderer: &'static str,
+    pub timeline: Option<FramePhaseTimeline>,
 }
 
 impl DroppedFrameRecord {
@@ -48,7 +136,11 @@ impl DroppedFrameRecord {
             "source_generation":self.source_generation,"source_age_us":self.source_age_us,
 
             "owned_refresh_observed":self.owned_refresh_observed,"active_sequence":self.active_sequence,
-            "ui_render_us":self.ui_render_us,"work":self.work.map(FrameWorkTiming::json)})
+            "ui_render_us":self.ui_render_us,
+            "ui_render_scope":self.timeline.map(|_| "before-custom-draw"),
+            "work":self.work.map(FrameWorkTiming::json),"workload":self.workload.label(),
+            "transition_route":self.transition_route,"transition_renderer":self.transition_renderer,
+            "timeline":self.timeline.map(FramePhaseTimeline::json)})
     }
 }
 
@@ -94,6 +186,7 @@ pub struct PresentationMetrics {
     pub context: Value,
     pub counters: Counters,
     pub last_render_us: u64,
+    pub render_timing_scope: Option<&'static str>,
     pub last_physical_drop_count: Option<u16>,
     pub motion_started_ms: Option<u64>,
     pub window_start: Option<(u64, Counters)>,
@@ -102,15 +195,30 @@ pub struct PresentationMetrics {
     pub last_card_source_timestamp_us: u64,
     pub last_card_source_generation: u64,
     pub dropped_frame_records: Vec<DroppedFrameRecord>,
+    pub last_dropped_frame: Option<DroppedFrameRecord>,
+    pub dropped_frame_records_omitted: u64,
+    pub dropped_frames_by_workload: [u64; 5],
 }
 impl PresentationMetrics {
     /// Reserve on begin; drop records perform no allocation or serialisation.
     pub fn record_dropped_frame(&mut self, record: DroppedFrameRecord) {
-        if self.window_start.is_some()
-            && self.window.is_none()
-            && self.dropped_frame_records.len() < 64
-        {
-            self.dropped_frame_records.push(record);
+        self.last_dropped_frame = Some(record);
+        if self.window_start.is_some() && self.window.is_none() {
+            let index = match record.workload {
+                FrameWorkload::Card => 0,
+                FrameWorkload::SystemTransition => 1,
+                FrameWorkload::Slint => 2,
+                FrameWorkload::Screensaver => 3,
+                FrameWorkload::Unknown => 4,
+            };
+            self.dropped_frames_by_workload[index] =
+                self.dropped_frames_by_workload[index].saturating_add(record.dropped_frames);
+            if self.dropped_frame_records.len() < 64 {
+                self.dropped_frame_records.push(record);
+            } else {
+                self.dropped_frame_records_omitted =
+                    self.dropped_frame_records_omitted.saturating_add(1);
+            }
         }
     }
 
@@ -171,6 +279,22 @@ impl PresentationMetrics {
             }
         }
 
+        window["render_timing_scope"] = json!(self.render_timing_scope);
+        window["drop_attribution"] = json!("activity at observation; not proven cause");
+        window["dropped_frame_records_omitted"] = json!(self.dropped_frame_records_omitted);
+        window["dropped_frames_by_workload"] = json!(
+            [
+                FrameWorkload::Card,
+                FrameWorkload::SystemTransition,
+                FrameWorkload::Slint,
+                FrameWorkload::Screensaver,
+                FrameWorkload::Unknown
+            ]
+            .into_iter()
+            .zip(self.dropped_frames_by_workload)
+            .map(|(kind, count)| (kind.label().to_string(), json!(count)))
+            .collect::<serde_json::Map<String, Value>>()
+        );
         window["dropped_frame_records"] = json!(
             self.dropped_frame_records
                 .iter()
@@ -226,6 +350,8 @@ impl PresentationMetrics {
         window["transfer_us_total"] = json!(c.transfer_us - baseline.transfer_us);
         window["owned_vblanks"] = json!(c.owned_vblanks - baseline.owned_vblanks);
         window["presented_vblanks"] = json!(c.presented_vblanks - baseline.presented_vblanks);
+        window["refresh_hz_scope"] =
+            json!("observed owned refreshes / whole window; not display mode Hz");
         window["refresh_hz"] = json!(
             (c.owned_vblanks - baseline.owned_vblanks) as f64 * 1000.0
                 / (end_ms - start_ms).max(1) as f64
@@ -243,6 +369,8 @@ impl PresentationMetrics {
         json!({"context":self.context,"width":width,"height":height,"elapsed_ms":elapsed_ms,"pid":std::process::id(),
             "sha256":std::env::var("MISTER_MAGIK2_ARTIFACT_SHA256").unwrap_or_default(),
             "presentations":self.counters.presentations,"last_render_us":self.last_render_us,
+            "render_timing_scope":self.render_timing_scope,
+            "last_dropped_frame_record":self.last_dropped_frame.map(DroppedFrameRecord::json),
             "render_us_total":self.counters.render_us,"render_to_present_us_total":self.counters.render_to_present_us,
             "physical_latch_posts":self.counters.posts,"physical_latch_flips":self.counters.flips,
             "dropped_frames":self.counters.drops+self.counters.card_dropped_frames,"latch_rejections":self.counters.rejections,
@@ -335,9 +463,71 @@ mod tests {
     }
 
     #[test]
+    fn workload_totals_survive_record_limit_and_frozen_window_preserves_late_evidence() {
+        let mut metrics = PresentationMetrics {
+            window_start: Some((0, Counters::default())),
+            ..Default::default()
+        };
+        for i in 0..100 {
+            metrics.counters.drops += 1;
+            metrics.record_dropped_frame(DroppedFrameRecord {
+                dropped_frames: 1,
+                workload: if i % 2 == 0 {
+                    FrameWorkload::Card
+                } else {
+                    FrameWorkload::SystemTransition
+                },
+                ui_render_us: 14,
+                timeline: Some(FramePhaseTimeline {
+                    render_start_us: 100,
+                    render_end_us: 114,
+                    custom_draw_start_us: 115,
+                    custom_draw_end_us: 8_115,
+                    post_request_start_us: Some(16_900),
+                    post_verified_us: Some(17_100),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        metrics.finish_window(1_000, 960, 540, false);
+        let frozen = metrics.window.clone().unwrap();
+        assert_eq!(frozen["dropped_frames"], 100);
+        assert!(frozen["render_timing_scope"].is_null());
+        assert_eq!(frozen["dropped_frame_records_omitted"], 36);
+        assert_eq!(frozen["dropped_frames_by_workload"]["card"], 50);
+        assert_eq!(
+            frozen["dropped_frames_by_workload"]["system-transition"],
+            50
+        );
+        assert_eq!(
+            frozen["dropped_frame_records"].as_array().unwrap().len(),
+            64
+        );
+        let record = &frozen["dropped_frame_records"][0];
+        assert_eq!(record["ui_render_us"], 14);
+        assert_eq!(record["timeline"]["custom_draw_end_us"], 8_115);
+        assert_eq!(record["timeline"]["post_request_start_us"], 16_900);
+        // Late drop evidence stays accessible to cumulative step snapshots, but
+        // cannot silently extend the completed device-clock measurement window.
+        metrics.record_dropped_frame(DroppedFrameRecord {
+            active_sequence: Some(511),
+            dropped_frames: 2,
+            ..Default::default()
+        });
+        assert_eq!(metrics.window.as_ref(), Some(&frozen));
+        assert_eq!(
+            metrics.json(960, 540, 1_100)["last_dropped_frame_record"]["active_sequence"],
+            511
+        );
+    }
+
+    #[test]
     fn dropped_frames_cover_distinct_failed_refreshes_and_bound_evidence() {
-        let mut metrics = PresentationMetrics::default();
-        metrics.window_start = Some((0, Counters::default()));
+        let mut metrics = PresentationMetrics {
+            window_start: Some((0, Counters::default())),
+            ..Default::default()
+        };
         metrics.dropped_frame_records.reserve(64);
         metrics.counters.card_dropped_frames = 60;
         metrics.counters.drops = 5;

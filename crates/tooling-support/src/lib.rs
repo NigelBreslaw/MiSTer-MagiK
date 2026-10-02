@@ -116,6 +116,9 @@ impl Session {
     }
     pub fn begin(&mut self) {
         self.metrics.dropped_frame_records.clear();
+        self.metrics.last_dropped_frame = None;
+        self.metrics.dropped_frame_records_omitted = 0;
+        self.metrics.dropped_frames_by_workload = [0; 5];
         self.metrics.dropped_frame_records.reserve(64);
         self.metrics.work_timings.clear();
         self.metrics.work_timings.reserve(3601);
@@ -449,7 +452,19 @@ mod tests {
         session.tick(16, 8).unwrap();
         let (first_baseline_ms, _) = session.scheduling_start.as_ref().unwrap();
         let first_baseline_ms = *first_baseline_ms;
+        session
+            .metrics
+            .record_dropped_frame(measurement::DroppedFrameRecord {
+                dropped_frames: 3,
+                workload: measurement::FrameWorkload::SystemTransition,
+                ..Default::default()
+            });
+        assert_eq!(session.metrics.dropped_frames_by_workload[1], 3);
         session.begin();
+        assert_eq!(session.metrics.dropped_frames_by_workload, [0; 5]);
+        assert!(session.metrics.last_dropped_frame.is_none());
+        assert!(session.metrics.dropped_frame_records.is_empty());
+        assert_eq!(session.metrics.dropped_frame_records_omitted, 0);
         assert!(session.scheduling_start.is_none());
         session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
         session.tick(16, 8).unwrap();

@@ -6358,6 +6358,8 @@ pub(super) fn run_launcher_loop(
     if let Some(session) = tooling.as_mut() {
         let paths = launcher_config.device_paths();
         let catalog = launcher_config.catalog_paths();
+        session.metrics.render_timing_scope =
+            Some("before-custom-draw; excludes custom drawing, latch post and completion");
         session.metrics.context = serde_json::json!({
             "data_root":paths.app_dir(), "main":paths.main_path(),
             "settings":paths.app_path("settings.json"), "controllers":paths.app_path("controllers.json"),
@@ -6384,6 +6386,10 @@ pub(super) fn run_launcher_loop(
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
+        #[cfg(feature = "tooling")]
+        let tooling_frame_begin = Instant::now();
+        #[cfg(feature = "tooling")]
+        let mut tooling_tick_us = 0;
         record_launcher_frame_phase!(LauncherFramePhase::Begin);
         window.process_pending_callbacks();
         #[cfg(feature = "tooling")]
@@ -6408,9 +6414,11 @@ pub(super) fn run_launcher_loop(
                 session.metrics.process_cpu_us = cpu_process_us();
             }
             session.set_ui_motion(mister_magik_catalog::ui_motion::active());
+            let tooling_tick_start = Instant::now();
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
             }
+            tooling_tick_us = duration_us(tooling_tick_start, Instant::now());
             launcher_presenter.tooling_preview(session);
         }
         gui_profiling.tick(Instant::now());
@@ -12137,6 +12145,8 @@ pub(super) fn run_launcher_loop(
             cpu_t3,
             cpu_t4,
             pacing_trace,
+            #[cfg(feature = "tooling")]
+            post_timing,
         } = present_cycle;
         record_launcher_frame_phase!(LauncherFramePhase::FrameSubmitted);
         if let Some(worker) = preview_compositor.as_ref() {
@@ -12831,6 +12841,7 @@ pub(super) fn run_launcher_loop(
                             metrics.counters.card_dropped_frames += 1;
                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
                                 reason:"current pose not updated at presentation; renderer timeline unavailable",
+                                workload:mister_magik_tooling_support::measurement::FrameWorkload::Card,
                                 dropped_frames:1,source_generation,source_age_us:age_us,
                                 ..Default::default()
                             });
@@ -12865,9 +12876,51 @@ pub(super) fn run_launcher_loop(
                                         metrics.counters.drops += dropped;
                                         if dropped != 0 {
                                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
-                                                reason: if card_work_timing.is_some_and(|work|work.producer_us+presented_frame.main_present_hidden_copy_us as u64>pacer.period_us()) {
-                                                    "current card rendering and copy exceeded the refresh budget"
-                                                } else { "cause unknown: display deadline missed; inspect frame phase, worker execution and completion timeline" },
+                                                reason: "owned refresh repeated during motion; see observation interval and phase timeline",
+                                                workload: if screensaver.active {
+                                                    mister_magik_tooling_support::measurement::FrameWorkload::Screensaver
+                                                } else if navigation_transition_composition_active {
+                                                    mister_magik_tooling_support::measurement::FrameWorkload::SystemTransition
+                                                } else if card_work_timing.is_some() {
+                                                    mister_magik_tooling_support::measurement::FrameWorkload::Card
+                                                } else {
+                                                    mister_magik_tooling_support::measurement::FrameWorkload::Slint
+                                                },
+                                                transition_route: navigation_transition_route,
+                                                transition_renderer: navigation_transition_renderer,
+                                                timeline: Some(mister_magik_tooling_support::measurement::FramePhaseTimeline {
+                                                    previous_observation_us: duration_us(run_start, at),
+                                                    frame_begin_us: duration_us(run_start, tooling_frame_begin),
+                                                    render_start_us: duration_us(run_start, frame_t1),
+                                                    render_end_us: duration_us(run_start, frame_t2),
+                                                    custom_draw_start_us: duration_us(run_start, custom_draw_start),
+                                                    custom_draw_end_us: duration_us(run_start, custom_draw_done),
+                                                    present_start_us: duration_us(run_start, frame_t3),
+                                                    post_returned_us: duration_us(run_start, frame_t4),
+                                                    post_request_start_us: post_timing.map(|(at,_)|duration_us(run_start,at)),
+                                                    post_verified_us: post_timing.map(|(_,at)|duration_us(run_start,at)),
+                                                    confirmation_wait_start_us: duration_us(run_start, wait_start),
+                                                    active_observed_us: duration_us(run_start, wait_done),
+                                                    telemetry_observed_us: duration_us(run_start, observed_at),
+                                                    refresh_period_us: pacer.period_us(),
+                                                    frame_start_phase_us,
+                                                    present_start_phase_us: presented_frame.present_phase_us.min(u128::from(u64::MAX)) as u64,
+                                                    tooling_tick_us,
+                                                    pre_render_wait_us: pre_render_wait_us.min(u128::from(u64::MAX)) as u64,
+                                                    hidden_copy_us: presented_frame.main_present_hidden_copy_us.min(u128::from(u64::MAX)) as u64,
+                                                    hidden_publish_us: presented_frame.main_present_hidden_publish_us.min(u128::from(u64::MAX)) as u64,
+                                                    latch_request_us: presented_frame.main_present_request_us.min(u128::from(u64::MAX)) as u64,
+                                                    post_status_us: presented_frame.main_present_wait_us,
+                                                    completion_poll_us: presented_frame.main_present_completion_poll_wall_us,
+                                                    previous_active_sequence: previous.active_sequence,
+                                                    posted_sequence: presented_frame.main_present_sequence,
+                                                    post_active_sequence: presented_frame.main_present_post_active_sequence,
+                                                    post_pending_sequence: presented_frame.main_present_post_pending_sequence,
+                                                    post_pending: presented_frame.main_present_post_pending,
+                                                    previous_owned_refresh: previous.owned_vblank_count,
+                                                    owned_refresh_delta: delta.owned_vblank_delta,
+                                                    repeated_refresh_delta: delta.repeated_vblank_delta,
+                                                }),
                                                 work:card_work_timing,
                                                 dropped_frames: dropped,
                                                 owned_refresh_observed: Some(telemetry.owned_vblank_count),
