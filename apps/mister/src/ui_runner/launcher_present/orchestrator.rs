@@ -523,6 +523,8 @@ pub(in crate::ui_runner) struct LauncherPresentCycle {
     pub(in crate::ui_runner) cpu_t3: FrameAnalyticsCpuStamp,
     pub(in crate::ui_runner) cpu_t4: FrameAnalyticsCpuStamp,
     pub(in crate::ui_runner) pacing_trace: LauncherPacingTrace,
+    #[cfg(feature = "tooling")]
+    pub(in crate::ui_runner) post_timing: Option<(Instant, Instant)>,
 }
 
 trait PresentationAdapters<L> {
@@ -866,6 +868,8 @@ impl LivePresentationAdapters<'_, '_> {
         let (_, frame_t3, cpu_t3, pacing_trace) =
             self.pace_before_fb0(PresentPacingRequirement::AfterFirstVisible);
         LauncherPresentCycle {
+            #[cfg(feature = "tooling")]
+            post_timing: None,
             presentation: empty_present_result(),
             frame_t3,
             frame_t4: Instant::now(),
@@ -903,6 +907,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 let (_, frame_t3, cpu_t3, pacing_trace) =
                     self.pace_before_fb0(PresentPacingRequirement::Always);
                 return Ok(LauncherPresentCycle {
+                    #[cfg(feature = "tooling")]
+                    post_timing: None,
                     presentation: direct_hidden_waiting_present_result(),
                     frame_t3,
                     frame_t4: Instant::now(),
@@ -925,6 +931,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 let _ =
                     mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
             }
+            #[cfg(feature = "tooling")]
+            let post_timing = Some(stats.post_timing);
             let presentation = latch_present_result(
                 stats,
                 source_evidence,
@@ -937,6 +945,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 None,
             );
             return Ok(LauncherPresentCycle {
+                #[cfg(feature = "tooling")]
+                post_timing,
                 presentation,
                 frame_t3,
                 frame_t4: Instant::now(),
@@ -1083,6 +1093,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 request,
             )
         });
+        #[cfg(feature = "tooling")]
+        let post_timing = Some(stats.post_timing);
         let presentation = latch_present_result(
             stats,
             source_evidence,
@@ -1097,6 +1109,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let frame_t4 = Instant::now();
         let cpu_t4 = FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode);
         Ok(LauncherPresentCycle {
+            #[cfg(feature = "tooling")]
+            post_timing,
             presentation,
             frame_t3,
             frame_t4,
@@ -1115,6 +1129,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let (_, frame_t3, cpu_t3, pacing_trace) =
             self.pace_before_fb0(PresentPacingRequirement::Always);
         let mut cycle = LauncherPresentCycle {
+            #[cfg(feature = "tooling")]
+            post_timing: None,
             presentation: empty_present_result(),
             frame_t3,
             frame_t4: Instant::now(),
@@ -1141,6 +1157,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             arcade_list_renderer,
         });
         LauncherPresentCycle {
+            #[cfg(feature = "tooling")]
+            post_timing: None,
             presentation: fb0_present_result(stats),
             frame_t3,
             frame_t4: Instant::now(),

@@ -287,6 +287,8 @@ const fn physical_slot_mirror_index(slot_index: u8) -> usize {
 
 #[derive(Debug)]
 pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
+    #[cfg(feature = "tooling")]
+    pub(in crate::ui_runner) post_timing: (Instant, Instant),
     pub(in crate::ui_runner) copied_bytes: usize,
     pub(in crate::ui_runner) invalid_bytes: usize,
     pub(in crate::ui_runner) rect_count: u32,
@@ -644,6 +646,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let post_pmu = profile_latch_phases
             .then(|| mister_magik_perf_events::sampled_span("gui.latch.post-request"))
             .flatten();
+        #[cfg(feature = "tooling")]
+        let post_started_at = Instant::now();
         let receipt = post_confirm_prepared_frame(
             hardware,
             LatchPostRequest {
@@ -656,6 +660,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             },
             |hardware, budget| self.read_geometry_safe_status_with_budget(hardware, budget),
         )?;
+        #[cfg(feature = "tooling")]
+        let post_verified_at = Instant::now();
         drop(post_pmu);
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
@@ -667,6 +673,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.invalidate_layer_coherency();
         self.hidden_active_verified = true;
         Ok(FpgaVblankLatchHiddenPresentStats {
+            #[cfg(feature = "tooling")]
+            post_timing: (post_started_at, post_verified_at),
             copied_bytes: 0,
             invalid_bytes: 0,
             rect_count: 0,
@@ -949,6 +957,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let post_pmu = profile_latch_phases
             .then(|| mister_magik_perf_events::sampled_span("gui.latch.post-request"))
             .flatten();
+        #[cfg(feature = "tooling")]
+        let post_started_at = Instant::now();
         let receipt = match post_confirm_prepared_frame(
             hardware,
             LatchPostRequest {
@@ -971,6 +981,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 return Err(failure);
             }
         };
+        #[cfg(feature = "tooling")]
+        let post_verified_at = Instant::now();
         drop(post_pmu);
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
@@ -983,6 +995,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.latch_state.mark_post_success(plan);
         self.last_committed_buffer = Some(buffer_index);
         Ok(FpgaVblankLatchHiddenPresentStats {
+            #[cfg(feature = "tooling")]
+            post_timing: (post_started_at, post_verified_at),
             copied_bytes,
             invalid_bytes,
             rect_count,

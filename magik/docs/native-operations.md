@@ -4,6 +4,8 @@ All commands share device identity discovery, Keychain SSH bootstrap authenticat
 identity-keyed service tokens, capability updates and result directories. An IP
 override is optional. A compatible installed service is reused across branches.
 
+Frame timing and dropped-refresh evidence are described in [frame-drop reporting](frame-drop-reporting.md).
+
 ## Device and catalog
 
 Use `scripts/magik device status`, `diagnostics`, or `logs` for bounded evidence;
