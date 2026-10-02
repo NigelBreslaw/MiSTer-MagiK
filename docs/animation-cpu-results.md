@@ -70,9 +70,9 @@ mean summed band wall time was 18.788 versus 18.866 ms/card frame. These small
 route differences do not establish an improvement.
 
 The fast path was removed instead of retaining production complexity for an
-unproven benefit on the target route. The `card-flat-generic` native fixture and
-independent projected-reference parity checks remain for future flat-kernel
-work. Trial Dev SHA256 was
+unproven benefit on the target route. The audit also removed flat-only fixture
+dispatch and parity cases added for that discarded experiment. Existing
+flat-renderer coverage remains. Trial Dev SHA256 was
 `466d96ee1e0843e4184373d5834cf39d47a6ce487db71e92374559b28b954ba1`;
 route evidence is `build/magik-results/20261002T191612Z-bd8dc35a2a54`.
 
@@ -112,13 +112,13 @@ The reflection reordering trial measured a small native kernel gain but remains
 unqualified on the complete route. Further campaign items remain in
 `animation-cpu-campaign.md`.
 
-## Helper real-time scheduling — Dev trial, not production-qualified
+## Helper real-time scheduling — removed after audit
 
-`7dac6c9d3` temporarily gives the helper round-robin priority 1 while it renders
-an active trick/carousel frame. The scope restores its captured calling-thread
-policy before the helper waits or reports completion. Production defaults and
-the UI/Main policy remain unchanged. Initial wake delay before entering the
-scope is outside this trial's effect.
+The historical trial (`7dac6c9d3`) temporarily gave the helper round-robin
+priority 1 while rendering an active trick/carousel frame. The scope restored
+its captured calling-thread policy before the helper waited or reported
+completion. Production defaults and UI/Main policy stayed unchanged. Initial
+wake delay before entering the scope was outside this trial's effect.
 
 One valid route recorded 28 drops before a second route's measurement window
 failed to finish. A full repeat passed with 20/23/25 drops and 19.583/19.740/19.642
@@ -129,12 +129,32 @@ ms moving CPU per presentation. The parent recorded 24/26/24 drops and averaged
 Evidence: `build/magik-results/20261002T200633Z-c148ad834ba9` and
 `build/magik-results/20261002T201139Z-c6d21a38e2fa`; trial Dev SHA256:
 `d584e649cc9b90d31223d3a8bdacdc1fb679ebd92e5453b8dbc032a2fc5c373b`.
-The native policy diagnostic is still required before claiming activation or
-promoting this experiment. A later diagnostic found Dev had been replaced by
-SHA256 `4081d563837504e238668791fa956ef6c4b8022986d68b5050b9a4ad2df928dc`;
+The audit removed the scheduler scope, render-worker callbacks and dedicated
+policy scenario. Neither whole-route benefit nor native activation was
+sufficiently qualified to retain runtime machinery. Future scheduling trials must establish
+activation and Main/input behavior before integration. A later diagnostic found
+Dev had been replaced by SHA256 `4081d563837504e238668791fa956ef6c4b8022986d68b5050b9a4ad2df928dc`;
 its scheduler snapshots are excluded from trial evidence. Reserve Dev for the
 remaining matched measurements; do not overwrite another task's executable.
 
 The timeout remains unexplained; the route completed and Main reported zero
 crashes/invariants afterward. Timeout handling now preserves the final metrics
 for diagnosis. Do not mix incomplete windows into the performance comparison.
+
+## Simplification and deletion audit
+
+Removed the unqualified helper scheduling experiment, its diagnostic-only
+scenario/CLI option, and orphaned flat-only benchmark/parity additions. The
+renderer uses its original constructor and thread policy;
+no per-frame scheduler callbacks or temporary policy guard remain. Retained the
+measured opaque-compose and sparse-copy changes, their pixel/coherence tests,
+moving-CPU accounting, bounded metrics transport and timeout evidence capture.
+The audit changes no artwork, poses, durations or input behavior. New hardware
+measurements require an isolated Dev build; previous numbers remain historical.
+
+Audit validation: 42 latch tests, two renderer coordination tests, one full-pixel
+sparse-copy test and two host scenario-selection tests passed. Frontend/scene
+Clippy, Ruff and bounded Rust LSP diagnostics passed. ARM compilation and exact
+NEON parity passed in local emulation; the retained benchmark also passed its
+output check. Emulation timing is excluded from performance evidence. The audit
+performed no MiSTer deployment or device control.

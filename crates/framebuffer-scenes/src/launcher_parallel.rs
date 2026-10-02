@@ -124,38 +124,11 @@ fn micros(start: Instant) -> u64 {
 fn cpu_delta(start: Option<u64>, end: Option<u64>) -> Option<u64> {
     start.zip(end).map(|(s, e)| e.saturating_sub(s))
 }
-struct WorkerActivityScope(Option<fn(bool)>);
-impl WorkerActivityScope {
-    fn enter(callback: Option<fn(bool)>, active: bool) -> Self {
-        let callback = callback.filter(|_| active);
-        if let Some(callback) = callback {
-            callback(true);
-        }
-        Self(callback)
-    }
-}
-impl Drop for WorkerActivityScope {
-    fn drop(&mut self) {
-        if let Some(callback) = self.0 {
-            callback(false);
-        }
-    }
-}
-
 impl ParallelLauncherRenderer {
     pub fn new(
         preparer: LauncherFramePreparer,
         worker_setup: Option<fn()>,
         clocks: Option<ThreadClocks>,
-    ) -> Result<Self, String> {
-        Self::new_with_worker_activity(preparer, worker_setup, clocks, None)
-    }
-
-    pub fn new_with_worker_activity(
-        preparer: LauncherFramePreparer,
-        worker_setup: Option<fn()>,
-        clocks: Option<ThreadClocks>,
-        worker_activity: Option<fn(bool)>,
     ) -> Result<Self, String> {
         let primary = preparer.new_direct_tile_buffer();
         let helper = preparer.new_tile_buffer();
@@ -171,16 +144,11 @@ impl ParallelLauncherRenderer {
                 while let Ok(mut job) = received.recv() {
                     let started_at = Instant::now();
                     let sample = ThreadSample::now(clocks);
-                    let activity = WorkerActivityScope::enter(
-                        worker_activity,
-                        job.preparer.request_is_animating(job.request),
-                    );
                     job.preparer.render_tile(
                         job.request,
                         &mut job.buffer,
                         (job.split, CAROUSEL_RIGHT),
                     );
-                    drop(activity);
                     let (cpu_us, run_delay_us) = ThreadSample::now(clocks).since(sample);
                     let wall_us = micros(started_at);
                     let finished_at = Instant::now();
@@ -344,21 +312,6 @@ mod tests {
             balanced_split(CAROUSEL_LEFT, CAROUSEL_SPLIT, 0, 5_000),
             CAROUSEL_SPLIT
         );
-    }
-
-    #[test]
-    fn worker_activity_restores_on_unwind_and_skips_settled_frames() {
-        thread_local! { static EVENTS: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) }; }
-        fn activity(active: bool) {
-            EVENTS.with(|events| events.borrow_mut().push(active));
-        }
-        drop(super::WorkerActivityScope::enter(Some(activity), false));
-        let result = std::panic::catch_unwind(|| {
-            let _scope = super::WorkerActivityScope::enter(Some(activity), true);
-            panic!("render interruption");
-        });
-        assert!(result.is_err());
-        EVENTS.with(|events| assert_eq!(*events.borrow(), [true, false]));
     }
 
     #[test]

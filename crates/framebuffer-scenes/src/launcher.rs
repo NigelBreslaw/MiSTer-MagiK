@@ -490,11 +490,6 @@ pub struct LauncherFramePreparer {
 }
 
 impl LauncherFramePreparer {
-    pub(crate) fn request_is_animating(&self, request: LauncherFrameRequest) -> bool {
-        self.trick.is_some()
-            || request.frame.phase != crate::launcher_navigation::BrowsePhase::Settled
-    }
-
     pub fn carousel_clip(&self) -> (usize, usize) {
         if self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides) {
             (268, 934)
