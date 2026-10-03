@@ -125,8 +125,6 @@ impl FramePhaseTimeline {
 pub struct DroppedFrameRecord {
     pub reason: &'static str,
     pub dropped_frames: u64,
-    /// Refreshes the first frame from rest waited without being charged.
-    pub first_frame_wait: u64,
     pub source_generation: u64,
     pub source_age_us: u64,
     pub owned_refresh_observed: Option<u32>,
@@ -142,7 +140,6 @@ pub struct DroppedFrameRecord {
 impl DroppedFrameRecord {
     pub(crate) fn json(self) -> Value {
         json!({"reason":self.reason,"dropped_frames":self.dropped_frames,
-            "first_frame_wait":self.first_frame_wait,
             "source_generation":self.source_generation,"source_age_us":self.source_age_us,
 
             "owned_refresh_observed":self.owned_refresh_observed,"active_sequence":self.active_sequence,
@@ -154,44 +151,29 @@ impl DroppedFrameRecord {
     }
 }
 
-/// How one confirmed observation's repeated refreshes are charged.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct RefreshCharge {
-    pub dropped_frames: u64,
-    /// Repeats forgiven while the first frame from rest waited for scanout.
-    pub first_frame_wait: u64,
-}
-
-/// Charge repeated refreshes for one observation. Motion starting from rest
-/// has no earlier refresh to meet: input can arrive anywhere in a period, so
-/// frame 0 may wait one refresh for scanout. `first_frame_work_us` runs from
-/// that frame's start to its post: repeats it would cause even when started
-/// on a refresh boundary are overruns and still count. Every repeat after
-/// frame 0 is a drop; repeats while idle are deliberate reuse.
-pub fn charge_refresh_repeats(
+/// Repeated refreshes charged as drops for one observation. Motion starting
+/// from rest has no earlier refresh to meet: input can arrive anywhere in a
+/// period, so frame 0 may wait one refresh for scanout. `first_frame_work_us`
+/// runs from that frame's start to its post: repeats it would cause even when
+/// started on a refresh boundary are overruns and still count. Every repeat
+/// after frame 0 is a drop; repeats while idle are deliberate reuse.
+pub fn charged_refresh_repeats(
     was_animating: bool,
     animating: bool,
     repeated: u32,
     first_frame_work_us: u64,
     period_us: u64,
-) -> RefreshCharge {
+) -> u64 {
     let repeated = u64::from(repeated);
     match (was_animating, animating) {
-        (false, false) => RefreshCharge::default(),
+        (false, false) => 0,
         (false, true) => {
             let overrun = first_frame_work_us
                 .div_ceil(period_us.max(1))
                 .saturating_sub(1);
-            let dropped_frames = repeated.saturating_sub(1).max(overrun).min(repeated);
-            RefreshCharge {
-                dropped_frames,
-                first_frame_wait: repeated - dropped_frames,
-            }
+            repeated.saturating_sub(1).max(overrun).min(repeated)
         }
-        _ => RefreshCharge {
-            dropped_frames: repeated,
-            first_frame_wait: 0,
-        },
+        _ => repeated,
     }
 }
 
@@ -498,40 +480,22 @@ mod tests {
     #[test]
     fn first_frame_from_rest_may_wait_one_refresh() {
         const PERIOD: u64 = 16_667;
-        let charge = |was, now, repeated, work| {
-            let c = charge_refresh_repeats(was, now, repeated, work, PERIOD);
-            (c.dropped_frames, c.first_frame_wait)
-        };
+        let charged =
+            |was, now, repeated, work| charged_refresh_repeats(was, now, repeated, work, PERIOD);
         // Idle reuse is never charged.
-        assert_eq!(charge(false, false, 3, 0), (0, 0));
+        assert_eq!(charged(false, false, 3, 0), 0);
         // Device browse start: input 9.4 ms into a period, 14.0 ms of work.
         // Frame 0 lands one refresh later; a wait, not a drop.
-        assert_eq!(charge(false, true, 1, 14_042), (0, 1));
-        assert_eq!(charge(false, true, 0, 14_042), (0, 0));
+        assert_eq!(charged(false, true, 1, 14_042), 0);
         // Device Games entry: 25.8 ms would miss from a boundary too.
-        assert_eq!(charge(false, true, 1, 25_827), (1, 0));
+        assert_eq!(charged(false, true, 1, 25_827), 1);
         // Device hub entry: 35.9 ms costs two refreshes; a third is the wait.
-        assert_eq!(charge(false, true, 2, 35_903), (2, 0));
-        assert_eq!(charge(false, true, 3, 35_903), (2, 1));
-        // A short frame 0 can still be charged beyond its one wait.
-        assert_eq!(charge(false, true, 3, 14_042), (2, 1));
+        assert_eq!(charged(false, true, 3, 35_903), 2);
+        // A short frame 0 is still charged beyond its one wait.
+        assert_eq!(charged(false, true, 3, 14_042), 2);
         // After frame 0, and while motion ends, every repeat is a drop.
-        assert_eq!(charge(true, true, 1, 0), (1, 0));
-        assert_eq!(charge(true, false, 2, 0), (2, 0));
-    }
-
-    #[test]
-    fn window_reports_motion_starts_and_forgiven_waits() {
-        let mut metrics = PresentationMetrics::default();
-        metrics.counters.motion_starts = 4;
-        metrics.counters.first_frame_wait_refreshes = 3;
-        metrics.window_start = Some((2000, metrics.counters.clone()));
-        metrics.counters.motion_starts = 9;
-        metrics.counters.first_frame_wait_refreshes = 7;
-        metrics.finish_window(7000, 960, 540, false);
-        let window = metrics.window.unwrap();
-        assert_eq!(window["motion_starts"], 5);
-        assert_eq!(window["first_frame_wait_refreshes"], 4);
+        assert_eq!(charged(true, true, 1, 0), 1);
+        assert_eq!(charged(true, false, 2, 0), 2);
     }
 
     #[test]

@@ -9,10 +9,10 @@ records, not omitted refreshes. A record can cover more than one refresh.
 
 Motion starting from rest has no earlier refresh to meet: input can arrive
 anywhere in a period, so its first frame may wait one refresh for scanout. That
-wait is input latency, not a drop. It is reported per frame as `first_frame_wait`
-and per window as `first_frame_wait_refreshes` beside `motion_starts`. A first
-frame that waits longer overran a whole period and still counts as dropped. Every
-repeat after that first frame is a drop.
+wait is input latency, not a drop. Windows report it as
+`first_frame_wait_refreshes` beside `motion_starts`. Repeats the first frame's
+own work would cause from a refresh boundary still count as dropped, as does
+every repeat after that first frame.
 
 `ui_render_us`, `last_render_us` and the window `render_*` statistics cover the
 existing render interval **before custom drawing**. This includes card work on

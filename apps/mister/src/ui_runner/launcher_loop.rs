@@ -13162,15 +13162,15 @@ pub(super) fn run_launcher_loop(
                                             .map_or(frame_t4, |(posted, _)| posted)
                                             .saturating_duration_since(at)
                                             .as_micros() as u64;
-                                        let charge = mister_magik_tooling_support::measurement::charge_refresh_repeats(
+                                        let dropped = mister_magik_tooling_support::measurement::charged_refresh_repeats(
                                             was_animating, animation_active, delta.repeated_vblank_delta,
                                             first_frame_work_us, pacer.period_us(),
                                         );
-                                        let dropped = charge.dropped_frames;
                                         metrics.counters.drops += dropped;
                                         if !was_animating && animation_active {
                                             metrics.counters.motion_starts += 1;
-                                            metrics.counters.first_frame_wait_refreshes += charge.first_frame_wait;
+                                            metrics.counters.first_frame_wait_refreshes +=
+                                                u64::from(delta.repeated_vblank_delta) - dropped;
                                         }
                                         if dropped != 0 || tooling_frame_evidence.is_some() {
                                             let record = mister_magik_tooling_support::measurement::DroppedFrameRecord {
@@ -13221,7 +13221,6 @@ pub(super) fn run_launcher_loop(
                                                 }),
                                                 work:card_work_timing,
                                                 dropped_frames: dropped,
-                                                first_frame_wait: charge.first_frame_wait,
                                                 owned_refresh_observed: Some(telemetry.owned_vblank_count),
                                                 active_sequence: Some(telemetry.active_sequence), ui_render_us: render_us,
                                                 ..Default::default()
