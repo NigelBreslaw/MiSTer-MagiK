@@ -2830,6 +2830,27 @@ pub(super) fn cpu_thread_us() -> Option<u64> {
     clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
+/// Diagnostic-only CPU samples bracketed in the app timeline. Unavailable stays null.
+#[cfg(feature = "tooling")]
+pub(super) fn capture_evidence_cpu(
+    frame: &mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    index: usize,
+    origin: Instant,
+) {
+    if let Some(frame) = frame.as_mut()
+        && frame.phases_enabled
+    {
+        let before = Instant::now();
+        frame.cpu_us[index] = cpu_thread_us();
+        let after = Instant::now();
+        frame.cpu_brackets_us[index] = [
+            before.saturating_duration_since(origin).as_micros() as u64,
+            after.saturating_duration_since(origin).as_micros() as u64,
+        ];
+        frame.observer_sampling_us += after.saturating_duration_since(before).as_micros() as u64;
+    }
+}
+
 /// Calling thread's cumulative run delay: time runnable while another task
 /// held its CPU. Measurement only: each call reads procfs.
 #[cfg(target_os = "linux")]

@@ -229,6 +229,24 @@ def animation_roundtrip(
             )
             == window["dropped_frames"]
         )
+    if frame_evidence == "phases":
+        frames = window["frame_evidence"]["frames"]
+        completed = [f for f in frames if f["telemetry_valid"]]
+        assert completed and all(f["produced_frame_id"] > 0 for f in completed)
+        assert all(
+            all(v is not None for v in f["phases"]["cpu_us"]) for f in completed
+        ), "Incomplete UI CPU evidence"
+        helpers = [
+            f["phases"]["helper"] for f in frames if f["phases"]["helper"] is not None
+        ]
+        assert helpers, "Missing helper job evidence"
+        assert all(
+            h["dispatched_us"]
+            <= h["started_us"]
+            <= h["finished_us"]
+            <= h["received_us"]
+            for h in helpers
+        )
     route_drops = sum(row["dropped_frames"] for row in rows)
     assert route_drops == window["dropped_frames"], "Route and window counts differ"
     assert sum(window["dropped_frames_by_workload"].values()) == route_drops

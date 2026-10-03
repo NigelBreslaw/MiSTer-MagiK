@@ -78,6 +78,14 @@ impl ThreadSample {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ParallelFrameTiming {
+    pub renderer_id: u64,
+    pub request_generation: u64,
+    pub request_timestamp_us: u64,
+    pub helper_dispatched_at: Option<Instant>,
+    pub helper_started_at: Option<Instant>,
+    pub helper_finished_at: Option<Instant>,
+    pub helper_received_at: Option<Instant>,
+    pub discarded_generation: Option<u64>,
     pub total_us: u64,
     pub helper_ahead: bool,
     pub helper_ahead_lead_us: u64,
@@ -111,6 +119,7 @@ struct Ahead {
     dispatched_at: Instant,
 }
 struct Completion {
+    started_at: Instant,
     #[cfg(feature = "launcher-profile")]
     profile: Option<crate::launcher_profile::Report>,
     buffer: PreparedLauncherFrame,
@@ -121,6 +130,7 @@ struct Completion {
     finished_at: Instant,
 }
 pub struct ParallelLauncherRenderer {
+    instance_id: u64,
     primary: PreparedLauncherFrame,
     helper: Option<PreparedLauncherFrame>,
     spare: Option<PreparedLauncherFrame>,
@@ -185,6 +195,7 @@ impl ParallelLauncherRenderer {
                         crate::launcher_profile::enabled().then(crate::launcher_profile::take);
                     if completed
                         .send(Completion {
+                            started_at,
                             #[cfg(feature = "launcher-profile")]
                             profile,
                             buffer: job.buffer,
@@ -203,7 +214,9 @@ impl ParallelLauncherRenderer {
                 }
             })
             .map_err(|e| e.to_string())?;
+        static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
         Ok(Self {
+            instance_id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64,
             primary,
             helper: Some(helper),
             spare: None,
@@ -231,6 +244,11 @@ impl ParallelLauncherRenderer {
             .ahead
             .as_ref()
             .is_some_and(|ahead| ahead.request == request && ahead.preparer.same_source(preparer));
+        let discarded_generation = self
+            .ahead
+            .as_ref()
+            .filter(|_| !helper_ahead)
+            .map(|ahead| ahead.request.generation);
         let (discarded_helper_us, discarded_helper_cpu_us) =
             if self.ahead.is_some() && !helper_ahead {
                 self.retire_ahead()?
@@ -238,6 +256,7 @@ impl ParallelLauncherRenderer {
                 (0, None)
             };
         let ahead = self.ahead.take();
+        let helper_dispatched_at = ahead.as_ref().map_or(started, |ahead| ahead.dispatched_at);
         let helper_ahead_lead_us = ahead.as_ref().map_or(0, |ahead| {
             started
                 .saturating_duration_since(ahead.dispatched_at)
@@ -299,6 +318,14 @@ impl ParallelLauncherRenderer {
             completed.wall_us + completed.start_delay_us,
         );
         Ok(ParallelFrameTiming {
+            renderer_id: self.instance_id,
+            request_generation: request.generation,
+            request_timestamp_us: request.timestamp_us,
+            helper_dispatched_at: Some(helper_dispatched_at),
+            helper_started_at: Some(completed.started_at),
+            helper_finished_at: Some(completed.finished_at),
+            helper_received_at: Some(received_at),
+            discarded_generation,
             total_us: micros(started),
             helper_ahead,
             helper_ahead_lead_us,
@@ -493,6 +520,11 @@ mod tests {
         assert!(page.pixels() == serial.pixels());
         let timing = page.render_parallel_frame(&mut renderer, next).unwrap();
         assert!(timing.helper_ahead);
+        assert_eq!(timing.request_generation, next.generation);
+        assert_eq!(timing.request_timestamp_us, next.timestamp_us);
+        assert!(timing.helper_dispatched_at <= timing.helper_started_at);
+        assert!(timing.helper_started_at <= timing.helper_finished_at);
+        assert!(timing.helper_finished_at <= timing.helper_received_at);
         page.merge_retained_helper(&mut renderer);
         assert!(page.pixels() == serial.pixels());
         assert_eq!(renderer.storage_bytes(), storage + 960 * 540 * 2);
@@ -515,6 +547,7 @@ mod tests {
             .unwrap();
         assert!(!timing.helper_ahead);
         assert!(timing.discarded_helper_us > 0);
+        assert_eq!(timing.discarded_generation, Some(next_request.generation));
         replacement.merge_retained_helper(&mut renderer);
         assert!(replacement.pixels() == serial.pixels());
         assert_eq!(renderer.helper_thread_id(), worker);

@@ -12,6 +12,7 @@ pub enum EvidenceMode {
     #[default]
     Off,
     Neighbors,
+    Phases,
 }
 impl EvidenceMode {
     pub fn from_request(value: &Value) -> Result<Self, String> {
@@ -19,20 +20,62 @@ impl EvidenceMode {
             None if value.is_null() => Ok(Self::Off),
             Some("off") => Ok(Self::Off),
             Some("neighbors") => Ok(Self::Neighbors),
-            _ => Err("frame_evidence must be off or neighbors".into()),
+            Some("phases") => Ok(Self::Phases),
+            _ => Err("frame_evidence must be off, neighbors or phases".into()),
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "off",
             Self::Neighbors => "neighbors",
+            Self::Phases => "phases",
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub struct HelperEvidence {
+    pub renderer_id: u64,
+    pub request_generation: u64,
+    pub request_timestamp_us: u64,
+    pub dispatched_us: u64,
+    pub started_us: u64,
+    pub finished_us: u64,
+    pub received_us: u64,
+    pub discarded_generation: Option<u64>,
+}
+impl HelperEvidence {
+    fn json(self) -> Value {
+        json!({"renderer_id":self.renderer_id,"request_generation":self.request_generation,
+            "request_timestamp_us":self.request_timestamp_us,"dispatched_us":self.dispatched_us,
+            "started_us":self.started_us,"finished_us":self.finished_us,"received_us":self.received_us,
+            "discarded_generation":self.discarded_generation})
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct FrameEvidence {
+    pub phases_enabled: bool,
+    pub cpu_us: [Option<u64>; 7],
+    pub cpu_brackets_us: [[u64; 2]; 7],
+    pub observer_sampling_us: u64,
+    pub helper: Option<HelperEvidence>,
+    pub input_sequence: Option<u64>,
+    pub input_captured_monotonic_us: Option<u64>,
+    pub input_dequeued_us: Option<u64>,
+    pub input_epoch: u64,
+    pub bridge_us: u64,
+    pub bridge_model_us: u64,
+    pub bridge_allocation_us: u64,
+    pub bridge_models_replaced: u64,
+    pub destination_reveal_us: u64,
+    pub card_snapshot_locked: bool,
+    pub producer_ready_depth: usize,
+    pub producer_ready_age_us: u64,
+    pub producer_cancelled: bool,
     pub attempt_id: u64,
+    pub produced_frame_id: u64,
+    pub previous_observation_attempt_id: Option<u64>,
     pub begin_us: u64,
     pub request_generation: u64,
     pub missing_fresh_pose: u64,
@@ -41,6 +84,7 @@ pub struct FrameEvidence {
     pub raw_repeat_count: Option<u32>,
     pub logical_time_us: u64,
     pub menu_token: u64,
+    pub view: &'static str,
     pub selected: usize,
     pub pose_phase: &'static str,
     pub pose_progress: u64,
@@ -62,11 +106,21 @@ pub struct FrameEvidence {
 }
 impl FrameEvidence {
     fn json(self) -> Value {
-        json!({"attempt_id":self.attempt_id,"begin_us":self.begin_us,
+        let phases = self.phases_enabled.then(|| json!({"cpu_us":self.cpu_us,"cpu_brackets_us":self.cpu_brackets_us,
+            "helper":self.helper.map(HelperEvidence::json),"input_sequence":self.input_sequence,
+            "input_captured_monotonic_us":self.input_captured_monotonic_us,
+            "input_dequeued_us":self.input_dequeued_us,"input_epoch":self.input_epoch,
+            "bridge_us":self.bridge_us,"bridge_model_us":self.bridge_model_us,
+            "bridge_allocation_us":self.bridge_allocation_us,"bridge_models_replaced":self.bridge_models_replaced,
+            "destination_reveal_us":self.destination_reveal_us,"card_snapshot_locked":self.card_snapshot_locked,
+            "producer_ready_depth":self.producer_ready_depth,"producer_ready_age_us":self.producer_ready_age_us,
+            "producer_cancelled":self.producer_cancelled}));
+        json!({"phases":phases,"attempt_id":self.attempt_id,"produced_frame_id":self.produced_frame_id,
+            "previous_observation_attempt_id":self.previous_observation_attempt_id,"begin_us":self.begin_us,
             "request_generation":self.request_generation,"missing_fresh_pose":self.missing_fresh_pose,"ownership_loss_count":self.ownership_loss_count,
             "raw_presented_count":self.raw_presented_count,"raw_repeat_count":self.raw_repeat_count,
             "logical_time_us":self.logical_time_us,
-            "menu_token":self.menu_token,"selected":self.selected,"pose_phase":self.pose_phase,
+            "menu_token":self.menu_token,"view":self.view,"selected":self.selected,"pose_phase":self.pose_phase,
             "pose_progress":self.pose_progress,"content_generation":self.content_generation,
             "input_generation":self.input_generation,"motion":self.motion,
             "baseline_reset":self.baseline_reset,"telemetry_valid":self.telemetry_valid,
@@ -174,9 +228,12 @@ impl FrameEvidenceCapture {
         json!({"schema":"frame-neighborhood-v1","mode":self.mode.label(),
             "predecessors":PREDECESSORS,"successors":SUCCESSORS,"capacity":CAPACITY,
             "observed_frames":self.observed,"retention_overflow":self.overflow,
-            "unobserved_attempts":self.gaps,"clock_resolution_us":1,
+            "unrecorded_loop_iterations":self.gaps,"clock_resolution_us":1,
             "clock_brackets":{"columns":["app_before_us","clock_monotonic_us","app_after_us"],"samples":self.clocks},
             "deadline":"unknown: FPGA acceptance/cutoff timestamps unavailable",
+            "phase_age_scope":"legacy phase fields are host hit ages, not FPGA vblank phase",
+            "cpu_phase_points":["loop-entry","render-start","render-end","custom-end","post-return","active-observed","finish"],
+            "observer_scope":"CPU sampler brackets and record selection; excludes clock-only reads and metadata construction",
             "observer_us":{"samples":samples.len(),"total":samples.iter().sum::<u64>(),
                 "p99":samples.get(samples.len().saturating_sub(1)*99/100),"max":samples.last()},
             "frames":self.retained.iter().copied().map(FrameEvidence::json).collect::<Vec<_>>()})
@@ -236,6 +293,26 @@ mod tests {
         assert!(capture.retained[1].baseline_reset);
         assert_eq!(capture.retained[1].record.active_sequence, Some(0));
     }
+    #[test]
+    fn superseded_post_and_missing_pose_are_retained_without_inventing_refresh_drops() {
+        let mut capture = FrameEvidenceCapture::default();
+        capture.reset(EvidenceMode::Phases);
+        let mut attempted = frame(1, 0);
+        attempted.outcome = "superseded-before-confirmation";
+        attempted.phases_enabled = true;
+        attempted.produced_frame_id = 1;
+        attempted.cpu_us[0] = Some(12);
+        attempted.cpu_us[6] = Some(22);
+        capture.observe(attempted);
+        let mut next = frame(2, 0);
+        next.missing_fresh_pose = 1;
+        capture.observe(next);
+        let result = capture.json();
+        assert_eq!(result["frames"][0]["observation"]["dropped_frames"], 0);
+        assert_eq!(result["frames"][0]["phases"]["cpu_us"][1], Value::Null);
+        assert_eq!(result["frames"][1]["missing_fresh_pose"], 1);
+    }
+
     #[test]
     fn retention_is_bounded_and_off_allocates_nothing() {
         let mut capture = FrameEvidenceCapture::default();

@@ -123,7 +123,7 @@ def main() -> int:
     )
     check_command.add_argument(
         "--frame-evidence",
-        choices=("off", "neighbors"),
+        choices=("off", "neighbors", "phases"),
         default="off",
         help="Capture bounded frame neighborhoods on the explicit animation round trip",
     )
