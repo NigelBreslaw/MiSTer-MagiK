@@ -608,3 +608,59 @@ physical joystick Select qualification. Physical validation here covers normal
 960x540 HDMI. CRT, portrait and overlapping overlays retain Slint fallback;
 alpha-overlay/fallback and invalidation checks pass in software, but those
 fallback modes have not been physically exercised by this journey.
+
+
+## Publication audits — deletion, then simplification
+
+The measured implementation is retained. The deletion audit (`96833b259`)
+removes the duplicate native-background dirty flag and preparation method.
+Full repaint and last-rendered source now express invalidation directly; source
+state is committed only after a raster actually consumes the damage.
+
+The simplification audit (`7fc86c3e6`) removes the default card-damage template
+that was immediately overwritten. Both tile rectangles are constructed from
+the actual rendered split, preserving root/trick clear widths and landing
+behavior. Device-copy x bounds are computed once per damaged rectangle and
+empty intersections are skipped before visiting rows.
+
+The full branch review retains fallback/full-frame merging, ahead cancellation
+and discard accounting, sparse per-slot catch-up, exact ARM/scalar kernels,
+and the bounded large-metrics transport. These are used correctness or measured
+performance paths. No artwork, motion duration, FrameClock stepping, input gate,
+scheduler policy or drop threshold changes were introduced by either audit.
+
+Focused validation passes: 13 compositor tests (full-page parity, overlays,
+reentry, source and layout changes), 42 latch lifecycle/copy tests, four parallel
+renderer tests (changing splits, retained ownership, helper-ahead reuse and
+source invalidation), one moving-CPU accounting test, 22 host tests and frontend
+tooling Clippy. Rust LSP reports zero compositor diagnostics; the loop file is
+reported as unlinked by its analyzer configuration, so Cargo compilation and
+Clippy provide validation there. ARM release-device-ui-tests delivery passes.
+
+Audited Dev executable SHA256:
+`ca7873a92b3dbd80e8591d01ec02220f234c008d258a7c11aa44bea6a596ac5b`.
+Deployment: `build/magik-results/20261003T102911Z-2f5464c0f509`.
+Capture/control journey: `build/magik-results/20261003T103112Z-c06ac5d1653a`.
+A/Back/Select-action and locked-trick input checks pass again. All exposed device
+and other static pixels match the qualified pre-audit candidate exactly; only
+the clock and games preview differ. CRT/portrait/physical-joystick qualification
+boundaries remain as described above. A standalone validation generated an
+unstaged tooling-support lockfile during delivery/control checks; it was removed
+before the clean benchmark and is not part of the PR or the app source changes.
+
+
+Final unprofiled benchmark:
+`build/magik-results/20261003T103219Z-d740cc5c52bb` (three fresh leases, passed).
+
+| Repeat | Drops | CPU / moving presentation (ms) | Card / Slint / system drops | Posts / flips |
+| --- | ---: | ---: | --- | --- |
+| 0 | 21 | 18.6251 | 14 / 1 / 6 | 559 / 559 |
+| 1 | 18 | 18.3963 | 12 / 1 / 5 | 553 / 553 |
+| 2 | 21 | 18.6037 | 14 / 1 / 6 | 551 / 551 |
+
+All three have zero latch rejections and reuse 216 ahead helper bands. Mean
+moving CPU is 18.5417 ms, versus 18.4864 ms before the audits (+0.30%). Both
+average 20 drops per route. This is consistent with run-to-run noise and gives
+no audit-related speedup or cadence claim. The full-stage and exact-pixel savings
+above remain the reason to keep the implementation. The branch still requires
+CI's broad Rust/ARM/visual assurance and does not achieve zero-drop 60 fps.
