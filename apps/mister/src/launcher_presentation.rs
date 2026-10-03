@@ -596,7 +596,11 @@ pub fn device_reveal_spec(
 
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565
 /// software renderer's truncation return exactly the stored pixels.
-fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::Image {
+fn rgb565_buffer(
+    width: usize,
+    height: usize,
+    pixels: &[Rgb565Pixel],
+) -> slint::SharedPixelBuffer<slint::Rgb8Pixel> {
     assert_eq!(
         pixels.len(),
         width * height,
@@ -607,7 +611,33 @@ fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::I
         pixels,
         buffer.make_mut_bytes()
     ));
-    slint::Image::from_rgb8(buffer)
+    buffer
+}
+
+fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::Image {
+    slint::Image::from_rgb8(rgb565_buffer(width, height, pixels))
+}
+
+pub(crate) fn device_pixel_buffer(
+    kind: crate::device_art::DeviceKind,
+) -> &'static slint::SharedPixelBuffer<slint::Rgb8Pixel> {
+    static BUFFERS: [std::sync::OnceLock<slint::SharedPixelBuffer<slint::Rgb8Pixel>>; 3] = [
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+    ];
+    let index = match kind {
+        crate::device_art::DeviceKind::Tv => 0,
+        crate::device_art::DeviceKind::Monitor => 1,
+        crate::device_art::DeviceKind::Handheld => 2,
+    };
+    BUFFERS[index].get_or_init(|| {
+        rgb565_buffer(
+            crate::device_art::DEVICE_WIDTH,
+            crate::device_art::DEVICE_HEIGHT,
+            system_device_rgb565(Some(kind)),
+        )
+    })
 }
 
 fn settings_cog_backdrop_image() -> slint::Image {
@@ -627,11 +657,7 @@ fn device_image(kind: Option<crate::device_art::DeviceKind>) -> slint::Image {
     let Some(kind) = kind else {
         return arcade_cabinet_image();
     };
-    rgb565_image(
-        crate::device_art::DEVICE_WIDTH,
-        crate::device_art::DEVICE_HEIGHT,
-        system_device_rgb565(Some(kind)),
-    )
+    slint::Image::from_rgb8(device_pixel_buffer(kind).clone())
 }
 
 fn arcade_cabinet_image() -> slint::Image {
@@ -1556,6 +1582,29 @@ fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_device_pixels_cross_threads_without_changing_artwork() {
+        for kind in [
+            crate::device_art::DeviceKind::Tv,
+            crate::device_art::DeviceKind::Monitor,
+            crate::device_art::DeviceKind::Handheld,
+        ] {
+            let prepared = std::thread::spawn(move || device_pixel_buffer(kind).clone())
+                .join()
+                .unwrap();
+            let current = device_pixel_buffer(kind);
+            assert_eq!(prepared.as_slice().as_ptr(), current.as_slice().as_ptr());
+            let packed = system_device_rgb565(Some(kind));
+            assert_eq!(prepared.as_slice().len(), packed.len());
+            for (rgb, pixel) in prepared.as_slice().iter().zip(packed) {
+                let actual = (u16::from(rgb.r >> 3) << 11)
+                    | (u16::from(rgb.g >> 2) << 5)
+                    | u16::from(rgb.b >> 3);
+                assert_eq!(actual, pixel.0);
+            }
+        }
+    }
 
     #[test]
     fn arcade_status_tracks_explicit_hydration_and_empty_library() {

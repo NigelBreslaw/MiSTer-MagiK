@@ -43,8 +43,15 @@ pub fn warm_in_background() {
     let _ = std::thread::Builder::new()
         .name("device-art".into())
         .spawn(|| {
+            use mister_magik_catalog::runtime_thread::{
+                RuntimeThreadRole, apply_runtime_thread_policy,
+            };
+            apply_runtime_thread_policy(RuntimeThreadRole::SystemEntryPrepare);
             for kind in [DeviceKind::Tv, DeviceKind::Monitor, DeviceKind::Handheld] {
                 device_rgb565(kind);
+                // Only immutable pixel data crosses threads. Slint Image
+                // construction and its renderer cache remain on the UI thread.
+                crate::launcher_presentation::device_pixel_buffer(kind);
             }
         });
 }

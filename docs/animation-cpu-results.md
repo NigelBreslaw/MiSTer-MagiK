@@ -450,7 +450,7 @@ These spans nest; do not add their totals. First-use device image construction
 is a measured part of the cold bridge cost. Full raster and destination layers
 also exceed available slack together, so this is not solely a latch/post issue.
 
-## Exact RGB565-to-RGB8 image expansion — awaiting comparison
+## Exact RGB565-to-RGB8 image expansion — kept (`7a0ea9bac`)
 
 The first-use device image previously expanded every packed pixel with scalar
 channel extraction/stores. A reusable eight-pixel NEON expansion now preserves
@@ -463,3 +463,33 @@ Host and actual ARM-kernel tests verify all 65,536 colours, RGB565 round trips,
 unaligned output offsets, vector tails and rejected output sizes. Focused
 frontend Clippy passes and semantic diagnostics are clean. Compare clean routes
 and a cold diagnostic run to the helper-ahead parent before retaining.
+
+
+Clean routes passed with zero latch rejections at 22/19/21 drops and CPU
+18.4816/18.7086/18.7134 ms/moving presentation. Evidence:
+`build/magik-results/20261003T000456Z-c19125a396f4`; executable SHA256
+`240e50e3714b1735aedc775bda1fb62f06137500d713185fb084f564accdfc1c`.
+This does not establish a route-wide CPU or cadence gain over 19/19/20 and
+18.5246 ms for the helper-ahead parent.
+
+A matched diagnostic route passed (`20261003T000904Z-cdd4a951f3f1`). First device
+image construction fell 9.080 -> 4.871 ms (46.4%); cold full bridge maximum fell
+22.706 -> 18.463 ms, closely matching that saving. Full Slint raster and
+initial destination-layer costs remained essentially unchanged. Retain the
+converter for the directly attributed cold saving and exact bytes, with no
+claim that it alone removes the first-frame misses.
+
+## Background device pixel buffers — awaiting comparison
+
+The existing artwork worker now prepares the immutable RGB8 buffers as well as
+packed device art, using the existing CPU0 preparation role. Only pixel data
+crosses threads; Slint Image construction and renderer caches stay on the UI
+thread. First use clones a ready shared buffer, with lazy construction retained
+if startup preparation is still in flight. All three device buffers share
+storage across worker/UI access and round-trip to every original artwork pixel
+in the focused test. Frontend Clippy and existing device-art tests pass.
+
+This moves the existing first-use data preparation off the UI path and eagerly
+stores up to three 483x519x3-byte buffers (2,256,039 bytes). It does not add a
+motion pause or change presentation/drop gates. Compare the cold profile and
+clean route against the converter-only parent before retaining.
