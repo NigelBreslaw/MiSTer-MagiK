@@ -1985,11 +1985,11 @@ impl LauncherNav {
 
     fn active_recent_refs(&self) -> &[String] {
         self.active_collection()
-            .and_then(|collection| {
+            .map(|collection| {
                 collection
                     .system_id
                     .as_deref()
-                    .or(Some(collection.legacy_system_id.as_str()))
+                    .unwrap_or(&collection.legacy_system_id)
             })
             .and_then(|system| self.system_recent_refs.get(system))
             .map_or(self.recent_launch_refs.as_slice(), Vec::as_slice)

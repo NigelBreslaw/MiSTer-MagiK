@@ -18,6 +18,7 @@ from actions import (
     validate_development_paths,
 )
 from magik.results import append_event
+from magik.animation_benchmark import ANIMATION_ROUTES
 from catalog_equivalence import (
     catalog_identity,
     assert_catalog_equivalent,
@@ -316,7 +317,7 @@ def test_device_plane(journey_application_session):
     "route",
     os.environ.get(
         "MAGIK_ANIMATION_ROUTES",
-        "root,consoles,computers,handhelds,arcade,favourites,settings",
+        ",".join(ANIMATION_ROUTES),
     ).split(","),
 )
 def test_animation_app(journey_application_session, repetition, route):

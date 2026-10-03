@@ -300,15 +300,6 @@ impl UserStateStore {
             .collect::<Result<Vec<String>, _>>()
             .map_err(|e| format!("read changed favourites: {e}"))?;
         drop(statement);
-        snapshot
-            .favourites_by_system
-            .insert(system_id.to_owned(), references);
-        snapshot.favourite_launch_refs = snapshot
-            .favourites_by_system
-            .values()
-            .flatten()
-            .cloned()
-            .collect();
         let counts = transaction
             .query_row(
                 "SELECT recent_count,favourite_count FROM user_system_counts WHERE system_id=?1",
@@ -323,10 +314,19 @@ impl UserStateStore {
             .optional()
             .map_err(|e| format!("read changed user counts: {e}"))?
             .unwrap_or_default();
-        snapshot.system_counts.insert(system_id.to_owned(), counts);
         transaction
             .commit()
             .map_err(|e| format!("finish changed user snapshot: {e}"))?;
+        snapshot
+            .favourites_by_system
+            .insert(system_id.to_owned(), references);
+        snapshot.favourite_launch_refs = snapshot
+            .favourites_by_system
+            .values()
+            .flatten()
+            .cloned()
+            .collect();
+        snapshot.system_counts.insert(system_id.to_owned(), counts);
         Ok(())
     }
 
@@ -589,6 +589,32 @@ mod tests {
         assert_eq!(reopened.system_counts["snes"].favourites, 0);
         assert_eq!(reopened.system_counts["nes"].favourites, 1);
         assert_eq!(reopened.favourite_launch_refs, [nes.launch_ref]);
+    }
+
+    #[test]
+    fn failed_favourite_refresh_keeps_the_cached_snapshot_until_a_successful_read() {
+        let store = temporary_store("failed-favourite-refresh");
+        let mut snapshot = store.read_snapshot().unwrap();
+        let before = snapshot.clone();
+        store.set_favourite(&game("one"), true, 10).unwrap();
+        let connection = store.connection().unwrap();
+        connection
+            .execute(
+                "UPDATE user_system_counts SET favourite_count='invalid' WHERE system_id='snes'",
+                [],
+            )
+            .unwrap();
+        assert!(store.refresh_favourites(&mut snapshot, "snes").is_err());
+        assert_eq!(snapshot, before);
+        connection
+            .execute(
+                "UPDATE user_system_counts SET favourite_count=1 WHERE system_id='snes'",
+                [],
+            )
+            .unwrap();
+        store.refresh_favourites(&mut snapshot, "snes").unwrap();
+        assert_eq!(snapshot.system_counts["snes"].favourites, 1);
+        assert_eq!(snapshot.favourite_launch_refs, [game("one").launch_ref]);
     }
 
     #[test]

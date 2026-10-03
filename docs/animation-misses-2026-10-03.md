@@ -141,3 +141,9 @@ output, other installed systems and populated global user lists are not qualifie
 
 There is no trustworthy all-app missed-refresh grand total yet: the Computers
 idle-gap issue and Favourites motion coverage must be resolved first.
+
+The PR audits subsequently consolidated route configuration and navigation into
+`magik/host/magik/animation_benchmark.py` and removed the separate route module.
+The measured inputs, waits, windows and destination assertions are preserved.
+This harness cleanup passed the focused host tests; the device evidence remains
+from the recorded pre-cleanup executable and workload.

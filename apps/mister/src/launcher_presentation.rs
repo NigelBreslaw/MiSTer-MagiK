@@ -400,7 +400,6 @@ fn bridge_churn_record(update: impl FnOnce(&mut BridgeChurnCounters)) {
 }
 
 struct HubText {
-    collection: String,
     source_title: String,
     system: String,
     counts: [usize; 3],
@@ -422,7 +421,6 @@ struct NavigationViewPresenter {
     selection_feedback_callback_installed: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 struct SettingsProjectionKey {
     integers: [i64; 10],
     flags: [bool; 7],
@@ -928,7 +926,6 @@ impl LauncherViewPresenters {
                         .unwrap_or(&collection.legacy_system_id)
                 })
                 .unwrap_or("");
-            let id = collection.map_or("", |collection| collection.id.as_str());
             let title = collection.map_or("", |collection| collection.title.as_str());
             let mut count_started = measure.then(Instant::now);
             let recent = nav.active_collection_recent_count();
@@ -941,13 +938,9 @@ impl LauncherViewPresenters {
                 favourites,
             ];
             if !self.navigation.hub_text.as_ref().is_some_and(|text| {
-                text.collection == id
-                    && text.source_title == title
-                    && text.system == system
-                    && text.counts == counts
+                text.source_title == title && text.system == system && text.counts == counts
             }) {
                 self.navigation.hub_text = Some(HubText {
-                    collection: id.to_owned(),
                     source_title: title.to_owned(),
                     system: system.to_owned(),
                     counts,
@@ -1064,7 +1057,6 @@ impl LauncherViewPresenters {
             install_fixed_settings_visual_assets(&settings);
             self.settings.fixed_visual_assets_installed = true;
         }
-        let ui = app.global::<MisterUi>();
         if ui.get_crt_layout() {
             let geometry = settings_visual_asset_geometry(&ui);
             if self.settings.crt_visual_assets_geometry != Some(geometry) {

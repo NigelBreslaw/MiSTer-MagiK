@@ -167,8 +167,9 @@ fn worker(
                         .map(|game| catalog.user_game_identity_for_entry(game))
                         .collect::<Vec<_>>();
                     import_legacy_snes(&store, &games, &media_root, now).and_then(|_| {
-                        cached = Some(store.read_snapshot()?);
-                        Ok(cached.as_ref().unwrap().clone())
+                        let snapshot = store.read_snapshot()?;
+                        cached = Some(snapshot.clone());
+                        Ok(snapshot)
                     })
                 }
             }
@@ -177,14 +178,14 @@ fn worker(
                 favourite,
                 now,
             } => store.set_favourite(&game, favourite, now).and_then(|_| {
-                if let Some(snapshot) = cached.as_mut() {
-                    let mut next = snapshot.clone();
-                    store.refresh_favourites(&mut next, &game.system_id)?;
-                    *snapshot = next;
-                } else {
-                    cached = Some(store.read_snapshot()?);
-                }
-                Ok(cached.as_ref().unwrap().clone())
+                let snapshot = match cached.as_mut() {
+                    Some(snapshot) => {
+                        store.refresh_favourites(snapshot, &game.system_id)?;
+                        snapshot
+                    }
+                    None => cached.insert(store.read_snapshot()?),
+                };
+                Ok(snapshot.clone())
             }),
         };
         let event = match result {

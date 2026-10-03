@@ -133,3 +133,30 @@ game list. Layout and artwork otherwise match in these settled captures.
 Raw runs, build logs and the aggregated comparison remain ignored under
 `build/magik-results/` and `outputs/bridge-refactor/`. Old pre-PR #219 measurements
 above are provenance only and are not mixed into this comparison.
+
+## Deletion and simplification audits before PR
+
+Removed the uncalled global full-metadata query APIs and duplicate count reader;
+backfill tests now exercise the production snapshot read. Removed the unused
+play-refresh mode and catalog parameters from maintained-count getters. Playback
+still updates both MRU indexes and counters through the existing SQL triggers;
+the running worker only refreshes favourites, and launch return reads a new
+startup snapshot.
+
+Favourite refresh now completes both queries and the read transaction before
+changing the cached projection. A failed count read leaves the old snapshot
+intact. This allows the worker to update its cache directly and copy it once for
+publication. A database failure/retry sequence tests that guarantee. Removed the
+hub cache's collection ID, which did not affect any cached output, and unused
+Settings key derives/duplicate global access.
+
+The app benchmark now owns its route configuration and navigation in one module;
+the separate route module and circular import were removed. Inputs, wait policy,
+measurement windows and destination assertions retain the measured workloads.
+
+Final focused validation passes: 173 navigation tests, 24 bridge tests, 6 worker
+sequences, 11 persistence/import tests, 14 host benchmark/CLI tests, UI and catalog
+Clippy, and Rust LSP diagnostics. These final API/cache/harness cleanups were
+validated on the host; the native measurements above refer to `b2cd60791` and
+were not repeated after cleanup. Card artwork, geometry and FrameClock behavior
+were not edited in either audit.
