@@ -2,21 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_catalog::legacy_user_state_import::import_legacy_snes;
+pub(super) use mister_magik_catalog::user_state::UserStateSnapshot;
 use mister_magik_catalog::user_state::{UserGameIdentity, UserStateStore};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct UserStateSnapshot {
-    pub favourite_launch_refs: Vec<String>,
-    pub recent_launch_refs: Vec<String>,
-}
-
 enum UserStateRequest {
     Refresh {
-        games: Vec<UserGameIdentity>,
+        catalog: crate::arcade_catalog::ArcadeCatalog,
         now: i64,
     },
     SetFavourite {
@@ -68,8 +63,12 @@ impl UserStateSession {
         self.available
     }
 
-    pub(super) fn refresh(&mut self, games: Vec<UserGameIdentity>, now: i64) -> Result<(), String> {
-        self.submit(UserStateRequest::Refresh { games, now })
+    pub(super) fn refresh(
+        &mut self,
+        catalog: crate::arcade_catalog::ArcadeCatalog,
+        now: i64,
+    ) -> Result<(), String> {
+        self.submit(UserStateRequest::Refresh { catalog, now })
     }
 
     pub(super) fn set_favourite(
@@ -149,22 +148,44 @@ fn worker(
             return;
         }
     };
+    let mut cached: Option<UserStateSnapshot> = None;
     while let Ok(request) = requests.recv() {
         let completed_favourite = match &request {
             UserStateRequest::SetFavourite { game, .. } => Some(game.launch_ref.clone()),
             UserStateRequest::Refresh { .. } => None,
         };
         let result = match request {
-            UserStateRequest::Refresh { games, now } => {
-                import_legacy_snes(&store, &games, &media_root, now).and_then(|_| snapshot(&store))
+            UserStateRequest::Refresh { catalog, now } => {
+                if let Some(snapshot) = cached.as_ref() {
+                    Ok(snapshot.clone())
+                } else {
+                    // Legacy resolution belongs to this worker, once at startup.
+                    let games = catalog
+                        .games
+                        .iter()
+                        .filter(|game| game.system_id.eq_ignore_ascii_case("snes"))
+                        .map(|game| catalog.user_game_identity_for_entry(game))
+                        .collect::<Vec<_>>();
+                    import_legacy_snes(&store, &games, &media_root, now).and_then(|_| {
+                        cached = Some(store.read_snapshot()?);
+                        Ok(cached.as_ref().unwrap().clone())
+                    })
+                }
             }
             UserStateRequest::SetFavourite {
                 game,
                 favourite,
                 now,
-            } => store
-                .set_favourite(&game, favourite, now)
-                .and_then(|_| snapshot(&store)),
+            } => store.set_favourite(&game, favourite, now).and_then(|_| {
+                if let Some(snapshot) = cached.as_mut() {
+                    let mut next = snapshot.clone();
+                    store.refresh_snapshot_system(&mut next, &game.system_id, false)?;
+                    *snapshot = next;
+                } else {
+                    cached = Some(store.read_snapshot()?);
+                }
+                Ok(cached.as_ref().unwrap().clone())
+            }),
         };
         let event = match result {
             Ok(snapshot) => UserStateEvent::Snapshot {
@@ -180,21 +201,6 @@ fn worker(
             break;
         }
     }
-}
-
-fn snapshot(store: &UserStateStore) -> Result<UserStateSnapshot, String> {
-    Ok(UserStateSnapshot {
-        favourite_launch_refs: store
-            .favourite_games("snes")?
-            .into_iter()
-            .map(|game| game.launch_ref)
-            .collect(),
-        recent_launch_refs: store
-            .recent_unique("snes", 16)?
-            .into_iter()
-            .map(|recent| recent.game.launch_ref)
-            .collect(),
-    })
 }
 
 #[cfg(test)]
@@ -248,7 +254,12 @@ mod tests {
 
     fn ready_session(root: &TestDirectory) -> UserStateSession {
         let mut session = UserStateSession::start(root.0.join("state.sqlite3"), root.0.clone());
-        session.refresh(vec![game()], 10).unwrap();
+        session
+            .refresh(
+                crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
+                10,
+            )
+            .unwrap();
         assert!(matches!(
             poll_until(&mut session),
             UserStateEvent::Snapshot { .. }
@@ -305,7 +316,14 @@ mod tests {
         assert!(session.pending_favourites.is_empty());
         assert!(session.poll().is_none());
         assert!(session.set_favourite(game(), true, 30).is_err());
-        assert!(session.refresh(vec![game()], 40).is_err());
+        assert!(
+            session
+                .refresh(
+                    crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
+                    40
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -365,7 +383,14 @@ mod tests {
         };
         session.set_favourite(game(), true, 20).unwrap();
         drop(request_rx);
-        assert!(session.refresh(vec![game()], 30).is_err());
+        assert!(
+            session
+                .refresh(
+                    crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
+                    30
+                )
+                .is_err()
+        );
         assert!(!session.available());
         assert!(session.pending_favourites.is_empty());
         assert!(session.poll().is_none());

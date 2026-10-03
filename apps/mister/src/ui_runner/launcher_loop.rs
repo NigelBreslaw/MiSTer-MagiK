@@ -6697,18 +6697,12 @@ pub(super) fn run_launcher_loop(
             && user_state_session.available()
             && user_state_catalog_version != Some(catalog_version)
         {
-            let games = catalog
-                .games
-                .iter()
-                .filter(|game| game.system_id.eq_ignore_ascii_case("snes"))
-                .filter_map(|game| catalog.user_game_identity_for_ref(&game.mra_path))
-                .collect();
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()
                 .and_then(|duration| i64::try_from(duration.as_secs()).ok())
                 .unwrap_or(0);
-            if let Err(error) = user_state_session.refresh(games, now) {
+            if let Err(error) = user_state_session.refresh(catalog.clone(), now) {
                 crate::ui_errln!("user-state: {error}");
             }
             user_state_catalog_version = Some(catalog_version);
@@ -6716,13 +6710,10 @@ pub(super) fn run_launcher_loop(
         while background_work_allowed && let Some(event) = user_state_session.poll() {
             match event {
                 UserStateEvent::Snapshot { snapshot, .. } => {
-                    nav.set_user_game_refs(
-                        &catalog,
-                        snapshot.favourite_launch_refs,
-                        snapshot.recent_launch_refs,
-                    );
-                    full_bridge_dirty = true;
-                    request_launcher_redraw!();
+                    if nav.set_user_state_snapshot(&catalog, snapshot) {
+                        full_bridge_dirty = true;
+                        request_launcher_redraw!();
+                    }
                 }
                 UserStateEvent::Failed { error, .. } | UserStateEvent::Unavailable { error } => {
                     crate::ui_errln!("user-state: {error}");
@@ -8998,8 +8989,19 @@ pub(super) fn run_launcher_loop(
                                         let favourite =
                                             event.action == LauncherAction::AddFavourite;
                                         if let Some(launch_ref) = event.path.as_deref()
-                                            && let Some(game) =
-                                                catalog.user_game_identity_for_ref(launch_ref)
+                                            && let Some(game) = nav
+                                                .active_arcade_game_view(
+                                                    &catalog,
+                                                    nav.active_collection_scope_id(&catalog),
+                                                )
+                                                .get(nav.arcade.selected)
+                                                .filter(|game| game.mra_path.as_ref() == launch_ref)
+                                                .map(|game| {
+                                                    catalog.user_game_identity_for_entry(game)
+                                                })
+                                                .or_else(|| {
+                                                    catalog.user_game_identity_for_ref(launch_ref)
+                                                })
                                         {
                                             let now = std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)

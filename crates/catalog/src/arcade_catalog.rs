@@ -1063,17 +1063,33 @@ impl ArcadeCatalog {
         launch_ref: &str,
     ) -> Option<crate::user_state::UserGameIdentity> {
         let game = self.game_for_launch_ref(launch_ref)?;
+        Some(self.user_game_identity_for_entry(game))
+    }
+
+    /// A known row does not need a reverse scan through every catalog game.
+    pub fn user_game_identity_for_entry(
+        &self,
+        game: &ArcadeGameEntry,
+    ) -> crate::user_state::UserGameIdentity {
+        let launch_ref = game.mra_path.as_ref();
         let payload_path = self
-            .structured_launch_plan_for_ref(launch_ref)
+            .system_collection(&game.system_id)
+            .and_then(|collection| collection.launch_plan_for_ref(launch_ref))
+            .or_else(|| {
+                self.system_collection(MENU_ARCADE_SYSTEM_ID)
+                    .filter(|collection| collection.system_id() == game.system_id.as_ref())
+                    .and_then(|collection| collection.launch_plan_for_ref(launch_ref))
+            })
+            .or_else(|| self.launch_plans_by_ref.get(launch_ref))
             .map(|plan| plan.payload_path.to_string())
             .unwrap_or_else(|| launch_ref.to_string());
-        Some(crate::user_state::UserGameIdentity {
+        crate::user_state::UserGameIdentity {
             system_id: game.system_id.to_string(),
             stable_key: game.stable_key(),
             title: game.title.to_string(),
             launch_ref: launch_ref.to_string(),
             payload_path,
-        })
+        }
     }
 
     pub fn launch_target_for_ref(&self, launch_ref: &str) -> LaunchTarget {

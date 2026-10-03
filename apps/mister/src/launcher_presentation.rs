@@ -403,8 +403,6 @@ fn bridge_churn_record(update: impl FnOnce(&mut BridgeChurnCounters)) {
 struct NavigationViewPresenter {
     /// Favourite and recent counts of the system page, recomputed only when
     /// the collection or its user lists change.
-    hub_counts_key: Option<(String, u64, usize, Option<String>)>,
-    hub_counts: (usize, usize),
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     menu_item_presentation: Option<Rc<VecModel<MenuItemPresentation>>>,
@@ -922,22 +920,11 @@ impl LauncherViewPresenters {
                 set_system_hub_games_count,
                 collection.map_or(0, |collection| collection.count) as i32
             );
-            let key = (
-                nav.active_collection_id().unwrap_or("").to_owned(),
-                nav.favourite_launch_refs_revision(),
-                nav.recent_count(),
-                nav.recent_launch_refs().first().cloned(),
-            );
-            if self.navigation.hub_counts_key.as_ref() != Some(&key) {
-                let mut count_started = measure.then(Instant::now);
-                let recent = nav.active_collection_recent_count(catalog);
-                timing.hub_counts_us[0] = presenter_stage(&mut count_started);
-                let favourites = nav.active_collection_favourite_count(catalog);
-                timing.hub_counts_us[1] = presenter_stage(&mut count_started);
-                self.navigation.hub_counts = (recent, favourites);
-                self.navigation.hub_counts_key = Some(key);
-            }
-            let (recent, favourites) = self.navigation.hub_counts;
+            let mut count_started = measure.then(Instant::now);
+            let recent = nav.active_collection_recent_count(catalog);
+            timing.hub_counts_us[0] = presenter_stage(&mut count_started);
+            let favourites = nav.active_collection_favourite_count(catalog);
+            timing.hub_counts_us[1] = presenter_stage(&mut count_started);
             set_view_string_if_changed!(
                 navigation,
                 get_system_hub_caption,

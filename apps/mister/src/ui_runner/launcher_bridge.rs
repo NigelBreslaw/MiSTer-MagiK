@@ -1895,6 +1895,43 @@ mod tests {
     }
 
     #[test]
+    fn hub_publishes_saved_counts_without_materializing_a_game_catalog() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        // The system is known but its game rows are not hydrated.
+        let catalog = ArcadeCatalog::new(
+            PathBuf::new(),
+            vec![],
+            vec![GameSystemEntry {
+                id: "snes".into(),
+                title: "SNES".into(),
+                count: 1857,
+            }],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "snes"));
+        let mut snapshot = mister_magik_catalog::user_state::UserStateSnapshot::default();
+        snapshot.system_counts.insert(
+            "snes".into(),
+            mister_magik_catalog::user_state::SystemUserCounts {
+                recent: 4,
+                favourites: 1,
+            },
+        );
+        assert!(nav.set_user_state_snapshot(&catalog, snapshot.clone()));
+        let mut models = LauncherViewModels::default();
+        models.sync(&app, &nav, &catalog, Some(1), false, None);
+        let navigation = app.global::<slint_ui::launcher::NavigationView>();
+        assert_eq!(navigation.get_system_hub_recent_count(), 4);
+        assert_eq!(navigation.get_system_hub_favourites_count(), 1);
+        assert!(!nav.set_user_state_snapshot(&catalog, snapshot.clone()));
+        snapshot.system_counts.get_mut("snes").unwrap().recent = 5;
+        assert!(nav.set_user_state_snapshot(&catalog, snapshot));
+        models.sync(&app, &nav, &catalog, None, false, None);
+        assert_eq!(navigation.get_system_hub_recent_count(), 5);
+    }
+
+    #[test]
     fn selection_only_drawer_sync_retains_the_slint_model() {
         install_isolated_test_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
