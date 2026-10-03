@@ -9338,12 +9338,26 @@ pub(super) fn run_launcher_loop(
         );
         let gui_bridge_pmu = gui_profiling.phase_span(gui_bridge_phase.span_name());
         let mut bridge_model_projection_us = 0u128;
+        #[cfg(feature = "tooling")]
+        let mut bridge_stage_us = [0u64; 6];
+        let measure_bridge = system_entry_cpu_profile.is_some() || {
+            #[cfg(feature = "tooling")]
+            {
+                tooling_frame_evidence
+                    .as_ref()
+                    .is_some_and(|frame| frame.phases_enabled)
+            }
+            #[cfg(not(feature = "tooling"))]
+            {
+                false
+            }
+        };
         match bridge_sync_plan {
             LauncherBridgeSyncPlan::Full => {
                 #[cfg(feature = "tooling")]
                 let _profile =
                     mister_magik_framebuffer_scenes::launcher_profile::span("bridge.full-sync");
-                bridge_model_projection_us = sync_bridge_launcher(
+                let timing = sync_bridge_launcher(
                     &app,
                     &pad,
                     &nav,
@@ -9356,10 +9370,14 @@ pub(super) fn run_launcher_loop(
                     &mut bridge_models,
                     catalog_version,
                     defer_or_preserve_selected_preview,
-                    system_entry_cpu_profile.is_some(),
+                    measure_bridge,
                     ui,
-                )
-                .model_projection_us;
+                );
+                bridge_model_projection_us = timing.model_projection_us;
+                #[cfg(feature = "tooling")]
+                {
+                    bridge_stage_us = timing.stage_us;
+                }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
                 request_launcher_redraw!();
@@ -9370,7 +9388,7 @@ pub(super) fn run_launcher_loop(
                 } else {
                     None
                 };
-                bridge_model_projection_us = sync_bridge_launcher_light(
+                let timing = sync_bridge_launcher_light(
                     &app,
                     &nav,
                     &lifecycle,
@@ -9382,10 +9400,14 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
                     defer_or_preserve_selected_preview,
-                    system_entry_cpu_profile.is_some(),
+                    measure_bridge,
                     ui,
-                )
-                .model_projection_us;
+                );
+                bridge_model_projection_us = timing.model_projection_us;
+                #[cfg(feature = "tooling")]
+                {
+                    bridge_stage_us = timing.stage_us;
+                }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
                 request_launcher_redraw!();
@@ -9408,7 +9430,12 @@ pub(super) fn run_launcher_loop(
         #[cfg(feature = "tooling")]
         if let Some(frame) = tooling_frame_evidence.as_mut() {
             frame.bridge_us = u128_to_u64(prepare_trace.bridge_sync_us);
-            frame.bridge_model_us = u128_to_u64(prepare_trace.bridge_model_projection_us);
+            frame.bridge_model_us = (measure_bridge
+                && bridge_sync_plan != LauncherBridgeSyncPlan::None)
+                .then(|| u128_to_u64(prepare_trace.bridge_model_projection_us));
+            frame.bridge_stages_us = (measure_bridge
+                && bridge_sync_plan != LauncherBridgeSyncPlan::None)
+                .then_some(bridge_stage_us);
             frame.bridge_allocation_us = prepare_trace.bridge_model_allocation_us;
             frame.bridge_models_replaced = prepare_trace.bridge_model_replacements;
         }
