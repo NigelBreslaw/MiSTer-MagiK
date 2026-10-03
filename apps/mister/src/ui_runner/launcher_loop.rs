@@ -6697,18 +6697,12 @@ pub(super) fn run_launcher_loop(
             && user_state_session.available()
             && user_state_catalog_version != Some(catalog_version)
         {
-            let games = catalog
-                .games
-                .iter()
-                .filter(|game| game.system_id.eq_ignore_ascii_case("snes"))
-                .filter_map(|game| catalog.user_game_identity_for_ref(&game.mra_path))
-                .collect();
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()
                 .and_then(|duration| i64::try_from(duration.as_secs()).ok())
                 .unwrap_or(0);
-            if let Err(error) = user_state_session.refresh(games, now) {
+            if let Err(error) = user_state_session.refresh(&catalog, now) {
                 crate::ui_errln!("user-state: {error}");
             }
             user_state_catalog_version = Some(catalog_version);
@@ -6716,15 +6710,23 @@ pub(super) fn run_launcher_loop(
         while background_work_allowed && let Some(event) = user_state_session.poll() {
             match event {
                 UserStateEvent::Snapshot { snapshot, .. } => {
-                    nav.set_user_game_refs(
-                        &catalog,
-                        snapshot.favourite_launch_refs,
-                        snapshot.recent_launch_refs,
-                    );
-                    full_bridge_dirty = true;
-                    request_launcher_redraw!();
+                    if nav.set_user_state_snapshot(&catalog, snapshot) {
+                        full_bridge_dirty = true;
+                        request_launcher_redraw!();
+                    }
                 }
-                UserStateEvent::Failed { error, .. } | UserStateEvent::Unavailable { error } => {
+                UserStateEvent::Failed {
+                    error,
+                    completed_favourite,
+                } => {
+                    crate::ui_errln!("user-state: {error}");
+                    if completed_favourite.is_some() {
+                        // One fresh read after a failed write/projection; a failed
+                        // Refresh itself does not schedule another retry.
+                        user_state_catalog_version = None;
+                    }
+                }
+                UserStateEvent::Unavailable { error } => {
                     crate::ui_errln!("user-state: {error}");
                 }
             }
@@ -8998,8 +9000,19 @@ pub(super) fn run_launcher_loop(
                                         let favourite =
                                             event.action == LauncherAction::AddFavourite;
                                         if let Some(launch_ref) = event.path.as_deref()
-                                            && let Some(game) =
-                                                catalog.user_game_identity_for_ref(launch_ref)
+                                            && let Some(game) = nav
+                                                .active_arcade_game_view(
+                                                    &catalog,
+                                                    nav.active_collection_scope_id(&catalog),
+                                                )
+                                                .get(nav.arcade.selected)
+                                                .filter(|game| game.mra_path.as_ref() == launch_ref)
+                                                .map(|game| {
+                                                    catalog.user_game_identity_for_entry(game)
+                                                })
+                                                .or_else(|| {
+                                                    catalog.user_game_identity_for_ref(launch_ref)
+                                                })
                                         {
                                             let now = std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -9305,7 +9318,7 @@ pub(super) fn run_launcher_loop(
                 last_clock_update = Instant::now();
                 window.request_redraw();
             }
-            sync_settings_bridge(&app, &nav, &lifecycle, ui);
+            sync_settings_bridge(&app, &nav, &lifecycle, ui, &mut bridge_models);
         }
         let source_was_arcade = pending_navigation_transition
             .as_ref()
@@ -9329,6 +9342,8 @@ pub(super) fn run_launcher_loop(
         let mut bridge_model_projection_us = 0u128;
         #[cfg(feature = "tooling")]
         let mut bridge_stage_us = None;
+        #[cfg(feature = "tooling")]
+        let mut bridge_presenter = None;
         let measure_bridge = system_entry_cpu_profile.is_some() || {
             #[cfg(feature = "tooling")]
             {
@@ -9366,6 +9381,7 @@ pub(super) fn run_launcher_loop(
                 #[cfg(feature = "tooling")]
                 {
                     bridge_stage_us = timing.stage_us;
+                    bridge_presenter = timing.presenter;
                 }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
@@ -9396,6 +9412,7 @@ pub(super) fn run_launcher_loop(
                 #[cfg(feature = "tooling")]
                 {
                     bridge_stage_us = timing.stage_us;
+                    bridge_presenter = timing.presenter;
                 }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
@@ -9423,6 +9440,9 @@ pub(super) fn run_launcher_loop(
                 && bridge_sync_plan != LauncherBridgeSyncPlan::None)
                 .then(|| u128_to_u64(prepare_trace.bridge_model_projection_us));
             frame.bridge_stages_us = bridge_stage_us;
+            frame.bridge_presenter_us = bridge_presenter.map(|timing| timing.stages_us);
+            frame.bridge_hub_counts_us = bridge_presenter.map(|timing| timing.hub_counts_us);
+            frame.bridge_counters_enabled = bridge_presenter.is_some();
             frame.bridge_allocation_us = prepare_trace.bridge_model_allocation_us;
             frame.bridge_models_replaced = prepare_trace.bridge_model_replacements;
         }

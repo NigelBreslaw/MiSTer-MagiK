@@ -1184,6 +1184,12 @@ pub struct LauncherNav {
     favourite_launch_refs: HashSet<String>,
     favourite_launch_refs_revision: u64,
     recent_launch_refs: Vec<String>,
+    system_user_counts: HashMap<String, mister_magik_catalog::user_state::SystemUserCounts>,
+    system_recent_refs: HashMap<String, Vec<String>>,
+    arcade_user_counts: mister_magik_catalog::user_state::SystemUserCounts,
+    arcade_recent_refs: Vec<String>,
+    arcade_member_systems: HashSet<String>,
+    user_catalog_token: Option<crate::arcade_catalog::CatalogProjectionToken>,
     arcade_user_list_mode: ArcadeUserListMode,
     user_list_indexes: Vec<usize>,
     pending_game_action_path: Option<String>,
@@ -1281,6 +1287,12 @@ pub struct NavigationTransitionState {
     favourite_launch_refs: HashSet<String>,
     favourite_launch_refs_revision: u64,
     recent_launch_refs: Vec<String>,
+    system_user_counts: HashMap<String, mister_magik_catalog::user_state::SystemUserCounts>,
+    system_recent_refs: HashMap<String, Vec<String>>,
+    arcade_user_counts: mister_magik_catalog::user_state::SystemUserCounts,
+    arcade_recent_refs: Vec<String>,
+    arcade_member_systems: HashSet<String>,
+    user_catalog_token: Option<crate::arcade_catalog::CatalogProjectionToken>,
     arcade_user_list_mode: ArcadeUserListMode,
     user_list_indexes: Vec<usize>,
     pending_game_action_path: Option<String>,
@@ -1704,6 +1716,12 @@ impl LauncherNav {
             favourite_launch_refs: HashSet::new(),
             favourite_launch_refs_revision: 0,
             recent_launch_refs: Vec::new(),
+            system_user_counts: HashMap::new(),
+            system_recent_refs: HashMap::new(),
+            arcade_user_counts: Default::default(),
+            arcade_recent_refs: Vec::new(),
+            arcade_member_systems: HashSet::new(),
+            user_catalog_token: None,
             arcade_user_list_mode: ArcadeUserListMode::Games,
             user_list_indexes: Vec::new(),
             pending_game_action_path: None,
@@ -1752,6 +1770,7 @@ impl LauncherNav {
         measure: bool,
         mut taxonomy_built: Option<&mut dyn FnMut()>,
     ) -> LauncherTaxonomySyncTiming {
+        self.sync_user_catalog(catalog);
         let token = LauncherTaxonomyToken::from_catalog(catalog);
         if self.taxonomy_token == token && self.taxonomy.matches_catalog(catalog) {
             return LauncherTaxonomySyncTiming::default();
@@ -1949,29 +1968,44 @@ impl LauncherNav {
         opened
     }
 
-    /// Favourites within the active collection.
-    pub fn active_collection_favourite_count(&self, catalog: &ArcadeCatalog) -> usize {
-        let Some(id) = self.active_collection_id() else {
-            return 0;
+    fn active_system_user_counts(&self) -> mister_magik_catalog::user_state::SystemUserCounts {
+        let Some(collection) = self.active_collection() else {
+            return Default::default();
         };
-        catalog
-            .system_game_view(id)
-            .iter()
-            .filter(|game| self.favourite_launch_refs.contains(game.mra_path.as_ref()))
-            .count()
+        if collection.id == crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID {
+            return self.arcade_user_counts;
+        }
+        let system = collection
+            .system_id
+            .as_deref()
+            .unwrap_or(&collection.legacy_system_id);
+        self.system_user_counts
+            .get(system)
+            .copied()
+            .unwrap_or_default()
     }
 
-    /// Recently played games within the active collection.
-    pub fn active_collection_recent_count(&self, catalog: &ArcadeCatalog) -> usize {
-        let Some(id) = self.active_collection_id() else {
-            return 0;
-        };
-        let recent: HashSet<&str> = self.recent_launch_refs.iter().map(String::as_str).collect();
-        catalog
-            .system_game_view(id)
-            .iter()
-            .filter(|game| recent.contains(game.mra_path.as_ref()))
-            .count()
+    /// Maintained user-state counts, not intersections with game rows.
+    pub fn active_collection_favourite_count(&self) -> usize {
+        self.active_system_user_counts().favourites
+    }
+    pub fn active_collection_recent_count(&self) -> usize {
+        self.active_system_user_counts().recent
+    }
+
+    fn active_recent_refs(&self) -> &[String] {
+        if self.active_collection_id() == Some(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID) {
+            return &self.arcade_recent_refs;
+        }
+        self.active_collection()
+            .map(|collection| {
+                collection
+                    .system_id
+                    .as_deref()
+                    .unwrap_or(&collection.legacy_system_id)
+            })
+            .and_then(|system| self.system_recent_refs.get(system))
+            .map_or(self.recent_launch_refs.as_slice(), Vec::as_slice)
     }
 
     /// Root-to-menu IDs for any menu, or `None` for an unknown menu.
@@ -2480,12 +2514,11 @@ impl LauncherNav {
         let memory_key = collection_filter_memory_key(&collection.id, &self.arcade_filter.active);
         if !self.game_list_memory.contains_key(&memory_key) {
             let representative = self
-                .recent_launch_refs
+                .active_recent_refs()
                 .iter()
                 .find_map(|path| {
                     self.active_arcade_game_view(catalog, &collection.id)
-                        .iter()
-                        .position(|game| game.mra_path.as_ref() == path.as_str())
+                        .position_launch_ref(path)
                 })
                 .unwrap_or(0);
             self.arcade.selected = representative.min(count.saturating_sub(1));
@@ -2583,6 +2616,12 @@ impl LauncherNav {
             favourite_launch_refs: self.favourite_launch_refs.clone(),
             favourite_launch_refs_revision: self.favourite_launch_refs_revision,
             recent_launch_refs: self.recent_launch_refs.clone(),
+            system_user_counts: self.system_user_counts.clone(),
+            system_recent_refs: self.system_recent_refs.clone(),
+            arcade_user_counts: self.arcade_user_counts,
+            arcade_recent_refs: self.arcade_recent_refs.clone(),
+            arcade_member_systems: self.arcade_member_systems.clone(),
+            user_catalog_token: self.user_catalog_token.clone(),
             arcade_user_list_mode: self.arcade_user_list_mode,
             user_list_indexes: self.user_list_indexes.clone(),
             pending_game_action_path: self.pending_game_action_path.clone(),
@@ -2629,6 +2668,12 @@ impl LauncherNav {
         self.favourite_launch_refs = state.favourite_launch_refs;
         self.favourite_launch_refs_revision = state.favourite_launch_refs_revision;
         self.recent_launch_refs = state.recent_launch_refs;
+        self.system_user_counts = state.system_user_counts;
+        self.system_recent_refs = state.system_recent_refs;
+        self.arcade_user_counts = state.arcade_user_counts;
+        self.arcade_recent_refs = state.arcade_recent_refs;
+        self.arcade_member_systems = state.arcade_member_systems;
+        self.user_catalog_token = state.user_catalog_token;
         self.arcade_user_list_mode = state.arcade_user_list_mode;
         self.drawer_projection.get_mut().take();
         self.user_list_indexes = state.user_list_indexes;
@@ -3077,13 +3122,26 @@ impl LauncherNav {
             self.system_hub_selected -= 1;
         }
         if pressed.btn_a {
-            let count = match self.system_hub_selected {
-                0 => self.active_collection().map_or(0, |c| c.count),
-                1 => self.active_collection_recent_count(catalog),
-                2 => self.active_collection_favourite_count(catalog),
+            let games = catalog.system_game_view(
+                self.active_collection_id()
+                    .unwrap_or(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID),
+            );
+            let available = match self.system_hub_selected {
+                0 => self
+                    .active_collection()
+                    .is_some_and(|collection| collection.count != 0),
+                1 => self
+                    .active_recent_refs()
+                    .iter()
+                    .any(|reference| games.position_launch_ref(reference).is_some()),
+                2 => (0..games.len()).any(|ordinal| {
+                    games
+                        .launch_ref(ordinal)
+                        .is_some_and(|reference| self.favourite_launch_refs.contains(reference))
+                }),
                 _ => unreachable!(),
             };
-            if count == 0 {
+            if !available {
                 return None;
             }
             let event = LauncherEvent {
@@ -4083,15 +4141,119 @@ impl LauncherNav {
         }
     }
 
+    fn sync_user_catalog(&mut self, catalog: &ArcadeCatalog) -> bool {
+        if self
+            .user_catalog_token
+            .as_ref()
+            .is_some_and(|token| token.matches(catalog))
+        {
+            return false;
+        }
+        self.arcade_member_systems = catalog
+            .search_source_system_ids(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+            .into_iter()
+            .collect();
+        self.refresh_arcade_user_counts();
+        self.rebuild_user_list_indexes(catalog);
+        self.user_catalog_token = Some(catalog.projection_token());
+        true
+    }
+
+    fn refresh_arcade_user_counts(&mut self) {
+        self.arcade_user_counts = self
+            .system_user_counts
+            .iter()
+            .filter(|(system, _)| self.arcade_member_systems.contains(*system))
+            .fold(
+                Default::default(),
+                |mut total: mister_magik_catalog::user_state::SystemUserCounts, (_, counts)| {
+                    total.recent += counts.recent;
+                    total.favourites += counts.favourites;
+                    total
+                },
+            );
+    }
+
+    pub fn set_user_state_snapshot(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        snapshot: mister_magik_catalog::user_state::UserStateSnapshot,
+    ) -> bool {
+        let catalog_changed = self.sync_user_catalog(catalog);
+        let favourites = snapshot
+            .favourite_launch_refs
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let changed = favourites != self.favourite_launch_refs
+            || snapshot.recent_launch_refs != self.recent_launch_refs
+            || snapshot.system_counts != self.system_user_counts
+            || snapshot.recent_by_system != self.system_recent_refs
+            || snapshot.arcade_recent_refs != self.arcade_recent_refs;
+        if !changed {
+            return catalog_changed;
+        }
+        self.set_favourite_launch_refs(favourites);
+        self.recent_launch_refs = snapshot.recent_launch_refs;
+        self.system_user_counts = snapshot.system_counts;
+        self.system_recent_refs = snapshot.recent_by_system;
+        self.arcade_recent_refs = snapshot.arcade_recent_refs;
+        self.refresh_arcade_user_counts();
+        self.rebuild_user_list_indexes(catalog);
+        true
+    }
+
+    #[cfg(test)]
     pub fn set_user_game_refs(
         &mut self,
         catalog: &ArcadeCatalog,
         favourites: impl IntoIterator<Item = String>,
         recents: Vec<String>,
     ) {
-        self.set_favourite_launch_refs(favourites);
-        self.recent_launch_refs = recents;
-        self.rebuild_user_list_indexes(catalog);
+        let mut snapshot = mister_magik_catalog::user_state::UserStateSnapshot {
+            favourite_launch_refs: favourites.into_iter().collect(),
+            recent_launch_refs: recents,
+            ..Default::default()
+        };
+        let favourites: HashSet<&str> = snapshot
+            .favourite_launch_refs
+            .iter()
+            .map(String::as_str)
+            .collect();
+        for reference in &favourites {
+            if let Some(game) = catalog.game_for_launch_ref(reference) {
+                snapshot
+                    .system_counts
+                    .entry(game.system_id.to_string())
+                    .or_default()
+                    .favourites += 1;
+            }
+        }
+        let arcade_games = catalog.system_game_view(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
+        snapshot.arcade_recent_refs = snapshot
+            .recent_launch_refs
+            .iter()
+            .filter(|reference| arcade_games.position_launch_ref(reference).is_some())
+            .cloned()
+            .collect();
+        let mut seen = HashSet::new();
+        for reference in &snapshot.recent_launch_refs {
+            if !seen.insert(reference.as_str()) {
+                continue;
+            }
+            if let Some(game) = catalog.game_for_launch_ref(reference) {
+                snapshot
+                    .system_counts
+                    .entry(game.system_id.to_string())
+                    .or_default()
+                    .recent += 1;
+                snapshot
+                    .recent_by_system
+                    .entry(game.system_id.to_string())
+                    .or_default()
+                    .push(reference.clone());
+            }
+        }
+        self.set_user_state_snapshot(catalog, snapshot);
     }
 
     pub fn set_arcade_user_list_mode(&mut self, catalog: &ArcadeCatalog, mode: ArcadeUserListMode) {
@@ -4112,16 +4274,20 @@ impl LauncherNav {
         let active_collection = self.active_collection_id().map(str::to_owned);
         self.user_list_indexes = match (self.arcade_user_list_mode, active_collection.as_deref()) {
             (ArcadeUserListMode::Games, _) => Vec::new(),
-            (ArcadeUserListMode::Favourites, Some(collection_id)) => catalog
-                .system_game_view(collection_id)
-                .iter()
-                .enumerate()
-                .filter_map(|(index, game)| {
-                    self.favourite_launch_refs
-                        .contains(game.mra_path.as_ref())
-                        .then_some(index)
-                })
-                .collect(),
+            (ArcadeUserListMode::Favourites, Some(collection_id)) => {
+                let games = catalog.system_game_view(collection_id);
+                if self.favourite_launch_refs.is_empty() {
+                    Vec::new()
+                } else {
+                    (0..games.len())
+                        .filter(|index| {
+                            games.launch_ref(*index).is_some_and(|reference| {
+                                self.favourite_launch_refs.contains(reference)
+                            })
+                        })
+                        .collect()
+                }
+            }
             (ArcadeUserListMode::Favourites, None) => catalog
                 .games
                 .iter()
@@ -4134,13 +4300,9 @@ impl LauncherNav {
                 .collect(),
             (ArcadeUserListMode::Recent, Some(collection_id)) => {
                 let games = catalog.system_game_view(collection_id);
-                self.recent_launch_refs
+                self.active_recent_refs()
                     .iter()
-                    .filter_map(|launch_ref| {
-                        games
-                            .iter()
-                            .position(|game| game.mra_path.as_ref() == launch_ref)
-                    })
+                    .filter_map(|launch_ref| games.position_launch_ref(launch_ref))
                     .collect()
             }
             (ArcadeUserListMode::Recent, None) => self
@@ -4186,7 +4348,30 @@ impl LauncherNav {
         launch_ref: &str,
         favourite: bool,
     ) {
+        self.sync_user_catalog(catalog);
+        let was_favourite = self.favourite_launch_refs.contains(launch_ref);
         self.apply_favourite_state(launch_ref, favourite);
+        if was_favourite != favourite
+            && let Some(game) = catalog.game_for_launch_ref(launch_ref)
+        {
+            let counts = self
+                .system_user_counts
+                .entry(game.system_id.to_string())
+                .or_default();
+            if favourite {
+                counts.favourites += 1;
+            } else {
+                counts.favourites = counts.favourites.saturating_sub(1);
+            }
+            if self.arcade_member_systems.contains(game.system_id.as_ref()) {
+                if favourite {
+                    self.arcade_user_counts.favourites += 1;
+                } else {
+                    self.arcade_user_counts.favourites =
+                        self.arcade_user_counts.favourites.saturating_sub(1);
+                }
+            }
+        }
         self.rebuild_user_list_indexes(catalog);
     }
 
@@ -11522,6 +11707,272 @@ mod tests {
             &catalog,
         );
         assert_eq!(nav.confirm_action, Some(ConfirmAction::RemoveFavourite));
+    }
+
+    #[test]
+    fn hub_saved_totals_do_not_open_an_empty_installed_list() {
+        use mister_magik_catalog::user_state::{SystemUserCounts, UserStateSnapshot};
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Installed")
+                    .system_id("snes")
+                    .path("installed.sfc")
+                    .build(),
+            ],
+            vec![arcade_system("snes", 1)],
+        );
+        let mut snapshot = UserStateSnapshot {
+            favourite_launch_refs: vec!["missing.sfc".into()],
+            ..Default::default()
+        };
+        snapshot
+            .recent_by_system
+            .insert("snes".into(), vec!["missing.sfc".into()]);
+        snapshot.system_counts.insert(
+            "snes".into(),
+            SystemUserCounts {
+                recent: 40,
+                favourites: 1,
+            },
+        );
+        let mut nav = LauncherNav::new();
+        nav.set_user_state_snapshot(&catalog, snapshot);
+        assert!(nav.open_system(&catalog, "snes"));
+        for section in [1, 2] {
+            nav.system_hub_selected = section;
+            assert!(
+                nav.handle_system_hub(&pad_with(|pad| pad.btn_a = true), &catalog, false)
+                    .is_none()
+            );
+            assert!(nav.is_system_hub());
+        }
+        nav.reconcile_favourite_state(&catalog, "installed.sfc", true);
+        nav.system_hub_selected = 2;
+        nav.handle_system_hub(&pad_with(|pad| pad.btn_a = true), &catalog, false);
+        assert!(!nav.is_system_hub());
+        assert_eq!(nav.active_arcade_game_count(&catalog, "snes"), 1);
+    }
+
+    #[test]
+    fn saved_lists_follow_replaced_catalog_rows_with_unchanged_user_data() {
+        let original = arcade_catalog(
+            vec![
+                arcade_game("Alpha").path("a.mra").build(),
+                arcade_game("Saved").path("saved.mra").build(),
+            ],
+            vec![arcade_system("arcade", 2)],
+        );
+        let replacement = arcade_catalog(
+            vec![
+                arcade_game("Inserted").path("new.mra").build(),
+                arcade_game("Alpha").path("a.mra").build(),
+                arcade_game("Saved").path("saved.mra").build(),
+            ],
+            vec![arcade_system("arcade", 3)],
+        );
+        for mode in [ArcadeUserListMode::Favourites, ArcadeUserListMode::Recent] {
+            let mut nav = LauncherNav::new();
+            let snapshot = mister_magik_catalog::user_state::UserStateSnapshot {
+                favourite_launch_refs: vec!["saved.mra".into()],
+                recent_launch_refs: vec!["saved.mra".into()],
+                ..Default::default()
+            };
+            nav.set_user_state_snapshot(&original, snapshot.clone());
+            nav.set_arcade_user_list_mode(&original, mode);
+            nav.screen = Screen::Arcade;
+            assert_eq!(
+                nav.active_arcade_game_view(&original, "")
+                    .get(0)
+                    .unwrap()
+                    .mra_path
+                    .as_ref(),
+                "saved.mra"
+            );
+            nav.sync_launcher_taxonomy(&replacement);
+            nav.set_user_state_snapshot(&replacement, snapshot);
+            assert_eq!(
+                nav.active_arcade_game_view(&replacement, "")
+                    .get(0)
+                    .unwrap()
+                    .mra_path
+                    .as_ref(),
+                "saved.mra"
+            );
+        }
+    }
+
+    #[test]
+    fn saved_list_indices_follow_hydrated_collection_replacement() {
+        use crate::arcade_catalog::{PlatformKind, SystemCollection};
+        let base = arcade_catalog(Vec::new(), vec![arcade_system("snes", 2)]);
+        let original = base.with_system_collection(std::sync::Arc::new(SystemCollection::new(
+            "snes",
+            vec![
+                arcade_game("Alpha").system_id("snes").path("a.sfc").build(),
+                arcade_game("Saved")
+                    .system_id("snes")
+                    .path("saved.sfc")
+                    .build(),
+            ],
+            Vec::new(),
+            PlatformKind::Console,
+        )));
+        let replacement =
+            original
+                .clone()
+                .with_system_collection(std::sync::Arc::new(SystemCollection::new(
+                    "snes",
+                    vec![
+                        arcade_game("Saved")
+                            .system_id("snes")
+                            .path("saved.sfc")
+                            .build(),
+                        arcade_game("Alpha").system_id("snes").path("a.sfc").build(),
+                    ],
+                    Vec::new(),
+                    PlatformKind::Console,
+                )));
+        assert!(std::sync::Arc::ptr_eq(&original.games, &replacement.games));
+        let mut nav = LauncherNav::new();
+        nav.set_user_game_refs(&original, ["saved.sfc".into()], vec!["saved.sfc".into()]);
+        assert!(nav.open_system_game_list(&original, "snes"));
+        nav.set_arcade_user_list_mode(&original, ArcadeUserListMode::Favourites);
+        assert_eq!(
+            nav.active_arcade_game_view(&original, "snes")
+                .get(0)
+                .unwrap()
+                .mra_path
+                .as_ref(),
+            "saved.sfc"
+        );
+        nav.sync_launcher_taxonomy(&replacement);
+        assert_eq!(
+            nav.active_arcade_game_view(&replacement, "snes")
+                .get(0)
+                .unwrap()
+                .mra_path
+                .as_ref(),
+            "saved.sfc"
+        );
+    }
+
+    #[test]
+    fn arcade_saved_sections_use_collection_members_for_recents_and_counts() {
+        use mister_magik_catalog::user_state::{SystemUserCounts, UserStateSnapshot};
+        let systems = ["arcade", "cps1", "cps2", "system16", "neogeo"];
+        let catalog = arcade_catalog(
+            systems
+                .iter()
+                .map(|system| {
+                    arcade_game(*system)
+                        .system_id(*system)
+                        .path(format!("{system}.mra"))
+                        .build()
+                })
+                .collect(),
+            systems
+                .iter()
+                .map(|system| arcade_system(*system, 1))
+                .collect(),
+        );
+        let mut snapshot = UserStateSnapshot {
+            favourite_launch_refs: systems
+                .iter()
+                .map(|system| format!("{system}.mra"))
+                .collect(),
+            recent_launch_refs: (0..16)
+                .map(|ordinal| format!("console-{ordinal}.sfc"))
+                .collect(),
+            arcade_recent_refs: vec![
+                "system16.mra".into(),
+                "cps2.mra".into(),
+                "cps1.mra".into(),
+                "arcade.mra".into(),
+            ],
+            ..Default::default()
+        };
+        snapshot
+            .recent_by_system
+            .insert("arcade".into(), vec!["arcade.mra".into()]);
+        for system in systems {
+            snapshot.system_counts.insert(
+                system.into(),
+                SystemUserCounts {
+                    recent: 1,
+                    favourites: 1,
+                },
+            );
+        }
+        let mut nav = LauncherNav::new();
+        nav.set_user_state_snapshot(&catalog, snapshot);
+        assert!(nav.open_default_arcade(&catalog));
+        assert_eq!(nav.active_collection_recent_count(), 4);
+        assert_eq!(nav.active_collection_favourite_count(), 4);
+        nav.set_arcade_user_list_mode(&catalog, ArcadeUserListMode::Recent);
+        assert_eq!(
+            nav.active_arcade_game_view(&catalog, crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+                .iter()
+                .map(|game| game.mra_path.as_ref())
+                .collect::<Vec<_>>(),
+            ["system16.mra", "cps2.mra", "cps1.mra", "arcade.mra"]
+        );
+        nav.reconcile_favourite_state(&catalog, "neogeo.mra", false);
+        nav.reconcile_favourite_state(&catalog, "neogeo.mra", true);
+        assert_eq!(nav.active_collection_favourite_count(), 4);
+        nav.reconcile_favourite_state(&catalog, "cps1.mra", false);
+        assert_eq!(nav.active_collection_favourite_count(), 3);
+        nav.set_arcade_user_list_mode(&catalog, ArcadeUserListMode::Favourites);
+        assert_eq!(
+            nav.active_arcade_game_view(&catalog, crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+                .len(),
+            3
+        );
+        nav.reconcile_favourite_state(&catalog, "cps1.mra", true);
+        assert_eq!(nav.active_collection_favourite_count(), 4);
+    }
+
+    #[test]
+    fn system_entry_uses_its_saved_recent_when_global_recents_are_other_systems() {
+        let catalog = crate::arcade_catalog::ArcadeCatalog::new(
+            std::path::PathBuf::new(),
+            vec![
+                crate::test_support::arcade_game("Alpha")
+                    .system_id("snes")
+                    .path("a.sfc")
+                    .build(),
+                crate::test_support::arcade_game("Beta")
+                    .system_id("snes")
+                    .path("b.sfc")
+                    .build(),
+                crate::test_support::arcade_game("NES game")
+                    .system_id("nes")
+                    .path("n.nes")
+                    .build(),
+            ],
+            vec![
+                crate::arcade_catalog::GameSystemEntry {
+                    id: "snes".into(),
+                    title: "SNES".into(),
+                    count: 2,
+                },
+                crate::arcade_catalog::GameSystemEntry {
+                    id: "nes".into(),
+                    title: "NES".into(),
+                    count: 1,
+                },
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        let mut snapshot = mister_magik_catalog::user_state::UserStateSnapshot {
+            recent_launch_refs: vec!["n.nes".into()],
+            ..Default::default()
+        };
+        snapshot
+            .recent_by_system
+            .insert("snes".into(), vec!["b.sfc".into()]);
+        nav.set_user_state_snapshot(&catalog, snapshot);
+        assert!(nav.open_system(&catalog, "snes"));
+        assert_eq!(nav.arcade.selected, 1);
     }
 
     #[test]

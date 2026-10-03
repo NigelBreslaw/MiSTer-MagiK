@@ -184,6 +184,20 @@ impl SystemCollectionRows {
         }
     }
 
+    fn launch_ref(&self, ordinal: usize) -> Option<&str> {
+        match self {
+            Self::Owned(games) => games.get(ordinal).map(|game| game.mra_path.as_ref()),
+            Self::NavPack(games) => games.pack.row(ordinal).ok().map(|row| row.launch_ref),
+        }
+    }
+
+    fn source_system_id(&self, ordinal: usize) -> Option<&str> {
+        match self {
+            Self::Owned(games) => games.get(ordinal).map(|game| game.system_id.as_ref()),
+            Self::NavPack(games) => (ordinal < games.count).then_some(games.system_id.as_ref()),
+        }
+    }
+
     fn iter(&self) -> SystemCollectionRowsIter<'_> {
         SystemCollectionRowsIter {
             rows: self,
@@ -788,6 +802,37 @@ impl<'a> ArcadeGameView<'a> {
         self.len() == 0
     }
 
+    /// Metadata resolution can read references without materializing game objects.
+    pub fn launch_ref(self, index: usize) -> Option<&'a str> {
+        match self {
+            Self::Collection(collection) => collection.games.launch_ref(index),
+            Self::CollectionIndexed {
+                collection,
+                indexes,
+            } => indexes
+                .get(index)
+                .and_then(|ordinal| collection.games.launch_ref(*ordinal)),
+            _ => self.get(index).map(|game| game.mra_path.as_ref()),
+        }
+    }
+
+    pub fn source_system_id(self, index: usize) -> Option<&'a str> {
+        match self {
+            Self::Collection(collection) => collection.games.source_system_id(index),
+            Self::CollectionIndexed {
+                collection,
+                indexes,
+            } => indexes
+                .get(index)
+                .and_then(|ordinal| collection.games.source_system_id(*ordinal)),
+            _ => self.get(index).map(|game| game.system_id.as_ref()),
+        }
+    }
+
+    pub fn position_launch_ref(self, reference: &str) -> Option<usize> {
+        (0..self.len()).find(|index| self.launch_ref(*index) == Some(reference))
+    }
+
     pub fn get(self, index: usize) -> Option<&'a ArcadeGameEntry> {
         match self {
             Self::Contiguous(games) => games.get(index),
@@ -1063,17 +1108,33 @@ impl ArcadeCatalog {
         launch_ref: &str,
     ) -> Option<crate::user_state::UserGameIdentity> {
         let game = self.game_for_launch_ref(launch_ref)?;
+        Some(self.user_game_identity_for_entry(game))
+    }
+
+    /// A known row does not need a reverse scan through every catalog game.
+    pub fn user_game_identity_for_entry(
+        &self,
+        game: &ArcadeGameEntry,
+    ) -> crate::user_state::UserGameIdentity {
+        let launch_ref = game.mra_path.as_ref();
         let payload_path = self
-            .structured_launch_plan_for_ref(launch_ref)
+            .system_collection(&game.system_id)
+            .and_then(|collection| collection.launch_plan_for_ref(launch_ref))
+            .or_else(|| {
+                self.system_collection(MENU_ARCADE_SYSTEM_ID)
+                    .filter(|collection| collection.system_id() == game.system_id.as_ref())
+                    .and_then(|collection| collection.launch_plan_for_ref(launch_ref))
+            })
+            .or_else(|| self.launch_plans_by_ref.get(launch_ref))
             .map(|plan| plan.payload_path.to_string())
             .unwrap_or_else(|| launch_ref.to_string());
-        Some(crate::user_state::UserGameIdentity {
+        crate::user_state::UserGameIdentity {
             system_id: game.system_id.to_string(),
             stable_key: game.stable_key(),
             title: game.title.to_string(),
             launch_ref: launch_ref.to_string(),
             payload_path,
-        })
+        }
     }
 
     pub fn launch_target_for_ref(&self, launch_ref: &str) -> LaunchTarget {
@@ -1322,11 +1383,11 @@ impl ArcadeCatalog {
 
     pub fn search_source_system_ids(&self, collection_id: &str) -> Vec<String> {
         let mut seen = HashSet::new();
-        self.system_game_view(collection_id)
-            .iter()
-            .filter_map(|game| {
-                let system_id = game.system_id.to_string();
-                seen.insert(system_id.clone()).then_some(system_id)
+        let games = self.system_game_view(collection_id);
+        (0..games.len())
+            .filter_map(|ordinal| {
+                let system = games.source_system_id(ordinal)?;
+                seen.insert(system).then(|| system.to_owned())
             })
             .collect()
     }
@@ -2864,6 +2925,34 @@ mod tests {
             "/games/129.d64"
         );
         assert_eq!(collection.games.iter().count(), 130);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn user_reference_resolution_leaves_mapped_game_rows_lazy() {
+        let path = navpack_fixture(1857);
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        let (collection, _) =
+            SystemCollection::open_navpack("c64", &path, bytes, 7, 1857, PlatformKind::Computer)
+                .unwrap();
+        let SystemCollectionRows::NavPack(rows) = &collection.games else {
+            panic!("mapped collection");
+        };
+        let before = rows.resident_rows();
+        let view = ArcadeGameView::collection(&collection);
+        assert_eq!(view.position_launch_ref("magik-plan:c64:1856"), Some(1856));
+        assert_eq!(view.position_launch_ref("missing"), None);
+        assert_eq!(view.source_system_id(1856), Some("c64"));
+        let catalog = ArcadeCatalog::new(PathBuf::new(), Vec::new(), Vec::new())
+            .with_system_collection(Arc::new(collection.clone()));
+        assert_eq!(catalog.search_source_system_ids("c64"), ["c64"]);
+        let indexes = [1856, 64];
+        let selected = ArcadeGameView::collection_indexed(&collection, &indexes);
+        assert_eq!(selected.launch_ref(0), Some("magik-plan:c64:1856"));
+        assert_eq!(selected.position_launch_ref("magik-plan:c64:64"), Some(1));
+        assert_eq!(rows.resident_rows(), before);
+        assert!(collection.rich_indexes.get().is_none());
         std::fs::remove_file(path).unwrap();
     }
 

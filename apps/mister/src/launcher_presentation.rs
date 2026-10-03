@@ -399,13 +399,20 @@ fn bridge_churn_record(update: impl FnOnce(&mut BridgeChurnCounters)) {
     });
 }
 
+struct HubText {
+    source_title: String,
+    system: String,
+    counts: [usize; 3],
+    title: String,
+    subtitle: String,
+    captions: [String; 3],
+}
+
 #[derive(Default)]
 struct NavigationViewPresenter {
-    /// Favourite and recent counts of the system page, recomputed only when
-    /// the collection or its user lists change.
-    hub_counts_key: Option<(String, u64, usize, Option<String>)>,
-    hub_counts: (usize, usize),
+    hub_text: Option<HubText>,
     menu_items_key: Option<(usize, String)>,
+    published_menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     menu_item_presentation: Option<Rc<VecModel<MenuItemPresentation>>>,
     projected_selected_index: Option<usize>,
@@ -415,8 +422,20 @@ struct NavigationViewPresenter {
     selection_feedback_callback_installed: bool,
 }
 
+struct SettingsProjectionKey {
+    integers: [i64; 10],
+    flags: [bool; 7],
+    orientation: &'static str,
+    fallback: Option<(u16, u16)>,
+    viewport: crate::licenses::LicenseViewport,
+    geometry: Option<SettingsVisualAssetGeometry>,
+    display_error: Option<String>,
+    orientation_error: Option<String>,
+}
+
 #[derive(Default)]
 struct SettingsViewPresenter {
+    projected: Option<SettingsProjectionKey>,
     license_lines_key: Option<(usize, crate::licenses::LicenseViewport)>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
     display_options: Option<Rc<VecModel<ChoiceOption>>>,
@@ -743,6 +762,33 @@ pub fn install_arcade_visual_assets(app: &Launcher) {
     arcade.set_focus_highlight(arcade_focus_highlight_image());
 }
 
+/// Non-overlapping presenter stages, plus nested count timings.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PresenterTiming {
+    pub stages_us: [u64; 4],
+    pub hub_counts_us: [u64; 2],
+}
+
+struct BridgeChurnMeasurement(bool);
+impl BridgeChurnMeasurement {
+    fn begin() -> Self {
+        Self(BRIDGE_CHURN_ENABLED.with(|enabled| enabled.replace(true)))
+    }
+}
+impl Drop for BridgeChurnMeasurement {
+    fn drop(&mut self) {
+        BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(self.0));
+    }
+}
+
+fn presenter_stage(start: &mut Option<Instant>) -> u64 {
+    start.map_or(0, |previous| {
+        let now = Instant::now();
+        *start = Some(now);
+        now.saturating_duration_since(previous).as_micros() as u64
+    })
+}
+
 #[derive(Default)]
 pub struct LauncherViewPresenters {
     navigation: NavigationViewPresenter,
@@ -765,12 +811,41 @@ impl LauncherViewPresenters {
         defer_arcade_overlay: bool,
         active_display_fallback: Option<(u16, u16)>,
     ) {
+        let _ = self.sync_measured(
+            app,
+            nav,
+            catalog,
+            catalog_version,
+            defer_arcade_overlay,
+            active_display_fallback,
+            false,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_measured(
+        &mut self,
+        app: &Launcher,
+        nav: &LauncherNav,
+        catalog: &ArcadeCatalog,
+        catalog_version: Option<usize>,
+        defer_arcade_overlay: bool,
+        active_display_fallback: Option<(u16, u16)>,
+        measure: bool,
+    ) -> Option<PresenterTiming> {
+        let _churn = measure.then(BridgeChurnMeasurement::begin);
+        let mut timing = PresenterTiming::default();
+        let mut stage = measure.then(Instant::now);
         let navigation = app.global::<NavigationView>();
         if !self.arcade_visual_assets_installed {
             install_arcade_visual_assets(app);
             self.arcade_visual_assets_installed = true;
             self.arcade_device_installed = Some(mister_magik_ui::launcher::DeviceKind::Cabinet);
             self.device_images[0] = Some(app.global::<ArcadeView>().get_device_backdrop());
+        }
+        if let Some(kind) = nav.device_kind() {
+            let index = device_kind(Some(kind)) as usize;
+            self.device_images[index].get_or_insert_with(|| device_image(Some(kind)));
         }
         set_if_changed!(
             navigation,
@@ -844,7 +919,7 @@ impl LauncherViewPresenters {
         );
         if nav.is_system_hub() {
             let collection = nav.active_collection();
-            let system_id = collection
+            let system = collection
                 .map(|collection| {
                     collection
                         .system_id
@@ -852,48 +927,55 @@ impl LauncherViewPresenters {
                         .unwrap_or(&collection.legacy_system_id)
                 })
                 .unwrap_or("");
+            let title = collection.map_or("", |collection| collection.title.as_str());
+            let mut count_started = measure.then(Instant::now);
+            let recent = nav.active_collection_recent_count();
+            timing.hub_counts_us[0] = presenter_stage(&mut count_started);
+            let favourites = nav.active_collection_favourite_count();
+            timing.hub_counts_us[1] = presenter_stage(&mut count_started);
+            let counts = [
+                collection.map_or(0, |collection| collection.count),
+                recent,
+                favourites,
+            ];
+            if !self.navigation.hub_text.as_ref().is_some_and(|text| {
+                text.source_title == title && text.system == system && text.counts == counts
+            }) {
+                self.navigation.hub_text = Some(HubText {
+                    source_title: title.to_owned(),
+                    system: system.to_owned(),
+                    counts,
+                    title: title.to_uppercase(),
+                    subtitle: crate::system_facts::system_subtitle(system),
+                    captions: std::array::from_fn(|section| {
+                        crate::system_facts::hub_caption(section, counts[0], counts[1], counts[2])
+                    }),
+                });
+            }
+            let text = self.navigation.hub_text.as_ref().unwrap();
             set_view_string_if_changed!(
                 navigation,
                 get_system_title,
                 set_system_title,
-                collection.map_or_else(String::new, |collection| collection.title.to_uppercase())
+                &text.title
             );
             set_view_string_if_changed!(
                 navigation,
                 get_system_subtitle,
                 set_system_subtitle,
-                crate::system_facts::system_subtitle(system_id)
+                &text.subtitle
+            );
+            set_view_string_if_changed!(
+                navigation,
+                get_system_hub_caption,
+                set_system_hub_caption,
+                &text.captions[nav.system_hub_selected.min(2)]
             );
             set_if_changed!(
                 navigation,
                 get_system_hub_games_count,
                 set_system_hub_games_count,
-                collection.map_or(0, |collection| collection.count) as i32
-            );
-            let key = (
-                nav.active_collection_id().unwrap_or("").to_owned(),
-                nav.favourite_launch_refs_revision(),
-                nav.recent_count(),
-                nav.recent_launch_refs().first().cloned(),
-            );
-            if self.navigation.hub_counts_key.as_ref() != Some(&key) {
-                self.navigation.hub_counts = (
-                    nav.active_collection_recent_count(catalog),
-                    nav.active_collection_favourite_count(catalog),
-                );
-                self.navigation.hub_counts_key = Some(key);
-            }
-            let (recent, favourites) = self.navigation.hub_counts;
-            set_view_string_if_changed!(
-                navigation,
-                get_system_hub_caption,
-                set_system_hub_caption,
-                crate::system_facts::hub_caption(
-                    nav.system_hub_selected,
-                    collection.map_or(0, |collection| collection.count),
-                    recent,
-                    favourites,
-                )
+                counts[0] as i32
             );
             set_if_changed!(
                 navigation,
@@ -908,12 +990,78 @@ impl LauncherViewPresenters {
                 favourites as i32
             );
         }
+        timing.stages_us[0] = presenter_stage(&mut stage);
+        self.sync_settings(app, nav, active_display_fallback);
+        timing.stages_us[1] = presenter_stage(&mut stage);
+        if nav.screen == Screen::Home {
+            self.sync_home_menu(app, nav, catalog_version);
+        } else if let Some(version) = catalog_version {
+            // Prepare the return menu on catalog adoption, without touching
+            // the hidden Home bindings or its current scanout image.
+            let _ = self.menu_items(nav, version);
+        }
+        self.publish_selection_feedback(&app.global::<FeedbackView>());
+
+        timing.stages_us[2] = presenter_stage(&mut stage);
+        if nav.screen == Screen::Arcade {
+            self.sync_arcade(app, nav, catalog, defer_arcade_overlay);
+        } else if app.global::<ArcadeView>().get_drawer_open() {
+            app.global::<ArcadeView>().set_drawer_open(false);
+        }
+        timing.stages_us[3] = presenter_stage(&mut stage);
+        measure.then_some(timing)
+    }
+
+    pub(crate) fn sync_settings(
+        &mut self,
+        app: &Launcher,
+        nav: &LauncherNav,
+        active_display_fallback: Option<(u16, u16)>,
+    ) -> bool {
+        let integers = [
+            nav.settings_selected as i64,
+            nav.display_selected as i64,
+            nav.display_highlighted as i64,
+            nav.orientation_selected as i64,
+            nav.orientation_highlighted as i64,
+            i64::from(nav.display_confirm_remaining),
+            i64::from(nav.orientation_confirm_remaining),
+            i64::from(nav.settings.screensaver_delay_minutes),
+            nav.licenses_selected as i64,
+            i64::from(nav.licenses_scroll_y()),
+        ];
+        let flags = [
+            nav.display_combo_open,
+            nav.orientation_combo_open,
+            nav.display_confirm_busy,
+            nav.orientation_confirm_busy,
+            nav.settings.simple_joystick_handling,
+            nav.settings.reduce_motion,
+            nav.settings.screensaver_enabled,
+        ];
+        let orientation = nav.settings.screen_orientation.id();
+        let viewport = nav.license_viewport();
+        let ui = app.global::<MisterUi>();
+        let geometry = ui
+            .get_crt_layout()
+            .then(|| settings_visual_asset_geometry(&ui));
+        if self.settings.projected.as_ref().is_some_and(|previous| {
+            previous.integers == integers
+                && previous.flags == flags
+                && previous.orientation == orientation
+                && previous.fallback == active_display_fallback
+                && previous.viewport == viewport
+                && previous.geometry == geometry
+                && previous.display_error.as_deref() == nav.display_error.as_deref()
+                && previous.orientation_error.as_deref() == nav.orientation_error.as_deref()
+        }) {
+            return false;
+        }
         let settings = app.global::<SettingsView>();
         if !self.settings.fixed_visual_assets_installed {
             install_fixed_settings_visual_assets(&settings);
             self.settings.fixed_visual_assets_installed = true;
         }
-        let ui = app.global::<MisterUi>();
         if ui.get_crt_layout() {
             let geometry = settings_visual_asset_geometry(&ui);
             if self.settings.crt_visual_assets_geometry != Some(geometry) {
@@ -1107,21 +1255,47 @@ impl LauncherViewPresenters {
             settings.set_license_lines(lines);
         }
 
+        self.settings.projected = Some(SettingsProjectionKey {
+            integers,
+            flags,
+            orientation,
+            fallback: active_display_fallback,
+            viewport,
+            geometry,
+            display_error: nav.display_error.clone(),
+            orientation_error: nav.orientation_error.clone(),
+        });
+        true
+    }
+
+    fn sync_home_menu(
+        &mut self,
+        app: &Launcher,
+        nav: &LauncherNav,
+        catalog_version: Option<usize>,
+    ) {
+        let navigation = app.global::<NavigationView>();
         if let Some(catalog_version) = catalog_version {
             let key = (catalog_version, nav.current_menu_id().to_string());
-            if self.navigation.menu_items_key.as_ref() != Some(&key) {
+            if self.navigation.published_menu_items_key.as_ref() != Some(&key) {
                 let menu_items = self.menu_items(nav, catalog_version);
                 let menu_item_presentation = self.menu_item_presentation();
                 bridge_churn_record_model_replacements(2);
                 navigation.set_menu_item_presentation(menu_item_presentation);
                 navigation.set_menu_items(menu_items);
+                self.navigation.published_menu_items_key = Some(key);
             }
         }
         self.sync_menu_item_state(nav);
-        self.publish_selection_feedback(&app.global::<FeedbackView>());
+    }
 
-        let games = active_game_view(catalog, nav);
-        let count = active_count(catalog, nav, games.len());
+    fn sync_arcade(
+        &mut self,
+        app: &Launcher,
+        nav: &LauncherNav,
+        catalog: &ArcadeCatalog,
+        defer_arcade_overlay: bool,
+    ) {
         let arcade = app.global::<ArcadeView>();
         let device = device_kind(nav.device_kind());
         set_if_changed!(arcade, get_device, set_device, device);
@@ -1154,6 +1328,21 @@ impl LauncherViewPresenters {
             set_load_state,
             active_games_load_state(catalog, nav)
         );
+        if nav.is_system_hub() {
+            set_if_changed!(
+                arcade,
+                get_active_count,
+                set_active_count,
+                nav.active_collection()
+                    .map_or(0, |collection| collection.count) as i32
+            );
+            if arcade.get_drawer_open() {
+                arcade.set_drawer_open(false);
+            }
+            return;
+        }
+        let games = active_game_view(catalog, nav);
+        let count = active_count(catalog, nav, games.len());
         set_if_changed!(arcade, get_active_count, set_active_count, count as i32);
         if !(defer_arcade_overlay && nav.screen == Screen::Arcade) {
             set_if_changed!(
@@ -1582,6 +1771,31 @@ fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measured_churn_preserves_outer_profile_and_restores_disabled_state() {
+        BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(false));
+        let before = bridge_churn_snapshot();
+        {
+            let _capture = BridgeChurnMeasurement::begin();
+            bridge_churn_record_model_replacements(2);
+        }
+        assert_eq!(
+            bridge_churn_snapshot()
+                .saturating_sub(before)
+                .model_replacements,
+            2
+        );
+        BRIDGE_CHURN_ENABLED.with(|enabled| assert!(!enabled.get()));
+        bridge_churn_begin();
+        {
+            let _capture = BridgeChurnMeasurement::begin();
+            bridge_churn_record_model_replacements(3);
+        }
+        BRIDGE_CHURN_ENABLED.with(|enabled| assert!(enabled.get()));
+        bridge_churn_record_model_replacements(1);
+        assert_eq!(bridge_churn_end().model_replacements, 4);
+    }
 
     #[test]
     fn prepared_device_pixels_cross_threads_without_changing_artwork() {

@@ -75,47 +75,14 @@ pub(super) fn sync_settings_bridge(
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
     ui: &UiDisplay,
+    models: &mut LauncherViewModels,
 ) {
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let screen = crate::launcher_view_types::launcher_screen(nav.screen);
     if navigation.get_screen() != screen {
         navigation.set_screen(screen);
     }
-    let settings = app.global::<slint_ui::launcher::SettingsView>();
-    settings.set_section(crate::launcher_view_types::settings_section(
-        nav.settings_selected,
-    ));
-    settings.set_popup(crate::launcher_view_types::settings_popup(
-        nav.display_combo_open,
-        nav.orientation_combo_open,
-    ));
-    settings.set_active_display(crate::launcher_view_types::active_display_choice(
-        nav.display_selected,
-        Some((ui.output_w(), ui.output_h())),
-    ));
-    settings.set_selected_display(crate::launcher_view_types::selected_display_choice(
-        nav.display_selected,
-    ));
-    settings.set_highlighted_display(crate::launcher_view_types::settings_display_choice(
-        nav.display_highlighted,
-    ));
-    settings.set_display_confirm_remaining(nav.display_confirm_remaining as i32);
-    settings.set_active_orientation(crate::launcher_view_types::screen_orientation(
-        nav.settings.screen_orientation,
-    ));
-    settings.set_selected_orientation(crate::launcher_view_types::orientation_at(
-        nav.orientation_selected,
-    ));
-    settings.set_highlighted_orientation(crate::launcher_view_types::orientation_at(
-        nav.orientation_highlighted,
-    ));
-    settings.set_orientation_confirm_remaining(nav.orientation_confirm_remaining as i32);
-    settings.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
-    settings.set_reduce_motion(nav.settings.reduce_motion);
-    settings.set_screensaver_enabled(nav.settings.screensaver_enabled);
-    settings.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
-    settings.set_selected_license_index(nav.licenses_selected as i32);
-    settings.set_license_scroll_y(nav.licenses_scroll_y());
+    models.sync_settings(app, nav, Some((ui.output_w(), ui.output_h())));
     if nav.screen == Screen::Settings
         || matches!(
             nav.confirm_action,
@@ -713,6 +680,8 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
 pub(super) struct LauncherBridgeSyncTiming {
     pub(super) model_projection_us: u128,
     #[cfg(feature = "tooling")]
+    pub(super) presenter: Option<crate::launcher_presentation::PresenterTiming>,
+    #[cfg(feature = "tooling")]
     pub(super) stage_us: Option<[u64; 6]>,
 }
 
@@ -744,13 +713,14 @@ pub(super) fn sync_bridge_launcher(
 ) -> LauncherBridgeSyncTiming {
     let mut stage_started = measure_model_projection.then(Instant::now);
     let mut stage_us = [0; 6];
-    models.sync(
+    let _presenter = models.sync_measured(
         app,
         nav,
         catalog,
         Some(catalog_version),
         defer_selected_preview,
         Some((ui.output_w(), ui.output_h())),
+        measure_model_projection,
     );
     stage_us[0] = bridge_stage_us(&mut stage_started);
     let model_projection_us = u128::from(stage_us[0]);
@@ -806,6 +776,8 @@ pub(super) fn sync_bridge_launcher(
     LauncherBridgeSyncTiming {
         model_projection_us,
         #[cfg(feature = "tooling")]
+        presenter: _presenter,
+        #[cfg(feature = "tooling")]
         stage_us: measure_model_projection.then_some(stage_us),
     }
 }
@@ -827,13 +799,14 @@ pub(super) fn sync_bridge_launcher_light(
     ui: &UiDisplay,
 ) -> LauncherBridgeSyncTiming {
     let mut model_started = measure_model_projection.then(Instant::now);
-    models.sync(
+    let _presenter = models.sync_measured(
         app,
         nav,
         catalog,
         None,
         defer_arcade_overlay_bridge,
         Some((ui.output_w(), ui.output_h())),
+        measure_model_projection,
     );
     let model_projection_us = u128::from(bridge_stage_us(&mut model_started));
     let active_games_loading = active_system_games_loading(catalog, nav);
@@ -863,6 +836,8 @@ pub(super) fn sync_bridge_launcher_light(
     }
     LauncherBridgeSyncTiming {
         model_projection_us,
+        #[cfg(feature = "tooling")]
+        presenter: _presenter,
         #[cfg(feature = "tooling")]
         stage_us: None,
     }
@@ -1607,7 +1582,13 @@ mod tests {
             Instant::now(),
         );
         let ui = UiDisplay::for_framebuffer(1280, 720);
-        sync_settings_bridge(&app, &nav, &lifecycle, &ui);
+        sync_settings_bridge(
+            &app,
+            &nav,
+            &lifecycle,
+            &ui,
+            &mut LauncherViewModels::default(),
+        );
 
         let settings = app.global::<slint_ui::launcher::SettingsView>();
         assert_eq!(
@@ -1660,7 +1641,13 @@ mod tests {
         );
         let ui = UiDisplay::for_framebuffer(1920, 1200);
 
-        sync_settings_bridge(&app, &nav, &lifecycle, &ui);
+        sync_settings_bridge(
+            &app,
+            &nav,
+            &lifecycle,
+            &ui,
+            &mut LauncherViewModels::default(),
+        );
 
         let active = app
             .global::<slint_ui::launcher::SettingsView>()
@@ -1859,6 +1846,144 @@ mod tests {
 
         assert_eq!(text.left_label, "Cancel");
         assert_eq!(text.right_label, "Exit to MiSTer");
+    }
+
+    #[test]
+    fn measured_presenter_reports_real_publication_and_unmeasured_sync_stays_off() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        let nav = LauncherNav::new();
+        let catalog = ArcadeCatalog::new(PathBuf::new(), vec![], vec![]);
+        let mut models = LauncherViewModels::default();
+        let before = crate::launcher_presentation::bridge_churn_snapshot();
+        let timing = models
+            .sync_measured(&app, &nav, &catalog, Some(1), false, None, true)
+            .unwrap();
+        let after = crate::launcher_presentation::bridge_churn_snapshot();
+        assert!(after.saturating_sub(before).model_replacements >= 2);
+        assert_eq!(timing.hub_counts_us, [0, 0]);
+        assert!(
+            models
+                .sync_measured(&app, &nav, &catalog, None, false, None, false)
+                .is_none()
+        );
+        assert_eq!(
+            crate::launcher_presentation::bridge_churn_snapshot().model_replacements,
+            after.model_replacements
+        );
+    }
+
+    #[test]
+    fn hub_publishes_saved_counts_without_materializing_a_game_catalog() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        // The system is known but its game rows are not hydrated.
+        let catalog = ArcadeCatalog::new(
+            PathBuf::new(),
+            vec![],
+            vec![GameSystemEntry {
+                id: "snes".into(),
+                title: "SNES".into(),
+                count: 1857,
+            }],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "snes"));
+        let mut snapshot = mister_magik_catalog::user_state::UserStateSnapshot::default();
+        snapshot.system_counts.insert(
+            "snes".into(),
+            mister_magik_catalog::user_state::SystemUserCounts {
+                recent: 4,
+                favourites: 1,
+            },
+        );
+        assert!(nav.set_user_state_snapshot(&catalog, snapshot.clone()));
+        let mut models = LauncherViewModels::default();
+        models.sync(&app, &nav, &catalog, Some(1), false, None);
+        let navigation = app.global::<slint_ui::launcher::NavigationView>();
+        assert_eq!(navigation.get_system_hub_recent_count(), 4);
+        assert_eq!(navigation.get_system_hub_favourites_count(), 1);
+        assert!(!nav.set_user_state_snapshot(&catalog, snapshot.clone()));
+        snapshot.system_counts.get_mut("snes").unwrap().recent = 5;
+        assert!(nav.set_user_state_snapshot(&catalog, snapshot));
+        models.sync(&app, &nav, &catalog, None, false, None);
+        assert_eq!(navigation.get_system_hub_recent_count(), 5);
+    }
+
+    #[test]
+    fn settings_owner_skips_card_selection_ticks_and_publishes_actual_changes() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        let mut models = LauncherViewModels::default();
+        let mut nav = LauncherNav::new();
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        for selected in 0..120 {
+            nav.selected = selected % 5;
+            assert!(!models.sync_settings(&app, &nav, Some((960, 540))));
+        }
+        nav.settings.reduce_motion = true;
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        assert!(
+            app.global::<slint_ui::launcher::SettingsView>()
+                .get_reduce_motion()
+        );
+        nav.display_confirm_remaining = 3;
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        nav.display_confirm_remaining = 2;
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        assert_eq!(
+            app.global::<slint_ui::launcher::SettingsView>()
+                .get_display_confirm_remaining(),
+            2
+        );
+        assert!(!models.sync_settings(&app, &nav, Some((960, 540))));
+    }
+
+    #[test]
+    fn hidden_home_menu_is_republished_only_when_home_returns() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        let catalog = ArcadeCatalog::new(
+            PathBuf::new(),
+            vec![],
+            vec![GameSystemEntry {
+                id: "snes".into(),
+                title: "SNES".into(),
+                count: 1857,
+            }],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let mut models = LauncherViewModels::default();
+        models.sync(&app, &nav, &catalog, Some(1), false, None);
+        let before = app
+            .global::<slint_ui::launcher::NavigationView>()
+            .get_menu_items();
+        assert!(nav.open_system(&catalog, "snes"));
+        models.sync(&app, &nav, &catalog, Some(2), false, None);
+        assert!(
+            before
+                == app
+                    .global::<slint_ui::launcher::NavigationView>()
+                    .get_menu_items()
+        );
+        let before_home = crate::launcher_presentation::bridge_churn_snapshot();
+        nav.screen = Screen::Home;
+        models.sync_measured(&app, &nav, &catalog, Some(2), false, None, true);
+        let after_home = crate::launcher_presentation::bridge_churn_snapshot();
+        assert_eq!(after_home.saturating_sub(before_home).row_allocations, 0);
+        let prepared = models.menu_items(&nav, 2);
+        assert_eq!(
+            prepared,
+            app.global::<slint_ui::launcher::NavigationView>()
+                .get_menu_items()
+        );
+        assert!(
+            before
+                != app
+                    .global::<slint_ui::launcher::NavigationView>()
+                    .get_menu_items()
+        );
     }
 
     #[test]
