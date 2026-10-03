@@ -713,7 +713,7 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
 pub(super) struct LauncherBridgeSyncTiming {
     pub(super) model_projection_us: u128,
     #[cfg(feature = "tooling")]
-    pub(super) stage_us: [u64; 6],
+    pub(super) stage_us: Option<[u64; 6]>,
 }
 
 fn bridge_stage_us(start: &mut Option<Instant>) -> u64 {
@@ -806,7 +806,7 @@ pub(super) fn sync_bridge_launcher(
     LauncherBridgeSyncTiming {
         model_projection_us,
         #[cfg(feature = "tooling")]
-        stage_us,
+        stage_us: measure_model_projection.then_some(stage_us),
     }
 }
 
@@ -866,14 +866,7 @@ pub(super) fn sync_bridge_launcher_light(
     LauncherBridgeSyncTiming {
         model_projection_us,
         #[cfg(feature = "tooling")]
-        stage_us: [
-            model_projection_us.min(u128::from(u64::MAX)) as u64,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ],
+        stage_us: None,
     }
 }
 

@@ -68,3 +68,25 @@ def test_explicit_mini_failure_points_to_retained_evidence(
     run = next(tmp_path.iterdir())
     assert str(run / "run.json") in output.err
     assert str(run / "logs.txt") in output.err
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        [],
+        ["animation-roundtrip", "--profile"],
+        ["animation-roundtrip", "--app", "mini-magik"],
+    ],
+)
+def test_frame_evidence_rejects_incompatible_workloads_before_dispatch(
+    monkeypatch, flags
+):
+    monkeypatch.setattr(
+        "sys.argv", ["scripts/magik", "check", *flags, "--frame-evidence", "phases"]
+    )
+    dispatch = Mock()
+    monkeypatch.setattr(cli, "dispatch", dispatch)
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    dispatch.assert_not_called()

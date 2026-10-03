@@ -180,6 +180,16 @@ def main() -> int:
         )
     arguments = parser.parse_args()
     if (
+        arguments.command == "check"
+        and arguments.frame_evidence != "off"
+        and (
+            arguments.app != "magik"
+            or arguments.scenario != "animation-roundtrip"
+            or arguments.profile
+        )
+    ):
+        parser.error("--frame-evidence requires unprofiled MagiK animation-roundtrip")
+    if (
         getattr(arguments, "profile_preparation", False)
         or getattr(arguments, "bench_preparation", False)
     ) and not (
@@ -463,8 +473,6 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         arguments.app,
     ]
     if getattr(arguments, "frame_evidence", "off") != "off":
-        if arguments.scenario != "animation-roundtrip" or arguments.profile:
-            raise ValueError("--frame-evidence requires unprofiled animation-roundtrip")
         options += ["--magik-frame-evidence", arguments.frame_evidence]
     if arguments.profile:
         measurements = (

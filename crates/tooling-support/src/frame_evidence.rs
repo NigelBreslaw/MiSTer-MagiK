@@ -1,7 +1,7 @@
 //! Opt-in, bounded observation neighborhoods. No allocation or JSON per frame.
 use crate::measurement::DroppedFrameRecord;
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::{collections::VecDeque, time::Instant};
 
 const PREDECESSORS: usize = 3;
 const SUCCESSORS: usize = 2;
@@ -110,7 +110,7 @@ impl FrameEvidence {
         let phases = self.phases_enabled.then(|| json!({"cpu_us":self.cpu_us,"cpu_brackets_us":self.cpu_brackets_us,
             "helper":self.helper.map(HelperEvidence::json),"input_sequence":self.input_sequence,
             "input_captured_monotonic_us":self.input_captured_monotonic_us,
-            "input_dequeued_us":self.input_dequeued_us,"input_epoch":self.input_epoch,
+            "input_dequeued_us":self.input_dequeued_us,
             "bridge_us":self.bridge_us,"bridge_model_us":self.bridge_model_us,"bridge_stages_us":self.bridge_stages_us,
             "bridge_allocation_us":self.bridge_allocation_us,"bridge_models_replaced":self.bridge_models_replaced,
             "destination_reveal_us":self.destination_reveal_us,"card_snapshot_locked":self.card_snapshot_locked,
@@ -123,7 +123,7 @@ impl FrameEvidence {
             "logical_time_us":self.logical_time_us,
             "menu_token":self.menu_token,"view":self.view,"selected":self.selected,"pose_phase":self.pose_phase,
             "pose_progress":self.pose_progress,"content_generation":self.content_generation,
-            "input_generation":self.input_generation,"motion":self.motion,
+            "input_generation":self.input_generation,"input_epoch":self.input_epoch,"motion":self.motion,
             "baseline_reset":self.baseline_reset,"telemetry_valid":self.telemetry_valid,
             "telemetry_before_us":self.telemetry_before_us,
             "previous_read_bracket_us":self.previous_read_bracket_us,
@@ -168,9 +168,14 @@ impl FrameEvidenceCapture {
     pub fn note_clock(&mut self, bracket: [u64; 3]) {
         self.clocks.push(bracket);
     }
-    pub fn note_observer_us(&mut self, us: u64) {
+    pub fn observe_timed(&mut self, frame: FrameEvidence, started: Instant) {
+        if self.mode == EvidenceMode::Off {
+            return;
+        }
+        self.observe(frame);
         if self.observer_us.len() < 3601 {
-            self.observer_us.push(us);
+            self.observer_us
+                .push(frame.observer_sampling_us + started.elapsed().as_micros() as u64);
         }
     }
     fn retain(&mut self, frame: FrameEvidence) {
@@ -199,9 +204,15 @@ impl FrameEvidenceCapture {
             previous.motion != frame.motion
                 || previous.input_generation != frame.input_generation
                 || previous.menu_token != frame.menu_token
+                || previous.view != frame.view
+                || previous.input_epoch != frame.input_epoch
+                || previous.card_snapshot_locked != frame.card_snapshot_locked
+                || previous.producer_cancelled != frame.producer_cancelled
+                || (previous.producer_ready_depth != 0) != (frame.producer_ready_depth != 0)
                 || previous.outcome != frame.outcome
         });
         let trigger = edge
+            || frame.missing_fresh_pose != 0
             || frame.record.dropped_frames != 0
             || frame.motion && !frame.telemetry_valid && frame.outcome != "idle";
         if trigger {
@@ -314,10 +325,52 @@ mod tests {
     }
 
     #[test]
+    fn isolated_missing_pose_and_view_input_readiness_edges_keep_full_neighborhoods() {
+        for change in 0..6 {
+            let mut capture = FrameEvidenceCapture::default();
+            capture.reset(EvidenceMode::Neighbors);
+            for id in 1..=20 {
+                let mut current = frame(id, 0);
+                current.view = "home";
+                current.outcome = "active";
+                if id >= 9 {
+                    match change {
+                        0 if id == 9 => current.missing_fresh_pose = 1,
+                        1 => current.view = "system-hub",
+                        2 => current.input_epoch = 1,
+                        3 => current.card_snapshot_locked = true,
+                        4 => current.producer_cancelled = true,
+                        5 => current.producer_ready_depth = 1,
+                        _ => {}
+                    }
+                }
+                capture.observe(current);
+            }
+            let ids = capture
+                .retained
+                .iter()
+                .map(|frame| frame.attempt_id)
+                .collect::<Vec<_>>();
+            for id in 6..=11 {
+                assert!(ids.contains(&id), "change={change}, missing frame={id}");
+            }
+            assert_eq!(
+                capture
+                    .retained
+                    .iter()
+                    .map(|f| f.record.dropped_frames)
+                    .sum::<u64>(),
+                0
+            );
+        }
+    }
+
+    #[test]
     fn retention_is_bounded_and_off_allocates_nothing() {
         let mut capture = FrameEvidenceCapture::default();
-        capture.observe(frame(1, 1));
+        capture.observe_timed(frame(1, 1), Instant::now());
         assert_eq!(capture.retained.capacity(), 0);
+        assert_eq!(capture.observer_us.capacity(), 0);
         assert_eq!(capture.observed, 0);
         capture.reset(EvidenceMode::Neighbors);
         for id in 1..=1000 {

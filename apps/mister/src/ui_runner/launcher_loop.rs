@@ -9339,7 +9339,7 @@ pub(super) fn run_launcher_loop(
         let gui_bridge_pmu = gui_profiling.phase_span(gui_bridge_phase.span_name());
         let mut bridge_model_projection_us = 0u128;
         #[cfg(feature = "tooling")]
-        let mut bridge_stage_us = [0u64; 6];
+        let mut bridge_stage_us = None;
         let measure_bridge = system_entry_cpu_profile.is_some() || {
             #[cfg(feature = "tooling")]
             {
@@ -9433,9 +9433,7 @@ pub(super) fn run_launcher_loop(
             frame.bridge_model_us = (measure_bridge
                 && bridge_sync_plan != LauncherBridgeSyncPlan::None)
                 .then(|| u128_to_u64(prepare_trace.bridge_model_projection_us));
-            frame.bridge_stages_us = (measure_bridge
-                && bridge_sync_plan != LauncherBridgeSyncPlan::None)
-                .then_some(bridge_stage_us);
+            frame.bridge_stages_us = bridge_stage_us;
             frame.bridge_allocation_us = prepare_trace.bridge_model_allocation_us;
             frame.bridge_models_replaced = prepare_trace.bridge_model_replacements;
         }
@@ -12847,10 +12845,7 @@ pub(super) fn run_launcher_loop(
                                 ..Default::default()
                             },
                         );
-                        session.metrics.frame_evidence.observe(frame);
-                        session.metrics.frame_evidence.note_observer_us(
-                            frame.observer_sampling_us + duration_us(started, Instant::now()),
-                        );
+                        session.metrics.frame_evidence.observe_timed(frame, started);
                     }
                     // No vsync has passed, so the next frame reuses this frame's
                     // time and replaces the posted one in the same refresh slot.
@@ -13668,10 +13663,10 @@ pub(super) fn run_launcher_loop(
                 "idle"
             };
             frame.finish_us = duration_us(run_start, observer_start);
-            session.metrics.frame_evidence.observe(frame);
-            session.metrics.frame_evidence.note_observer_us(
-                frame.observer_sampling_us + duration_us(observer_start, Instant::now()),
-            );
+            session
+                .metrics
+                .frame_evidence
+                .observe_timed(frame, observer_start);
         }
         frames += 1;
         frame_clock.advance();
