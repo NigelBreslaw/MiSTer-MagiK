@@ -713,6 +713,8 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
 pub(super) struct LauncherBridgeSyncTiming {
     pub(super) model_projection_us: u128,
     #[cfg(feature = "tooling")]
+    pub(super) presenter: Option<crate::launcher_presentation::PresenterTiming>,
+    #[cfg(feature = "tooling")]
     pub(super) stage_us: Option<[u64; 6]>,
 }
 
@@ -744,13 +746,14 @@ pub(super) fn sync_bridge_launcher(
 ) -> LauncherBridgeSyncTiming {
     let mut stage_started = measure_model_projection.then(Instant::now);
     let mut stage_us = [0; 6];
-    models.sync(
+    let _presenter = models.sync_measured(
         app,
         nav,
         catalog,
         Some(catalog_version),
         defer_selected_preview,
         Some((ui.output_w(), ui.output_h())),
+        measure_model_projection,
     );
     stage_us[0] = bridge_stage_us(&mut stage_started);
     let model_projection_us = u128::from(stage_us[0]);
@@ -806,6 +809,8 @@ pub(super) fn sync_bridge_launcher(
     LauncherBridgeSyncTiming {
         model_projection_us,
         #[cfg(feature = "tooling")]
+        presenter: _presenter,
+        #[cfg(feature = "tooling")]
         stage_us: measure_model_projection.then_some(stage_us),
     }
 }
@@ -827,13 +832,14 @@ pub(super) fn sync_bridge_launcher_light(
     ui: &UiDisplay,
 ) -> LauncherBridgeSyncTiming {
     let mut model_started = measure_model_projection.then(Instant::now);
-    models.sync(
+    let _presenter = models.sync_measured(
         app,
         nav,
         catalog,
         None,
         defer_arcade_overlay_bridge,
         Some((ui.output_w(), ui.output_h())),
+        measure_model_projection,
     );
     let model_projection_us = u128::from(bridge_stage_us(&mut model_started));
     let active_games_loading = active_system_games_loading(catalog, nav);
@@ -863,6 +869,8 @@ pub(super) fn sync_bridge_launcher_light(
     }
     LauncherBridgeSyncTiming {
         model_projection_us,
+        #[cfg(feature = "tooling")]
+        presenter: _presenter,
         #[cfg(feature = "tooling")]
         stage_us: None,
     }
@@ -1859,6 +1867,31 @@ mod tests {
 
         assert_eq!(text.left_label, "Cancel");
         assert_eq!(text.right_label, "Exit to MiSTer");
+    }
+
+    #[test]
+    fn measured_presenter_reports_real_publication_and_unmeasured_sync_stays_off() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        let nav = LauncherNav::new();
+        let catalog = ArcadeCatalog::new(PathBuf::new(), vec![], vec![]);
+        let mut models = LauncherViewModels::default();
+        let before = crate::launcher_presentation::bridge_churn_snapshot();
+        let timing = models
+            .sync_measured(&app, &nav, &catalog, Some(1), false, None, true)
+            .unwrap();
+        let after = crate::launcher_presentation::bridge_churn_snapshot();
+        assert!(after.saturating_sub(before).model_replacements >= 2);
+        assert_eq!(timing.hub_counts_us, [0, 0]);
+        assert!(
+            models
+                .sync_measured(&app, &nav, &catalog, None, false, None, false)
+                .is_none()
+        );
+        assert_eq!(
+            crate::launcher_presentation::bridge_churn_snapshot().model_replacements,
+            after.model_replacements
+        );
     }
 
     #[test]

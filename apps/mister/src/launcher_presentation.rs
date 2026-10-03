@@ -743,6 +743,33 @@ pub fn install_arcade_visual_assets(app: &Launcher) {
     arcade.set_focus_highlight(arcade_focus_highlight_image());
 }
 
+/// Non-overlapping presenter stages, plus nested count timings.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PresenterTiming {
+    pub stages_us: [u64; 4],
+    pub hub_counts_us: [u64; 2],
+}
+
+struct BridgeChurnMeasurement(bool);
+impl BridgeChurnMeasurement {
+    fn begin() -> Self {
+        Self(BRIDGE_CHURN_ENABLED.with(|enabled| enabled.replace(true)))
+    }
+}
+impl Drop for BridgeChurnMeasurement {
+    fn drop(&mut self) {
+        BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(self.0));
+    }
+}
+
+fn presenter_stage(start: &mut Option<Instant>) -> u64 {
+    start.map_or(0, |previous| {
+        let now = Instant::now();
+        *start = Some(now);
+        now.saturating_duration_since(previous).as_micros() as u64
+    })
+}
+
 #[derive(Default)]
 pub struct LauncherViewPresenters {
     navigation: NavigationViewPresenter,
@@ -765,6 +792,31 @@ impl LauncherViewPresenters {
         defer_arcade_overlay: bool,
         active_display_fallback: Option<(u16, u16)>,
     ) {
+        let _ = self.sync_measured(
+            app,
+            nav,
+            catalog,
+            catalog_version,
+            defer_arcade_overlay,
+            active_display_fallback,
+            false,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_measured(
+        &mut self,
+        app: &Launcher,
+        nav: &LauncherNav,
+        catalog: &ArcadeCatalog,
+        catalog_version: Option<usize>,
+        defer_arcade_overlay: bool,
+        active_display_fallback: Option<(u16, u16)>,
+        measure: bool,
+    ) -> Option<PresenterTiming> {
+        let _churn = measure.then(BridgeChurnMeasurement::begin);
+        let mut timing = PresenterTiming::default();
+        let mut stage = measure.then(Instant::now);
         let navigation = app.global::<NavigationView>();
         if !self.arcade_visual_assets_installed {
             install_arcade_visual_assets(app);
@@ -877,10 +929,12 @@ impl LauncherViewPresenters {
                 nav.recent_launch_refs().first().cloned(),
             );
             if self.navigation.hub_counts_key.as_ref() != Some(&key) {
-                self.navigation.hub_counts = (
-                    nav.active_collection_recent_count(catalog),
-                    nav.active_collection_favourite_count(catalog),
-                );
+                let mut count_started = measure.then(Instant::now);
+                let recent = nav.active_collection_recent_count(catalog);
+                timing.hub_counts_us[0] = presenter_stage(&mut count_started);
+                let favourites = nav.active_collection_favourite_count(catalog);
+                timing.hub_counts_us[1] = presenter_stage(&mut count_started);
+                self.navigation.hub_counts = (recent, favourites);
                 self.navigation.hub_counts_key = Some(key);
             }
             let (recent, favourites) = self.navigation.hub_counts;
@@ -908,6 +962,7 @@ impl LauncherViewPresenters {
                 favourites as i32
             );
         }
+        timing.stages_us[0] = presenter_stage(&mut stage);
         let settings = app.global::<SettingsView>();
         if !self.settings.fixed_visual_assets_installed {
             install_fixed_settings_visual_assets(&settings);
@@ -1107,6 +1162,7 @@ impl LauncherViewPresenters {
             settings.set_license_lines(lines);
         }
 
+        timing.stages_us[1] = presenter_stage(&mut stage);
         if let Some(catalog_version) = catalog_version {
             let key = (catalog_version, nav.current_menu_id().to_string());
             if self.navigation.menu_items_key.as_ref() != Some(&key) {
@@ -1120,6 +1176,7 @@ impl LauncherViewPresenters {
         self.sync_menu_item_state(nav);
         self.publish_selection_feedback(&app.global::<FeedbackView>());
 
+        timing.stages_us[2] = presenter_stage(&mut stage);
         let games = active_game_view(catalog, nav);
         let count = active_count(catalog, nav, games.len());
         let arcade = app.global::<ArcadeView>();
@@ -1213,6 +1270,8 @@ impl LauncherViewPresenters {
             self.drawer_projection = projection;
             self.drawer_initialized = true;
         }
+        timing.stages_us[3] = presenter_stage(&mut stage);
+        measure.then_some(timing)
     }
 
     pub fn menu_items(&mut self, nav: &LauncherNav, catalog_version: usize) -> ModelRc<MenuItem> {
@@ -1582,6 +1641,31 @@ fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measured_churn_preserves_outer_profile_and_restores_disabled_state() {
+        BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(false));
+        let before = bridge_churn_snapshot();
+        {
+            let _capture = BridgeChurnMeasurement::begin();
+            bridge_churn_record_model_replacements(2);
+        }
+        assert_eq!(
+            bridge_churn_snapshot()
+                .saturating_sub(before)
+                .model_replacements,
+            2
+        );
+        BRIDGE_CHURN_ENABLED.with(|enabled| assert!(!enabled.get()));
+        bridge_churn_begin();
+        {
+            let _capture = BridgeChurnMeasurement::begin();
+            bridge_churn_record_model_replacements(3);
+        }
+        BRIDGE_CHURN_ENABLED.with(|enabled| assert!(enabled.get()));
+        bridge_churn_record_model_replacements(1);
+        assert_eq!(bridge_churn_end().model_replacements, 4);
+    }
 
     #[test]
     fn prepared_device_pixels_cross_threads_without_changing_artwork() {

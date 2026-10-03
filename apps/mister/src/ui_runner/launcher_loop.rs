@@ -9329,6 +9329,8 @@ pub(super) fn run_launcher_loop(
         let mut bridge_model_projection_us = 0u128;
         #[cfg(feature = "tooling")]
         let mut bridge_stage_us = None;
+        #[cfg(feature = "tooling")]
+        let mut bridge_presenter = None;
         let measure_bridge = system_entry_cpu_profile.is_some() || {
             #[cfg(feature = "tooling")]
             {
@@ -9366,6 +9368,7 @@ pub(super) fn run_launcher_loop(
                 #[cfg(feature = "tooling")]
                 {
                     bridge_stage_us = timing.stage_us;
+                    bridge_presenter = timing.presenter;
                 }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
@@ -9396,6 +9399,7 @@ pub(super) fn run_launcher_loop(
                 #[cfg(feature = "tooling")]
                 {
                     bridge_stage_us = timing.stage_us;
+                    bridge_presenter = timing.presenter;
                 }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
@@ -9423,6 +9427,9 @@ pub(super) fn run_launcher_loop(
                 && bridge_sync_plan != LauncherBridgeSyncPlan::None)
                 .then(|| u128_to_u64(prepare_trace.bridge_model_projection_us));
             frame.bridge_stages_us = bridge_stage_us;
+            frame.bridge_presenter_us = bridge_presenter.map(|timing| timing.stages_us);
+            frame.bridge_hub_counts_us = bridge_presenter.map(|timing| timing.hub_counts_us);
+            frame.bridge_counters_enabled = bridge_presenter.is_some();
             frame.bridge_allocation_us = prepare_trace.bridge_model_allocation_us;
             frame.bridge_models_replaced = prepare_trace.bridge_model_replacements;
         }
