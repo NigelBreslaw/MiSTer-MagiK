@@ -47,21 +47,12 @@ impl LauncherPresentStatus {
 #[derive(Default)]
 pub(super) struct NativeDeviceBackground {
     source: Option<Option<crate::device_art::DeviceKind>>,
-    dirty: bool,
     full_repaint: bool,
     layout_epoch: Option<u64>,
 }
 impl NativeDeviceBackground {
     pub(super) fn invalidate(&mut self) {
-        self.dirty = true;
         self.full_repaint = true;
-    }
-    pub(super) fn prepare(&mut self, kind: Option<crate::device_art::DeviceKind>) {
-        if self.source == Some(kind) {
-            return;
-        }
-        self.source = Some(kind);
-        self.dirty = true;
     }
 }
 
@@ -145,7 +136,7 @@ impl<'a> LayerTarget<'a> {
             background.invalidate();
             background.layout_epoch = Some(self.layout_epoch);
         }
-        if background.dirty || background.source != Some(kind) {
+        if background.full_repaint || background.source != Some(kind) {
             window.request_redraw();
         }
         self.background = Some(NativeBackground {
@@ -161,8 +152,7 @@ impl<'a> LayerTarget<'a> {
         let Some(background) = self.background.as_mut() else {
             return self.target.render(renderer);
         };
-        background.cache.prepare(background.kind);
-        if background.cache.dirty {
+        if background.cache.full_repaint || background.cache.source != Some(background.kind) {
             use i_slint_core::renderer::RendererSealed;
             renderer.mark_dirty_region(
                 i_slint_core::lengths::LogicalRect::new(
@@ -212,7 +202,7 @@ impl<'a> LayerTarget<'a> {
                 }
             }
         }
-        background.cache.dirty = false;
+        background.cache.source = Some(background.kind);
         background.cache.full_repaint = false;
         region
     }
@@ -1293,7 +1283,8 @@ mod tests {
                             .find(|(_, (a, b))| a != b)
                     );
                     if !overlay {
-                        assert!(!cache.dirty);
+                        assert_eq!(cache.source, Some(kind));
+                        assert!(!cache.full_repaint);
                     }
                     // A partial overlay move must restore the old covered art.
                     if overlay {
