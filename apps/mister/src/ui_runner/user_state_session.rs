@@ -11,7 +11,8 @@ use std::thread;
 
 enum UserStateRequest {
     Refresh {
-        catalog: crate::arcade_catalog::ArcadeCatalog,
+        legacy_catalog: Option<crate::arcade_catalog::ArcadeCatalog>,
+        arcade_systems: Vec<String>,
         now: i64,
     },
     SetFavourite {
@@ -41,6 +42,7 @@ pub(super) struct UserStateSession {
     events: mpsc::Receiver<UserStateEvent>,
     pending_favourites: HashSet<String>,
     available: bool,
+    legacy_catalog_sent: bool,
 }
 
 impl UserStateSession {
@@ -56,6 +58,7 @@ impl UserStateSession {
             events: event_rx,
             pending_favourites: HashSet::new(),
             available: true,
+            legacy_catalog_sent: false,
         }
     }
 
@@ -65,10 +68,20 @@ impl UserStateSession {
 
     pub(super) fn refresh(
         &mut self,
-        catalog: crate::arcade_catalog::ArcadeCatalog,
+        catalog: &crate::arcade_catalog::ArcadeCatalog,
         now: i64,
     ) -> Result<(), String> {
-        self.submit(UserStateRequest::Refresh { catalog, now })
+        let mut arcade_systems =
+            catalog.search_source_system_ids(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
+        arcade_systems.sort_unstable();
+        let legacy_catalog = (!self.legacy_catalog_sent).then(|| catalog.clone());
+        self.submit(UserStateRequest::Refresh {
+            legacy_catalog,
+            arcade_systems,
+            now,
+        })?;
+        self.legacy_catalog_sent = true;
+        Ok(())
     }
 
     pub(super) fn set_favourite(
@@ -150,39 +163,41 @@ fn worker(
     };
     let mut cached: Option<UserStateSnapshot> = None;
     let mut arcade_systems = Vec::new();
+    let mut pending_import = None;
+    let mut import_completed = false;
     while let Ok(request) = requests.recv() {
         let completed_favourite = match &request {
             UserStateRequest::SetFavourite { game, .. } => Some(game.launch_ref.clone()),
             UserStateRequest::Refresh { .. } => None,
         };
         let result = match request {
-            UserStateRequest::Refresh { catalog, now } => {
-                let mut members =
-                    catalog.search_source_system_ids(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-                members.sort_unstable();
-                if cached.is_some() && arcade_systems != members {
-                    store.read_snapshot(&members).inspect(|snapshot| {
-                        arcade_systems = members;
-                        cached = Some(snapshot.clone());
-                    })
-                } else if let Some(snapshot) = cached.as_ref() {
-                    Ok(snapshot.clone())
-                } else {
-                    // Legacy resolution belongs to this worker, once at startup.
+            UserStateRequest::Refresh {
+                legacy_catalog,
+                arcade_systems: members,
+                now,
+            } => (|| {
+                if let Some(catalog) = legacy_catalog {
+                    pending_import = Some(catalog);
+                }
+                if !import_completed {
+                    let catalog = pending_import
+                        .as_ref()
+                        .ok_or("legacy import context missing")?;
                     let games = catalog
                         .games
                         .iter()
                         .filter(|game| game.system_id.eq_ignore_ascii_case("snes"))
                         .map(|game| catalog.user_game_identity_for_entry(game))
                         .collect::<Vec<_>>();
-                    import_legacy_snes(&store, &games, &media_root, now).and_then(|_| {
-                        let snapshot = store.read_snapshot(&members)?;
-                        arcade_systems = members;
-                        cached = Some(snapshot.clone());
-                        Ok(snapshot)
-                    })
+                    import_legacy_snes(&store, &games, &media_root, now)?;
+                    import_completed = true;
+                    pending_import = None;
                 }
-            }
+                arcade_systems = members;
+                let snapshot = store.read_snapshot(&arcade_systems)?;
+                cached = Some(snapshot.clone());
+                Ok(snapshot)
+            })(),
             UserStateRequest::SetFavourite {
                 game,
                 favourite,
@@ -198,6 +213,10 @@ fn worker(
                 Ok(snapshot.clone())
             }),
         };
+        if result.is_err() && completed_favourite.is_some() {
+            // A durable write may have succeeded before its projection failed.
+            cached = None;
+        }
         let event = match result {
             Ok(snapshot) => UserStateEvent::Snapshot {
                 snapshot,
@@ -227,8 +246,11 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
+            static NEXT_DIRECTORY: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            let sequence = NEXT_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "mister-magik-user-state-session-{}-{nonce}",
+                "mister-magik-user-state-session-{}-{nonce}-{sequence}",
                 std::process::id()
             ));
             std::fs::create_dir_all(&path).unwrap();
@@ -267,15 +289,99 @@ mod tests {
         let mut session = UserStateSession::start(root.0.join("state.sqlite3"), root.0.clone());
         session
             .refresh(
-                crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
+                &crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
                 10,
             )
             .unwrap();
+        let event = poll_until(&mut session);
+        assert!(
+            matches!(event, UserStateEvent::Snapshot { .. }),
+            "{event:?}"
+        );
+        session
+    }
+
+    #[test]
+    fn only_the_first_refresh_queues_a_catalog_for_legacy_import() {
+        let (request_tx, request_rx) = mpsc::channel();
+        let (_event_tx, event_rx) = mpsc::channel();
+        let mut session = UserStateSession {
+            requests: request_tx,
+            events: event_rx,
+            pending_favourites: HashSet::new(),
+            available: true,
+            legacy_catalog_sent: false,
+        };
+        let catalog = crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]);
+        session.refresh(&catalog, 10).unwrap();
+        assert!(matches!(
+            request_rx.recv().unwrap(),
+            UserStateRequest::Refresh {
+                legacy_catalog: Some(_),
+                ..
+            }
+        ));
+        session.refresh(&catalog, 20).unwrap();
+        assert!(matches!(
+            request_rx.recv().unwrap(),
+            UserStateRequest::Refresh {
+                legacy_catalog: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn refresh_observes_plays_and_favourites_written_by_another_connection() {
+        let root = TestDirectory::new();
+        let mut session = ready_session(&root);
+        let store = UserStateStore::open(root.0.join("state.sqlite3")).unwrap();
+        store.record_play(&game(), 20).unwrap();
+        store.set_favourite(&game(), true, 20).unwrap();
+        let catalog = crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]);
+        session.refresh(&catalog, 30).unwrap();
+        let UserStateEvent::Snapshot { snapshot, .. } = poll_until(&mut session) else {
+            panic!("snapshot");
+        };
+        assert_eq!(snapshot.recent_launch_refs, [game().launch_ref.clone()]);
+        assert_eq!(snapshot.favourite_launch_refs, [game().launch_ref]);
+    }
+
+    #[test]
+    fn an_early_favourite_does_not_skip_legacy_import_on_first_refresh() {
+        let root = TestDirectory::new();
+        std::fs::create_dir_all(root.0.join("config")).unwrap();
+        std::fs::write(
+            root.0.join("config/SNES_favorites.cfg"),
+            "/media/fat/games/SNES/legacy.sfc\n",
+        )
+        .unwrap();
+        let mut session = UserStateSession::start(root.0.join("state.sqlite3"), root.0.clone());
+        session.set_favourite(game(), true, 10).unwrap();
         assert!(matches!(
             poll_until(&mut session),
             UserStateEvent::Snapshot { .. }
         ));
-        session
+        let catalog = crate::test_support::arcade_catalog(
+            vec![
+                crate::test_support::arcade_game("Legacy")
+                    .system_id("snes")
+                    .path("/media/fat/games/SNES/legacy.sfc")
+                    .build(),
+            ],
+            vec![crate::test_support::arcade_system("snes", 1)],
+        );
+        session.refresh(&catalog, 20).unwrap();
+        let event = poll_until(&mut session);
+        let UserStateEvent::Snapshot { snapshot, .. } = event else {
+            panic!("{event:?}");
+        };
+        assert!(snapshot.favourite_launch_refs.contains(&game().launch_ref));
+        assert!(
+            snapshot
+                .favourite_launch_refs
+                .contains(&"/media/fat/games/SNES/legacy.sfc".into())
+        );
     }
 
     #[test]
@@ -313,13 +419,13 @@ mod tests {
             )
         };
         let mut session = ready_session(&root);
-        session.refresh(make_catalog(&["cps1"]), 30).unwrap();
+        session.refresh(&make_catalog(&["cps1"]), 30).unwrap();
         let UserStateEvent::Snapshot { snapshot, .. } = poll_until(&mut session) else {
             panic!("snapshot");
         };
         assert_eq!(snapshot.arcade_recent_refs, ["cps1.mra"]);
         session
-            .refresh(make_catalog(&["cps1", "cps2"]), 40)
+            .refresh(&make_catalog(&["cps1", "cps2"]), 40)
             .unwrap();
         let UserStateEvent::Snapshot { snapshot, .. } = poll_until(&mut session) else {
             panic!("snapshot");
@@ -363,6 +469,7 @@ mod tests {
             events: event_rx,
             pending_favourites: HashSet::new(),
             available: true,
+            legacy_catalog_sent: false,
         };
         session.set_favourite(game(), true, 20).unwrap();
         // A directory cannot be opened as the SQLite database. Run the real
@@ -379,7 +486,7 @@ mod tests {
         assert!(
             session
                 .refresh(
-                    crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
+                    &crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
                     40
                 )
                 .is_err()
@@ -416,6 +523,7 @@ mod tests {
             events: event_rx,
             pending_favourites: HashSet::new(),
             available: true,
+            legacy_catalog_sent: false,
         };
         assert!(session.poll().is_none());
         assert!(session.available());
@@ -440,13 +548,14 @@ mod tests {
             events: event_rx,
             pending_favourites: HashSet::new(),
             available: true,
+            legacy_catalog_sent: false,
         };
         session.set_favourite(game(), true, 20).unwrap();
         drop(request_rx);
         assert!(
             session
                 .refresh(
-                    crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
+                    &crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]),
                     30
                 )
                 .is_err()
@@ -465,6 +574,7 @@ mod tests {
             events: event_rx,
             pending_favourites: HashSet::new(),
             available: true,
+            legacy_catalog_sent: false,
         };
         session.set_favourite(game(), true, 20).unwrap();
         assert!(matches!(

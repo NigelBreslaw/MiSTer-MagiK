@@ -6702,7 +6702,7 @@ pub(super) fn run_launcher_loop(
                 .ok()
                 .and_then(|duration| i64::try_from(duration.as_secs()).ok())
                 .unwrap_or(0);
-            if let Err(error) = user_state_session.refresh(catalog.clone(), now) {
+            if let Err(error) = user_state_session.refresh(&catalog, now) {
                 crate::ui_errln!("user-state: {error}");
             }
             user_state_catalog_version = Some(catalog_version);
@@ -6715,7 +6715,18 @@ pub(super) fn run_launcher_loop(
                         request_launcher_redraw!();
                     }
                 }
-                UserStateEvent::Failed { error, .. } | UserStateEvent::Unavailable { error } => {
+                UserStateEvent::Failed {
+                    error,
+                    completed_favourite,
+                } => {
+                    crate::ui_errln!("user-state: {error}");
+                    if completed_favourite.is_some() {
+                        // One fresh read after a failed write/projection; a failed
+                        // Refresh itself does not schedule another retry.
+                        user_state_catalog_version = None;
+                    }
+                }
+                UserStateEvent::Unavailable { error } => {
                     crate::ui_errln!("user-state: {error}");
                 }
             }
