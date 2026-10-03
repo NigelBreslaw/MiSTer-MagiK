@@ -130,8 +130,8 @@ logs and the analysis script are ignored under `outputs/frame-drop-evidence/`.
 The new capture made no artwork, duration, pose, input, scheduling or drop-gate
 changes. Focused checks pass: four bounded-capture recorded-state tests, four
 parallel helper/pixel tests, four FrameClock tests, frontend/support Clippy,
-frontend tooling and no-UI compilation, and eleven host tests. QEMU/host results
-are correctness evidence; the tables above are physical MiSTer measurements.
+frontend tooling and no-UI compilation, and eleven host tests. Portable tests
+establish correctness; the tables above are physical MiSTer measurements.
 
 
 The user's bridge question exposed an attribution gap: the existing projection
