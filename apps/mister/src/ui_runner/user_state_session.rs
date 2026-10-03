@@ -179,7 +179,7 @@ fn worker(
             } => store.set_favourite(&game, favourite, now).and_then(|_| {
                 if let Some(snapshot) = cached.as_mut() {
                     let mut next = snapshot.clone();
-                    store.refresh_snapshot_system(&mut next, &game.system_id, false)?;
+                    store.refresh_favourites(&mut next, &game.system_id)?;
                     *snapshot = next;
                 } else {
                     cached = Some(store.read_snapshot()?);

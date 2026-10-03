@@ -931,9 +931,9 @@ impl LauncherViewPresenters {
             let id = collection.map_or("", |collection| collection.id.as_str());
             let title = collection.map_or("", |collection| collection.title.as_str());
             let mut count_started = measure.then(Instant::now);
-            let recent = nav.active_collection_recent_count(catalog);
+            let recent = nav.active_collection_recent_count();
             timing.hub_counts_us[0] = presenter_stage(&mut count_started);
-            let favourites = nav.active_collection_favourite_count(catalog);
+            let favourites = nav.active_collection_favourite_count();
             timing.hub_counts_us[1] = presenter_stage(&mut count_started);
             let counts = [
                 collection.map_or(0, |collection| collection.count),

@@ -1976,10 +1976,10 @@ impl LauncherNav {
     }
 
     /// Maintained user-state counts, not intersections with game rows.
-    pub fn active_collection_favourite_count(&self, _catalog: &ArcadeCatalog) -> usize {
+    pub fn active_collection_favourite_count(&self) -> usize {
         self.active_system_user_counts().favourites
     }
-    pub fn active_collection_recent_count(&self, _catalog: &ArcadeCatalog) -> usize {
+    pub fn active_collection_recent_count(&self) -> usize {
         self.active_system_user_counts().recent
     }
 
@@ -3105,8 +3105,8 @@ impl LauncherNav {
         if pressed.btn_a {
             let count = match self.system_hub_selected {
                 0 => self.active_collection().map_or(0, |c| c.count),
-                1 => self.active_collection_recent_count(catalog),
-                2 => self.active_collection_favourite_count(catalog),
+                1 => self.active_collection_recent_count(),
+                2 => self.active_collection_favourite_count(),
                 _ => unreachable!(),
             };
             if count == 0 {
