@@ -247,6 +247,8 @@ def animation_roundtrip(
             <= h["received_us"]
             for h in helpers
         )
+    # Frame 0 from rest may wait one refresh; any longer overrun is a drop.
+    assert 0 <= window["first_frame_wait_refreshes"] <= window["motion_starts"]
     route_drops = sum(row["dropped_frames"] for row in rows)
     assert route_drops == window["dropped_frames"], "Route and window counts differ"
     assert sum(window["dropped_frames_by_workload"].values()) == route_drops

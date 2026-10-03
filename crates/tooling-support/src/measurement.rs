@@ -125,6 +125,8 @@ impl FramePhaseTimeline {
 pub struct DroppedFrameRecord {
     pub reason: &'static str,
     pub dropped_frames: u64,
+    /// Refreshes the first frame from rest waited without being charged.
+    pub first_frame_wait: u64,
     pub source_generation: u64,
     pub source_age_us: u64,
     pub owned_refresh_observed: Option<u32>,
@@ -140,6 +142,7 @@ pub struct DroppedFrameRecord {
 impl DroppedFrameRecord {
     pub(crate) fn json(self) -> Value {
         json!({"reason":self.reason,"dropped_frames":self.dropped_frames,
+            "first_frame_wait":self.first_frame_wait,
             "source_generation":self.source_generation,"source_age_us":self.source_age_us,
 
             "owned_refresh_observed":self.owned_refresh_observed,"active_sequence":self.active_sequence,
@@ -148,6 +151,47 @@ impl DroppedFrameRecord {
             "work":self.work.map(FrameWorkTiming::json),"workload":self.workload.label(),
             "transition_route":self.transition_route,"transition_renderer":self.transition_renderer,
             "timeline":self.timeline.map(FramePhaseTimeline::json)})
+    }
+}
+
+/// How one confirmed observation's repeated refreshes are charged.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RefreshCharge {
+    pub dropped_frames: u64,
+    /// Repeats forgiven while the first frame from rest waited for scanout.
+    pub first_frame_wait: u64,
+}
+
+/// Charge repeated refreshes for one observation. Motion starting from rest
+/// has no earlier refresh to meet: input can arrive anywhere in a period, so
+/// frame 0 may wait one refresh for scanout. `first_frame_work_us` runs from
+/// that frame's start to its post: repeats it would cause even when started
+/// on a refresh boundary are overruns and still count. Every repeat after
+/// frame 0 is a drop; repeats while idle are deliberate reuse.
+pub fn charge_refresh_repeats(
+    was_animating: bool,
+    animating: bool,
+    repeated: u32,
+    first_frame_work_us: u64,
+    period_us: u64,
+) -> RefreshCharge {
+    let repeated = u64::from(repeated);
+    match (was_animating, animating) {
+        (false, false) => RefreshCharge::default(),
+        (false, true) => {
+            let overrun = first_frame_work_us
+                .div_ceil(period_us.max(1))
+                .saturating_sub(1);
+            let dropped_frames = repeated.saturating_sub(1).max(overrun).min(repeated);
+            RefreshCharge {
+                dropped_frames,
+                first_frame_wait: repeated - dropped_frames,
+            }
+        }
+        _ => RefreshCharge {
+            dropped_frames: repeated,
+            first_frame_wait: 0,
+        },
     }
 }
 
@@ -163,6 +207,8 @@ pub struct Counters {
     pub posts: u64,
     pub flips: u64,
     pub drops: u64,
+    pub motion_starts: u64,
+    pub first_frame_wait_refreshes: u64,
     pub rejections: u64,
     pub card_rendered_frames: u64,
     pub card_delivered_frames: u64,
@@ -278,6 +324,8 @@ impl PresentationMetrics {
             "physical_latch_posts":c.posts-baseline.posts,"physical_latch_flips":c.flips-baseline.flips,
             "dropped_frames":(c.drops-baseline.drops)+(c.card_dropped_frames-baseline.card_dropped_frames),
             "owned_refresh_dropped_frames":c.drops-baseline.drops,"latch_rejections":c.rejections-baseline.rejections,
+            "motion_starts":c.motion_starts-baseline.motion_starts,
+            "first_frame_wait_refreshes":c.first_frame_wait_refreshes-baseline.first_frame_wait_refreshes,
 
             "card_rendered_frames":c.card_rendered_frames-baseline.card_rendered_frames,
             "helper_ahead_frames": self.work_timings.iter().filter(|t| t.helper_ahead).count(),
@@ -447,6 +495,45 @@ impl PresentationMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_frame_from_rest_may_wait_one_refresh() {
+        const PERIOD: u64 = 16_667;
+        let charge = |was, now, repeated, work| {
+            let c = charge_refresh_repeats(was, now, repeated, work, PERIOD);
+            (c.dropped_frames, c.first_frame_wait)
+        };
+        // Idle reuse is never charged.
+        assert_eq!(charge(false, false, 3, 0), (0, 0));
+        // Device browse start: input 9.4 ms into a period, 14.0 ms of work.
+        // Frame 0 lands one refresh later; a wait, not a drop.
+        assert_eq!(charge(false, true, 1, 14_042), (0, 1));
+        assert_eq!(charge(false, true, 0, 14_042), (0, 0));
+        // Device Games entry: 25.8 ms would miss from a boundary too.
+        assert_eq!(charge(false, true, 1, 25_827), (1, 0));
+        // Device hub entry: 35.9 ms costs two refreshes; a third is the wait.
+        assert_eq!(charge(false, true, 2, 35_903), (2, 0));
+        assert_eq!(charge(false, true, 3, 35_903), (2, 1));
+        // A short frame 0 can still be charged beyond its one wait.
+        assert_eq!(charge(false, true, 3, 14_042), (2, 1));
+        // After frame 0, and while motion ends, every repeat is a drop.
+        assert_eq!(charge(true, true, 1, 0), (1, 0));
+        assert_eq!(charge(true, false, 2, 0), (2, 0));
+    }
+
+    #[test]
+    fn window_reports_motion_starts_and_forgiven_waits() {
+        let mut metrics = PresentationMetrics::default();
+        metrics.counters.motion_starts = 4;
+        metrics.counters.first_frame_wait_refreshes = 3;
+        metrics.window_start = Some((2000, metrics.counters.clone()));
+        metrics.counters.motion_starts = 9;
+        metrics.counters.first_frame_wait_refreshes = 7;
+        metrics.finish_window(7000, 960, 540, false);
+        let window = metrics.window.unwrap();
+        assert_eq!(window["motion_starts"], 5);
+        assert_eq!(window["first_frame_wait_refreshes"], 4);
+    }
+
     #[test]
     fn cpu_window_reports_process_delta_and_preserves_unavailable() {
         let mut metrics = PresentationMetrics {

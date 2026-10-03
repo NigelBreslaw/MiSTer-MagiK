@@ -10332,7 +10332,8 @@ pub(super) fn run_launcher_loop(
         );
         // Repeats while idle are reuse, not drops. Restart an idle baseline at
         // every render start so motion starting from rest is measured from its
-        // first frame's render: idle time is excluded, an overrun still counts.
+        // first frame's render: idle time is excluded. That frame may wait one
+        // refresh for scanout; a longer overrun still counts as a drop.
         #[cfg(feature = "tooling")]
         if tooling.is_some() && tooling_drop_baseline.is_some_and(|observation| !observation.motion)
         {
@@ -13149,8 +13150,22 @@ pub(super) fn run_launcher_loop(
                                     Ok(delta) => {
                                         metrics.counters.owned_vblanks += u64::from(delta.owned_vblank_delta);
                                         metrics.counters.presented_vblanks += u64::from(delta.presented_vblank_delta);
-                                        let dropped = if animation_active || was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
+                                        // A first frame's baseline restarts at its render, so this
+                                        // spans that frame's work up to its post.
+                                        let first_frame_work_us = post_timing
+                                            .map_or(frame_t4, |(posted, _)| posted)
+                                            .saturating_duration_since(at)
+                                            .as_micros() as u64;
+                                        let charge = mister_magik_tooling_support::measurement::charge_refresh_repeats(
+                                            was_animating, animation_active, delta.repeated_vblank_delta,
+                                            first_frame_work_us, pacer.period_us(),
+                                        );
+                                        let dropped = charge.dropped_frames;
                                         metrics.counters.drops += dropped;
+                                        if !was_animating && animation_active {
+                                            metrics.counters.motion_starts += 1;
+                                            metrics.counters.first_frame_wait_refreshes += charge.first_frame_wait;
+                                        }
                                         if dropped != 0 || tooling_frame_evidence.is_some() {
                                             let record = mister_magik_tooling_support::measurement::DroppedFrameRecord {
                                                 reason: "owned refresh repeated during motion; see observation interval and phase timeline",
@@ -13200,6 +13215,7 @@ pub(super) fn run_launcher_loop(
                                                 }),
                                                 work:card_work_timing,
                                                 dropped_frames: dropped,
+                                                first_frame_wait: charge.first_frame_wait,
                                                 owned_refresh_observed: Some(telemetry.owned_vblank_count),
                                                 active_sequence: Some(telemetry.active_sequence), ui_render_us: render_us,
                                                 ..Default::default()
