@@ -6040,6 +6040,7 @@ pub(super) fn run_launcher_loop(
     let mut card_level = crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
     // The level and card the neighbours were last prepared for.
     let mut card_prefetch_key: (String, usize) = (String::new(), usize::MAX);
+    let mut card_frame_rendered_last_iteration = false;
     let mut launcher_card_home = match super::launcher_card_home::LauncherCardHomeSession::new(
         super::launcher_card_home::scene_for_display(ui, layout),
         card_level.clone(),
@@ -9917,6 +9918,7 @@ pub(super) fn run_launcher_loop(
             global.set_custom_device_base(native_device_base);
             native_device_background.invalidate();
         }
+        let card_frame_just_rendered = std::mem::take(&mut card_frame_rendered_last_iteration);
         // Every Home level is the Rust card launcher, not only the root.
         let custom_home_active = launcher_card_home.is_some() && nav.screen == Screen::Home;
         app.global::<slint_ui::launcher::MisterUi>()
@@ -9940,8 +9942,11 @@ pub(super) fn run_launcher_loop(
                     nav.home_card_browse_prediction(animation_now),
                 );
                 // Idle on a card: prepare the level it opens and the parent, so
-                // the level trick never waits on preparation.
+                // the level trick never waits on preparation. The worker shares
+                // CPU0 with the card helper; start only once card frames stop,
+                // or it preempts the helper while the settle frame renders.
                 if !session.is_animating()
+                    && !card_frame_just_rendered
                     && (card_prefetch_key.0 != nav.current_menu_id()
                         || card_prefetch_key.1 != nav.selected)
                 {
@@ -10586,6 +10591,7 @@ pub(super) fn run_launcher_loop(
                     }
                     completed_hidden_frame_for_present = Some(copy.completed);
                     card_direct_frame_rendered = true;
+                    card_frame_rendered_last_iteration = true;
                     session.note_direct_presented();
                 }
                 Ok(None) => {}
