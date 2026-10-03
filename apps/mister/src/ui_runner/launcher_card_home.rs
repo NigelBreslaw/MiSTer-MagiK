@@ -754,6 +754,34 @@ impl LauncherCardHomeSession {
             && self.pending.is_none()
     }
 
+    pub(super) fn evidence_pose(&self) -> (&'static str, u64) {
+        if let Some(trick) = self.trick.as_ref() {
+            let elapsed = self.now_ms.saturating_sub(trick.started_ms);
+            if let Some(delay) = trick.deal_delay_ms {
+                (
+                    "level-deal",
+                    elapsed
+                        .saturating_sub(delay)
+                        .min(u64::from(LEVEL_TRICK_MILLIS)),
+                )
+            } else {
+                (
+                    "level-gather",
+                    elapsed.min(u64::from(LEVEL_TRICK_EDGE_MILLIS)),
+                )
+            }
+        } else {
+            (
+                if self.frame.phase == BrowsePhase::Settled {
+                    "settled"
+                } else {
+                    "browse"
+                },
+                u64::from(self.frame.progress_millis),
+            )
+        }
+    }
+
     pub(super) const fn content_generation(&self) -> u64 {
         self.content_generation
     }

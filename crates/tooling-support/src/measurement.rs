@@ -23,7 +23,7 @@ pub struct FrameWorkTiming {
     pub secondary_run_delay_us: Option<u64>,
 }
 impl FrameWorkTiming {
-    fn json(self) -> Value {
+    pub(crate) fn json(self) -> Value {
         json!({"producer_us":self.producer_us,
             "helper_ahead":self.helper_ahead,"helper_ahead_lead_us":self.helper_ahead_lead_us,
             "discarded_helper_us":self.discarded_helper_us,
@@ -96,7 +96,7 @@ pub struct FramePhaseTimeline {
     pub repeated_refresh_delta: u32,
 }
 impl FramePhaseTimeline {
-    fn json(self) -> Value {
+    pub(crate) fn json(self) -> Value {
         json!({
             "clock":"process-monotonic-us",
             "previous_observation_us":self.previous_observation_us,
@@ -138,7 +138,7 @@ pub struct DroppedFrameRecord {
 }
 
 impl DroppedFrameRecord {
-    fn json(self) -> Value {
+    pub(crate) fn json(self) -> Value {
         json!({"reason":self.reason,"dropped_frames":self.dropped_frames,
             "source_generation":self.source_generation,"source_age_us":self.source_age_us,
 
@@ -208,6 +208,7 @@ pub struct PresentationMetrics {
     pub moving_cpu_us: Option<u64>,
     pub moving_presentations: u64,
     pub moving_cpu_unavailable_intervals: u64,
+    pub frame_evidence: crate::frame_evidence::FrameEvidenceCapture,
     pub(crate) previous_motion_cpu_sample: Option<(Option<u64>, u64, bool)>,
 }
 impl PresentationMetrics {

@@ -77,12 +77,16 @@ def _settled_metrics(metrics, before_ms, deadline):
         time.sleep(0.2)
 
 
-def animation_roundtrip(app, agent, run: Path, repetition: int, *, instrumented=False):
+def animation_roundtrip(
+    app, agent, run: Path, repetition: int, *, instrumented=False, frame_evidence="off"
+):
     prefix = f"animation-roundtrip-{repetition}"
     _key(app, "\uf729")
     time.sleep(1.2)
     _focus(app, r"^Consoles$")
-    agent._successful("measure", {"duration_ms": 45_000})
+    agent._successful(
+        "measure", {"duration_ms": 45_000, "frame_evidence": frame_evidence}
+    )
     requested_at = time.monotonic()
     time.sleep(3.5)
 
@@ -212,6 +216,19 @@ def animation_roundtrip(app, agent, run: Path, repetition: int, *, instrumented=
                 "flip.reflection",
             )
         ), "Missing renderer stage evidence"
+    if frame_evidence != "off":
+        evidence = window["frame_evidence"]
+        assert evidence["mode"] == frame_evidence
+        assert evidence["observed_frames"] > 0
+        assert evidence["retention_overflow"] == 0
+        assert evidence["clock_brackets"]["samples"], "Missing clock calibration"
+        assert (
+            sum(
+                (frame["observation"]["dropped_frames"] + frame["missing_fresh_pose"])
+                for frame in evidence["frames"]
+            )
+            == window["dropped_frames"]
+        )
     route_drops = sum(row["dropped_frames"] for row in rows)
     assert route_drops == window["dropped_frames"], "Route and window counts differ"
     assert sum(window["dropped_frames_by_workload"].values()) == route_drops

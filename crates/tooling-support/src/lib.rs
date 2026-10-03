@@ -1,5 +1,6 @@
 //! Opt-in application support shared by Mini-MagiK and MiSTer MagiK.
 //! The application supplies its own pixels and confirmed presentation counters.
+pub mod frame_evidence;
 pub mod measurement;
 mod preview;
 mod profile;
@@ -114,6 +115,12 @@ impl Session {
     pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
         self.measurement_duration_ms = milliseconds;
     }
+    pub fn frame_evidence_active(&self) -> bool {
+        self.metrics.frame_evidence.mode != frame_evidence::EvidenceMode::Off
+            && self.metrics.window_start.is_some()
+            && self.metrics.window.is_none()
+    }
+
     pub fn begin(&mut self) {
         self.metrics.dropped_frame_records.clear();
         self.metrics.last_dropped_frame = None;
@@ -263,6 +270,9 @@ impl Session {
                     self.force_card_fallback =
                         value["launcher_fallback"].as_bool().unwrap_or(false);
                     self.measurement_duration_ms = requested_duration_ms;
+                    let evidence_mode =
+                        frame_evidence::EvidenceMode::from_request(&value["frame_evidence"])?;
+                    self.metrics.frame_evidence.reset(evidence_mode);
                     self.begin();
                 }
             }
@@ -303,6 +313,12 @@ impl Session {
                 .is_some_and(|(start, _)| now - start >= duration)
             {
                 self.metrics.finish_window(now, width, height, instrumented);
+                if self.metrics.frame_evidence.mode != frame_evidence::EvidenceMode::Off {
+                    let evidence = self.metrics.frame_evidence.json();
+                    if let Some(window) = self.metrics.window.as_mut() {
+                        window["frame_evidence"] = evidence;
+                    }
+                }
                 if let Some(window) = self.metrics.window.as_mut() {
                     window["requested_duration_ms"] =
                         serde_json::json!(self.measurement_duration_ms);

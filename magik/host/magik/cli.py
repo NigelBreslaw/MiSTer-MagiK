@@ -121,6 +121,12 @@ def main() -> int:
         action="store_true",
         help="benchmark cold Mini preparation and first confirmed presentation only",
     )
+    check_command.add_argument(
+        "--frame-evidence",
+        choices=("off", "neighbors"),
+        default="off",
+        help="Capture bounded frame neighborhoods on the explicit animation round trip",
+    )
     check_command.add_argument("--concept")
     check_command.add_argument(
         "--quick",
@@ -456,6 +462,10 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         "--magik-app",
         arguments.app,
     ]
+    if getattr(arguments, "frame_evidence", "off") != "off":
+        if arguments.scenario != "animation-roundtrip" or arguments.profile:
+            raise ValueError("--frame-evidence requires unprofiled animation-roundtrip")
+        options += ["--magik-frame-evidence", arguments.frame_evidence]
     if arguments.profile:
         measurements = (
             {"idle", "motion", "motion-rollover", "motion-held", "animation-roundtrip"}
