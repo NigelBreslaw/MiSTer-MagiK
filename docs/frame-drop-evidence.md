@@ -174,3 +174,33 @@ The later bridge-only timing change passes 20 bridge behavior tests, recorded
 capture tests, UI/tooling Clippy and no-UI compilation; it does not alter the
 bridge's state updates or rendering operations. Physical joystick qualification
 and CRT/portrait qualification remain outside this HDMI capture campaign.
+
+
+## Publication audits
+
+Deletion commit `8860dd8a4` removes the duplicated last-frame copy and two
+unnecessary serializer visibility changes. The rolling buffer is the authority
+for the preceding observation. Simplification commit `c3694256c` centralizes
+observer timing, rejects incompatible commands before device dispatch and leaves
+unmeasured light-bridge scopes null rather than inventing zero durations.
+
+The audit found and fixed independent missing-pose and view/input/readiness
+retention triggers. The earlier missing-pose test was masked by an outcome change;
+isolated state-sequence regressions now cover each trigger without a second
+edge. These fixes change diagnostic retention, not physical drop accounting.
+
+Focused validation: five collector tests, fourteen host tests, frontend UI/tooling
+and support Clippy, no-UI check and ARM device build pass. Final native capture:
+`20261003T132324Z-a673263edff1`, executable SHA256
+`672619fa5ebb7920201dcaeb9ac87f7ddfeb90e3a9244b707382cacf065c1275`.
+
+| Repeat | Drops | CPU / moving presentation | Retained frames | Sampler/selection p99 |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 20 | 18.5438 ms | 126 | 146 us |
+| 1 | 19 | 18.5506 ms | 132 | 133 us |
+| 2 | 21 | 18.5965 ms | 133 | 111 us |
+
+All three routes pass with zero retention overflow, complete confirmed-frame CPU
+evidence, valid helper ordering, zero latch rejections and matching posts/flips.
+Mean process CPU is 18.5636 ms per moving presentation. This does not establish
+a speedup or resolve the existing observer-budget/FPGA-cutoff limitations.
