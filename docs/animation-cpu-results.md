@@ -527,3 +527,37 @@ browse helper scheduling. Perfect moving-refresh cadence across all launcher
 and subview navigation remains unachieved. Input/contention, CRT and other-route
 qualification remain part of the full objective; the SNES route cannot prove
 those requirements by itself.
+
+
+## Native fixed HDMI device plane — awaiting device comparison
+
+The unfinished prototype is repaired and specialized to the uncovered fixed
+960x540 HDMI device plane. Slint's original RGB565 raster and blend order remain
+in use. Packed art is copied into damaged device pixels after that raster,
+excluding the screen opening; preview/list recomposition stays on its existing
+same-frame path. No full-frame background buffer is allocated.
+
+A generic RGBA underlay was rejected during parity testing because nested
+translucent overlays differed by a RGB565 channel step. The fast path instead
+uses the original Slint image for overlapping dialogs, loading/setup/catalog/
+media overlays, screensavers and unsupported/rotated geometry. Image resources
+remain installed for immediate fallback. Entering native mode or a new layout
+requires a full repaint; changed device kind marks its fixed region. Damage is
+retained until a real raster consumes it. All construction/copy work stays in
+measured raster scope.
+
+Full compiled-page pixel parity covers all four artworks, hub, games, loading,
+search and drawer states. Separate checks cover alpha-overlay fallback, partial
+moves, old-view clearing, device changes and layout-epoch replacement. The
+Slint MCP clipping reference validates; frontend Clippy, compositor and clock
+checks pass. An explicit `scripts/magik check device-plane` journey captures
+FPGA-latched scanout and checks A/Back/Select-action plus a tap during a locked
+trick. It passed on the parent before candidate deployment.
+
+Fresh parent baseline: `build/magik-results/20261003T093522Z-7fb0e49d32eb`,
+20/18/18 drops and moving CPU 18.5539/18.5173/18.5986 ms. Parent capture/control
+run: `build/magik-results/20261003T094413Z-a7ec753f1547`. Both use installed SHA256
+`ee19b9bb87ba128dc8d6f8816e7c2a403144fc25c02a40428f9dc67d7bcef851`.
+Raw captures remain ignored. Neither the standalone Slint reference nor host
+parity proves physical timing; the candidate must still complete native checks
+and a matched benchmark before retention.

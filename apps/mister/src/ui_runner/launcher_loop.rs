@@ -5653,6 +5653,8 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_cpu_profile =
         cpu_profile::ScreensaverProfiler::from_config(profile_config.cpu());
     let mut bridge_models = LauncherViewModels::default();
+    let mut native_device_background =
+        super::launcher_compositor::NativeDeviceBackground::default();
     let mut catalog_version = 0usize;
     let (user_state_path, user_state_media_root) = {
         #[cfg(feature = "ui-device-tests")]
@@ -6360,6 +6362,9 @@ pub(super) fn run_launcher_loop(
             "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
             "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
             "animation_clock": {"mode":"vsync-locked-v1", "period_ns":frame_clock.period().as_nanos()},
+            "native_device_plane": if !layout.is_portrait() && !ui.output_route().is_crt()
+                && (layout.logical_w(), layout.logical_h()) == (960, 540)
+                { "exposed-hdmi-v1" } else { "disabled" },
             "card_helper_ahead": if !layout.is_portrait() && !ui.output_route().is_crt()
                 && (layout.logical_w(), layout.logical_h()) == (960, 540)
                 { "native-tricks-v1" } else { "disabled" },
@@ -9805,6 +9810,33 @@ pub(super) fn run_launcher_loop(
         } else {
             AutomationFrameStamp::default()
         };
+        // The exposed fixed HDMI device plane can bypass RGB8 image rasterization.
+        let native_device_base = nav.screen == Screen::Arcade
+            && !layout.is_portrait()
+            && !ui.output_route().is_crt()
+            && (layout.logical_w(), layout.logical_h()) == (960, 540)
+            && !confirm_visible
+            && !catalog_scan_visible
+            && !catalog_background_scan_visible
+            && !setup.is_active()
+            && !screensaver.active
+            && !launching
+            && app
+                .global::<slint_ui::launcher::MediaView>()
+                .get_rows()
+                .row_count()
+                == 0
+            && app.global::<slint_ui::launcher::SettingsView>().get_popup()
+                == slint_ui::launcher::SettingsPopup::None
+            && app
+                .global::<slint_ui::launcher::OverlayView>()
+                .get_loading_state()
+                != slint_ui::launcher::LoadingState::Active;
+        let global = app.global::<slint_ui::launcher::MisterUi>();
+        if global.get_custom_device_base() != native_device_base {
+            global.set_custom_device_base(native_device_base);
+            native_device_background.invalidate();
+        }
         // Every Home level is the Rust card launcher, not only the root.
         let custom_home_active = launcher_card_home.is_some() && nav.screen == Screen::Home;
         app.global::<slint_ui::launcher::MisterUi>()
@@ -10187,6 +10219,13 @@ pub(super) fn run_launcher_loop(
             update_slint_animations(animation_clock);
         }
         let mut layer_target = LayerTarget::new_oriented_with_epoch(target, layout, layout_epoch);
+        if native_device_base {
+            layer_target.attach_device_background(
+                &mut native_device_background,
+                nav.device_kind(),
+                window,
+            );
+        }
         let reclaimed_preview_publication =
             layer_target.reclaim_preview_publication(&mut launcher_preview_publication);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);

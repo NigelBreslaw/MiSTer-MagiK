@@ -108,7 +108,7 @@ export component ArcadeListScreen inherits Rectangle {
             x: 490px; y: 77px; width: 483px; height: 423px;
             clip: true;
 
-            Image {
+            if !MisterUi.custom-device-base : Image {
                 x: 0px; y: -42px; width: 483px; height: 519px;
                 source: ArcadeView.device-backdrop;
                 image-fit: fill;

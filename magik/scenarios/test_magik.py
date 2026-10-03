@@ -296,3 +296,10 @@ def test_animation_roundtrip_profile(journey_application_session):
 
     app, agent, run, _ = journey_application_session
     animation_roundtrip(app, agent, run, 0, instrumented=True)
+
+
+def test_device_plane(journey_application_session):
+    from magik.native_device_check import device_plane_journey
+
+    app, agent, run, _ = journey_application_session
+    device_plane_journey(app, agent, run)

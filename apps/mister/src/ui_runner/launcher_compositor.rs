@@ -44,8 +44,35 @@ impl LauncherPresentStatus {
     }
 }
 
+#[derive(Default)]
+pub(super) struct NativeDeviceBackground {
+    source: Option<Option<crate::device_art::DeviceKind>>,
+    dirty: bool,
+    full_repaint: bool,
+    layout_epoch: Option<u64>,
+}
+impl NativeDeviceBackground {
+    pub(super) fn invalidate(&mut self) {
+        self.dirty = true;
+        self.full_repaint = true;
+    }
+    pub(super) fn prepare(&mut self, kind: Option<crate::device_art::DeviceKind>) {
+        if self.source == Some(kind) {
+            return;
+        }
+        self.source = Some(kind);
+        self.dirty = true;
+    }
+}
+
+struct NativeBackground<'a> {
+    cache: &'a mut NativeDeviceBackground,
+    kind: Option<crate::device_art::DeviceKind>,
+}
+
 pub(super) struct LayerTarget<'a> {
     target: &'a mut UiFrameTarget,
+    background: Option<NativeBackground<'a>>,
     layout: UiLayoutGeometry,
     layout_epoch: u64,
     drawing_ui: UiDisplay,
@@ -76,6 +103,7 @@ impl<'a> LayerTarget<'a> {
     pub(super) fn new(target: &'a mut UiFrameTarget, ui: &'a UiDisplay) -> Self {
         Self {
             target,
+            background: None,
             layout: UiLayoutGeometry::for_display(ui, ScreenOrientation::Normal),
             layout_epoch: 1,
             drawing_ui: UiDisplay::for_framebuffer(ui.render_w(), ui.render_h()),
@@ -85,6 +113,7 @@ impl<'a> LayerTarget<'a> {
     pub(super) fn new_oriented(target: &'a mut UiFrameTarget, layout: UiLayoutGeometry) -> Self {
         Self {
             target,
+            background: None,
             layout,
             layout_epoch: 1,
             drawing_ui: UiDisplay::for_framebuffer(layout.logical_w(), layout.logical_h()),
@@ -99,10 +128,93 @@ impl<'a> LayerTarget<'a> {
         debug_assert_ne!(layout_epoch, 0);
         Self {
             target,
+            background: None,
             layout,
             layout_epoch,
             drawing_ui: UiDisplay::for_framebuffer(layout.logical_w(), layout.logical_h()),
         }
+    }
+
+    pub(super) fn attach_device_background(
+        &mut self,
+        background: &'a mut NativeDeviceBackground,
+        kind: Option<crate::device_art::DeviceKind>,
+        window: &MisterSoftwareWindow,
+    ) {
+        if background.layout_epoch != Some(self.layout_epoch) {
+            background.invalidate();
+            background.layout_epoch = Some(self.layout_epoch);
+        }
+        if background.dirty || background.source != Some(kind) {
+            window.request_redraw();
+        }
+        self.background = Some(NativeBackground {
+            cache: background,
+            kind,
+        });
+    }
+
+    fn render_slint_pixels(
+        &mut self,
+        renderer: &slint::platform::software_renderer::SoftwareRenderer,
+    ) -> slint::platform::software_renderer::PhysicalRegion {
+        let Some(background) = self.background.as_mut() else {
+            return self.target.render(renderer);
+        };
+        background.cache.prepare(background.kind);
+        if background.cache.dirty {
+            use i_slint_core::renderer::RendererSealed;
+            renderer.mark_dirty_region(
+                i_slint_core::lengths::LogicalRect::new(
+                    if background.cache.full_repaint {
+                        i_slint_core::lengths::LogicalPoint::new(0.0, 0.0)
+                    } else {
+                        i_slint_core::lengths::LogicalPoint::new(490.0, 77.0)
+                    },
+                    if background.cache.full_repaint {
+                        i_slint_core::lengths::LogicalSize::new(960.0, 540.0)
+                    } else {
+                        i_slint_core::lengths::LogicalSize::new(470.0, 423.0)
+                    },
+                )
+                .into(),
+            );
+        }
+        // Keep the renderer's original RGB565 quantization for every panel
+        // and glyph. The fixed device plane has no foreground outside its
+        // screen opening while this path is eligible.
+        let region = self.target.render(renderer);
+        #[cfg(feature = "tooling")]
+        let _copy =
+            mister_magik_framebuffer_scenes::launcher_profile::span("frame.native-device-copy");
+        let source = crate::launcher_presentation::system_device_rgb565(background.kind);
+        let pixels = self.target.cached_565_mut();
+        for rect in dirty_rects(&region, 960, 540).iter() {
+            for y in rect.y0.max(77)..rect.y1.min(500) {
+                let left = rect.x0.max(490);
+                let right = rect.x1.min(960);
+                let spans = if (96..416).contains(&y) {
+                    [(left, right.min(572)), (left.max(892), right)]
+                } else {
+                    [(left, right), (0, 0)]
+                };
+                for (left, right) in spans {
+                    if left >= right {
+                        continue;
+                    }
+                    let start = (y - 35) * 483 + left - 490;
+                    for (dst, src) in pixels[y * 960 + left..y * 960 + right]
+                        .iter_mut()
+                        .zip(&source[start..start + right - left])
+                    {
+                        dst.0 = src.0;
+                    }
+                }
+            }
+        }
+        background.cache.dirty = false;
+        background.cache.full_repaint = false;
+        region
     }
 
     pub(super) fn render_slint_base(
@@ -115,7 +227,7 @@ impl<'a> LayerTarget<'a> {
             #[cfg(feature = "tooling")]
             let _slint =
                 mister_magik_framebuffer_scenes::launcher_profile::span("frame.slint-raster");
-            let region = self.target.render(renderer);
+            let region = self.render_slint_pixels(renderer);
             slint_dirty = dirty_rect(
                 &region,
                 self.layout.composition_w(),
@@ -147,7 +259,7 @@ impl<'a> LayerTarget<'a> {
                 let _full = mister_magik_framebuffer_scenes::launcher_profile::span(
                     "frame.slint-full-raster",
                 );
-                let region = self.target.render(renderer);
+                let region = self.render_slint_pixels(renderer);
                 slint_dirty = dirty_rect(
                     &region,
                     self.layout.composition_w(),
@@ -949,6 +1061,28 @@ mod tests {
     use crate::visual_platform::install_isolated_test_platform;
 
     slint::slint! {
+        export component NativeDeviceProbe inherits Window {
+            width: 960px; height: 540px;
+            in property <bool> native: false;
+            in property <image> artwork;
+            in property <bool> overlay: false;
+            in property <length> overlay-x: 520px;
+            background: black;
+            Rectangle {
+                x: 490px; y: 77px; width: 483px; height: 423px; clip: true;
+                if !root.native : Image {
+                    x: 0px; y: -42px; width: 483px; height: 519px;
+                    source: root.artwork; image-fit: fill; image-rendering: pixelated;
+                }
+                Rectangle { x: 82px; y: 19px; width: 320px; height: 320px; background: black; }
+            }
+            Rectangle { x: 26px; y: 104px; width: 462px; height: 394px; background: #0a0e18; }
+            if root.overlay : Rectangle {
+                x: root.overlay-x; y: 70px; width: 220px; height: 420px; background: #00000080;
+                Rectangle { x: 20px; y: 60px; width: 140px; height: 80px; background: #bb773399; }
+            }
+        }
+
         export component NativeHomeOverlayProbe inherits Window {
             width: 960px;
             height: 540px;
@@ -964,6 +1098,232 @@ mod tests {
                 background: #00000080;
             }
         }
+    }
+
+    #[test]
+    fn native_device_repaints_kind_and_layout_epoch_changes() {
+        std::thread::spawn(|| {
+            use crate::device_art::DeviceKind;
+            let window = install_isolated_test_platform();
+            let app = NativeDeviceProbe::new().unwrap();
+            window.set_size(PhysicalSize::new(960, 540));
+            app.show().unwrap();
+            let ui = UiDisplay::for_framebuffer(960, 540);
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let mut cache = NativeDeviceBackground::default();
+            app.set_native(true);
+            {
+                let mut layer = LayerTarget::new(&mut target, &ui);
+                layer.attach_device_background(&mut cache, Some(DeviceKind::Tv), &window);
+                layer.render_slint_base(&window);
+            }
+            let previous = target.cached_565().to_vec();
+            let packed =
+                crate::launcher_presentation::system_device_rgb565(Some(DeviceKind::Monitor));
+            let mut image = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(483, 519);
+            assert!(mister_magik_framebuffer_scenes::expand_rgb565_rgb8(
+                packed,
+                image.make_mut_bytes()
+            ));
+            app.set_artwork(slint::Image::from_rgb8(image));
+            app.set_native(false);
+            window.request_redraw();
+            LayerTarget::new(&mut target, &ui).render_slint_full(&window);
+            let expected = target.cached_565().to_vec();
+            target.cached_565_mut().copy_from_slice(&previous);
+            app.set_native(true);
+            {
+                let mut layer = LayerTarget::new(&mut target, &ui);
+                layer.attach_device_background(&mut cache, Some(DeviceKind::Monitor), &window);
+                layer.render_slint_base(&window);
+            }
+            assert!(target.cached_565() == expected);
+            target.cached_565_mut().fill(Rgb565Pixel(0xf81f));
+            {
+                let layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::Normal);
+                let mut layer = LayerTarget::new_oriented_with_epoch(&mut target, layout, 2);
+                layer.attach_device_background(&mut cache, Some(DeviceKind::Monitor), &window);
+                layer.render_slint_base(&window);
+            }
+            assert!(target.cached_565() == expected);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn native_device_matches_complete_hub_games_and_status_pages() {
+        std::thread::spawn(|| {
+            use crate::device_art::DeviceKind;
+            use slint_ui::launcher::{
+                ArcadeLoadState, ArcadeSearchMode, ArcadeView, Launcher, LauncherScreen, MisterUi,
+                NavigationView, SystemPageMode,
+            };
+            let window = install_isolated_test_platform();
+            let app = Launcher::new().unwrap();
+            window.set_size(PhysicalSize::new(960, 540));
+            app.show().unwrap();
+            let nav = app.global::<NavigationView>();
+            let arcade = app.global::<ArcadeView>();
+            nav.set_screen(LauncherScreen::Arcade);
+            nav.set_system_title("SUPER NINTENDO".into());
+            nav.set_system_title_wraps(true);
+            nav.set_system_subtitle("NINTENDO / 1990".into());
+            nav.set_system_hub_games_count(1857);
+            arcade.set_collection_title("SNES".into());
+            let ui = UiDisplay::for_framebuffer(960, 540);
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let mut cache = NativeDeviceBackground::default();
+            for kind in [
+                None,
+                Some(DeviceKind::Tv),
+                Some(DeviceKind::Monitor),
+                Some(DeviceKind::Handheld),
+            ] {
+                let packed = crate::launcher_presentation::system_device_rgb565(kind);
+                let mut image = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(483, 519);
+                assert!(mister_magik_framebuffer_scenes::expand_rgb565_rgb8(
+                    packed,
+                    image.make_mut_bytes()
+                ));
+                arcade.set_device_backdrop(slint::Image::from_rgb8(image));
+                for state in 0..5 {
+                    nav.set_system_page_mode(if state == 0 {
+                        SystemPageMode::Hub
+                    } else {
+                        SystemPageMode::List
+                    });
+                    arcade.set_load_state(if state == 2 {
+                        ArcadeLoadState::Loading
+                    } else {
+                        ArcadeLoadState::Ready
+                    });
+                    arcade.set_active_count(if state == 3 { 0 } else { 1857 });
+                    arcade.set_search_mode(if state == 3 {
+                        ArcadeSearchMode::Active
+                    } else {
+                        ArcadeSearchMode::Inactive
+                    });
+                    arcade.set_drawer_open(state == 4);
+                    app.global::<MisterUi>().set_custom_device_base(false);
+                    window.request_redraw();
+                    LayerTarget::new(&mut target, &ui).render_slint_full(&window);
+                    let expected = target.cached_565().to_vec();
+                    target.cached_565_mut().fill(Rgb565Pixel(0xf81f));
+                    cache.invalidate();
+                    app.global::<MisterUi>().set_custom_device_base(true);
+                    window.request_redraw();
+                    {
+                        let mut layer = LayerTarget::new(&mut target, &ui);
+                        layer.attach_device_background(&mut cache, kind, &window);
+                        layer.render_slint_base(&window);
+                    }
+                    assert!(
+                        target.cached_565() == expected,
+                        "{kind:?} state={state} first={:?}",
+                        target
+                            .cached_565()
+                            .iter()
+                            .zip(&expected)
+                            .enumerate()
+                            .find(|(_, (a, b))| a != b)
+                    );
+                }
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn native_device_background_matches_slint_pixels_through_overlays_and_reentry() {
+        std::thread::spawn(|| {
+            use crate::device_art::DeviceKind;
+            let window = install_isolated_test_platform();
+            let app = NativeDeviceProbe::new().unwrap();
+            window.set_size(PhysicalSize::new(960, 540));
+            app.show().unwrap();
+            let ui = UiDisplay::for_framebuffer(960, 540);
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let mut cache = NativeDeviceBackground::default();
+            for kind in [
+                None,
+                Some(DeviceKind::Tv),
+                Some(DeviceKind::Monitor),
+                Some(DeviceKind::Handheld),
+            ] {
+                let packed = crate::launcher_presentation::system_device_rgb565(kind);
+                let mut pixels = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(483, 519);
+                assert!(mister_magik_framebuffer_scenes::expand_rgb565_rgb8(
+                    packed,
+                    pixels.make_mut_bytes()
+                ));
+                app.set_artwork(slint::Image::from_rgb8(pixels));
+                for overlay in [false, true] {
+                    app.set_overlay(overlay);
+                    app.set_native(false);
+                    window.request_redraw();
+                    {
+                        let mut layer = LayerTarget::new(&mut target, &ui);
+                        layer.render_slint_full(&window);
+                    }
+                    let expected = target.cached_565().to_vec();
+                    // Simulate leftover Home pixels, then enter native mode.
+                    target.cached_565_mut().fill(Rgb565Pixel(0xf81f));
+                    cache.invalidate();
+                    app.set_native(!overlay);
+                    window.request_redraw();
+                    {
+                        let mut layer = LayerTarget::new(&mut target, &ui);
+                        if !overlay {
+                            layer.attach_device_background(&mut cache, kind, &window);
+                            layer.render_slint_base(&window);
+                        } else {
+                            layer.render_slint_full(&window);
+                        }
+                    }
+                    assert!(
+                        target.cached_565() == expected,
+                        "{kind:?}, overlay={overlay}, first={:?}",
+                        target
+                            .cached_565()
+                            .iter()
+                            .zip(&expected)
+                            .enumerate()
+                            .find(|(_, (a, b))| a != b)
+                    );
+                    if !overlay {
+                        assert!(!cache.dirty);
+                    }
+                    // A partial overlay move must restore the old covered art.
+                    if overlay {
+                        app.set_overlay_x(600.0);
+                        window.request_redraw();
+                        {
+                            let mut layer = LayerTarget::new(&mut target, &ui);
+                            layer.render_slint_base(&window);
+                        }
+                        let native = target.cached_565().to_vec();
+                        app.set_native(false);
+                        window.request_redraw();
+                        LayerTarget::new(&mut target, &ui).render_slint_full(&window);
+                        assert!(
+                            target.cached_565() == native,
+                            "partial first={:?}",
+                            target
+                                .cached_565()
+                                .iter()
+                                .zip(&native)
+                                .enumerate()
+                                .find(|(_, (a, b))| a != b)
+                        );
+                        app.set_overlay_x(520.0);
+                    }
+                }
+            }
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
