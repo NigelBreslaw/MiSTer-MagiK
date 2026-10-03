@@ -712,6 +712,17 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct LauncherBridgeSyncTiming {
     pub(super) model_projection_us: u128,
+    #[cfg(feature = "tooling")]
+    pub(super) stage_us: Option<[u64; 6]>,
+}
+
+fn bridge_stage_us(start: &mut Option<Instant>) -> u64 {
+    let Some(previous) = *start else {
+        return 0;
+    };
+    let now = Instant::now();
+    *start = Some(now);
+    now.saturating_duration_since(previous).as_micros() as u64
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -731,7 +742,8 @@ pub(super) fn sync_bridge_launcher(
     measure_model_projection: bool,
     ui: &UiDisplay,
 ) -> LauncherBridgeSyncTiming {
-    let model_started = measure_model_projection.then(Instant::now);
+    let mut stage_started = measure_model_projection.then(Instant::now);
+    let mut stage_us = [0; 6];
     models.sync(
         app,
         nav,
@@ -740,14 +752,21 @@ pub(super) fn sync_bridge_launcher(
         defer_selected_preview,
         Some((ui.output_w(), ui.output_h())),
     );
-    let model_projection_us = model_started
-        .map(|started| started.elapsed().as_micros())
-        .unwrap_or(0);
+    stage_us[0] = bridge_stage_us(&mut stage_started);
+    let model_projection_us = u128::from(stage_us[0]);
     sync_bridge_pad_launcher(app, pad);
     let clock_text = SharedString::from(launcher_clock_text());
     app.global::<slint_ui::launcher::NavigationView>()
         .set_clock_text(clock_text);
+    #[cfg(feature = "tooling")]
+    {
+        stage_us[1] = bridge_stage_us(&mut stage_started);
+    }
     sync_launcher_layout(app, nav, ui);
+    #[cfg(feature = "tooling")]
+    {
+        stage_us[2] = bridge_stage_us(&mut stage_started);
+    }
     let active_games_loading = active_system_games_loading(catalog, nav);
     sync_launcher_confirm_bridge(
         &app.global::<slint_ui::launcher::OverlayView>(),
@@ -755,6 +774,10 @@ pub(super) fn sync_bridge_launcher(
         lifecycle,
     );
     LauncherStatusPresenter::new(app).sync_loading(loading_message, loading_detail);
+    #[cfg(feature = "tooling")]
+    {
+        stage_us[3] = bridge_stage_us(&mut stage_started);
+    }
     if nav.screen == Screen::Arcade
         && !nav.uses_crt_layout()
         && !active_games_loading
@@ -771,9 +794,19 @@ pub(super) fn sync_bridge_launcher(
             nav.arcade.is_turbo_active(),
         );
     }
+    #[cfg(feature = "tooling")]
+    {
+        stage_us[4] = bridge_stage_us(&mut stage_started);
+    }
     sync_setup_bridge(app, pad, setup);
+    #[cfg(feature = "tooling")]
+    {
+        stage_us[5] = bridge_stage_us(&mut stage_started);
+    }
     LauncherBridgeSyncTiming {
         model_projection_us,
+        #[cfg(feature = "tooling")]
+        stage_us: measure_model_projection.then_some(stage_us),
     }
 }
 
@@ -793,7 +826,7 @@ pub(super) fn sync_bridge_launcher_light(
     measure_model_projection: bool,
     ui: &UiDisplay,
 ) -> LauncherBridgeSyncTiming {
-    let model_started = measure_model_projection.then(Instant::now);
+    let mut model_started = measure_model_projection.then(Instant::now);
     models.sync(
         app,
         nav,
@@ -802,9 +835,7 @@ pub(super) fn sync_bridge_launcher_light(
         defer_arcade_overlay_bridge,
         Some((ui.output_w(), ui.output_h())),
     );
-    let model_projection_us = model_started
-        .map(|started| started.elapsed().as_micros())
-        .unwrap_or(0);
+    let model_projection_us = u128::from(bridge_stage_us(&mut model_started));
     let active_games_loading = active_system_games_loading(catalog, nav);
     sync_launcher_layout_if_changed(app, nav, ui);
     sync_launcher_confirm_bridge(
@@ -832,6 +863,8 @@ pub(super) fn sync_bridge_launcher_light(
     }
     LauncherBridgeSyncTiming {
         model_projection_us,
+        #[cfg(feature = "tooling")]
+        stage_us: None,
     }
 }
 

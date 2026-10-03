@@ -6371,13 +6371,17 @@ pub(super) fn run_launcher_loop(
     let mut background_maintenance_deferral = mister_magik_catalog::ui_motion::Deferral::default();
     let mut status_write_deferral = mister_magik_catalog::ui_motion::Deferral::default();
     #[cfg(feature = "tooling")]
-    let mut tooling_drop_baseline: Option<(
-        mister_magik_latch_contract::PresentationTelemetry,
-        Instant,
-        bool,
-    )> = None;
+    let mut tooling_drop_baseline: Option<
+        super::launcher_frame_accounting::ToolingPresentationObservation,
+    > = None;
     #[cfg(feature = "tooling")]
     let mut tooling_reject_baseline: Option<u16> = None;
+    #[cfg(feature = "tooling")]
+    let mut tooling_attempt_id = 0u64;
+    #[cfg(feature = "tooling")]
+    let mut tooling_input_epoch = 0u64;
+    #[cfg(feature = "tooling")]
+    let mut tooling_produced_id = 0u64;
     #[cfg(feature = "tooling")]
     crate::catalog_equivalence::start_requested_probe();
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
@@ -6386,7 +6390,40 @@ pub(super) fn run_launcher_loop(
         #[cfg(feature = "tooling")]
         let tooling_frame_begin = Instant::now();
         #[cfg(feature = "tooling")]
+        let mut tooling_frame_evidence = {
+            tooling_attempt_id = tooling_attempt_id.wrapping_add(1);
+            tooling.as_ref().and_then(|session| {
+                session.frame_evidence_candidate(
+                    tooling_attempt_id,
+                    duration_us(run_start, tooling_frame_begin),
+                )
+            })
+        };
+        #[cfg(feature = "tooling")]
+        if tooling_frame_evidence.is_some()
+            && let Some(session) = tooling.as_mut()
+            && session
+                .metrics
+                .frame_evidence
+                .needs_clock(duration_us(run_start, tooling_frame_begin))
+        {
+            let before = Instant::now();
+            let monotonic = crate::input_hub::monotonic_us();
+            let after = Instant::now();
+            session.metrics.frame_evidence.note_clock([
+                duration_us(run_start, before),
+                monotonic,
+                duration_us(run_start, after),
+            ]);
+        }
+        #[cfg(feature = "tooling")]
         let mut tooling_tick_us = 0;
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            &mut tooling_frame_evidence,
+            0,
+            run_start,
+        );
         record_launcher_frame_phase!(LauncherFramePhase::Begin);
         window.process_pending_callbacks();
         #[cfg(feature = "tooling")]
@@ -7625,9 +7662,26 @@ pub(super) fn run_launcher_loop(
             record_launcher_frame_phase!(LauncherFramePhase::InputCaptured);
             input_observation = drained_input.observation;
             launcher_response_trace.observe_drained_input(&drained_input);
+            #[cfg(feature = "tooling")]
+            if let Some(frame) = tooling_frame_evidence.as_mut() {
+                frame.input_sequence = drained_input.batch.last_sequence;
+                frame.input_captured_monotonic_us = drained_input
+                    .batch
+                    .events
+                    .last()
+                    .map(|event| event.captured_at_us);
+                frame.input_dequeued_us = Some(duration_us(run_start, Instant::now()));
+            }
             let input_batch = drained_input.batch;
             let input_batch_empty =
                 input_batch.events.is_empty() && !launcher_ui_actions.has_pending();
+            #[cfg(feature = "tooling")]
+            {
+                tooling_input_epoch += u64::from(!input_batch_empty);
+                if let Some(frame) = tooling_frame_evidence.as_mut() {
+                    frame.input_epoch = tooling_input_epoch;
+                }
+            }
             let input_route_pmu = launcher_response_trace.input_pmu_span(
                 !input_batch.events.is_empty(),
                 "launcher-response.input-route",
@@ -9272,12 +9326,26 @@ pub(super) fn run_launcher_loop(
         );
         let gui_bridge_pmu = gui_profiling.phase_span(gui_bridge_phase.span_name());
         let mut bridge_model_projection_us = 0u128;
+        #[cfg(feature = "tooling")]
+        let mut bridge_stage_us = None;
+        let measure_bridge = system_entry_cpu_profile.is_some() || {
+            #[cfg(feature = "tooling")]
+            {
+                tooling_frame_evidence
+                    .as_ref()
+                    .is_some_and(|frame| frame.phases_enabled)
+            }
+            #[cfg(not(feature = "tooling"))]
+            {
+                false
+            }
+        };
         match bridge_sync_plan {
             LauncherBridgeSyncPlan::Full => {
                 #[cfg(feature = "tooling")]
                 let _profile =
                     mister_magik_framebuffer_scenes::launcher_profile::span("bridge.full-sync");
-                bridge_model_projection_us = sync_bridge_launcher(
+                let timing = sync_bridge_launcher(
                     &app,
                     &pad,
                     &nav,
@@ -9290,10 +9358,14 @@ pub(super) fn run_launcher_loop(
                     &mut bridge_models,
                     catalog_version,
                     defer_or_preserve_selected_preview,
-                    system_entry_cpu_profile.is_some(),
+                    measure_bridge,
                     ui,
-                )
-                .model_projection_us;
+                );
+                bridge_model_projection_us = timing.model_projection_us;
+                #[cfg(feature = "tooling")]
+                {
+                    bridge_stage_us = timing.stage_us;
+                }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
                 request_launcher_redraw!();
@@ -9304,7 +9376,7 @@ pub(super) fn run_launcher_loop(
                 } else {
                     None
                 };
-                bridge_model_projection_us = sync_bridge_launcher_light(
+                let timing = sync_bridge_launcher_light(
                     &app,
                     &nav,
                     &lifecycle,
@@ -9316,10 +9388,14 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
                     defer_or_preserve_selected_preview,
-                    system_entry_cpu_profile.is_some(),
+                    measure_bridge,
                     ui,
-                )
-                .model_projection_us;
+                );
+                bridge_model_projection_us = timing.model_projection_us;
+                #[cfg(feature = "tooling")]
+                {
+                    bridge_stage_us = timing.stage_us;
+                }
                 preview_scheduled_this_loop =
                     nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
                 request_launcher_redraw!();
@@ -9339,6 +9415,16 @@ pub(super) fn run_launcher_loop(
         prepare_trace.bridge_shared_string_constructions =
             bridge_churn_delta.shared_string_constructions;
         prepare_trace.bridge_model_allocation_us = bridge_churn_delta.model_allocation_us;
+        #[cfg(feature = "tooling")]
+        if let Some(frame) = tooling_frame_evidence.as_mut() {
+            frame.bridge_us = u128_to_u64(prepare_trace.bridge_sync_us);
+            frame.bridge_model_us = (measure_bridge
+                && bridge_sync_plan != LauncherBridgeSyncPlan::None)
+                .then(|| u128_to_u64(prepare_trace.bridge_model_projection_us));
+            frame.bridge_stages_us = bridge_stage_us;
+            frame.bridge_allocation_us = prepare_trace.bridge_model_allocation_us;
+            frame.bridge_models_replaced = prepare_trace.bridge_model_replacements;
+        }
         let response_projected_at_us = crate::input_hub::monotonic_us();
         let response_projected_execution = launcher_response_trace.execution_stamp();
         drop(interaction_projection_pmu);
@@ -10224,15 +10310,49 @@ pub(super) fn run_launcher_loop(
             layer_target.reclaim_preview_publication(&mut launcher_preview_publication);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
+        #[cfg(feature = "tooling")]
+        {
+            tooling_produced_id = tooling_produced_id.wrapping_add(1);
+        }
+        #[cfg(feature = "tooling")]
+        let tooling_animation_active = super::launcher_frame_accounting::capture_evidence_state(
+            &mut tooling_frame_evidence,
+            &nav,
+            launcher_card_home.as_ref(),
+            scheduled_frame_class,
+            animation_us,
+            input_observation.generation(),
+            tooling_produced_id,
+        );
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            &mut tooling_frame_evidence,
+            1,
+            run_start,
+        );
         // Repeats while idle are reuse, not drops. Restart an idle baseline at
         // every render start so motion starting from rest is measured from its
         // first frame's render: idle time is excluded, an overrun still counts.
         #[cfg(feature = "tooling")]
-        if tooling.is_some()
-            && tooling_drop_baseline.is_some_and(|(_, _, was_animating)| !was_animating)
-            && let Ok(telemetry) = f.read_magik_presentation_telemetry()
+        if tooling.is_some() && tooling_drop_baseline.is_some_and(|observation| !observation.motion)
         {
-            tooling_drop_baseline = Some((telemetry, frame_t1, false));
+            let before = tooling_frame_evidence.as_ref().map(|_| Instant::now());
+            if let Ok(telemetry) = f.read_magik_presentation_telemetry() {
+                let read_done = Instant::now();
+                tooling_drop_baseline = Some(
+                    super::launcher_frame_accounting::ToolingPresentationObservation::new(
+                        telemetry,
+                        read_done,
+                        false,
+                        tooling_attempt_id,
+                        before,
+                        run_start,
+                    ),
+                );
+                if let Some(frame) = tooling_frame_evidence.as_mut() {
+                    frame.baseline_reset = true;
+                }
+            }
         }
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
         if screensaver.take_restore_full_frame() {
@@ -10427,6 +10547,34 @@ pub(super) fn run_launcher_loop(
                                 primary_run_delay_us: timing.primary_run_delay_us,
                                 secondary_run_delay_us: timing.secondary_run_delay_us,
                             };
+                            if let Some(frame) = tooling_frame_evidence.as_mut()
+                                && frame.phases_enabled
+                            {
+                                frame.helper = Some(
+                                    mister_magik_tooling_support::frame_evidence::HelperEvidence {
+                                        renderer_id: timing.renderer_id,
+                                        request_generation: timing.request_generation,
+                                        request_timestamp_us: timing.request_timestamp_us,
+                                        dispatched_us: duration_us(
+                                            run_start,
+                                            timing.helper_dispatched_at,
+                                        ),
+                                        started_us: duration_us(
+                                            run_start,
+                                            timing.helper_started_at,
+                                        ),
+                                        finished_us: duration_us(
+                                            run_start,
+                                            timing.helper_finished_at,
+                                        ),
+                                        received_us: duration_us(
+                                            run_start,
+                                            timing.helper_received_at,
+                                        ),
+                                        discarded_generation: timing.discarded_generation,
+                                    },
+                                );
+                            }
                             card_work_timing = Some(work);
                             if tooling.metrics.window_start.is_some()
                                 && tooling.metrics.window.is_none()
@@ -10931,6 +11079,14 @@ pub(super) fn run_launcher_loop(
             })));
             let _ = launcher_response_trace
                 .record_scheduler_interval("input-priority-restart", scheduler_phase);
+            #[cfg(feature = "tooling")]
+            super::launcher_frame_accounting::record_abandoned_evidence_raster(
+                &mut tooling_frame_evidence,
+                tooling.as_mut(),
+                run_start,
+                frame_t1,
+                Instant::now(),
+            );
             request_launcher_redraw!();
             continue 'launcher;
         }
@@ -10978,6 +11134,12 @@ pub(super) fn run_launcher_loop(
             .note_rendered(accepted_screensaver_frame);
         let cpu_t2 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t2 = Instant::now();
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            &mut tooling_frame_evidence,
+            2,
+            run_start,
+        );
         let cpu_custom_draw_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_start = Instant::now();
         let logical_slint_rect = this_rect.map(|rect| {
@@ -11700,6 +11862,12 @@ pub(super) fn run_launcher_loop(
         };
         let cpu_custom_draw_done = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_done = Instant::now();
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            &mut tooling_frame_evidence,
+            3,
+            run_start,
+        );
         if !first_render_logged {
             first_render_logged = true;
             boot_analytics::event(
@@ -12180,6 +12348,12 @@ pub(super) fn run_launcher_loop(
             #[cfg(feature = "tooling")]
             post_timing,
         } = present_cycle;
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            &mut tooling_frame_evidence,
+            4,
+            run_start,
+        );
         record_launcher_frame_phase!(LauncherFramePhase::FrameSubmitted);
         if let Some(worker) = preview_compositor.as_ref() {
             worker.release_queued();
@@ -12390,6 +12564,19 @@ pub(super) fn run_launcher_loop(
             &custom_draw_trace,
             &presentation,
         ));
+        #[cfg(feature = "tooling")]
+        if let Some(frame) = tooling_frame_evidence.as_mut() {
+            frame.destination_reveal_us =
+                u128_to_u64(custom_draw_trace.navigation_transition_destination_reveal_us);
+            frame.card_snapshot_locked |= custom_draw_trace.navigation_snapshot_locked;
+            frame.producer_ready_depth = frame_production_trace.ready_depth;
+            frame.producer_ready_age_us = frame_production_trace.ready_age_us;
+            frame.producer_cancelled = frame_production_trace.cancelled;
+        }
+        #[cfg(feature = "tooling")]
+        if let Some(frame) = tooling_frame_evidence.as_mut() {
+            frame.request_generation = frame_production_trace.sequence;
+        }
         let mut presented_frame = LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames,
@@ -12600,6 +12787,38 @@ pub(super) fn run_launcher_loop(
                     record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
                     request_launcher_redraw!();
                     record_launcher_frame_phase!(LauncherFramePhase::Yielded);
+                    #[cfg(feature = "tooling")]
+                    if let Some(mut frame) = tooling_frame_evidence.take()
+                        && let Some(session) = tooling.as_mut()
+                        && session.frame_evidence_active()
+                    {
+                        let started = Instant::now();
+                        frame.outcome = "superseded-before-confirmation";
+                        frame.slot = presented_frame.main_present_buffer;
+                        frame.copied_bytes =
+                            presented_frame.main_present_hidden_copied_bytes as u64;
+                        frame.finish_us = duration_us(run_start, started);
+                        frame.record.reason = "post replaced before vsync; not a counted drop";
+                        frame.record.work = card_work_timing;
+                        frame.record.timeline = Some(
+                            mister_magik_tooling_support::measurement::FramePhaseTimeline {
+                                frame_begin_us: frame.begin_us,
+                                render_start_us: duration_us(run_start, frame_t1),
+                                render_end_us: duration_us(run_start, frame_t2),
+                                custom_draw_start_us: duration_us(run_start, custom_draw_start),
+                                custom_draw_end_us: duration_us(run_start, custom_draw_done),
+                                present_start_us: duration_us(run_start, frame_t3),
+                                post_returned_us: duration_us(run_start, frame_t4),
+                                confirmation_wait_start_us: duration_us(run_start, wait_start),
+                                posted_sequence: presented_frame.main_present_sequence,
+                                post_pending_sequence: presented_frame
+                                    .main_present_post_pending_sequence,
+                                post_pending: presented_frame.main_present_post_pending,
+                                ..Default::default()
+                            },
+                        );
+                        session.record_frame_evidence(frame, started);
+                    }
                     // No vsync has passed, so the next frame reuses this frame's
                     // time and replaces the posted one in the same refresh slot.
                     continue 'launcher;
@@ -12615,6 +12834,12 @@ pub(super) fn run_launcher_loop(
             );
             drop(completion_poll_pmu);
             let wait_done = Instant::now();
+            #[cfg(feature = "tooling")]
+            super::launcher_frame_accounting::capture_evidence_cpu(
+                &mut tooling_frame_evidence,
+                5,
+                run_start,
+            );
             scheduler_phase = launcher_response_trace
                 .record_scheduler_interval("latch-confirmation-wait", scheduler_phase);
             let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
@@ -12634,6 +12859,12 @@ pub(super) fn run_launcher_loop(
             presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
             presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
             presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
+            #[cfg(feature = "tooling")]
+            if let Some(frame) = tooling_frame_evidence.as_mut() {
+                frame.slot = presented_frame.main_present_buffer;
+                frame.copied_bytes = presented_frame.main_present_hidden_copied_bytes as u64;
+                frame.full_seed = presented_frame.main_present_hidden_full_copy;
+            }
             let mut readiness_post = None;
             match completion {
                 Ok(completion) => {
@@ -12885,6 +13116,9 @@ pub(super) fn run_launcher_loop(
                                 metrics.counters.card_delivered_frames.saturating_add(1);
                         } else {
                             metrics.counters.card_dropped_frames += 1;
+                            if let Some(frame) = tooling_frame_evidence.as_mut() {
+                                frame.missing_fresh_pose += 1;
+                            }
                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
                                 reason:"current pose not updated at presentation; renderer timeline unavailable",
                                 workload:mister_magik_tooling_support::measurement::FrameWorkload::Card,
@@ -12899,19 +13133,16 @@ pub(super) fn run_launcher_loop(
                     if nav.home_horizontal_repeat_active() {
                         metrics.counters.card_continuous_presentations += 1;
                     }
+                    let evidence_read_before =
+                        tooling_frame_evidence.as_ref().map(|_| Instant::now());
                     match f.read_magik_presentation_telemetry() {
                         Ok(telemetry) => {
                             let observed_at = Instant::now();
-                            // The scheduled class predates this frame's pose; the card
-                            // session knows whether the frame it just rendered moved.
-                            let animation_active = scheduled_frame_class
-                                != FrameProductionClass::EventDriven
-                                || nav.arcade.is_scroll_active() && nav.screen == Screen::Arcade
-                                || nav.screen == Screen::Home
-                                    && launcher_card_home.as_ref().is_some_and(
-                                        super::launcher_card_home::LauncherCardHomeSession::is_animating,
-                                    );
-                            if let Some((previous, at, was_animating)) = tooling_drop_baseline {
+                            let animation_active = tooling_animation_active;
+                            if let Some(previous_observation) = tooling_drop_baseline {
+                                let previous = previous_observation.telemetry;
+                                let at = previous_observation.at;
+                                let was_animating = previous_observation.motion;
                                 match mister_magik_latch_contract::validate_presentation_telemetry_window(
                                     previous, telemetry, observed_at.saturating_duration_since(at).as_micros().max(1) as u64, 8_333,
                                 ) {
@@ -12920,8 +13151,8 @@ pub(super) fn run_launcher_loop(
                                         metrics.counters.presented_vblanks += u64::from(delta.presented_vblank_delta);
                                         let dropped = if animation_active || was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
                                         metrics.counters.drops += dropped;
-                                        if dropped != 0 {
-                                            metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
+                                        if dropped != 0 || tooling_frame_evidence.is_some() {
+                                            let record = mister_magik_tooling_support::measurement::DroppedFrameRecord {
                                                 reason: "owned refresh repeated during motion; see observation interval and phase timeline",
                                                 workload: if screensaver.active {
                                                     mister_magik_tooling_support::measurement::FrameWorkload::Screensaver
@@ -12972,14 +13203,28 @@ pub(super) fn run_launcher_loop(
                                                 owned_refresh_observed: Some(telemetry.owned_vblank_count),
                                                 active_sequence: Some(telemetry.active_sequence), ui_render_us: render_us,
                                                 ..Default::default()
-                                            });
+                                            };
+                                            if dropped != 0 { metrics.record_dropped_frame(record); }
+                                            if let Some(frame) = tooling_frame_evidence.as_mut() {
+                                                frame.record = record;
+                                                frame.telemetry_valid = true;
+                                                frame.telemetry_before_us = duration_us(run_start,evidence_read_before.unwrap());
+                                                frame.previous_read_bracket_us = previous_observation.read_bracket_us;
+                                                frame.previous_observation_attempt_id = Some(previous_observation.attempt_id);
+                                                frame.refresh_counter = Some(telemetry.owned_vblank_count);
+                                                frame.ownership_loss_count = Some(telemetry.ownership_loss_count);
+                                                frame.raw_presented_count = Some(telemetry.presented_vblank_count);
+                                                frame.raw_repeat_count = Some(telemetry.repeated_vblank_count);
+                                                frame.telemetry_flags = Some(telemetry.flags);
+                                            }
                                         }
                                     }
                                     Err(error) => metrics.error = Some(error.to_string()),
                                 }
                             }
-                            tooling_drop_baseline =
-                                Some((telemetry, observed_at, animation_active));
+                            tooling_drop_baseline = Some(super::launcher_frame_accounting::ToolingPresentationObservation::new(
+                                telemetry, observed_at, animation_active, tooling_attempt_id, evidence_read_before, run_start,
+                            ));
                             metrics.last_physical_drop_count =
                                 Some(presented_frame.main_present_drop_count);
                         }
@@ -13357,6 +13602,28 @@ pub(super) fn run_launcher_loop(
             visible_frame_presented
         } {
             latency_critical_input_pending = false;
+        }
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            &mut tooling_frame_evidence,
+            6,
+            run_start,
+        );
+        #[cfg(feature = "tooling")]
+        if let Some(mut frame) = tooling_frame_evidence.take()
+            && let Some(session) = tooling.as_mut()
+            && session.frame_evidence_active()
+        {
+            let observer_start = Instant::now();
+            frame.outcome = if accepted_and_active_confirmed {
+                "active"
+            } else if visible_frame_presented {
+                "published"
+            } else {
+                "idle"
+            };
+            frame.finish_us = duration_us(run_start, observer_start);
+            session.record_frame_evidence(frame, observer_start);
         }
         frames += 1;
         frame_clock.advance();

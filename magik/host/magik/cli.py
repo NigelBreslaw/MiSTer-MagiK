@@ -121,6 +121,12 @@ def main() -> int:
         action="store_true",
         help="benchmark cold Mini preparation and first confirmed presentation only",
     )
+    check_command.add_argument(
+        "--frame-evidence",
+        choices=("off", "neighbors", "phases"),
+        default="off",
+        help="Capture bounded frame neighborhoods on the explicit animation round trip",
+    )
     check_command.add_argument("--concept")
     check_command.add_argument(
         "--quick",
@@ -173,6 +179,16 @@ def main() -> int:
             help="use Mini's production-matched optimization profile for cadence qualification",
         )
     arguments = parser.parse_args()
+    if (
+        arguments.command == "check"
+        and arguments.frame_evidence != "off"
+        and (
+            arguments.app != "magik"
+            or arguments.scenario != "animation-roundtrip"
+            or arguments.profile
+        )
+    ):
+        parser.error("--frame-evidence requires unprofiled MagiK animation-roundtrip")
     if (
         getattr(arguments, "profile_preparation", False)
         or getattr(arguments, "bench_preparation", False)
@@ -456,6 +472,8 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         "--magik-app",
         arguments.app,
     ]
+    if getattr(arguments, "frame_evidence", "off") != "off":
+        options += ["--magik-frame-evidence", arguments.frame_evidence]
     if arguments.profile:
         measurements = (
             {"idle", "motion", "motion-rollover", "motion-held", "animation-roundtrip"}

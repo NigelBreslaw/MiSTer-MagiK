@@ -754,6 +754,35 @@ impl LauncherCardHomeSession {
             && self.pending.is_none()
     }
 
+    #[cfg(feature = "tooling")]
+    pub(super) fn evidence_pose(&self) -> (&'static str, u64) {
+        if let Some(trick) = self.trick.as_ref() {
+            let elapsed = self.now_ms.saturating_sub(trick.started_ms);
+            if let Some(delay) = trick.deal_delay_ms {
+                (
+                    "level-deal",
+                    elapsed
+                        .saturating_sub(delay)
+                        .min(u64::from(LEVEL_TRICK_MILLIS)),
+                )
+            } else {
+                (
+                    "level-gather",
+                    elapsed.min(u64::from(LEVEL_TRICK_EDGE_MILLIS)),
+                )
+            }
+        } else {
+            (
+                if self.frame.phase == BrowsePhase::Settled {
+                    "settled"
+                } else {
+                    "browse"
+                },
+                u64::from(self.frame.progress_millis),
+            )
+        }
+    }
+
     pub(super) const fn content_generation(&self) -> u64 {
         self.content_generation
     }
@@ -1790,7 +1819,32 @@ mod tests {
         }
         now += u64::from(LEVEL_TRICK_MILLIS);
         session.update(scene, &consoles(), 0, 0.0, "21:37", now, true, None);
+        #[cfg(feature = "tooling")]
+        let final_evidence = {
+            let nav = crate::launcher::LauncherNav::new();
+            let mut frame =
+                Some(mister_magik_tooling_support::frame_evidence::FrameEvidence::default());
+            assert!(
+                super::super::launcher_frame_accounting::capture_evidence_state(
+                    &mut frame,
+                    &nav,
+                    Some(&session),
+                    super::super::launcher_pacing::FrameProductionClass::EventDriven,
+                    now * 1000,
+                    0,
+                    1,
+                )
+            );
+            frame.unwrap()
+        };
         session.render();
+        #[cfg(feature = "tooling")]
+        {
+            assert_eq!(final_evidence.pose_phase, "level-deal");
+            assert_eq!(final_evidence.pose_progress, u64::from(LEVEL_TRICK_MILLIS));
+            assert!(final_evidence.motion);
+            assert!(final_evidence.card_snapshot_locked);
+        }
         assert!(session.trick.is_none());
         assert!(!session.is_level_trick_active());
         assert!(session.can_render_native());

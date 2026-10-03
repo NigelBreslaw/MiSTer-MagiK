@@ -34,6 +34,9 @@ def pytest_addoption(parser):
     )
     group.addoption("--magik-run", help="Existing result directory for this invocation")
     group.addoption("--magik-installed-sha256")
+    group.addoption(
+        "--magik-frame-evidence", choices=("off", "neighbors", "phases"), default="off"
+    )
 
 
 def pytest_configure(config):

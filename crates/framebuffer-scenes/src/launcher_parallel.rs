@@ -76,8 +76,16 @@ impl ThreadSample {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct ParallelFrameTiming {
+    pub renderer_id: u64,
+    pub request_generation: u64,
+    pub request_timestamp_us: u64,
+    pub helper_dispatched_at: Instant,
+    pub helper_started_at: Instant,
+    pub helper_finished_at: Instant,
+    pub helper_received_at: Instant,
+    pub discarded_generation: Option<u64>,
     pub total_us: u64,
     pub helper_ahead: bool,
     pub helper_ahead_lead_us: u64,
@@ -111,6 +119,8 @@ struct Ahead {
     dispatched_at: Instant,
 }
 struct Completion {
+    dispatched_at: Instant,
+    started_at: Instant,
     #[cfg(feature = "launcher-profile")]
     profile: Option<crate::launcher_profile::Report>,
     buffer: PreparedLauncherFrame,
@@ -121,6 +131,7 @@ struct Completion {
     finished_at: Instant,
 }
 pub struct ParallelLauncherRenderer {
+    instance_id: u64,
     primary: PreparedLauncherFrame,
     helper: Option<PreparedLauncherFrame>,
     spare: Option<PreparedLauncherFrame>,
@@ -185,6 +196,8 @@ impl ParallelLauncherRenderer {
                         crate::launcher_profile::enabled().then(crate::launcher_profile::take);
                     if completed
                         .send(Completion {
+                            dispatched_at: job.dispatched_at,
+                            started_at,
                             #[cfg(feature = "launcher-profile")]
                             profile,
                             buffer: job.buffer,
@@ -203,7 +216,9 @@ impl ParallelLauncherRenderer {
                 }
             })
             .map_err(|e| e.to_string())?;
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Ok(Self {
+            instance_id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             primary,
             helper: Some(helper),
             spare: None,
@@ -231,6 +246,11 @@ impl ParallelLauncherRenderer {
             .ahead
             .as_ref()
             .is_some_and(|ahead| ahead.request == request && ahead.preparer.same_source(preparer));
+        let discarded_generation = self
+            .ahead
+            .as_ref()
+            .filter(|_| !helper_ahead)
+            .map(|ahead| ahead.request.generation);
         let (discarded_helper_us, discarded_helper_cpu_us) =
             if self.ahead.is_some() && !helper_ahead {
                 self.retire_ahead()?
@@ -258,7 +278,7 @@ impl ParallelLauncherRenderer {
                     preparer: preparer.clone(),
                     request,
                     buffer: self.helper.take().ok_or("helper output unavailable")?,
-                    dispatched_at: started,
+                    dispatched_at: Instant::now(),
                     split,
                 })
                 .map_err(|e| e.to_string())?;
@@ -299,6 +319,14 @@ impl ParallelLauncherRenderer {
             completed.wall_us + completed.start_delay_us,
         );
         Ok(ParallelFrameTiming {
+            renderer_id: self.instance_id,
+            request_generation: request.generation,
+            request_timestamp_us: request.timestamp_us,
+            helper_dispatched_at: completed.dispatched_at,
+            helper_started_at: completed.started_at,
+            helper_finished_at: completed.finished_at,
+            helper_received_at: received_at,
+            discarded_generation,
             total_us: micros(started),
             helper_ahead,
             helper_ahead_lead_us,
@@ -441,6 +469,17 @@ mod tests {
 
     #[test]
     fn ahead_preserves_current_pixels_and_rejects_changed_sources() {
+        static HELPER_READS: std::sync::Mutex<Vec<Instant>> = std::sync::Mutex::new(Vec::new());
+        fn record_helper_clock() -> Option<u64> {
+            if std::thread::current().name() == Some("card-tile-helper") {
+                HELPER_READS.lock().unwrap().push(Instant::now());
+            }
+            None
+        }
+        let clocks = ThreadClocks {
+            cpu_us: record_helper_clock,
+            run_delay_us: || None,
+        };
         let scene = LauncherScene::new(960, 540);
         let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
             id: LauncherCardId::Consoles,
@@ -460,7 +499,8 @@ mod tests {
         let mut page = scene.prepare(data);
         let mut serial = scene.prepare(data);
         let preparer = page.frame_preparer();
-        let mut renderer = ParallelLauncherRenderer::new(preparer.clone(), None, None).unwrap();
+        let mut renderer =
+            ParallelLauncherRenderer::new(preparer.clone(), None, Some(clocks)).unwrap();
         renderer.retain_bands(true);
         let storage = renderer.storage_bytes();
         let worker = renderer.helper_thread_id();
@@ -493,6 +533,11 @@ mod tests {
         assert!(page.pixels() == serial.pixels());
         let timing = page.render_parallel_frame(&mut renderer, next).unwrap();
         assert!(timing.helper_ahead);
+        assert_eq!(timing.request_generation, next.generation);
+        assert_eq!(timing.request_timestamp_us, next.timestamp_us);
+        assert!(timing.helper_dispatched_at <= timing.helper_started_at);
+        assert!(timing.helper_started_at <= timing.helper_finished_at);
+        assert!(timing.helper_finished_at <= timing.helper_received_at);
         page.merge_retained_helper(&mut renderer);
         assert!(page.pixels() == serial.pixels());
         assert_eq!(renderer.storage_bytes(), storage + 960 * 540 * 2);
@@ -515,6 +560,19 @@ mod tests {
             .unwrap();
         assert!(!timing.helper_ahead);
         assert!(timing.discarded_helper_us > 0);
+        assert_eq!(timing.discarded_generation, Some(next_request.generation));
+        {
+            let samples = HELPER_READS.lock().unwrap();
+            let discarded_finished = samples[samples.len() - 3];
+            assert!(timing.helper_dispatched_at >= discarded_finished);
+            assert_eq!(
+                timing.helper_start_delay_us,
+                timing
+                    .helper_started_at
+                    .saturating_duration_since(timing.helper_dispatched_at)
+                    .as_micros() as u64
+            );
+        }
         replacement.merge_retained_helper(&mut renderer);
         assert!(replacement.pixels() == serial.pixels());
         assert_eq!(renderer.helper_thread_id(), worker);
