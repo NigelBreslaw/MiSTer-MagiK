@@ -754,6 +754,7 @@ impl LauncherCardHomeSession {
             && self.pending.is_none()
     }
 
+    #[cfg(feature = "tooling")]
     pub(super) fn evidence_pose(&self) -> (&'static str, u64) {
         if let Some(trick) = self.trick.as_ref() {
             let elapsed = self.now_ms.saturating_sub(trick.started_ms);
