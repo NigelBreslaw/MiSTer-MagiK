@@ -78,24 +78,63 @@ def _settled_metrics(metrics, before_ms, deadline):
 
 
 def animation_roundtrip(
-    app, agent, run: Path, repetition: int, *, instrumented=False, frame_evidence="off"
+    app,
+    agent,
+    run: Path,
+    repetition: int,
+    *,
+    instrumented=False,
+    frame_evidence="off",
+    route="consoles",
 ):
-    prefix = f"animation-roundtrip-{repetition}"
+    prefix = (
+        f"animation-roundtrip-{repetition}"
+        if route == "consoles"
+        else f"animation-app-{route}-{repetition}"
+    )
+    duration_ms = {
+        "root": 45_000,
+        "consoles": 45_000,
+        "computers": 35_000,
+        "handhelds": 35_000,
+        "settings": 35_000,
+        "arcade": 35_000,
+        "favourites": 15_000,
+    }[route]
     _key(app, "\uf729")
     time.sleep(1.2)
-    _focus(app, r"^Consoles$")
+    _focus(
+        app,
+        "^"
+        + {
+            "consoles": "Consoles",
+            "computers": "Computers",
+            "handhelds": "Handhelds",
+            "root": "Arcade",
+            "arcade": "Arcade",
+            "favourites": "Favourites",
+            "settings": "Settings",
+        }[route]
+        + "$",
+    )
     agent._successful(
-        "measure", {"duration_ms": 45_000, "frame_evidence": frame_evidence}
+        "measure", {"duration_ms": duration_ms, "frame_evidence": frame_evidence}
     )
     requested_at = time.monotonic()
     time.sleep(3.5)
 
     animation_clock = None
+    process_id = None
 
     def metrics():
-        nonlocal animation_clock
+        nonlocal animation_clock, process_id
         value = agent.metrics()
         assert value["sha256"] == agent.expected_sha256
+        if process_id is None:
+            process_id = value["pid"]
+        assert value["pid"] == process_id, (
+            "Application restarted during the benchmark lease"
+        )
         assert not value.get("evidence_error"), value.get("evidence_error")
         clock = value.get("context", {}).get("animation_clock", {})
         assert clock.get("mode") == "vsync-locked-v1", (
@@ -112,16 +151,29 @@ def animation_roundtrip(
     assert before.get("ui_motion") is False, "Initial selection has not settled"
     rows = []
 
-    def step(name, action, expected=None, menu=None, games=False, browsing=False):
+    def step(
+        name,
+        action,
+        expected=None,
+        menu=None,
+        games=False,
+        browsing=False,
+        element=None,
+    ):
         nonlocal before
         action()
-        time.sleep(2)
-        after = _settled_metrics(metrics, before["elapsed_ms"], requested_at + 43)
+        poll_delay_ms = 2_000 if route in {"root", "consoles"} else 1_000
+        time.sleep(poll_delay_ms / 1_000)
+        after = _settled_metrics(
+            metrics, before["elapsed_ms"], requested_at + duration_ms / 1000 + 1
+        )
         tree = _tree(app)
         if expected:
             assert _selected(tree, expected), (name, tree)
         if menu:
             assert re.search(menu, str(tree["menu"]), re.I), (name, tree)
+        if element:
+            assert any(e["label"] == element for e in tree["elements"]), (name, tree)
         if games:
             assert any(e["label"] == "Arcade games" for e in tree["elements"]), (
                 name,
@@ -147,56 +199,72 @@ def animation_roundtrip(
         )
         before = after
 
-    step("Root → Consoles", lambda: _key(app, "\n"), menu="Consoles", browsing=True)
-    if not _selected(_tree(app), r"^Nintendo$"):
+    if route == "consoles":
+        step("Root → Consoles", lambda: _key(app, "\n"), menu="Consoles", browsing=True)
+        if not _selected(_tree(app), r"^Nintendo$"):
+            step(
+                "Browse to Nintendo",
+                lambda: _focus(app, r"^Nintendo$"),
+                expected=r"^Nintendo$",
+                browsing=True,
+            )
         step(
-            "Browse to Nintendo",
-            lambda: _focus(app, r"^Nintendo$"),
-            expected=r"^Nintendo$",
+            "Consoles → Nintendo",
+            lambda: _key(app, "\n"),
+            menu="Nintendo",
             browsing=True,
         )
-    step("Consoles → Nintendo", lambda: _key(app, "\n"), menu="Nintendo", browsing=True)
-    if not _selected(_tree(app), r"SNES|Super Nintendo"):
+        if not _selected(_tree(app), r"SNES|Super Nintendo"):
+            step(
+                "Browse to SNES",
+                lambda: _focus(app, r"SNES|Super Nintendo"),
+                expected=r"SNES|Super Nintendo",
+                browsing=True,
+            )
+        step("Nintendo → SNES hub", lambda: _key(app, "\n"), expected=r"^GAMES$")
+        step("SNES hub → Games list", lambda: _key(app, "\n"), games=True)
         step(
-            "Browse to SNES",
-            lambda: _focus(app, r"SNES|Super Nintendo"),
-            expected=r"SNES|Super Nintendo",
+            "Games list → Nintendo",
+            lambda: _key(app, "\x1b"),
+            menu="Nintendo",
             browsing=True,
         )
-    step("Nintendo → SNES hub", lambda: _key(app, "\n"), expected=r"^GAMES$")
-    step("SNES hub → Games list", lambda: _key(app, "\n"), games=True)
-    step(
-        "Games list → Nintendo",
-        lambda: _key(app, "\x1b"),
-        menu="Nintendo",
-        browsing=True,
-    )
-    step(
-        "Nintendo → Consoles", lambda: _key(app, "\x1b"), menu="Consoles", browsing=True
-    )
-    step(
-        "Consoles → Root",
-        lambda: _key(app, "\x1b"),
-        expected=r"^Consoles$",
-        browsing=True,
-    )
+        step(
+            "Nintendo → Consoles",
+            lambda: _key(app, "\x1b"),
+            menu="Consoles",
+            browsing=True,
+        )
+        step(
+            "Consoles → Root",
+            lambda: _key(app, "\x1b"),
+            expected=r"^Consoles$",
+            browsing=True,
+        )
+    else:
+        from .app_animation_routes import navigate
+
+        navigate(app, step, route)
     while True:
         end = metrics()
         if end.get("window") is not None and (
             not instrumented or "renderer_profile" in end["window"]
         ):
             break
-        if time.monotonic() >= requested_at + 55:
+        if time.monotonic() >= requested_at + duration_ms / 1000 + 12:
             (run / f"{prefix}-incomplete.json").write_text(json.dumps(end, indent=2))
             raise AssertionError("Measurement did not complete")
         time.sleep(0.3)
     window = end["window"]
-    assert window["target_duration_ms"] == 45_000
-    assert 45_000 <= window["elapsed_ms"] < 46_000
+    assert window["target_duration_ms"] == duration_ms
+    assert duration_ms <= window["elapsed_ms"] < duration_ms + 1_000
     assert window["start_ms"] <= rows[0]["device_before_ms"]
     assert window["end_ms"] >= rows[-1]["device_after_ms"]
     assert window["instrumented"] is instrumented and not window.get("evidence_error")
-    if window.get("context", {}).get("card_helper_ahead") == "native-tricks-v1":
+    if (
+        route == "consoles"
+        and window.get("context", {}).get("card_helper_ahead") == "native-tricks-v1"
+    ):
         assert window["helper_ahead_frames"] > 0, (
             "Helper render-ahead was not exercised"
         )
@@ -251,8 +319,12 @@ def animation_roundtrip(
     assert route_drops == window["dropped_frames"], "Route and window counts differ"
     assert sum(window["dropped_frames_by_workload"].values()) == route_drops
     assert window["moving_cpu_unavailable_intervals"] == 0
-    assert window["moving_cpu_us"] > 0 and window["moving_presentations"] > 0
+    if route == "favourites" and not window["moving_presentations"]:
+        assert not window["motion_starts"] and not window["dropped_frames"]
+    else:
+        assert window["moving_cpu_us"] > 0 and window["moving_presentations"] > 0
     result = {
+        "route": route,
         "sha256": agent.expected_sha256,
         "animation_clock": animation_clock,
         "steps": rows,

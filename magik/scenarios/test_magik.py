@@ -309,3 +309,27 @@ def test_device_plane(journey_application_session):
 
     app, agent, run, _ = journey_application_session
     device_plane_journey(app, agent, run)
+
+
+@pytest.mark.parametrize("repetition", range(3))
+@pytest.mark.parametrize(
+    "route",
+    os.environ.get(
+        "MAGIK_ANIMATION_ROUTES",
+        "root,consoles,computers,handhelds,arcade,favourites,settings",
+    ).split(","),
+)
+def test_animation_app(journey_application_session, repetition, route):
+    from magik.animation_benchmark import animation_roundtrip
+
+    app, agent, run, _ = journey_application_session
+    result = animation_roundtrip(app, agent, run, repetition, route=route)
+    append_event(
+        run,
+        {
+            "phase": "animation-app",
+            "outcome": "measured",
+            "repetition": repetition,
+            **result,
+        },
+    )
