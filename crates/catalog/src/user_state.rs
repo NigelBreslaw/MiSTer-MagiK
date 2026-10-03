@@ -591,8 +591,14 @@ mod tests {
             snapshot.recent_launch_refs,
             [snes.launch_ref.clone(), nes.launch_ref.clone()]
         );
-        assert_eq!(snapshot.recent_by_system["snes"], [snes.launch_ref.clone()]);
-        assert_eq!(snapshot.recent_by_system["nes"], [nes.launch_ref.clone()]);
+        assert_eq!(
+            snapshot.recent_by_system["snes"].as_slice(),
+            std::slice::from_ref(&snes.launch_ref)
+        );
+        assert_eq!(
+            snapshot.recent_by_system["nes"].as_slice(),
+            std::slice::from_ref(&nes.launch_ref)
+        );
         let recent = store.recent_unique("snes", 16).unwrap();
         assert_eq!(recent[0].play_count, 3);
         assert_eq!(recent[0].last_played_at, 30);
