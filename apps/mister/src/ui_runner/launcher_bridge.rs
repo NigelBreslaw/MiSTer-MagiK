@@ -75,47 +75,14 @@ pub(super) fn sync_settings_bridge(
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
     ui: &UiDisplay,
+    models: &mut LauncherViewModels,
 ) {
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let screen = crate::launcher_view_types::launcher_screen(nav.screen);
     if navigation.get_screen() != screen {
         navigation.set_screen(screen);
     }
-    let settings = app.global::<slint_ui::launcher::SettingsView>();
-    settings.set_section(crate::launcher_view_types::settings_section(
-        nav.settings_selected,
-    ));
-    settings.set_popup(crate::launcher_view_types::settings_popup(
-        nav.display_combo_open,
-        nav.orientation_combo_open,
-    ));
-    settings.set_active_display(crate::launcher_view_types::active_display_choice(
-        nav.display_selected,
-        Some((ui.output_w(), ui.output_h())),
-    ));
-    settings.set_selected_display(crate::launcher_view_types::selected_display_choice(
-        nav.display_selected,
-    ));
-    settings.set_highlighted_display(crate::launcher_view_types::settings_display_choice(
-        nav.display_highlighted,
-    ));
-    settings.set_display_confirm_remaining(nav.display_confirm_remaining as i32);
-    settings.set_active_orientation(crate::launcher_view_types::screen_orientation(
-        nav.settings.screen_orientation,
-    ));
-    settings.set_selected_orientation(crate::launcher_view_types::orientation_at(
-        nav.orientation_selected,
-    ));
-    settings.set_highlighted_orientation(crate::launcher_view_types::orientation_at(
-        nav.orientation_highlighted,
-    ));
-    settings.set_orientation_confirm_remaining(nav.orientation_confirm_remaining as i32);
-    settings.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
-    settings.set_reduce_motion(nav.settings.reduce_motion);
-    settings.set_screensaver_enabled(nav.settings.screensaver_enabled);
-    settings.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
-    settings.set_selected_license_index(nav.licenses_selected as i32);
-    settings.set_license_scroll_y(nav.licenses_scroll_y());
+    models.sync_settings(app, nav, Some((ui.output_w(), ui.output_h())));
     if nav.screen == Screen::Settings
         || matches!(
             nav.confirm_action,
@@ -1615,7 +1582,13 @@ mod tests {
             Instant::now(),
         );
         let ui = UiDisplay::for_framebuffer(1280, 720);
-        sync_settings_bridge(&app, &nav, &lifecycle, &ui);
+        sync_settings_bridge(
+            &app,
+            &nav,
+            &lifecycle,
+            &ui,
+            &mut LauncherViewModels::default(),
+        );
 
         let settings = app.global::<slint_ui::launcher::SettingsView>();
         assert_eq!(
@@ -1668,7 +1641,13 @@ mod tests {
         );
         let ui = UiDisplay::for_framebuffer(1920, 1200);
 
-        sync_settings_bridge(&app, &nav, &lifecycle, &ui);
+        sync_settings_bridge(
+            &app,
+            &nav,
+            &lifecycle,
+            &ui,
+            &mut LauncherViewModels::default(),
+        );
 
         let active = app
             .global::<slint_ui::launcher::SettingsView>()
@@ -1929,6 +1908,73 @@ mod tests {
         assert!(nav.set_user_state_snapshot(&catalog, snapshot));
         models.sync(&app, &nav, &catalog, None, false, None);
         assert_eq!(navigation.get_system_hub_recent_count(), 5);
+    }
+
+    #[test]
+    fn settings_owner_skips_card_selection_ticks_and_publishes_actual_changes() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        let mut models = LauncherViewModels::default();
+        let mut nav = LauncherNav::new();
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        for selected in 0..120 {
+            nav.selected = selected % 5;
+            assert!(!models.sync_settings(&app, &nav, Some((960, 540))));
+        }
+        nav.settings.reduce_motion = true;
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        assert!(
+            app.global::<slint_ui::launcher::SettingsView>()
+                .get_reduce_motion()
+        );
+        nav.display_confirm_remaining = 3;
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        nav.display_confirm_remaining = 2;
+        assert!(models.sync_settings(&app, &nav, Some((960, 540))));
+        assert_eq!(
+            app.global::<slint_ui::launcher::SettingsView>()
+                .get_display_confirm_remaining(),
+            2
+        );
+        assert!(!models.sync_settings(&app, &nav, Some((960, 540))));
+    }
+
+    #[test]
+    fn hidden_home_menu_is_republished_only_when_home_returns() {
+        install_isolated_test_platform();
+        let app = slint_ui::launcher::Launcher::new().unwrap();
+        let catalog = ArcadeCatalog::new(
+            PathBuf::new(),
+            vec![],
+            vec![GameSystemEntry {
+                id: "snes".into(),
+                title: "SNES".into(),
+                count: 1857,
+            }],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let mut models = LauncherViewModels::default();
+        models.sync(&app, &nav, &catalog, Some(1), false, None);
+        let before = app
+            .global::<slint_ui::launcher::NavigationView>()
+            .get_menu_items();
+        assert!(nav.open_system(&catalog, "snes"));
+        models.sync(&app, &nav, &catalog, Some(2), false, None);
+        assert!(
+            before
+                == app
+                    .global::<slint_ui::launcher::NavigationView>()
+                    .get_menu_items()
+        );
+        nav.screen = Screen::Home;
+        models.sync(&app, &nav, &catalog, Some(2), false, None);
+        assert!(
+            before
+                != app
+                    .global::<slint_ui::launcher::NavigationView>()
+                    .get_menu_items()
+        );
     }
 
     #[test]

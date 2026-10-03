@@ -2505,8 +2505,7 @@ impl LauncherNav {
                 .iter()
                 .find_map(|path| {
                     self.active_arcade_game_view(catalog, &collection.id)
-                        .iter()
-                        .position(|game| game.mra_path.as_ref() == path.as_str())
+                        .position_launch_ref(path)
                 })
                 .unwrap_or(0);
             self.arcade.selected = representative.min(count.saturating_sub(1));
@@ -4213,16 +4212,20 @@ impl LauncherNav {
         let active_collection = self.active_collection_id().map(str::to_owned);
         self.user_list_indexes = match (self.arcade_user_list_mode, active_collection.as_deref()) {
             (ArcadeUserListMode::Games, _) => Vec::new(),
-            (ArcadeUserListMode::Favourites, Some(collection_id)) => catalog
-                .system_game_view(collection_id)
-                .iter()
-                .enumerate()
-                .filter_map(|(index, game)| {
-                    self.favourite_launch_refs
-                        .contains(game.mra_path.as_ref())
-                        .then_some(index)
-                })
-                .collect(),
+            (ArcadeUserListMode::Favourites, Some(collection_id)) => {
+                let games = catalog.system_game_view(collection_id);
+                if self.favourite_launch_refs.is_empty() {
+                    Vec::new()
+                } else {
+                    (0..games.len())
+                        .filter(|index| {
+                            games.launch_ref(*index).is_some_and(|reference| {
+                                self.favourite_launch_refs.contains(reference)
+                            })
+                        })
+                        .collect()
+                }
+            }
             (ArcadeUserListMode::Favourites, None) => catalog
                 .games
                 .iter()
@@ -4237,11 +4240,7 @@ impl LauncherNav {
                 let games = catalog.system_game_view(collection_id);
                 self.active_recent_refs()
                     .iter()
-                    .filter_map(|launch_ref| {
-                        games
-                            .iter()
-                            .position(|game| game.mra_path.as_ref() == launch_ref)
-                    })
+                    .filter_map(|launch_ref| games.position_launch_ref(launch_ref))
                     .collect()
             }
             (ArcadeUserListMode::Recent, None) => self

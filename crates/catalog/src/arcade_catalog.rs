@@ -184,6 +184,13 @@ impl SystemCollectionRows {
         }
     }
 
+    fn launch_ref(&self, ordinal: usize) -> Option<&str> {
+        match self {
+            Self::Owned(games) => games.get(ordinal).map(|game| game.mra_path.as_ref()),
+            Self::NavPack(games) => games.pack.row(ordinal).ok().map(|row| row.launch_ref),
+        }
+    }
+
     fn iter(&self) -> SystemCollectionRowsIter<'_> {
         SystemCollectionRowsIter {
             rows: self,
@@ -786,6 +793,24 @@ impl<'a> ArcadeGameView<'a> {
 
     pub fn is_empty(self) -> bool {
         self.len() == 0
+    }
+
+    /// Metadata resolution can read references without materializing game objects.
+    pub fn launch_ref(self, index: usize) -> Option<&'a str> {
+        match self {
+            Self::Collection(collection) => collection.games.launch_ref(index),
+            Self::CollectionIndexed {
+                collection,
+                indexes,
+            } => indexes
+                .get(index)
+                .and_then(|ordinal| collection.games.launch_ref(*ordinal)),
+            _ => self.get(index).map(|game| game.mra_path.as_ref()),
+        }
+    }
+
+    pub fn position_launch_ref(self, reference: &str) -> Option<usize> {
+        (0..self.len()).find(|index| self.launch_ref(*index) == Some(reference))
     }
 
     pub fn get(self, index: usize) -> Option<&'a ArcadeGameEntry> {
@@ -2880,6 +2905,30 @@ mod tests {
             "/games/129.d64"
         );
         assert_eq!(collection.games.iter().count(), 130);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn user_reference_resolution_leaves_mapped_game_rows_lazy() {
+        let path = navpack_fixture(1857);
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        let (collection, _) =
+            SystemCollection::open_navpack("c64", &path, bytes, 7, 1857, PlatformKind::Computer)
+                .unwrap();
+        let SystemCollectionRows::NavPack(rows) = &collection.games else {
+            panic!("mapped collection");
+        };
+        let before = rows.resident_rows();
+        let view = ArcadeGameView::collection(&collection);
+        assert_eq!(view.position_launch_ref("magik-plan:c64:1856"), Some(1856));
+        assert_eq!(view.position_launch_ref("missing"), None);
+        let indexes = [1856, 64];
+        let selected = ArcadeGameView::collection_indexed(&collection, &indexes);
+        assert_eq!(selected.launch_ref(0), Some("magik-plan:c64:1856"));
+        assert_eq!(selected.position_launch_ref("magik-plan:c64:64"), Some(1));
+        assert_eq!(rows.resident_rows(), before);
+        assert!(collection.rich_indexes.get().is_none());
         std::fs::remove_file(path).unwrap();
     }
 

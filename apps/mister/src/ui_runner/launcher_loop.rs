@@ -9307,7 +9307,7 @@ pub(super) fn run_launcher_loop(
                 last_clock_update = Instant::now();
                 window.request_redraw();
             }
-            sync_settings_bridge(&app, &nav, &lifecycle, ui);
+            sync_settings_bridge(&app, &nav, &lifecycle, ui, &mut bridge_models);
         }
         let source_was_arcade = pending_navigation_transition
             .as_ref()
