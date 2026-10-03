@@ -153,7 +153,7 @@ impl UserStateStore {
                 |row| row.get::<_, i64>(0),
             )
             .optional()
-            .map(|count| count.unwrap_or(0) as usize)
+            .map(|count| count.unwrap_or(0).max(0) as usize)
             .map_err(|e| format!("read favourite count: {e}"))
     }
 
@@ -257,8 +257,8 @@ impl UserStateStore {
                 Ok((
                     row.get::<_, String>(0)?,
                     SystemUserCounts {
-                        recent: row.get::<_, i64>(1)? as usize,
-                        favourites: row.get::<_, i64>(2)? as usize,
+                        recent: row.get::<_, i64>(1)?.max(0) as usize,
+                        favourites: row.get::<_, i64>(2)?.max(0) as usize,
                     },
                 ))
             })
@@ -268,17 +268,23 @@ impl UserStateStore {
             snapshot.system_counts.insert(system, counts);
         }
         drop(statement);
-        snapshot.recent_launch_refs = snapshot_recent_refs(&transaction, None)?;
+        snapshot.recent_launch_refs = snapshot_recent_refs(&transaction)?;
         snapshot.arcade_recent_refs =
             snapshot_collection_recent_refs(&transaction, arcade_systems)?;
+        let mut recents = transaction.prepare(
+            "SELECT launch_ref FROM user_recent_games WHERE system_id=?1 ORDER BY last_played_at DESC,last_session_id DESC LIMIT 16"
+        ).map_err(|e| format!("prepare system recents: {e}"))?;
         for (system, counts) in &snapshot.system_counts {
             if counts.recent != 0 {
-                snapshot.recent_by_system.insert(
-                    system.clone(),
-                    snapshot_recent_refs(&transaction, Some(system))?,
-                );
+                let references = recents
+                    .query_map([system], |row| row.get(0))
+                    .map_err(|e| format!("query system recents: {e}"))?
+                    .collect::<Result<Vec<String>, _>>()
+                    .map_err(|e| format!("read system recents: {e}"))?;
+                snapshot.recent_by_system.insert(system.clone(), references);
             }
         }
+        drop(recents);
         transaction
             .commit()
             .map_err(|e| format!("finish user snapshot: {e}"))?;
@@ -309,8 +315,8 @@ impl UserStateStore {
                 [system_id],
                 |row| {
                     Ok(SystemUserCounts {
-                        recent: row.get::<_, i64>(0)? as usize,
-                        favourites: row.get::<_, i64>(1)? as usize,
+                        recent: row.get::<_, i64>(0)?.max(0) as usize,
+                        favourites: row.get::<_, i64>(1)?.max(0) as usize,
                     })
                 },
             )
@@ -373,20 +379,12 @@ impl UserStateStore {
     }
 }
 
-fn snapshot_recent_refs(
-    connection: &Connection,
-    system: Option<&str>,
-) -> Result<Vec<String>, String> {
-    let sql = if system.is_some() {
-        "SELECT launch_ref FROM user_recent_games WHERE system_id=?1 ORDER BY last_played_at DESC,last_session_id DESC LIMIT 16"
-    } else {
-        "SELECT launch_ref FROM user_recent_games WHERE ?1 IS NULL ORDER BY last_played_at DESC,last_session_id DESC LIMIT 16"
-    };
-    let mut statement = connection
-        .prepare(sql)
-        .map_err(|e| format!("prepare recent refs: {e}"))?;
+fn snapshot_recent_refs(connection: &Connection) -> Result<Vec<String>, String> {
+    let mut statement = connection.prepare(
+        "SELECT launch_ref FROM user_recent_games ORDER BY last_played_at DESC,last_session_id DESC LIMIT 16"
+    ).map_err(|e| format!("prepare recent refs: {e}"))?;
     statement
-        .query_map([system], |row| row.get(0))
+        .query_map([], |row| row.get(0))
         .map_err(|e| format!("query recent refs: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("read recent refs: {e}"))
@@ -669,6 +667,25 @@ mod tests {
             ["cps1.mra", "system16.mra", "cps2.mra", "arcade.mra"]
         );
         assert_eq!(snapshot.system_counts["cps1"].recent, 1);
+    }
+
+    #[test]
+    fn negative_summary_counts_are_clamped_on_every_read_path() {
+        let store = temporary_store("negative-counts");
+        store.set_favourite(&game("one"), true, 10).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE user_system_counts SET recent_count=-1,favourite_count=-2",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.favourite_count("snes").unwrap(), 0);
+        let mut snapshot = store.read_snapshot(&[]).unwrap();
+        assert_eq!(snapshot.system_counts["snes"], SystemUserCounts::default());
+        store.refresh_favourites(&mut snapshot, "snes").unwrap();
+        assert_eq!(snapshot.system_counts["snes"], SystemUserCounts::default());
     }
 
     #[test]

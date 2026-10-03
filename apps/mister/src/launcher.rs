@@ -3122,13 +3122,26 @@ impl LauncherNav {
             self.system_hub_selected -= 1;
         }
         if pressed.btn_a {
-            let count = match self.system_hub_selected {
-                0 => self.active_collection().map_or(0, |c| c.count),
-                1 => self.active_collection_recent_count(),
-                2 => self.active_collection_favourite_count(),
+            let games = catalog.system_game_view(
+                self.active_collection_id()
+                    .unwrap_or(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID),
+            );
+            let available = match self.system_hub_selected {
+                0 => self
+                    .active_collection()
+                    .is_some_and(|collection| collection.count != 0),
+                1 => self
+                    .active_recent_refs()
+                    .iter()
+                    .any(|reference| games.position_launch_ref(reference).is_some()),
+                2 => (0..games.len()).any(|ordinal| {
+                    games
+                        .launch_ref(ordinal)
+                        .is_some_and(|reference| self.favourite_launch_refs.contains(reference))
+                }),
                 _ => unreachable!(),
             };
-            if count == 0 {
+            if !available {
                 return None;
             }
             let event = LauncherEvent {
@@ -11694,6 +11707,50 @@ mod tests {
             &catalog,
         );
         assert_eq!(nav.confirm_action, Some(ConfirmAction::RemoveFavourite));
+    }
+
+    #[test]
+    fn hub_saved_totals_do_not_open_an_empty_installed_list() {
+        use mister_magik_catalog::user_state::{SystemUserCounts, UserStateSnapshot};
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Installed")
+                    .system_id("snes")
+                    .path("installed.sfc")
+                    .build(),
+            ],
+            vec![arcade_system("snes", 1)],
+        );
+        let mut snapshot = UserStateSnapshot {
+            favourite_launch_refs: vec!["missing.sfc".into()],
+            ..Default::default()
+        };
+        snapshot
+            .recent_by_system
+            .insert("snes".into(), vec!["missing.sfc".into()]);
+        snapshot.system_counts.insert(
+            "snes".into(),
+            SystemUserCounts {
+                recent: 40,
+                favourites: 1,
+            },
+        );
+        let mut nav = LauncherNav::new();
+        nav.set_user_state_snapshot(&catalog, snapshot);
+        assert!(nav.open_system(&catalog, "snes"));
+        for section in [1, 2] {
+            nav.system_hub_selected = section;
+            assert!(
+                nav.handle_system_hub(&pad_with(|pad| pad.btn_a = true), &catalog, false)
+                    .is_none()
+            );
+            assert!(nav.is_system_hub());
+        }
+        nav.reconcile_favourite_state(&catalog, "installed.sfc", true);
+        nav.system_hub_selected = 2;
+        nav.handle_system_hub(&pad_with(|pad| pad.btn_a = true), &catalog, false);
+        assert!(!nav.is_system_hub());
+        assert_eq!(nav.active_arcade_game_count(&catalog, "snes"), 1);
     }
 
     #[test]
