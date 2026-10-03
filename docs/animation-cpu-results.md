@@ -427,3 +427,39 @@ also remain. This narrows the next action: cold source/destination preparation
 and ordinary-browse scheduling matter more than adding another primary worker
 to the already clean sampled interior trick frames. It does not prove those
 causes or exclude a problem outside the sampled routes.
+
+
+## Complete cold-frame attribution (`097410dc6`)
+
+A full diagnostic route passed with the newly covered controlled full Slint
+captures. Earlier `frame.slint-raster` totals omitted this one entrypoint and
+must be read as partial instrumentation, not total Slint work. Native process
+CPU/drop counters are unaffected by that reporting gap.
+Evidence: `build/magik-results/20261002T235436Z-74e93b02db33`; executable SHA256
+`dca7cc350098c776e4a53ccff91bedf231045fee864813ce331ede86eed9528d`.
+
+| Stage | Calls | Total wall (ms) | Mean (ms) | Maximum (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Device Slint image creation | 1 | 9.080 | 9.080 | 9.080 |
+| Full bridge sync | 12 | 24.942 | 2.078 | 22.706 |
+| Full Slint raster | 4 | 51.124 | 12.781 | 14.760 |
+| All covered Slint raster | 31 | 239.078 | 7.712 | 15.598 |
+| Destination layers | 3 | 33.267 | 11.089 | 17.217 |
+
+These spans nest; do not add their totals. First-use device image construction
+is a measured part of the cold bridge cost. Full raster and destination layers
+also exceed available slack together, so this is not solely a latch/post issue.
+
+## Exact RGB565-to-RGB8 image expansion — awaiting comparison
+
+The first-use device image previously expanded every packed pixel with scalar
+channel extraction/stores. A reusable eight-pixel NEON expansion now preserves
+the same bit replication into RGB8; portable platforms retain the scalar path.
+Device images also reuse the packed pixels already cached for reveal rendering,
+removing their temporary packed-pixel copy. The Slint image, layout, art, clock
+steps and drop accounting remain unchanged.
+
+Host and actual ARM-kernel tests verify all 65,536 colours, RGB565 round trips,
+unaligned output offsets, vector tails and rejected output sizes. Focused
+frontend Clippy passes and semantic diagnostics are clean. Compare clean routes
+and a cold diagnostic run to the helper-ahead parent before retaining.

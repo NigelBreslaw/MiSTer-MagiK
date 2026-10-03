@@ -603,14 +603,10 @@ fn rgb565_image(width: usize, height: usize, pixels: &[Rgb565Pixel]) -> slint::I
         "RGB565 image geometry must match its pixels"
     );
     let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(width as u32, height as u32);
-    for (pixel, packed) in buffer.make_mut_slice().iter_mut().zip(pixels) {
-        let (r, g, b) = (packed.0 >> 11, (packed.0 >> 5) & 0x3f, packed.0 & 0x1f);
-        *pixel = slint::Rgb8Pixel {
-            r: ((r << 3) | (r >> 2)) as u8,
-            g: ((g << 2) | (g >> 4)) as u8,
-            b: ((b << 3) | (b >> 2)) as u8,
-        };
-    }
+    assert!(mister_magik_framebuffer_scenes::expand_rgb565_rgb8(
+        pixels,
+        buffer.make_mut_bytes()
+    ));
     slint::Image::from_rgb8(buffer)
 }
 
@@ -631,14 +627,10 @@ fn device_image(kind: Option<crate::device_art::DeviceKind>) -> slint::Image {
     let Some(kind) = kind else {
         return arcade_cabinet_image();
     };
-    let pixels: Vec<Rgb565Pixel> = crate::device_art::device_rgb565(kind)
-        .iter()
-        .map(|pixel| Rgb565Pixel(*pixel))
-        .collect();
     rgb565_image(
         crate::device_art::DEVICE_WIDTH,
         crate::device_art::DEVICE_HEIGHT,
-        &pixels,
+        system_device_rgb565(Some(kind)),
     )
 }
 

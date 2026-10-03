@@ -292,3 +292,26 @@ void mister_magik_arcade_base(uint16_t *out,const uint16_t *home,const uint16_t 
         }
     }
 }
+
+// Exact bit replication, matching the portable RGB565-to-RGB8 expansion.
+void mister_magik_rgb565_expand_rgb8(uint8_t *out, const uint16_t *source, size_t n) {
+    size_t i = 0;
+    for (; i + 7 < n; i += 8) {
+        const uint16x8_t pixels = vld1q_u16(source + i);
+        const uint8x8_t r = vmovn_u16(vshrq_n_u16(pixels, 11));
+        const uint8x8_t g = vand_u8(vmovn_u16(vshrq_n_u16(pixels, 5)), vdup_n_u8(63));
+        const uint8x8_t b = vand_u8(vmovn_u16(pixels), vdup_n_u8(31));
+        uint8x8x3_t rgb;
+        rgb.val[0] = vorr_u8(vshl_n_u8(r, 3), vshr_n_u8(r, 2));
+        rgb.val[1] = vorr_u8(vshl_n_u8(g, 2), vshr_n_u8(g, 4));
+        rgb.val[2] = vorr_u8(vshl_n_u8(b, 3), vshr_n_u8(b, 2));
+        vst3_u8(out + i * 3, rgb);
+    }
+    for (; i < n; ++i) {
+        const uint16_t pixel = source[i];
+        const uint16_t r = pixel >> 11, g = (pixel >> 5) & 63, b = pixel & 31;
+        out[i * 3] = (r << 3) | (r >> 2);
+        out[i * 3 + 1] = (g << 2) | (g >> 4);
+        out[i * 3 + 2] = (b << 3) | (b >> 2);
+    }
+}
