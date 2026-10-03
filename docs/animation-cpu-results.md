@@ -529,7 +529,7 @@ qualification remain part of the full objective; the SNES route cannot prove
 those requirements by itself.
 
 
-## Native fixed HDMI device plane — awaiting device comparison
+## Native fixed HDMI device plane — kept for measured raster savings
 
 The unfinished prototype is repaired and specialized to the uncovered fixed
 960x540 HDMI device plane. Slint's original RGB565 raster and blend order remain
@@ -558,6 +558,53 @@ Fresh parent baseline: `build/magik-results/20261003T093522Z-7fb0e49d32eb`,
 20/18/18 drops and moving CPU 18.5539/18.5173/18.5986 ms. Parent capture/control
 run: `build/magik-results/20261003T094413Z-a7ec753f1547`. Both use installed SHA256
 `ee19b9bb87ba128dc8d6f8816e7c2a403144fc25c02a40428f9dc67d7bcef851`.
-Raw captures remain ignored. Neither the standalone Slint reference nor host
-parity proves physical timing; the candidate must still complete native checks
-and a matched benchmark before retention.
+Candidate implementation: `949b01612`, deployed SHA256
+`bd4a321307910c9e45df7a956c5c200e46a4a3ff594074b2143efb06df80e9f6`.
+Capture/control run: `build/magik-results/20261003T095637Z-8ca772bb95f2`.
+A, Back, Select action and the locked-trick tap pass. All exposed device pixels
+are exactly equal to the parent in hub, games, Select return and root captures.
+Whole-frame static pixels also match: the only differences are clock digits
+(x900–918, y26–40) and the games preview inside the existing screen opening.
+Captures use `fpga-latched-scanout-slots`, RGB565 LE, 960x540 and stride 1920.
+Raw captures and the compact comparison report remain ignored.
+
+Clean candidate run: `build/magik-results/20261003T095749Z-97c9b1b1e893`.
+
+| Repeat | Parent drops | Candidate drops | Parent CPU (ms) | Candidate CPU (ms) | Candidate card / Slint / system drops |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 0 | 20 | 18 | 18.5539 | 18.4817 | 11 / 1 / 6 |
+| 1 | 18 | 22 | 18.5173 | 18.4559 | 15 / 1 / 6 |
+| 2 | 18 | 20 | 18.5986 | 18.5215 | 14 / 1 / 5 |
+
+Mean process CPU per moving presentation changes 18.5566 → 18.4864 ms,
+a 0.0703 ms (0.38%) reduction. Drops 20/18/18 → 18/22/20 establish no cadence
+improvement. Parent system-transition drops are 6/6/6; candidate 6/6/5.
+All clean runs have zero latch rejections and equal post/flip totals. These
+process CPU values sum activity across threads; they are not producer deadlines.
+
+Instrumented candidate: `build/magik-results/20261003T100140Z-e3f2af20bb52`.
+The comparison profile is the previously recorded run of the exact same parent
+executable, `build/magik-results/20261003T001906Z-0b179beeaf13`; it is not a fresh
+interleaved profile. Profile figures describe stage wall time, not stage CPU.
+
+| Measured scope | Parent | Candidate |
+| --- | ---: | ---: |
+| Full Slint raster, four calls, total | 51.808 ms | 32.676 ms |
+| Full Slint raster, mean / maximum | 12.952 / 15.621 ms | 8.169 / 9.483 ms |
+| All Slint raster, total / calls | 255.150 ms / 32 | 216.639 ms / 31 |
+| Native device copy, total / calls / maximum | absent | 4.026 ms / 19 / 1.147 ms |
+| Destination layers, three calls, total | 33.127 ms | 32.370 ms |
+| Full bridge sync, maximum | 13.630 ms | 13.446 ms |
+
+Native copy is nested inside the raster measurements; do not add it again.
+The full-capture scope saves 19.132 ms total (36.9%), with exact software and
+physical pixel evidence. Retain this bounded fast path for that saving; it has
+not solved system-transition drops, initial destination work or ordinary browse
+helper scheduling. Card rendering, animation timing, input locks and physical
+drop accounting are unchanged. Perfect 60 fps remains unachieved.
+
+The device journey exercises Dev's Select action through keyboard Tab, not a
+physical joystick Select qualification. Physical validation here covers normal
+960x540 HDMI. CRT, portrait and overlapping overlays retain Slint fallback;
+alpha-overlay/fallback and invalidation checks pass in software, but those
+fallback modes have not been physically exercised by this journey.
