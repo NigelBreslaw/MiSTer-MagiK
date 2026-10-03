@@ -22,6 +22,9 @@ const SPLIT_ALIGNMENT: usize = 8;
 /// Move the band boundary a quarter of the way to where both bands would
 /// finish together. Each band's measured cost is spread evenly across its
 /// columns; carousel poses change little between consecutive frames.
+/// The partial step is load-bearing: level-deal cost is concentrated in a few
+/// columns, and a full step crossed it every frame on device, swinging the
+/// boundary between both clamps and adding about six drops per route.
 fn balanced_split(left: usize, split: usize, primary_us: u64, secondary_us: u64) -> usize {
     if primary_us == 0 || secondary_us == 0 {
         return split;

@@ -16,6 +16,7 @@ thread_local! {
 pub enum RuntimeThreadRole {
     LauncherUi,
     LauncherCardRenderer,
+    LauncherCardHelper,
     InputReader,
     InputDiscovery,
     ControllerPersistence,
@@ -50,6 +51,7 @@ impl RuntimeThreadRole {
         match self {
             Self::LauncherUi => "launcher-ui",
             Self::LauncherCardRenderer => "launcher-card-renderer",
+            Self::LauncherCardHelper => "launcher-card-helper",
             Self::InputReader => "input-reader",
             Self::InputDiscovery => "input-discovery",
             Self::ControllerPersistence => "controller-persistence",
@@ -89,6 +91,12 @@ impl RuntimeThreadRole {
             // Cortex-A9 cores. Keep its helper on CPU0 while the UI/latch
             // owner remains isolated on CPU1.
             Self::LauncherCardRenderer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0),
+            // The Home helper sleeps between bands, so real-time priority only
+            // applies while it renders. Otherwise CPU0 background work already
+            // on the core keeps it for a whole time slice: 2-4 ms of a ~3 ms
+            // frame margin. Main's input loop is on CPU1.
+            Self::LauncherCardHelper => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0)
+                .with_scheduler(ThreadScheduler::RoundRobin { priority: 1 }),
             // The input proxy IRQ/wake path can leave a runnable CPU0 reader
             // behind tens of milliseconds of kernel/catalog work.  Keep the
             // reader with the latency-critical launcher work on CPU1; the
@@ -845,6 +853,11 @@ mod tests {
             let expected_policy = RuntimeThreadPolicy::new(nice, affinity);
             assert_eq!(role.default_policy(), expected_policy);
         }
+        assert_eq!(
+            RuntimeThreadRole::LauncherCardHelper.default_policy(),
+            RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0)
+                .with_scheduler(ThreadScheduler::RoundRobin { priority: 1 })
+        );
     }
 
     #[test]

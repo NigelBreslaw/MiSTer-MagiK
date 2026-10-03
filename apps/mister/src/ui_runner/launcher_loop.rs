@@ -6040,6 +6040,7 @@ pub(super) fn run_launcher_loop(
     let mut card_level = crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
     // The level and card the neighbours were last prepared for.
     let mut card_prefetch_key: (String, usize) = (String::new(), usize::MAX);
+    let mut card_frame_rendered_last_iteration = false;
     let mut launcher_card_home = match super::launcher_card_home::LauncherCardHomeSession::new(
         super::launcher_card_home::scene_for_display(ui, layout),
         card_level.clone(),
@@ -9917,6 +9918,7 @@ pub(super) fn run_launcher_loop(
             global.set_custom_device_base(native_device_base);
             native_device_background.invalidate();
         }
+        let card_frame_just_rendered = std::mem::take(&mut card_frame_rendered_last_iteration);
         // Every Home level is the Rust card launcher, not only the root.
         let custom_home_active = launcher_card_home.is_some() && nav.screen == Screen::Home;
         app.global::<slint_ui::launcher::MisterUi>()
@@ -9940,8 +9942,11 @@ pub(super) fn run_launcher_loop(
                     nav.home_card_browse_prediction(animation_now),
                 );
                 // Idle on a card: prepare the level it opens and the parent, so
-                // the level trick never waits on preparation.
+                // the level trick never waits on preparation. The worker shares
+                // CPU0 with the card helper; start only once card frames stop,
+                // or it preempts the helper while the settle frame renders.
                 if !session.is_animating()
+                    && !card_frame_just_rendered
                     && (card_prefetch_key.0 != nav.current_menu_id()
                         || card_prefetch_key.1 != nav.selected)
                 {
@@ -10332,7 +10337,8 @@ pub(super) fn run_launcher_loop(
         );
         // Repeats while idle are reuse, not drops. Restart an idle baseline at
         // every render start so motion starting from rest is measured from its
-        // first frame's render: idle time is excluded, an overrun still counts.
+        // first frame's render: idle time is excluded. That frame may wait one
+        // refresh for scanout; a longer overrun still counts as a drop.
         #[cfg(feature = "tooling")]
         if tooling.is_some() && tooling_drop_baseline.is_some_and(|observation| !observation.motion)
         {
@@ -10585,6 +10591,7 @@ pub(super) fn run_launcher_loop(
                     }
                     completed_hidden_frame_for_present = Some(copy.completed);
                     card_direct_frame_rendered = true;
+                    card_frame_rendered_last_iteration = true;
                     session.note_direct_presented();
                 }
                 Ok(None) => {}
@@ -13149,7 +13156,21 @@ pub(super) fn run_launcher_loop(
                                     Ok(delta) => {
                                         metrics.counters.owned_vblanks += u64::from(delta.owned_vblank_delta);
                                         metrics.counters.presented_vblanks += u64::from(delta.presented_vblank_delta);
-                                        let dropped = if animation_active || was_animating { u64::from(delta.repeated_vblank_delta) } else { 0 };
+                                        let repeated = u64::from(delta.repeated_vblank_delta);
+                                        let dropped = if !was_animating && animation_active {
+                                            // A first frame's baseline restarts at its render, so
+                                            // this spans that frame's work up to its post.
+                                            let work_us = post_timing
+                                                .map_or(frame_t4, |(posted, _)| posted)
+                                                .saturating_duration_since(at)
+                                                .as_micros() as u64;
+                                            let dropped = mister_magik_tooling_support::measurement::first_frame_drops(
+                                                repeated, work_us, pacer.period_us(),
+                                            );
+                                            metrics.counters.motion_starts += 1;
+                                            metrics.counters.first_frame_wait_refreshes += repeated - dropped;
+                                            dropped
+                                        } else if animation_active || was_animating { repeated } else { 0 };
                                         metrics.counters.drops += dropped;
                                         if dropped != 0 || tooling_frame_evidence.is_some() {
                                             let record = mister_magik_tooling_support::measurement::DroppedFrameRecord {

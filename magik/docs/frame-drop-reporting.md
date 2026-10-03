@@ -7,6 +7,13 @@ identifies activity when a repeat was observed; it does not prove its cause.
 the bounded 64-record detail buffer. `dropped_frame_records_omitted` counts omitted
 records, not omitted refreshes. A record can cover more than one refresh.
 
+Motion starting from rest has no earlier refresh to meet: input can arrive
+anywhere in a period, so its first frame may wait one refresh for scanout. That
+wait is input latency, not a drop. Windows report it as
+`first_frame_wait_refreshes` beside `motion_starts`. Repeats the first frame's
+own work would cause from a refresh boundary still count as dropped, as does
+every repeat after that first frame.
+
 `ui_render_us`, `last_render_us` and the window `render_*` statistics cover the
 existing render interval **before custom drawing**. This includes card work on
 some paths but excludes device reveals, panel drawing and hidden-buffer posting.

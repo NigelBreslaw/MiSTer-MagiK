@@ -903,7 +903,7 @@ fn home_renderer(prepared: &PreparedLauncher) -> Box<ParallelLauncherRenderer> {
         use mister_magik_catalog::runtime_thread::{
             RuntimeThreadRole, apply_runtime_thread_policy,
         };
-        apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+        apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardHelper);
     }
     let clocks = std::env::var_os("MISTER_MAGIK2_STATE_ROOT")
         .is_some()

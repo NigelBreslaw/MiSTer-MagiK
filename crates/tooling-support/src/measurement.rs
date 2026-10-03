@@ -151,6 +151,15 @@ impl DroppedFrameRecord {
     }
 }
 
+/// Drops charged to the first frame of motion from rest. Input can arrive
+/// anywhere in a period, so that frame may wait one refresh for scanout.
+/// `work_us` runs from the frame's start to its post: repeats that work would
+/// cause even from a refresh boundary are overruns and still count.
+pub fn first_frame_drops(repeated: u64, work_us: u64, period_us: u64) -> u64 {
+    let overrun = work_us.div_ceil(period_us.max(1)).saturating_sub(1);
+    repeated.saturating_sub(1).max(overrun).min(repeated)
+}
+
 #[derive(Default, Clone)]
 pub struct Counters {
     pub owned_vblanks: u64,
@@ -163,6 +172,8 @@ pub struct Counters {
     pub posts: u64,
     pub flips: u64,
     pub drops: u64,
+    pub motion_starts: u64,
+    pub first_frame_wait_refreshes: u64,
     pub rejections: u64,
     pub card_rendered_frames: u64,
     pub card_delivered_frames: u64,
@@ -278,6 +289,8 @@ impl PresentationMetrics {
             "physical_latch_posts":c.posts-baseline.posts,"physical_latch_flips":c.flips-baseline.flips,
             "dropped_frames":(c.drops-baseline.drops)+(c.card_dropped_frames-baseline.card_dropped_frames),
             "owned_refresh_dropped_frames":c.drops-baseline.drops,"latch_rejections":c.rejections-baseline.rejections,
+            "motion_starts":c.motion_starts-baseline.motion_starts,
+            "first_frame_wait_refreshes":c.first_frame_wait_refreshes-baseline.first_frame_wait_refreshes,
 
             "card_rendered_frames":c.card_rendered_frames-baseline.card_rendered_frames,
             "helper_ahead_frames": self.work_timings.iter().filter(|t| t.helper_ahead).count(),
@@ -447,6 +460,21 @@ impl PresentationMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_frame_from_rest_may_wait_one_refresh() {
+        const PERIOD: u64 = 16_667;
+        // Device browse start: input 9.4 ms into a period, 14.0 ms of work.
+        // Frame 0 lands one refresh later; a wait, not a drop.
+        assert_eq!(first_frame_drops(0, 14_042, PERIOD), 0);
+        assert_eq!(first_frame_drops(1, 14_042, PERIOD), 0);
+        // Device Games entry: 25.8 ms would miss from a boundary too.
+        assert_eq!(first_frame_drops(1, 25_827, PERIOD), 1);
+        // Device hub entry: 35.9 ms costs two refreshes; a third is the wait.
+        assert_eq!(first_frame_drops(3, 35_903, PERIOD), 2);
+        // A short frame 0 is still charged beyond its one wait.
+        assert_eq!(first_frame_drops(3, 14_042, PERIOD), 2);
+    }
+
     #[test]
     fn cpu_window_reports_process_delta_and_preserves_unavailable() {
         let mut metrics = PresentationMetrics {
