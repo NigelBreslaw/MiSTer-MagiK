@@ -94,29 +94,23 @@ const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
-const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
-    DirtyRect {
-        x0: 296,
-        y0: 120,
-        x1: mister_magik_framebuffer_scenes::launcher_parallel::CAROUSEL_SPLIT,
-        y1: 495,
-    },
-    DirtyRect {
-        x0: mister_magik_framebuffer_scenes::launcher_parallel::CAROUSEL_SPLIT,
-        y0: 120,
-        x1: 934,
-        y1: 495,
-    },
-];
-
 fn card_direct_tile_damage(left: usize, level_trick: bool, split: usize) -> [DirtyRect; 2] {
-    let mut damage = CARD_DIRECT_TILE_DAMAGE;
     // Trick rendering clears from x=268, including root cards whose ordinary
     // carousel starts at x=296. Keep that width on the landing frame as well.
-    damage[0].x0 = if level_trick { 268 } else { left };
-    damage[0].x1 = split;
-    damage[1].x0 = split;
-    damage
+    [
+        DirtyRect {
+            x0: if level_trick { 268 } else { left },
+            y0: 120,
+            x1: split,
+            y1: 495,
+        },
+        DirtyRect {
+            x0: split,
+            y0: 120,
+            x1: 934,
+            y1: 495,
+        },
+    ]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

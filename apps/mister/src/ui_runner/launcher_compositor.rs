@@ -180,9 +180,12 @@ impl<'a> LayerTarget<'a> {
         let source = crate::launcher_presentation::system_device_rgb565(background.kind);
         let pixels = self.target.cached_565_mut();
         for rect in dirty_rects(&region, 960, 540).iter() {
+            let left = rect.x0.max(490);
+            let right = rect.x1.min(960);
+            if left >= right {
+                continue;
+            }
             for y in rect.y0.max(77)..rect.y1.min(500) {
-                let left = rect.x0.max(490);
-                let right = rect.x1.min(960);
                 let spans = if (96..416).contains(&y) {
                     [(left, right.min(572)), (left.max(892), right)]
                 } else {
