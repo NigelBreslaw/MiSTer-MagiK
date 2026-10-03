@@ -3,7 +3,9 @@
 
 //! Card-to-system reveal; all text remains at its native raster size.
 use crate::Rgb565Pixel;
-use crate::card_page::{alpha_of, blend, ease_in_out, ease_out, rounded_span, window_q16};
+use crate::card_page::{
+    alpha_of, blend, ease_in_out, ease_out, fade_from_black, rounded_span, window_q16,
+};
 use crate::navigation::NavigationTransitionRect;
 use crate::system_panel::{HDMI_HUB_BANDS, blit, crt_hub_bands};
 
@@ -110,12 +112,20 @@ fn hdmi(
     let hh = card.height as f64 * z;
     let wx = cx - ww / 2.0;
     let wy = cy - hh / 2.0;
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.base");
     let source_a = 256 - alpha_of(window_q16(t, 40, 240));
-    for (dst, src) in out.iter_mut().zip(launcher) {
-        *dst = Rgb565Pixel(blend(0, src.0, source_a));
-    }
+    fade_from_black(out, launcher, source_a);
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.face");
     let face_a = 256 - alpha_of(window_q16(t, 60, 200));
     sample_rect(w, h, launcher, out, card, (wx, wy, ww, hh), face_a, None);
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.device");
     let pc = ease_in_out(window_q16(t, 80, 760)) as f64 / 65536.0;
     let s0 = card.width as f64 / spec.region.width.max(1) as f64;
     let sc = s0 + (1.0 - s0) * pc;
@@ -126,8 +136,22 @@ fn hdmi(
     for (x, sx) in device_x.iter_mut().enumerate().take(w) {
         *sx = ((x as f64 + 0.5 - dx) * inverse).floor() as i32;
     }
+    // The positive scale makes source columns monotonic. Find the exact
+    // interval from the existing floor-mapped coordinates; do not approximate
+    // clipping with separately rounded floating-point bounds.
+    let device_left = device_x[..w]
+        .iter()
+        .position(|sx| (0..483).contains(sx))
+        .unwrap_or(w);
+    let device_right = device_x[..w]
+        .iter()
+        .rposition(|sx| (0..483).contains(sx))
+        .map_or(device_left, |x| x + 1);
     for y in 77..500.min(h) {
         let sy = ((y as f64 + 0.5 - dy) * inverse).floor() as i32;
+        if !(0..519).contains(&sy) || device_left == device_right {
+            continue;
+        }
         let span = rounded_span(
             y as i32,
             (wx * 65536.0) as i64,
@@ -138,17 +162,20 @@ fn hdmi(
             w,
         );
         if let Some((left, right)) = span {
-            for x in left..right {
+            for x in left.max(device_left)..right.min(device_right) {
                 let sx = device_x[x];
-                if (0..483).contains(&sx) && (0..519).contains(&sy) {
-                    let pixel = device[sy as usize * 483 + sx as usize];
-                    if pixel.0 != 0 || ((82..402).contains(&sx) && (61..381).contains(&sy)) {
-                        out[y * w + x] = pixel;
-                    }
+                debug_assert!((0..483).contains(&sx));
+                let pixel = device[sy as usize * 483 + sx as usize];
+                if pixel.0 != 0 || ((82..402).contains(&sx) && (61..381).contains(&sy)) {
+                    out[y * w + x] = pixel;
                 }
             }
         }
     }
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.outline");
     outline(
         w,
         h,
@@ -160,6 +187,10 @@ fn hdmi(
         77,
         500,
     );
+    #[cfg(feature = "launcher-profile")]
+    drop(_stage);
+    #[cfg(feature = "launcher-profile")]
+    let _stage = crate::launcher_profile::span("device.hdmi.page");
     blit(
         w,
         h,
@@ -538,6 +569,156 @@ fn outline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hdmi_sampling_matches_pre_clip_pixels() {
+        let (w, h) = (960, 540);
+        let launcher = (0..w * h)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(977).wrapping_add(13)))
+            .collect::<Vec<_>>();
+        let page = (0..w * h)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(613).wrapping_add(29)))
+            .collect::<Vec<_>>();
+        let device = (0..483 * 519)
+            .map(|i| {
+                if i % 23 == 0 || ((82..402).contains(&(i % 483)) && (61..381).contains(&(i / 483)))
+                {
+                    Rgb565Pixel(0)
+                } else {
+                    Rgb565Pixel((i as u16).wrapping_mul(109).wrapping_add(7))
+                }
+            })
+            .collect::<Vec<_>>();
+        let expected = [
+            [
+                2050344272382617010,
+                6513596282159625497,
+                9700370400297047586,
+                13576922291134698789,
+                14750861223993203467,
+                11034734251185900215,
+                90440596095472773,
+                4371924697157078420,
+                14111205289208592778,
+                1208721177884478019,
+                1208721177884478019,
+                10454387159633124511,
+            ],
+            [
+                17909281650587612165,
+                15668213492985024406,
+                9885174833733224323,
+                17555658340166034153,
+                8217330386756947802,
+                6409048835109264499,
+                15463048542309421331,
+                4779176697446967620,
+                1932102511901935239,
+                1093867821176062935,
+                7780887353825996839,
+                5526865609376199153,
+            ],
+            [
+                7378753317035132009,
+                4366688040123661947,
+                5537062922191707885,
+                2030291898652558061,
+                5047067274755516886,
+                707491103362407598,
+                12615541502899162682,
+                4742522132093854917,
+                8239374318276596916,
+                1208721177884478019,
+                1208721177884478019,
+                10454387159633124511,
+            ],
+            [
+                14474495301510053699,
+                5860944611642199134,
+                255210828373002182,
+                17348253677534012001,
+                15650220812570843004,
+                8034801572150372476,
+                2987400679732996282,
+                7902779378846926707,
+                14649329285058392100,
+                1093867821176062935,
+                7780887353825996839,
+                5526865609376199153,
+            ],
+        ];
+        let times = [1, 79, 80, 200, 279, 280, 500, 759, 760, 839, 840, 999];
+        let mut output = vec![Rgb565Pixel(0); w * h];
+        for (i, (card, hub)) in [
+            (
+                NavigationTransitionRect {
+                    x: 296,
+                    y: 140,
+                    width: 224,
+                    height: 312,
+                },
+                true,
+            ),
+            (
+                NavigationTransitionRect {
+                    x: 268,
+                    y: 124,
+                    width: 240,
+                    height: 336,
+                },
+                false,
+            ),
+            (
+                NavigationTransitionRect {
+                    x: 650,
+                    y: 40,
+                    width: 240,
+                    height: 336,
+                },
+                true,
+            ),
+            (
+                NavigationTransitionRect {
+                    x: 4,
+                    y: 330,
+                    width: 120,
+                    height: 168,
+                },
+                false,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut hashes = Vec::new();
+            for t in times {
+                let spec = DeviceCardReveal {
+                    hub,
+                    ..DeviceCardReveal::cabinet(false)
+                };
+                assert!(render_into(
+                    w,
+                    h,
+                    &launcher,
+                    &page,
+                    &device,
+                    &[],
+                    None,
+                    card,
+                    spec,
+                    t,
+                    &mut output
+                ));
+                let hash = output.iter().fold(0xcbf29ce484222325u64, |hash, pixel| {
+                    pixel.0.to_le_bytes().into_iter().fold(hash, |hash, byte| {
+                        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+                    })
+                });
+                hashes.push(hash);
+            }
+            assert_eq!(hashes, expected[i], "card case {i}");
+        }
+    }
+
     #[test]
     fn crt_scrim_uses_original_pixels_and_finishes_at_production_brightness() {
         let w = 640;

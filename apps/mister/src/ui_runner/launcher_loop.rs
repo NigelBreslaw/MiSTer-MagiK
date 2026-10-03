@@ -94,36 +94,23 @@ const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
-const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
-    DirtyRect {
-        x0: 296,
-        y0: 120,
-        x1: mister_magik_framebuffer_scenes::launcher_parallel::CAROUSEL_SPLIT,
-        y1: 495,
-    },
-    DirtyRect {
-        x0: mister_magik_framebuffer_scenes::launcher_parallel::CAROUSEL_SPLIT,
-        y0: 120,
-        x1: 934,
-        y1: 495,
-    },
-];
-
-fn card_direct_tile_damage(left: usize, level_trick: bool) -> [DirtyRect; 2] {
-    let mut damage = CARD_DIRECT_TILE_DAMAGE;
-    if level_trick {
-        // The trick fades chrome outside the carousel. Include the endpoint,
-        // whose render clears the active trick before the frame is copied.
-        damage[0].x0 = 0;
-        damage[1].x1 = 960;
-        for rect in &mut damage {
-            rect.y0 = 0;
-            rect.y1 = 540;
-        }
-    } else {
-        damage[0].x0 = left;
-    }
-    damage
+fn card_direct_tile_damage(left: usize, level_trick: bool, split: usize) -> [DirtyRect; 2] {
+    // Trick rendering clears from x=268, including root cards whose ordinary
+    // carousel starts at x=296. Keep that width on the landing frame as well.
+    [
+        DirtyRect {
+            x0: if level_trick { 268 } else { left },
+            y0: 120,
+            x1: split,
+            y1: 495,
+        },
+        DirtyRect {
+            x0: split,
+            y0: 120,
+            x1: 934,
+            y1: 495,
+        },
+    ]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5660,6 +5647,8 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_cpu_profile =
         cpu_profile::ScreensaverProfiler::from_config(profile_config.cpu());
     let mut bridge_models = LauncherViewModels::default();
+    let mut native_device_background =
+        super::launcher_compositor::NativeDeviceBackground::default();
     let mut catalog_version = 0usize;
     let (user_state_path, user_state_media_root) = {
         #[cfg(feature = "ui-device-tests")]
@@ -6348,6 +6337,8 @@ pub(super) fn run_launcher_loop(
     #[cfg(feature = "tooling")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
     #[cfg(feature = "tooling")]
+    let renderer_profile_requested = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
+    #[cfg(feature = "tooling")]
     let mut tooling_carousel_release: Option<crate::input_event::InputEvent> = None;
     // Count repeated artwork in ordinary measurement sessions too. A confirmed
     // 60 Hz post does not imply a fresh carousel pose; CPU sampling is separate.
@@ -6364,6 +6355,13 @@ pub(super) fn run_launcher_loop(
             "settings":paths.app_path("settings.json"), "controllers":paths.app_path("controllers.json"),
             "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
             "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
+            "animation_clock": {"mode":"vsync-locked-v1", "period_ns":frame_clock.period().as_nanos()},
+            "native_device_plane": if !layout.is_portrait() && !ui.output_route().is_crt()
+                && (layout.logical_w(), layout.logical_h()) == (960, 540)
+                { "exposed-hdmi-v1" } else { "disabled" },
+            "card_helper_ahead": if !layout.is_portrait() && !ui.output_route().is_crt()
+                && (layout.logical_w(), layout.logical_h()) == (960, 540)
+                { "native-tricks-v1" } else { "disabled" },
         });
         crate::ui_logln!("magik_context {}", session.metrics.context);
     }
@@ -6414,8 +6412,29 @@ pub(super) fn run_launcher_loop(
             }
             session.set_ui_motion(mister_magik_catalog::ui_motion::active());
             let tooling_tick_start = Instant::now();
+            let window_was_open =
+                session.metrics.window_start.is_some() && session.metrics.window.is_none();
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
+            }
+            let window_is_open =
+                session.metrics.window_start.is_some() && session.metrics.window.is_none();
+            if renderer_profile_requested && !window_was_open && window_is_open {
+                let _ = mister_magik_framebuffer_scenes::launcher_profile::take();
+                mister_magik_framebuffer_scenes::launcher_profile::enable_wall_time();
+            } else if renderer_profile_requested && window_was_open && !window_is_open {
+                mister_magik_framebuffer_scenes::launcher_profile::disable();
+                let report = mister_magik_framebuffer_scenes::launcher_profile::take();
+                if let Some(window) = session.metrics.window.as_mut() {
+                    window["renderer_profile"] =
+                        serde_json::to_value(report).expect("renderer profile JSON");
+                    window["renderer_profile_scope"] = serde_json::json!(
+                        "summed primary/helper stage wall time; not elapsed critical path or stage CPU time"
+                    );
+                }
+                if let Err(error) = session.publish_metrics(ui.render_w(), ui.render_h()) {
+                    session.metrics.error = Some(error);
+                }
             }
             tooling_tick_us = duration_us(tooling_tick_start, Instant::now());
             launcher_presenter.tooling_preview(session);
@@ -9255,6 +9274,9 @@ pub(super) fn run_launcher_loop(
         let mut bridge_model_projection_us = 0u128;
         match bridge_sync_plan {
             LauncherBridgeSyncPlan::Full => {
+                #[cfg(feature = "tooling")]
+                let _profile =
+                    mister_magik_framebuffer_scenes::launcher_profile::span("bridge.full-sync");
                 bridge_model_projection_us = sync_bridge_launcher(
                     &app,
                     &pad,
@@ -9782,6 +9804,33 @@ pub(super) fn run_launcher_loop(
         } else {
             AutomationFrameStamp::default()
         };
+        // The exposed fixed HDMI device plane can bypass RGB8 image rasterization.
+        let native_device_base = nav.screen == Screen::Arcade
+            && !layout.is_portrait()
+            && !ui.output_route().is_crt()
+            && (layout.logical_w(), layout.logical_h()) == (960, 540)
+            && !confirm_visible
+            && !catalog_scan_visible
+            && !catalog_background_scan_visible
+            && !setup.is_active()
+            && !screensaver.active
+            && !launching
+            && app
+                .global::<slint_ui::launcher::MediaView>()
+                .get_rows()
+                .row_count()
+                == 0
+            && app.global::<slint_ui::launcher::SettingsView>().get_popup()
+                == slint_ui::launcher::SettingsPopup::None
+            && app
+                .global::<slint_ui::launcher::OverlayView>()
+                .get_loading_state()
+                != slint_ui::launcher::LoadingState::Active;
+        let global = app.global::<slint_ui::launcher::MisterUi>();
+        if global.get_custom_device_base() != native_device_base {
+            global.set_custom_device_base(native_device_base);
+            native_device_background.invalidate();
+        }
         // Every Home level is the Rust card launcher, not only the root.
         let custom_home_active = launcher_card_home.is_some() && nav.screen == Screen::Home;
         app.global::<slint_ui::launcher::MisterUi>()
@@ -10164,6 +10213,13 @@ pub(super) fn run_launcher_loop(
             update_slint_animations(animation_clock);
         }
         let mut layer_target = LayerTarget::new_oriented_with_epoch(target, layout, layout_epoch);
+        if native_device_base {
+            layer_target.attach_device_background(
+                &mut native_device_background,
+                nav.device_kind(),
+                window,
+            );
+        }
         let reclaimed_preview_publication =
             layer_target.reclaim_preview_publication(&mut launcher_preview_publication);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
@@ -10304,11 +10360,17 @@ pub(super) fn run_launcher_loop(
                 nav.home_card_browse_prediction(pose_at),
             );
             let level_trick = session.is_level_trick_active();
-            session.render();
+            session.render_direct_bands();
             let request = session.current_request();
             let timing = session.last_timing();
+            let chrome_damage = session.chrome_copy_damage(level_trick);
             let cached = card_cached_frame_view(
-                session.current_pixels(),
+                session.current_primary_pixels(),
+                layout.logical_w(),
+                layout.logical_h(),
+            );
+            let helper = card_cached_frame_view(
+                session.current_helper_pixels(),
                 layout.logical_w(),
                 layout.logical_h(),
             );
@@ -10316,8 +10378,13 @@ pub(super) fn run_launcher_loop(
                 f,
                 display_session,
                 cached,
-                [cached, cached],
-                card_direct_tile_damage(session.carousel_clip().0, level_trick),
+                &chrome_damage,
+                [cached, helper],
+                card_direct_tile_damage(
+                    session.carousel_clip().0,
+                    level_trick,
+                    session.rendered_split(),
+                ),
                 mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
                     session.content_generation(),
                     request.generation,
@@ -10344,6 +10411,10 @@ pub(super) fn run_launcher_loop(
                             tooling.metrics.counters.card_rendered_frames += 1;
                             let work = mister_magik_tooling_support::measurement::FrameWorkTiming {
                                 producer_us: timing.total_us,
+                                helper_ahead: timing.helper_ahead,
+                                helper_ahead_lead_us: timing.helper_ahead_lead_us,
+                                discarded_helper_us: timing.discarded_helper_us,
+                                discarded_helper_cpu_us: timing.discarded_helper_cpu_us,
                                 primary_us: timing.primary_us,
                                 secondary_us: timing.secondary_us,
                                 wait_us: timing.wait_us,
@@ -11187,6 +11258,10 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = !navigation_capture_source_carrier_rendered;
             if destination_committed && !navigation_transition.destination_ready() {
+                #[cfg(feature = "tooling")]
+                let _profile = mister_magik_framebuffer_scenes::launcher_profile::span(
+                    "transition.destination-layers",
+                );
                 let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
                     || (full_screen_transition.owner()
                         == Some(FullScreenTransitionOwner::Navigation)
@@ -12480,6 +12555,14 @@ pub(super) fn run_launcher_loop(
             // Latch mode posts the hidden buffer first, then spends the slack before
             // vblank on normal per-frame accounting. The final wait is only the
             // pacing boundary for the next frame.
+            if card_direct_frame_rendered
+                && visible_frame_presented
+                && let Some(session) = launcher_card_home.as_mut()
+            {
+                let mut next_clock = frame_clock;
+                next_clock.advance();
+                session.prepare_helper_ahead(next_clock.elapsed_us() / 1_000);
+            }
             let wait_start = Instant::now();
             scheduler_phase = launcher_response_trace
                 .record_scheduler_interval("post-submit-accounting", scheduler_phase);

@@ -139,3 +139,117 @@ def test_capture_deadline_includes_connect_time(monkeypatch):
     )
     with pytest.raises(TimeoutError, match="deadline"):
         NativeAgent("fixture", "token").capture_framebuffer()
+
+
+def test_metrics_preserves_large_evidence_in_body():
+    import json
+
+    value = {"window": {"evidence": "x" * (70 * 1024)}}
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def serve():
+        connection, _ = listener.accept()
+        with connection:
+            request, _ = receive_message(connection)
+            assert request.operation == "metrics-body"
+            send_message(
+                connection,
+                Envelope(request.request_id, "metrics", "", {"encoding": "json"}),
+                json.dumps(value).encode(),
+            )
+        listener.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    assert NativeAgent("127.0.0.1", "token", port).metrics() == value
+    thread.join()
+
+
+def test_metrics_falls_back_only_for_unsupported_body_operation():
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(2)
+    port = listener.getsockname()[1]
+
+    def serve():
+        for expected, operation, fields in [
+            ("metrics-body", "error", {"code": "unsupported-operation"}),
+            ("metrics", "metrics", {"presentations": 42}),
+        ]:
+            connection, _ = listener.accept()
+            with connection:
+                request, _ = receive_message(connection)
+                assert request.operation == expected
+                send_message(
+                    connection, Envelope(request.request_id, operation, "", fields)
+                )
+        listener.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    assert NativeAgent("127.0.0.1", "token", port).metrics() == {"presentations": 42}
+    thread.join()
+
+
+@pytest.mark.parametrize("in_body", [False, True])
+def test_watch_metrics_decode_legacy_headers_and_large_bodies_without_losing_next_event(
+    in_body,
+):
+    import json
+
+    metrics = (
+        {"window": {"renderer_profile": "x" * (70 * 1024)}}
+        if in_body
+        else {"presentations": 42}
+    )
+    local, peer = socket.socketpair()
+
+    def serve():
+        with peer:
+            send_message(
+                peer,
+                Envelope(
+                    "watch",
+                    "watch-metrics",
+                    "",
+                    {"encoding": "json"} if in_body else {"metrics": metrics},
+                ),
+                json.dumps(metrics).encode() if in_body else b"",
+            )
+            send_message(
+                peer, Envelope("watch", "watch-log", "", {"line": "still streaming"})
+            )
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        local.settimeout(2)
+        event, body = NativeAgent.read_watch_event(local)
+        assert event.fields["metrics"] == metrics
+        assert body == b""
+        assert NativeAgent.read_watch_event(local)[0].operation == "watch-log"
+    finally:
+        local.close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    "body,encoding", [(b"[]", "json"), (b"broken", "json"), (b"{}", "unknown")]
+)
+def test_watch_rejects_malformed_metrics_bodies(body, encoding):
+    from magik.protocol import ProtocolError
+
+    local, peer = socket.socketpair()
+    try:
+        send_message(
+            peer, Envelope("watch", "watch-metrics", "", {"encoding": encoding}), body
+        )
+        with pytest.raises(ProtocolError):
+            NativeAgent.read_watch_event(local)
+    finally:
+        local.close()
+        peer.close()

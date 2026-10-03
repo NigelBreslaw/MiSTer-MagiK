@@ -55,11 +55,15 @@ void reference_project_dithered(uint16_t *out,size_t pitch,const uint32_t *src,
 static uint32_t seed=237;
 static uint32_t next(void) {seed=seed*1664525+1013904223;return seed;}
 int main(void) {
+  size_t opaque_cases=0,opaque_rows=0;
   for(size_t trial=0;trial<40000;++trial) {
     size_t height=1+next()%273,rows=next()%557,pitch=1+next()%17;
     uint32_t src[273];uint16_t a[10000],b[10000];
     for(size_t j=0;j<height;++j) {
-      uint32_t alpha=trial%3==0?255:trial%3==1?next()%256:0;
+      // Fully opaque, rounded caps with an opaque interior, arbitrary alpha,
+      // and transparent columns all receive independent backgrounds.
+      uint32_t alpha=trial%4==0?255:trial%4==1?
+        (height>16 && j>=8 && j<height-8?255:next()%255):trial%4==2?next()%256:0;
       src[j]=(next()%(alpha+1))|(next()%(alpha+1))<<8|(next()%(alpha+1))<<16|alpha<<24;
     }
     for(size_t j=0;j<10000;++j)a[j]=b[j]=(uint16_t)next();
@@ -68,6 +72,21 @@ int main(void) {
     reference_project_dithered(a+3,pitch,src,height,rows,q,step,x,y);
     magik_launcher_project_dithered(b+3,pitch,src,height,rows,q,step,x,y);
     if(memcmp(a,b,sizeof a)) {fprintf(stderr,"project mismatch trial %zu\n",trial);return 1;}
+    // Reinitialize reference and candidate with the same arbitrary background.
+    for(size_t j=0;j<10000;++j)a[j]=b[j]=(uint16_t)next();
+    reference_project_dithered(a+3,pitch,src,height,rows,q,step,x,y);
+    size_t top=trial%4<2 && height>16?8:0;
+    size_t bottom=top?height-8:0;
+    magik_launcher_project_dithered_opaque(b+3,pitch,src,height,rows,q,step,x,y,top,bottom);
+    if(memcmp(a,b,sizeof a)) {fprintf(stderr,"opaque project mismatch trial %zu\n",trial);return 6;}
+    // Count valid bilinear interior rows independently of the kernel's
+    // interval helper. A >=4-row interval exercises its opaque NEON loop.
+    size_t interior=0;
+    if(top)for(size_t j=0;j<rows;++j) {
+      int64_t row=((int64_t)q+(int64_t)j*step)>>16;
+      if(row>=(int64_t)top && row+1<(int64_t)bottom)++interior;
+    }
+    if(interior>=4) {++opaque_cases;opaque_rows+=interior;}
   }
   for(uint32_t a=0;a<256;++a)for(uint32_t b=0;b<256;++b)for(uint32_t w=0;w<256;w+=4) {
     uint32_t ws[4]={w,w+1,w+2,w+3},aa=a*0x01010101u,bb=b*0x01010101u,got[4];
@@ -103,5 +122,7 @@ int main(void) {
   vst1_u16(actual,dither_over4(vld1q_u32(p),vld1_u16(dest),vld1_u16(offset)));
   for(size_t j=0;j<4;++j)if(actual[j]!=dither_pixel(p[j],dest[j],x+j,y)) {fprintf(stderr,"over mismatch %u %u %zu\n",bg,alpha,j);return 1;}
  }
+  if(opaque_cases<1000) {fputs("insufficient opaque fast-path coverage\n",stderr);return 7;}
+  printf("%zu opaque vector-loop cases covering %zu interior rows\n",opaque_cases,opaque_rows);
   puts("40000 projection cases, 16777216 interpolation triples, 16842752 constant-weight triples and 100000 mixed-lane plus 16777216 final-over NEON cases match exactly");
 }

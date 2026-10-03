@@ -39,10 +39,11 @@ REQUIRED_AGENT_CAPABILITIES = {
 }
 CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
     "metrics-v1",
+    "metrics-body-v1",
     "test-bridge-v1",
     "test-session",
 }
-WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
+WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1", "watch-metrics-body-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
 CHECK_SCENARIOS = (
     "smoke",
@@ -54,6 +55,8 @@ CHECK_SCENARIOS = (
     "motion-fallback",
     "idle",
     "journeys",
+    "animation-roundtrip",
+    "device-plane",
 )
 
 
@@ -455,7 +458,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     ]
     if arguments.profile:
         measurements = (
-            {"idle", "motion", "motion-rollover", "motion-held"}
+            {"idle", "motion", "motion-rollover", "motion-held", "animation-roundtrip"}
             if arguments.app == "magik"
             else {"motion"}
         )

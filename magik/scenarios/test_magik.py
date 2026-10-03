@@ -271,3 +271,35 @@ def test_journeys_profile(application_session):
             "window": window,
         },
     )
+
+
+@pytest.mark.parametrize("repetition", range(3))
+def test_animation_roundtrip(journey_application_session, repetition):
+    from magik.animation_benchmark import animation_roundtrip
+
+    app, agent, run, _ = journey_application_session
+    result = animation_roundtrip(app, agent, run, repetition)
+    append_event(
+        run,
+        {
+            "phase": "animation-roundtrip",
+            "outcome": "measured",
+            "repetition": repetition,
+            **result,
+        },
+    )
+
+
+@pytest.mark.magik_profile
+def test_animation_roundtrip_profile(journey_application_session):
+    from magik.animation_benchmark import animation_roundtrip
+
+    app, agent, run, _ = journey_application_session
+    animation_roundtrip(app, agent, run, 0, instrumented=True)
+
+
+def test_device_plane(journey_application_session):
+    from magik.native_device_check import device_plane_journey
+
+    app, agent, run, _ = journey_application_session
+    device_plane_journey(app, agent, run)

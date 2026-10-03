@@ -48,14 +48,14 @@ impl LevelChange {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct TrickCard {
     index: usize,
     detail: bool,
     pose: Pose,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct TrickPlan {
     items: [Option<TrickCard>; CAROUSEL_CAPACITY],
 }
@@ -157,6 +157,25 @@ impl PreparedLauncher {
         }
     }
 
+    /// Prepare only the card pixels for a future virtual-clock step. Chrome,
+    /// destination readiness and navigation remain owned by the current frame.
+    pub fn level_frame_preparer(
+        &self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        slot: CardSlot,
+        gather: bool,
+    ) -> LauncherFramePreparer {
+        let mut preparer = self.frame_preparer();
+        preparer.trick = if gather {
+            self.level_gather_pose(selected, change, elapsed_millis, slot)
+        } else {
+            self.level_deal_pose(selected, change, elapsed_millis, slot)
+        };
+        preparer
+    }
+
     fn level_gather_plan(
         &mut self,
         selected: usize,
@@ -167,9 +186,25 @@ impl PreparedLauncher {
         let t = elapsed_millis.min(EDGE_MILLIS);
         if t == 0 {
             self.restore_chrome();
+        } else {
+            self.fade_level_chrome(
+                GEOMETRY_ONE - ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS)),
+            );
+        }
+        self.level_gather_pose(selected, change, t, destination)
+    }
+
+    fn level_gather_pose(
+        &self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        destination: CardSlot,
+    ) -> Option<TrickPlan> {
+        let t = elapsed_millis.min(EDGE_MILLIS);
+        if t == 0 {
             return None;
         }
-        self.fade_level_chrome(GEOMETRY_ONE - ease_in_out_cubic(window(t, 0, CHROME_OUT_MILLIS)));
         let hero = hero_pose(self.slot_zero(), destination, change, t);
         let progress = window(t, 0, EDGE_MILLIS);
         let gather = ease_in_out_cubic(progress);
@@ -229,13 +264,27 @@ impl PreparedLauncher {
         let t = elapsed_millis.clamp(EDGE_MILLIS, LEVEL_TRICK_MILLIS);
         if t == LEVEL_TRICK_MILLIS {
             self.restore_chrome();
+        } else {
+            self.fade_level_chrome(ease_out_quart(window(
+                t,
+                CHROME_IN_AT_MILLIS,
+                CHROME_IN_MILLIS,
+            )));
+        }
+        self.level_deal_pose(selected, change, t, source)
+    }
+
+    fn level_deal_pose(
+        &self,
+        selected: usize,
+        change: LevelChange,
+        elapsed_millis: u32,
+        source: CardSlot,
+    ) -> Option<TrickPlan> {
+        let t = elapsed_millis.clamp(EDGE_MILLIS, LEVEL_TRICK_MILLIS);
+        if t == LEVEL_TRICK_MILLIS {
             return None;
         }
-        self.fade_level_chrome(ease_out_quart(window(
-            t,
-            CHROME_IN_AT_MILLIS,
-            CHROME_IN_MILLIS,
-        )));
         let hero = hero_pose(source, self.slot_zero(), change, t);
         let mut behind = scaled_pose(hero, BEHIND_SCALE);
         behind.angle = 0;
@@ -390,6 +439,22 @@ impl PreparedLauncher {
                 }
             }
         }
+    }
+
+    /// Rows that can change during a level trick, excluding the carousel.
+    /// Copy the full title region: a wider target breadcrumb and its later
+    /// clearing can change pixels that are black in the source title.
+    pub fn level_chrome_copy_spans(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let width = self.responsive.map_or(LOGICAL_WIDTH, |_| self.scene.width);
+        let ((x0, y0, x1, y1), _) = self.level_chrome_regions()[2];
+        (y0..y1)
+            .map(move |y| (y * width + x0, y * width + x1))
+            .chain(
+                self.level_chrome_spans
+                    .iter()
+                    .filter(|s| !s.title)
+                    .map(|s| (s.start, s.end)),
+            )
     }
 
     fn fade_level_chrome(&mut self, alpha: i64) {
@@ -677,6 +742,49 @@ mod tests {
     }
 
     #[test]
+    fn sparse_copy_spans_cover_tricks_and_interrupted_foreign_titles() {
+        let cards = cards(6);
+        let scene = LauncherScene::new(960, 540);
+        for root in [false, true] {
+            let mut data = level(&cards, 3, &["CONSOLES"]);
+            if root {
+                data.level = LauncherLevel::Root;
+            }
+            let mut from = scene.prepare(data);
+            let target = scene.prepare(level(
+                &cards,
+                0,
+                &["CONSOLES", "NINTENDO ENTERTAINMENT SYSTEM"],
+            ));
+            for change in [LevelChange::Descend, LevelChange::Ascend] {
+                let mut slots = [from.pixels().to_vec(), from.pixels().to_vec()];
+                for (frame, t) in [
+                    0, 1, 150, 260, 414, 459, 75, 460, 461, 600, 750, 866, 899, 919, 920,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if t <= EDGE_MILLIS {
+                        from.render_level_gather_to(3, change, t, target.slot_zero());
+                        from.render_transition_title_from(&target, t);
+                    } else {
+                        from.render_level_deal_from(3, change, t, target.slot_zero());
+                    }
+                    let slot = &mut slots[frame % 2];
+                    for (start, end) in from.level_chrome_copy_spans() {
+                        slot[start..end].copy_from_slice(&from.pixels()[start..end]);
+                    }
+                    for y in 120..495 {
+                        let range = y * 960 + 268..y * 960 + 934;
+                        slot[range.clone()].copy_from_slice(&from.pixels()[range]);
+                    }
+                    assert!(slot == from.pixels(), "root={root} {change:?} phase={t}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn parallel_tricks_match_serial_pixels_and_reuse_the_current_worker() {
         let cards = cards(6);
         let scene = LauncherScene::new(960, 540);
@@ -685,6 +793,7 @@ mod tests {
         let initial = scene.prepare(initial_data);
         let mut renderer =
             ParallelLauncherRenderer::new(initial.frame_preparer(), None, None).unwrap();
+        renderer.retain_bands(true);
         let mut generation = 0;
         for root in [true, false] {
             let mut data = level(&cards, 3, &["CONSOLES"]);
@@ -708,8 +817,16 @@ mod tests {
                         timestamp_us: t as u64 * 1000,
                         generation,
                     };
+                    let before = parallel.pixels().to_vec();
+                    let prepared = renderer
+                        .prepare_helper_ahead(
+                            &parallel.level_frame_preparer(3, change, t, target.slot_zero(), true),
+                            request,
+                        )
+                        .unwrap();
+                    assert!(parallel.pixels() == before);
                     serial.render_level_gather_to(3, change, t, target.slot_zero());
-                    parallel
+                    let timing = parallel
                         .render_level_gather_to_parallel(
                             request,
                             change,
@@ -718,8 +835,10 @@ mod tests {
                             &mut renderer,
                         )
                         .unwrap();
+                    assert_eq!(timing.helper_ahead, prepared);
                     serial.render_transition_title_from(&target, t);
                     parallel.render_transition_title_from(&target, t);
+                    parallel.merge_retained_helper(&mut renderer);
                     assert!(
                         serial.pixels() == parallel.pixels(),
                         "root={root} {change:?} gather {t}"
@@ -732,8 +851,14 @@ mod tests {
                         timestamp_us: t as u64 * 1000,
                         generation,
                     };
+                    let prepared = renderer
+                        .prepare_helper_ahead(
+                            &parallel.level_frame_preparer(3, change, t, target.slot_zero(), false),
+                            request,
+                        )
+                        .unwrap();
                     serial.render_level_deal_from(3, change, t, target.slot_zero());
-                    parallel
+                    let timing = parallel
                         .render_level_deal_from_parallel(
                             request,
                             change,
@@ -742,6 +867,8 @@ mod tests {
                             &mut renderer,
                         )
                         .unwrap();
+                    assert_eq!(timing.helper_ahead, prepared);
+                    parallel.merge_retained_helper(&mut renderer);
                     assert!(
                         serial.pixels() == parallel.pixels(),
                         "root={root} {change:?} deal {t}"

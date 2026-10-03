@@ -79,6 +79,10 @@ impl ThreadSample {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ParallelFrameTiming {
     pub total_us: u64,
+    pub helper_ahead: bool,
+    pub helper_ahead_lead_us: u64,
+    pub discarded_helper_us: u64,
+    pub discarded_helper_cpu_us: Option<u64>,
     pub primary_us: u64,
     pub secondary_us: u64,
     pub wait_us: u64,
@@ -100,7 +104,15 @@ struct Job {
     dispatched_at: Instant,
     split: usize,
 }
+struct Ahead {
+    preparer: LauncherFramePreparer,
+    request: LauncherFrameRequest,
+    split: usize,
+    dispatched_at: Instant,
+}
 struct Completion {
+    #[cfg(feature = "launcher-profile")]
+    profile: Option<crate::launcher_profile::Report>,
     buffer: PreparedLauncherFrame,
     wall_us: u64,
     cpu_us: Option<u64>,
@@ -111,13 +123,29 @@ struct Completion {
 pub struct ParallelLauncherRenderer {
     primary: PreparedLauncherFrame,
     helper: Option<PreparedLauncherFrame>,
+    spare: Option<PreparedLauncherFrame>,
+    ahead: Option<Ahead>,
     requests: Option<SyncSender<Job>>,
     completions: Receiver<Completion>,
     worker: Option<JoinHandle<()>>,
     clocks: Option<ThreadClocks>,
     storage_bytes: usize,
     split: usize,
+    rendered_split: usize,
+    retain_bands: bool,
+    helper_unmerged: bool,
 }
+fn copy_helper_band(destination: &mut [Rgb565Pixel], source: &[Rgb565Pixel], split: usize) -> u64 {
+    let started = Instant::now();
+    #[cfg(feature = "launcher-profile")]
+    let _merge = crate::launcher_profile::span("frame.helper-merge");
+    for y in 120..495 {
+        let range = y * 960 + split..y * 960 + CAROUSEL_RIGHT;
+        destination[range.clone()].copy_from_slice(&source[range]);
+    }
+    micros(started)
+}
+
 fn micros(start: Instant) -> u64 {
     start.elapsed().as_micros() as u64
 }
@@ -152,8 +180,13 @@ impl ParallelLauncherRenderer {
                     let (cpu_us, run_delay_us) = ThreadSample::now(clocks).since(sample);
                     let wall_us = micros(started_at);
                     let finished_at = Instant::now();
+                    #[cfg(feature = "launcher-profile")]
+                    let profile =
+                        crate::launcher_profile::enabled().then(crate::launcher_profile::take);
                     if completed
                         .send(Completion {
+                            #[cfg(feature = "launcher-profile")]
+                            profile,
                             buffer: job.buffer,
                             wall_us,
                             cpu_us,
@@ -173,12 +206,17 @@ impl ParallelLauncherRenderer {
         Ok(Self {
             primary,
             helper: Some(helper),
+            spare: None,
+            ahead: None,
             requests: Some(requests),
             completions,
             worker: Some(worker),
             clocks,
             storage_bytes,
             split: CAROUSEL_SPLIT,
+            rendered_split: CAROUSEL_SPLIT,
+            retain_bands: false,
+            helper_unmerged: false,
         })
     }
     pub fn render(
@@ -189,20 +227,42 @@ impl ParallelLauncherRenderer {
     ) -> Result<ParallelFrameTiming, String> {
         let started = Instant::now();
         let left = preparer.carousel_clip().0;
-        let split = self
-            .split
-            .clamp(left + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND);
-        self.requests
+        let helper_ahead = self
+            .ahead
             .as_ref()
-            .ok_or("card renderer stopped")?
-            .send(Job {
-                preparer: preparer.clone(),
-                request,
-                buffer: self.helper.take().ok_or("helper output unavailable")?,
-                dispatched_at: started,
-                split,
-            })
-            .map_err(|e| e.to_string())?;
+            .is_some_and(|ahead| ahead.request == request && ahead.preparer.same_source(preparer));
+        let (discarded_helper_us, discarded_helper_cpu_us) =
+            if self.ahead.is_some() && !helper_ahead {
+                self.retire_ahead()?
+            } else {
+                (0, None)
+            };
+        let ahead = self.ahead.take();
+        let helper_ahead_lead_us = ahead.as_ref().map_or(0, |ahead| {
+            started
+                .saturating_duration_since(ahead.dispatched_at)
+                .as_micros() as u64
+        });
+        let split = ahead.as_ref().map_or_else(
+            || {
+                self.split
+                    .clamp(left + MINIMUM_BAND, CAROUSEL_RIGHT - MINIMUM_BAND)
+            },
+            |ahead| ahead.split,
+        );
+        if !helper_ahead {
+            self.requests
+                .as_ref()
+                .ok_or("card renderer stopped")?
+                .send(Job {
+                    preparer: preparer.clone(),
+                    request,
+                    buffer: self.helper.take().ok_or("helper output unavailable")?,
+                    dispatched_at: started,
+                    split,
+                })
+                .map_err(|e| e.to_string())?;
+        }
         let primary_started = Instant::now();
         let sample = ThreadSample::now(self.clocks);
         preparer.render_tile_into(request, &mut self.primary, destination, (left, split));
@@ -215,14 +275,21 @@ impl ParallelLauncherRenderer {
         if completed.buffer.request() != Some(request) {
             return Err("mismatched current card pose".into());
         }
-        let merge_started = Instant::now();
-        for y in 120..495 {
-            destination[y * 960 + split..y * 960 + CAROUSEL_RIGHT].copy_from_slice(
-                &completed.buffer.pixels()[y * 960 + split..y * 960 + CAROUSEL_RIGHT],
-            );
+        self.rendered_split = split;
+        self.helper_unmerged = self.retain_bands;
+        let merge_us = if self.retain_bands {
+            0
+        } else {
+            copy_helper_band(destination, completed.buffer.pixels(), split)
+        };
+        #[cfg(feature = "launcher-profile")]
+        if let Some(profile) = completed.profile {
+            crate::launcher_profile::absorb_worker(profile);
         }
-        let merge_us = micros(merge_started);
-        self.helper = Some(completed.buffer);
+        let previous = self.helper.replace(completed.buffer);
+        if helper_ahead {
+            self.spare = previous;
+        }
         // Balance what each band adds to the critical path, including the
         // helper's wake-up; the primary band runs on the presenting thread.
         self.split = balanced_split(
@@ -233,6 +300,10 @@ impl ParallelLauncherRenderer {
         );
         Ok(ParallelFrameTiming {
             total_us: micros(started),
+            helper_ahead,
+            helper_ahead_lead_us,
+            discarded_helper_us,
+            discarded_helper_cpu_us,
             primary_us,
             secondary_us: completed.wall_us,
             wait_us,
@@ -248,6 +319,96 @@ impl ParallelLauncherRenderer {
             split,
         })
     }
+    /// At most one future helper band is in flight. The current immutable
+    /// pixels stay available; projection scratch moves to the spare buffer.
+    pub fn prepare_helper_ahead(
+        &mut self,
+        preparer: &LauncherFramePreparer,
+        request: LauncherFrameRequest,
+    ) -> Result<bool, String> {
+        if self.ahead.is_some() {
+            return Ok(false);
+        }
+        let sender = self.requests.as_ref().ok_or("card renderer stopped")?;
+        let helper = self.helper.as_mut().ok_or("helper output unavailable")?;
+        if helper.request().is_none() {
+            return Ok(false);
+        }
+        let mut buffer = self.spare.take().unwrap_or_else(|| {
+            let buffer = PreparedLauncherFrame::spare_pixels();
+            self.storage_bytes += buffer.storage_bytes();
+            buffer
+        });
+        buffer.swap_scratch(helper);
+        let split = self.split.clamp(
+            preparer.carousel_clip().0 + MINIMUM_BAND,
+            CAROUSEL_RIGHT - MINIMUM_BAND,
+        );
+        let dispatched_at = Instant::now();
+        let job = Job {
+            preparer: preparer.clone(),
+            request,
+            buffer,
+            dispatched_at,
+            split,
+        };
+        if let Err(error) = sender.send(job) {
+            let mut buffer = error.0.buffer;
+            buffer.swap_scratch(helper);
+            self.spare = Some(buffer);
+            return Err("card helper stopped".into());
+        }
+        self.ahead = Some(Ahead {
+            preparer: preparer.clone(),
+            request,
+            split,
+            dispatched_at,
+        });
+        Ok(true)
+    }
+
+    fn retire_ahead(&mut self) -> Result<(u64, Option<u64>), String> {
+        self.ahead.take();
+        let mut completed = self.completions.recv().map_err(|error| error.to_string())?;
+        #[cfg(feature = "launcher-profile")]
+        if let Some(profile) = completed.profile {
+            crate::launcher_profile::absorb_worker(profile);
+        }
+        completed
+            .buffer
+            .swap_scratch(self.helper.as_mut().ok_or("helper output unavailable")?);
+        self.spare = Some(completed.buffer);
+        Ok((completed.wall_us, completed.cpu_us))
+    }
+
+    /// Retain separate immutable sources for the native two-tile publisher.
+    /// Full-frame consumers keep the default merged output.
+    pub fn retain_bands(&mut self, retain: bool) {
+        self.retain_bands = retain;
+    }
+
+    pub const fn rendered_split(&self) -> usize {
+        self.rendered_split
+    }
+
+    pub fn helper_pixels(&self, request: LauncherFrameRequest) -> Option<&[Rgb565Pixel]> {
+        self.helper
+            .as_ref()
+            .filter(|buffer| buffer.request() == Some(request))
+            .map(PreparedLauncherFrame::pixels)
+    }
+
+    pub fn merge_retained_helper(&mut self, destination: &mut [Rgb565Pixel]) {
+        if self.helper_unmerged {
+            copy_helper_band(
+                destination,
+                self.helper.as_ref().expect("completed helper").pixels(),
+                self.rendered_split,
+            );
+            self.helper_unmerged = false;
+        }
+    }
+
     pub const fn storage_bytes(&self) -> usize {
         self.storage_bytes
     }
@@ -255,6 +416,9 @@ impl ParallelLauncherRenderer {
         self.worker.as_ref().unwrap().thread().id()
     }
     pub fn stop(&mut self) {
+        if self.ahead.is_some() {
+            let _ = self.retire_ahead();
+        }
         self.requests.take();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -274,6 +438,101 @@ mod tests {
         LauncherCard, LauncherCardId, LauncherData, LauncherLevel, LauncherScene,
     };
     use crate::launcher_navigation::{BrowseDirection, BrowseFrame, BrowsePhase};
+
+    #[test]
+    fn ahead_preserves_current_pixels_and_rejects_changed_sources() {
+        let scene = LauncherScene::new(960, 540);
+        let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+            id: LauncherCardId::Consoles,
+            name,
+            games: Some(12),
+            colour: 0x2a7f,
+        });
+        let data = LauncherData {
+            cards: &cards,
+            selected: 0,
+            library_games: 72,
+            collections: 6,
+            favourites: 1,
+            clock: "12:00",
+            level: LauncherLevel::Root,
+        };
+        let mut page = scene.prepare(data);
+        let mut serial = scene.prepare(data);
+        let preparer = page.frame_preparer();
+        let mut renderer = ParallelLauncherRenderer::new(preparer.clone(), None, None).unwrap();
+        renderer.retain_bands(true);
+        let storage = renderer.storage_bytes();
+        let worker = renderer.helper_thread_id();
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 0,
+            phase: BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 180,
+        };
+        let first = LauncherFrameRequest {
+            frame,
+            timestamp_us: 0,
+            generation: 1,
+        };
+        page.render_parallel_frame(&mut renderer, first).unwrap();
+        let original = renderer.helper_pixels(first).unwrap().to_vec();
+        let next = LauncherFrameRequest {
+            timestamp_us: 16_000,
+            generation: 2,
+            ..first
+        };
+        assert!(renderer.prepare_helper_ahead(&preparer, next).unwrap());
+        assert!(!renderer.prepare_helper_ahead(&preparer, next).unwrap());
+        assert_eq!(renderer.helper_pixels(first).unwrap(), original);
+        assert!(renderer.helper_pixels(next).is_none());
+        page.merge_retained_helper(&mut renderer);
+        serial.render_frame(frame);
+        assert!(page.pixels() == serial.pixels());
+        let timing = page.render_parallel_frame(&mut renderer, next).unwrap();
+        assert!(timing.helper_ahead);
+        page.merge_retained_helper(&mut renderer);
+        assert!(page.pixels() == serial.pixels());
+        assert_eq!(renderer.storage_bytes(), storage + 960 * 540 * 2);
+
+        let next_request = LauncherFrameRequest {
+            timestamp_us: 33_000,
+            generation: 3,
+            ..first
+        };
+        assert!(
+            renderer
+                .prepare_helper_ahead(&preparer, next_request)
+                .unwrap()
+        );
+        // Same request, but independently prepared artwork: the old band must
+        // be discarded rather than tagged as the new source's output.
+        let mut replacement = scene.prepare(data);
+        let timing = replacement
+            .render_parallel_frame(&mut renderer, next_request)
+            .unwrap();
+        assert!(!timing.helper_ahead);
+        assert!(timing.discarded_helper_us > 0);
+        replacement.merge_retained_helper(&mut renderer);
+        assert!(replacement.pixels() == serial.pixels());
+        assert_eq!(renderer.helper_thread_id(), worker);
+        let retained = renderer.helper_pixels(next_request).unwrap().to_vec();
+        let future = LauncherFrameRequest {
+            timestamp_us: 50_000,
+            generation: 4,
+            ..first
+        };
+        assert!(
+            renderer
+                .prepare_helper_ahead(&replacement.frame_preparer(), future)
+                .unwrap()
+        );
+        renderer.stop();
+        assert_eq!(renderer.helper_pixels(next_request).unwrap(), retained);
+        assert!(renderer.prepare_helper_ahead(&preparer, future).is_err());
+    }
 
     #[test]
     fn split_moves_toward_balance_and_stays_bounded() {
@@ -312,6 +571,59 @@ mod tests {
             balanced_split(CAROUSEL_LEFT, CAROUSEL_SPLIT, 0, 5_000),
             CAROUSEL_SPLIT
         );
+    }
+
+    #[test]
+    #[cfg(feature = "launcher-profile")]
+    fn instrumented_frame_collects_and_drains_helper_stages() {
+        let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+            id: LauncherCardId::Consoles,
+            name,
+            games: Some(12),
+            colour: 0x2a7f,
+        });
+        let mut scene = LauncherScene::new(960, 540).prepare(LauncherData {
+            cards: &cards,
+            selected: 0,
+            library_games: 72,
+            collections: 6,
+            favourites: 1,
+            clock: "12:00",
+            level: LauncherLevel::Root,
+        });
+        let preparer = scene.frame_preparer();
+        let mut renderer = ParallelLauncherRenderer::new(preparer.clone(), None, None).unwrap();
+        let _ = crate::launcher_profile::take();
+        crate::launcher_profile::enable_wall_time();
+        let request = LauncherFrameRequest {
+            frame: BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: BrowsePhase::Flipping,
+                direction: Some(BrowseDirection::Right),
+                progress_millis: 60,
+                duration_millis: 180,
+            },
+            timestamp_us: 60_000,
+            generation: 1,
+        };
+        scene.render_parallel_frame(&mut renderer, request).unwrap();
+        crate::launcher_profile::disable();
+        let report = crate::launcher_profile::take();
+        assert_eq!(report.worker_frames, 1);
+        for label in [
+            "flip.clear",
+            "flip.geometry-filter",
+            "flip.compose",
+            "reflection.prepare",
+            "flip.reflection",
+            "frame.helper-merge",
+        ] {
+            assert!(report.stages.contains_key(label), "missing {label}");
+        }
+        let drained = crate::launcher_profile::take();
+        assert_eq!(drained.worker_frames, 0);
+        assert!(drained.stages.is_empty());
     }
 
     #[test]
@@ -417,6 +729,39 @@ mod tests {
                         parallel.pixels() == serial.pixels(),
                         "split {split}, {direction:?} {progress}"
                     );
+                    // A native publisher combines the two immutable sources,
+                    // including when the adaptive boundary changes each frame.
+                    renderer.retain_bands(true);
+                    renderer.split = split;
+                    generation += 1;
+                    let retained_frame = BrowseFrame {
+                        progress_millis: progress ^ 0x8000,
+                        ..frame
+                    };
+                    let request = LauncherFrameRequest {
+                        frame: retained_frame,
+                        timestamp_us: 0,
+                        generation,
+                    };
+                    let timing = parallel
+                        .render_parallel_frame(&mut renderer, request)
+                        .unwrap();
+                    assert_eq!(timing.merge_us, 0);
+                    assert_eq!(renderer.rendered_split(), split);
+                    let mut published = parallel.pixels().to_vec();
+                    let helper = renderer.helper_pixels(request).unwrap();
+                    for y in 120..495 {
+                        let range = y * 960 + split..y * 960 + CAROUSEL_RIGHT;
+                        published[range.clone()].copy_from_slice(&helper[range]);
+                    }
+                    serial.render_frame(retained_frame);
+                    assert!(published == serial.pixels(), "retained split {split}");
+                    parallel.merge_retained_helper(&mut renderer);
+                    assert!(
+                        parallel.pixels() == serial.pixels(),
+                        "full consumer after retained bands"
+                    );
+                    renderer.retain_bands(false);
                 }
             }
         }

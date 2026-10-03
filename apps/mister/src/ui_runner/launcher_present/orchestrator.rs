@@ -661,11 +661,13 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::ui_runner) fn try_copy_direct_hidden_tiles(
         &mut self,
         hardware: &mut Fpga,
         display: &mut LauncherDisplaySession,
         chrome: CachedFrameView<'_>,
+        chrome_damage: &DirtyRectList,
         tiles: [CachedFrameView<'_>; 2],
         damage: [DirtyRect; 2],
         content_generation: mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity,
@@ -675,6 +677,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
                 hardware,
                 display,
                 chrome,
+                chrome_damage,
                 tiles,
                 damage,
                 content_generation,

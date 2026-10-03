@@ -4,6 +4,10 @@ use serde_json::{Value, json};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameWorkTiming {
     pub producer_us: u64,
+    pub helper_ahead: bool,
+    pub helper_ahead_lead_us: u64,
+    pub discarded_helper_us: u64,
+    pub discarded_helper_cpu_us: Option<u64>,
     pub primary_us: u64,
     pub secondary_us: u64,
     pub wait_us: u64,
@@ -20,7 +24,10 @@ pub struct FrameWorkTiming {
 }
 impl FrameWorkTiming {
     fn json(self) -> Value {
-        json!({"producer_us":self.producer_us,"primary_us":self.primary_us,"secondary_us":self.secondary_us,
+        json!({"producer_us":self.producer_us,
+            "helper_ahead":self.helper_ahead,"helper_ahead_lead_us":self.helper_ahead_lead_us,
+            "discarded_helper_us":self.discarded_helper_us,
+            "discarded_helper_cpu_us":self.discarded_helper_cpu_us,"primary_us":self.primary_us,"secondary_us":self.secondary_us,
             "wait_us":self.wait_us,"helper_start_delay_us":self.helper_start_delay_us,
             "completion_delivery_us":self.completion_delivery_us,"merge_us":self.merge_us,
             "primary_cpu_us":self.primary_cpu_us,"secondary_cpu_us":self.secondary_cpu_us,
@@ -198,6 +205,10 @@ pub struct PresentationMetrics {
     pub last_dropped_frame: Option<DroppedFrameRecord>,
     pub dropped_frame_records_omitted: u64,
     pub dropped_frames_by_workload: [u64; 5],
+    pub moving_cpu_us: Option<u64>,
+    pub moving_presentations: u64,
+    pub moving_cpu_unavailable_intervals: u64,
+    pub(crate) previous_motion_cpu_sample: Option<(Option<u64>, u64, bool)>,
 }
 impl PresentationMetrics {
     /// Reserve on begin; drop records perform no allocation or serialisation.
@@ -222,6 +233,31 @@ impl PresentationMetrics {
         }
     }
 
+    /// Reuse the existing process CPU samples; no additional procfs reads.
+    /// Each interval is attributed to the motion signal published by its preceding frame.
+    pub fn note_motion_cpu(&mut self, moving: bool) {
+        if self.window_start.is_none() || self.window.is_some() {
+            self.previous_motion_cpu_sample = None;
+            return;
+        }
+        if let Some((previous_cpu, presentations, was_moving)) = self.previous_motion_cpu_sample
+            && was_moving
+        {
+            self.moving_presentations += self.counters.presentations.saturating_sub(presentations);
+            match previous_cpu
+                .zip(self.process_cpu_us)
+                .and_then(|(a, b)| b.checked_sub(a))
+            {
+                Some(delta) => {
+                    self.moving_cpu_us = Some(self.moving_cpu_us.unwrap_or(0).saturating_add(delta))
+                }
+                None => self.moving_cpu_unavailable_intervals += 1,
+            }
+        }
+        self.previous_motion_cpu_sample =
+            Some((self.process_cpu_us, self.counters.presentations, moving));
+    }
+
     pub fn finish_window(&mut self, end_ms: u64, width: usize, height: usize, instrumented: bool) {
         let (start_ms, baseline) = self.window_start.as_ref().expect("measurement started");
         let c = &self.counters;
@@ -243,6 +279,9 @@ impl PresentationMetrics {
             "owned_refresh_dropped_frames":c.drops-baseline.drops,"latch_rejections":c.rejections-baseline.rejections,
 
             "card_rendered_frames":c.card_rendered_frames-baseline.card_rendered_frames,
+            "helper_ahead_frames": self.work_timings.iter().filter(|t| t.helper_ahead).count(),
+            "helper_ahead_lead_us_total": self.work_timings.iter().filter(|t| t.helper_ahead).map(|t| t.helper_ahead_lead_us).sum::<u64>(),
+            "discarded_helper_us_total": self.work_timings.iter().map(|t| t.discarded_helper_us).sum::<u64>(),
 
             "card_delivered_frames":c.card_delivered_frames-baseline.card_delivered_frames,
 
@@ -260,6 +299,18 @@ impl PresentationMetrics {
         );
         let window = self.window.as_mut().unwrap();
         window["process_cpu_us"] = json!(cpu_us);
+        window["moving_cpu_us"] = json!(self.moving_cpu_us);
+        window["moving_presentations"] = json!(self.moving_presentations);
+        window["moving_cpu_unavailable_intervals"] = json!(self.moving_cpu_unavailable_intervals);
+        window["moving_cpu_scope"] = json!(
+            "process samples following published UI-motion signal; boundaries may lag one loop; includes background app threads"
+        );
+        window["moving_cpu_per_presentation_us"] = json!(
+            self.moving_cpu_us
+                .filter(|_| self.moving_cpu_unavailable_intervals == 0
+                    && self.moving_presentations != 0)
+                .map(|us| us as f64 / self.moving_presentations as f64)
+        );
         for (index, name) in ["render", "transfer", "frame_to_present"]
             .into_iter()
             .enumerate()
@@ -460,6 +511,41 @@ mod tests {
         assert_eq!(window["card_producer_total_us"], 24_000);
         assert_eq!(window["card_hidden_copy_us"], 2_700);
         assert_eq!(window["last_card_source_generation"], 42);
+    }
+
+    #[test]
+    fn motion_cpu_excludes_idle_and_marks_missing_samples() {
+        let mut metrics = PresentationMetrics {
+            window_start: Some((0, Counters::default())),
+            ..Default::default()
+        };
+        for (cpu, frames, moving) in [
+            (100, 0, false),
+            (110, 0, true),
+            (140, 2, true),
+            (180, 3, false),
+            (200, 3, false),
+        ] {
+            metrics.process_cpu_us = Some(cpu);
+            metrics.counters.presentations = frames;
+            metrics.note_motion_cpu(moving);
+        }
+        metrics.finish_window(1000, 960, 540, false);
+        let window = metrics.window.as_ref().unwrap();
+        assert_eq!(window["moving_cpu_us"], 70);
+        assert_eq!(window["moving_presentations"], 3);
+        assert_eq!(window["moving_cpu_unavailable_intervals"], 0);
+        assert!(window["moving_cpu_per_presentation_us"].as_f64().unwrap() > 23.3);
+        metrics.window = None;
+        metrics.note_motion_cpu(true);
+        metrics.process_cpu_us = None;
+        metrics.note_motion_cpu(false);
+        metrics.finish_window(2000, 960, 540, false);
+        assert_eq!(
+            metrics.window.as_ref().unwrap()["moving_cpu_unavailable_intervals"],
+            1
+        );
+        assert!(metrics.window.as_ref().unwrap()["moving_cpu_per_presentation_us"].is_null());
     }
 
     #[test]

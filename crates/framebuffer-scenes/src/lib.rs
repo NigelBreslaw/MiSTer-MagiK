@@ -548,6 +548,40 @@ fn slices_overlap<P>(left: &[P], right: &[P]) -> bool {
     left_start < right_end && right_start < left_end
 }
 
+/// Expand packed RGB565 to interleaved RGB8 by bit replication. Truncating
+/// these channels back to RGB565 recovers every original pixel exactly.
+#[must_use]
+pub fn expand_rgb565_rgb8(source: &[Rgb565Pixel], output: &mut [u8]) -> bool {
+    if source.len().checked_mul(3) != Some(output.len()) {
+        return false;
+    }
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    if rgb565_neon_enabled() {
+        unsafe extern "C" {
+            fn mister_magik_rgb565_expand_rgb8(output: *mut u8, source: *const u16, n: usize);
+        }
+        // SAFETY: disjoint valid slices, exactly three output bytes per input
+        // pixel; Rgb565Pixel is a transparent u16. The kernel handles tails.
+        unsafe {
+            mister_magik_rgb565_expand_rgb8(
+                output.as_mut_ptr(),
+                source.as_ptr().cast(),
+                source.len(),
+            );
+        }
+        return true;
+    }
+    for (out, packed) in output.as_chunks_mut::<3>().0.iter_mut().zip(source) {
+        let (r, g, b) = (packed.0 >> 11, (packed.0 >> 5) & 63, packed.0 & 31);
+        out.copy_from_slice(&[
+            ((r << 3) | (r >> 2)) as u8,
+            ((g << 2) | (g >> 4)) as u8,
+            ((b << 3) | (b >> 2)) as u8,
+        ]);
+    }
+    true
+}
+
 fn rgb565_neon_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -1125,6 +1159,42 @@ impl From<&str> for SceneError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgb8_expansion_matches_all_colours_offsets_and_tails() {
+        let source = (0..=u16::MAX).map(Rgb565Pixel).collect::<Vec<_>>();
+        let verify = |source: &[Rgb565Pixel], offset: usize| {
+            let mut output = vec![0xa5; source.len() * 3 + offset + 3];
+            let end = offset + source.len() * 3;
+            assert!(expand_rgb565_rgb8(source, &mut output[offset..end]));
+            assert!(output[..offset].iter().all(|byte| *byte == 0xa5));
+            assert!(output[end..].iter().all(|byte| *byte == 0xa5));
+            for (rgb, pixel) in output[offset..end].as_chunks::<3>().0.iter().zip(source) {
+                let (r, g, b) = (pixel.0 >> 11, (pixel.0 >> 5) & 63, pixel.0 & 31);
+                assert_eq!(
+                    rgb,
+                    &[
+                        ((r << 3) | (r >> 2)) as u8,
+                        ((g << 2) | (g >> 4)) as u8,
+                        ((b << 3) | (b >> 2)) as u8
+                    ]
+                );
+                let packed = (u16::from(rgb[0] >> 3) << 11)
+                    | (u16::from(rgb[1] >> 2) << 5)
+                    | u16::from(rgb[2] >> 3);
+                assert_eq!(packed, pixel.0);
+            }
+        };
+        verify(&source, 1);
+        for offset in 0..16 {
+            for length in 0..32 {
+                verify(&source[offset..offset + length], offset);
+            }
+        }
+        let mut wrong_size = [0xa5; 2];
+        assert!(!expand_rgb565_rgb8(&source[..1], &mut wrong_size));
+        assert_eq!(wrong_size, [0xa5; 2]);
+    }
 
     #[test]
     fn half_blend_preserves_channel_floor_without_cross_channel_carries() {

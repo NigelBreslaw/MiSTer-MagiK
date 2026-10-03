@@ -4,7 +4,7 @@
 //! Production owner for the custom RGB565 card launcher: the root cards and
 //! every nested hierarchy level, including the level-change card trick.
 
-use super::DirtyRect;
+use super::{DirtyRect, DirtyRectList};
 use crate::bitmap_font_resource::{
     jersey_25_console_bitmap_font, launcher_bitmap_font, nocive_15_console_bitmap_font,
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
@@ -631,6 +631,53 @@ impl LauncherCardHomeSession {
         };
     }
 
+    /// Queue a helper band for exactly the next FrameClock step. Do not cross
+    /// the preparation/swap or landing boundaries, where state may change.
+    pub(super) fn prepare_helper_ahead(&mut self, next_ms: u64) {
+        if !self.can_render_native() || next_ms <= self.now_ms {
+            return;
+        }
+        let Some(trick) = self.trick.as_ref() else {
+            return;
+        };
+        let elapsed = next_ms.saturating_sub(trick.started_ms);
+        let (selected, t, slot, gather) = if let Some(delay) = trick.deal_delay_ms {
+            let t = elapsed.saturating_sub(delay);
+            if t >= u64::from(LEVEL_TRICK_MILLIS) {
+                return;
+            }
+            (
+                trick.destination_selected,
+                t as u32,
+                trick.source_slot,
+                false,
+            )
+        } else {
+            if elapsed >= u64::from(LEVEL_TRICK_EDGE_MILLIS) {
+                return;
+            }
+            (
+                trick.source_selected,
+                elapsed as u32,
+                trick.destination_slot,
+                true,
+            )
+        };
+        let request = LauncherFrameRequest {
+            frame: settled_frame(selected),
+            timestamp_us: next_ms.saturating_mul(1_000),
+            generation: self.last_request.generation.wrapping_add(1).max(1),
+        };
+        let preparer = self
+            .prepared
+            .level_frame_preparer(selected, trick.change, t, slot, gather);
+        if let Some(renderer) = self.renderer.as_mut()
+            && let Err(error) = renderer.prepare_helper_ahead(&preparer, request)
+        {
+            crate::ui_errln!("card helper render-ahead failed: {error}");
+        }
+    }
+
     /// A level change is playing. The carousel shows neither level's real
     /// selection, so the launcher must not act on input until it lands.
     pub(super) fn is_level_trick_active(&self) -> bool {
@@ -646,6 +693,17 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
+        self.render_output(false)
+    }
+
+    pub(super) fn render_direct_bands(&mut self) {
+        let _ = self.render_output(true);
+    }
+
+    fn render_output(&mut self, retain_bands: bool) -> &[Rgb565Pixel] {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.retain_bands(retain_bands);
+        }
         if self.render_trick() {
             self.last_rendered = None;
             self.content_dirty = true;
@@ -668,6 +726,12 @@ impl LauncherCardHomeSession {
             }
             self.last_rendered = Some((self.frame, self.content_generation));
         } else {
+            if !retain_bands
+                && self.scene == LauncherScene::new(960, 540)
+                && let Some(renderer) = self.renderer.as_mut()
+            {
+                self.prepared.merge_retained_helper(renderer);
+            }
             self.last_timing = None;
         }
         self.content_dirty = false;
@@ -700,6 +764,39 @@ impl LauncherCardHomeSession {
 
     pub(super) fn invalidate_compositor(&mut self) {
         self.compositor_content_generation = None;
+    }
+
+    pub(super) fn chrome_copy_damage(&self, level_trick: bool) -> DirtyRectList {
+        let mut damage = DirtyRectList::new();
+        if !level_trick {
+            return damage;
+        }
+        assert_eq!(self.scene, LauncherScene::new(960, 540));
+        // Coalesce sparse rows in bounded 32-row bands. Separate sidebar and
+        // panel runs; native chrome geometry needs at most 19 rectangles.
+        let mut pending: Option<((usize, bool), DirtyRect)> = None;
+        for (start, end) in self.prepared.level_chrome_copy_spans() {
+            let y = start / 960;
+            let key = (y / 32, start % 960 >= 268);
+            let row = DirtyRect {
+                x0: start % 960,
+                y0: y,
+                x1: (end - 1) % 960 + 1,
+                y1: y + 1,
+            };
+            if let Some((previous, rect)) = pending.as_mut() {
+                if *previous == key {
+                    *rect = rect.union(row);
+                    continue;
+                }
+                damage.push(*rect);
+            }
+            pending = Some((key, row));
+        }
+        if let Some((_, rect)) = pending {
+            damage.push(rect);
+        }
+        damage
     }
 
     pub(super) fn compositor_copy_damage(&self, motion_only: bool) -> Option<DirtyRect> {
@@ -748,8 +845,22 @@ impl LauncherCardHomeSession {
     pub(super) fn last_timing(&self) -> Option<ParallelFrameTiming> {
         self.last_timing
     }
-    pub(super) fn current_pixels(&self) -> &[Rgb565Pixel] {
+    pub(super) fn current_primary_pixels(&self) -> &[Rgb565Pixel] {
         self.prepared.pixels()
+    }
+
+    pub(super) fn current_helper_pixels(&self) -> &[Rgb565Pixel] {
+        self.renderer
+            .as_ref()
+            .and_then(|renderer| renderer.helper_pixels(self.last_request))
+            .expect("matching current helper band")
+    }
+
+    pub(super) fn rendered_split(&self) -> usize {
+        self.renderer
+            .as_ref()
+            .expect("native renderer")
+            .rendered_split()
     }
 
     #[cfg(feature = "tooling")]
@@ -1439,8 +1550,18 @@ mod tests {
         let scene = LauncherScene::new(960, 540);
         let level = snapshot();
         let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        let mut reference = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        reference.update(scene, &level, 0, 0.25, "07:28", 16, false, None);
+        let captured = reference.render().to_vec();
         session.update(scene, &level, 0, 0.25, "07:28", 16, false, None);
-        let captured = session.render().to_vec();
+        session.render_direct_bands();
+        assert_eq!(session.last_timing().unwrap().merge_us, 0);
+        let mut published = session.current_primary_pixels().to_vec();
+        for y in 120..495 {
+            let range = y * 960 + session.rendered_split()..y * 960 + 934;
+            published[range.clone()].copy_from_slice(&session.current_helper_pixels()[range]);
+        }
+        assert_eq!(published, captured);
         let generation = session.current_request().generation;
         session.note_direct_presented();
         assert!(session.compositor_stale());
@@ -1636,6 +1757,24 @@ mod tests {
         assert_eq!(session.current_request().frame.selected, 1);
         assert_eq!(session.current_request().timestamp_us, 200_000);
         assert!(session.current_request().generation > source_generation);
+        let current = session.current_request();
+        let helper = session.current_helper_pixels().to_vec();
+        session.prepare_helper_ahead(216);
+        assert_eq!(session.now_ms, 200);
+        assert_eq!(session.current_request(), current);
+        assert_eq!(session.current_helper_pixels(), helper);
+        assert!(session.is_level_trick_active());
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 216, true, None);
+        let produced = session.render().to_vec();
+        assert!(session.last_timing().unwrap().helper_ahead);
+        let mut expected = prepare(scene, &snapshot(), 1, "21:37", &session.fonts);
+        expected.render_level_gather_to(
+            1,
+            LevelChange::Descend,
+            200,
+            session.trick.as_ref().unwrap().destination_slot,
+        );
+        assert_eq!(produced, expected.pixels());
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut now = 400;
         while session

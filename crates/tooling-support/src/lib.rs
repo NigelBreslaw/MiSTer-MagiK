@@ -119,6 +119,10 @@ impl Session {
         self.metrics.last_dropped_frame = None;
         self.metrics.dropped_frame_records_omitted = 0;
         self.metrics.dropped_frames_by_workload = [0; 5];
+        self.metrics.moving_cpu_us = None;
+        self.metrics.moving_presentations = 0;
+        self.metrics.moving_cpu_unavailable_intervals = 0;
+        self.metrics.previous_motion_cpu_sample = None;
         self.metrics.dropped_frame_records.reserve(64);
         self.metrics.work_timings.clear();
         self.metrics.work_timings.reserve(3601);
@@ -211,6 +215,14 @@ impl Session {
         (self.start.elapsed().as_millis() as u64).checked_sub(window_start)
     }
 
+    fn measurement_duration(&self, instrumented: bool) -> u64 {
+        // Preserve the legacy ten-second profile minimum; explicit longer
+        // windows must cover the whole requested diagnostic workload.
+        self.measurement_duration_ms
+            .unwrap_or(5_000)
+            .max(if instrumented { 10_000 } else { 0 })
+    }
+
     /// Device-clock warmup and measurement boundaries, independent of host polling.
     pub fn tick(&mut self, width: usize, height: usize) -> Result<bool, String> {
         if self.last_request.elapsed() >= Duration::from_millis(100) {
@@ -257,11 +269,7 @@ impl Session {
         }
         let now = self.start.elapsed().as_millis() as u64;
         let instrumented = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
-        let duration = if instrumented {
-            10_000
-        } else {
-            self.measurement_duration_ms.unwrap_or(5_000)
-        };
+        let duration = self.measurement_duration(instrumented);
         let mut completed = false;
         // Scanning procfs blocks for tens of milliseconds and a helper thread
         // would compete with rendering, so snapshot inside the warmup instead.
@@ -287,6 +295,7 @@ impl Session {
                 self.metrics.window_cpu_start_us = self.metrics.process_cpu_us;
                 self.profile = CpuProfile::start()?;
             }
+            self.metrics.note_motion_cpu(self.ui_motion);
             if self
                 .metrics
                 .window_start
@@ -316,18 +325,30 @@ impl Session {
             }
         }
         if !self.ready && self.metrics.counters.presentations > 0 {
-            self.write("probe-ready.json", &self.metrics.json(width, height, now))?;
+            self.write("probe-ready.json", &self.metrics_json(width, height, now))?;
             self.ready = true;
         }
         let since_write = self.last_write.elapsed();
         let periodic_write_due = since_write >= PERIODIC_WRITE_INTERVAL
             && (!self.ui_motion || since_write >= MOTION_WRITE_INTERVAL);
         if completed || periodic_write_due {
-            self.write("probe-metrics.json", &self.metrics.json(width, height, now))?;
+            self.write("probe-metrics.json", &self.metrics_json(width, height, now))?;
             self.last_write = Instant::now();
         }
         Ok(completed)
     }
+    /// Republish completed evidence after the app attaches its renderer report.
+    pub fn publish_metrics(&mut self, width: usize, height: usize) -> Result<(), String> {
+        let now = self.start.elapsed().as_millis() as u64;
+        self.write("probe-metrics.json", &self.metrics_json(width, height, now))
+    }
+
+    fn metrics_json(&self, width: usize, height: usize, now: u64) -> serde_json::Value {
+        let mut value = self.metrics.json(width, height, now);
+        value["ui_motion"] = serde_json::json!(self.ui_motion);
+        value
+    }
+
     pub fn preview(&mut self, pixels: &[Rgb565Pixel], width: usize, height: usize) {
         self.previews
             .publish_if_watched(pixels, width, height, self.start.elapsed());
@@ -425,6 +446,7 @@ mod tests {
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
         assert_eq!(session.measurement_duration_ms, Some(8000));
+        assert_eq!(session.measurement_duration(true), 10_000);
         assert_eq!(session.carousel_hold_change(), Some(true));
         assert_eq!(session.carousel_hold_change(), None);
         session.start -= Duration::from_secs(3);
@@ -477,6 +499,7 @@ mod tests {
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
         assert_eq!(session.measurement_duration_ms, Some(45000));
+        assert_eq!(session.measurement_duration(true), 45_000);
         session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
         session.tick(16, 8).unwrap();
         session.start -= Duration::from_millis(45_000);
@@ -537,11 +560,17 @@ mod tests {
         session.last_write -= MOTION_WRITE_INTERVAL;
         session.tick(16, 8).unwrap();
         assert!(metrics.exists(), "but only for a bounded time");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&metrics).unwrap()).unwrap();
+        assert_eq!(value["ui_motion"], true);
         std::fs::remove_file(&metrics).unwrap();
         session.last_write = Instant::now() - Duration::from_millis(250);
         session.set_ui_motion(false);
         session.tick(16, 8).unwrap();
         assert!(metrics.exists(), "idle refreshes keep their cadence");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&metrics).unwrap()).unwrap();
+        assert_eq!(value["ui_motion"], false);
         std::fs::remove_dir_all(root).unwrap();
     }
 

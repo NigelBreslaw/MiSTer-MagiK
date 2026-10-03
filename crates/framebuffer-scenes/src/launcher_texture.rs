@@ -730,7 +730,7 @@ pub(super) fn project_card_over_column_quality(
     #[cfg(target_arch = "arm")]
     {
         unsafe extern "C" {
-            fn magik_launcher_project_dithered(
+            fn magik_launcher_project_dithered_opaque(
                 out: *mut u16,
                 pitch: usize,
                 src: *const u32,
@@ -740,11 +740,15 @@ pub(super) fn project_card_over_column_quality(
                 step: i32,
                 x: usize,
                 y: usize,
+                opaque_top: usize,
+                opaque_bottom: usize,
             );
         }
-        // SAFETY: destination span checked above; kernel bounds-checks source rows.
+        // SAFETY: output and coordinate progression checked above. Canonical card
+        // columns share the existing 8-row opaque-interior contract used by
+        // project_card_over_column; both bilinear inputs stay within it.
         unsafe {
-            magik_launcher_project_dithered(
+            magik_launcher_project_dithered_opaque(
                 destination.as_mut_ptr().cast(),
                 pitch,
                 source.as_ptr(),
@@ -754,6 +758,12 @@ pub(super) fn project_card_over_column_quality(
                 sample.1,
                 origin.0,
                 origin.1,
+                if source.len() > 16 { 8 } else { 0 },
+                if source.len() > 16 {
+                    source.len() - 8
+                } else {
+                    0
+                },
             );
         }
     }
