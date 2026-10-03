@@ -114,3 +114,12 @@ All retained card miss records in these runs are outside the reused ahead bands.
 Prioritize cold transition starts/endpoint raster and ordinary-browse scheduler
 attribution next, while keeping physical input/contention qualification in scope.
 The full launcher/subview goal is still unachieved at 19/19/20 route drops.
+
+
+Complete cold capture attribution exposed first-use device image expansion.
+Separate exact conversion and background shared-buffer commits reduced that UI
+cost from 9.080 to 4.871 to 0.019 ms. Clean cadence is still about 20 drops/route.
+Full Slint raster and initial destination composition remain costly; target them
+next, alongside ordinary-browse scheduler tails and complete input/route gates.
+Earlier Slint span totals omitted one controlled full-raster entrypoint and are
+partial, while native CPU/drop totals remain valid.

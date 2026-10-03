@@ -479,7 +479,7 @@ initial destination-layer costs remained essentially unchanged. Retain the
 converter for the directly attributed cold saving and exact bytes, with no
 claim that it alone removes the first-frame misses.
 
-## Background device pixel buffers — awaiting comparison
+## Background device pixel buffers — kept (`bab3c677c`)
 
 The existing artwork worker now prepares the immutable RGB8 buffers as well as
 packed device art, using the existing CPU0 preparation role. Only pixel data
@@ -490,6 +490,40 @@ storage across worker/UI access and round-trip to every original artwork pixel
 in the focused test. Frontend Clippy and existing device-art tests pass.
 
 This moves the existing first-use data preparation off the UI path and eagerly
-stores up to three 483x519x3-byte buffers (2,256,039 bytes). It does not add a
+stores up to three 483x519x3-byte buffers (2,256,093 bytes). It does not add a
 motion pause or change presentation/drop gates. Compare the cold profile and
 clean route against the converter-only parent before retaining.
+
+
+A complete diagnostic route passed: `build/magik-results/20261003T001906Z-0b179beeaf13`.
+First device Slint-image use is now 0.019 ms, versus 4.871 ms after conversion
+alone and 9.080 ms originally. Cold bridge maximum is 13.630 ms, versus 18.463
+and 22.706 ms respectively. The prepared data were ready before first navigation;
+no presentation counter, motion step or duration was suppressed to obtain this.
+Full Slint raster (51.808 ms over four calls) and initial destination layers
+(33.127 ms over three calls) remain essentially unchanged and still expensive.
+
+Three clean routes and teardown passed. Evidence:
+`build/magik-results/20261003T002222Z-7e9c2ad3d09d`; executable SHA256
+`ee19b9bb87ba128dc8d6f8816e7c2a403144fc25c02a40428f9dc67d7bcef851`.
+
+| Repeat | Drops | CPU / moving presentation (ms) | Card / Slint / system drops |
+| --- | ---: | ---: | --- |
+| 0 | 21 | 18.6781 | 13 / 1 / 7 |
+| 1 | 19 | 18.3154 | 11 / 1 / 7 |
+| 2 | 19 | 18.4978 | 11 / 1 / 7 |
+
+Mean CPU is approximately 18.50 ms/presentation, effectively neutral against
+18.5246 ms for helper-ahead alone. Drops 21/19/19 versus 19/19/20 also establish
+no cadence improvement. Latch rejections are zero and post/flip totals match.
+Retain for directly measured cold UI latency savings and immutable exact data,
+with the explicit eager storage/initialization tradeoff. This is background work
+prepared once, not a claim that total startup CPU was removed or every input
+boundary is qualified.
+
+Next: measure and reduce full Slint/background raster and initial destination
+composition; refine the remaining bridge/model attribution, and address ordinary
+browse helper scheduling. Perfect moving-refresh cadence across all launcher
+and subview navigation remains unachieved. Input/contention, CRT and other-route
+qualification remain part of the full objective; the SNES route cannot prove
+those requirements by itself.
