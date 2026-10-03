@@ -82,7 +82,13 @@ pub struct Session {
 impl Session {
     pub fn from_environment() -> Option<Self> {
         let root = PathBuf::from(std::env::var_os("MISTER_MAGIK2_STATE_ROOT")?);
-        Some(Self {
+        Some(Self::new(root))
+    }
+
+    /// A session owns its artifact directory; explicit construction also lets
+    /// launcher sequence tests exercise it without changing process environment.
+    pub fn new(root: PathBuf) -> Self {
+        Self {
             metrics: PresentationMetrics::default(),
             start: Instant::now(),
             root,
@@ -103,7 +109,7 @@ impl Session {
             scheduling_start: None,
             ui_motion: false,
             screensaver_requested: false,
-        })
+        }
     }
     /// Report whether the application's UI is in motion. Periodic metric
     /// writes are postponed while it is, for at most five seconds; completed
@@ -115,6 +121,35 @@ impl Session {
     pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
         self.measurement_duration_ms = milliseconds;
     }
+    /// Prepare at loop entry, including warmup: tick may open the window later
+    /// in this iteration. Only an open window retains the finished record.
+    pub fn frame_evidence_candidate(
+        &self,
+        attempt_id: u64,
+        begin_us: u64,
+    ) -> Option<frame_evidence::FrameEvidence> {
+        (self.metrics.frame_evidence.mode != frame_evidence::EvidenceMode::Off
+            && self.metrics.motion_started_ms.is_some()
+            && self.metrics.window.is_none())
+        .then(|| frame_evidence::FrameEvidence {
+            phases_enabled: self.metrics.frame_evidence.mode
+                == frame_evidence::EvidenceMode::Phases,
+            attempt_id,
+            begin_us,
+            ..Default::default()
+        })
+    }
+
+    pub fn record_frame_evidence(
+        &mut self,
+        frame: frame_evidence::FrameEvidence,
+        started: Instant,
+    ) {
+        if self.frame_evidence_active() {
+            self.metrics.frame_evidence.observe_timed(frame, started);
+        }
+    }
+
     pub fn frame_evidence_active(&self) -> bool {
         self.metrics.frame_evidence.mode != frame_evidence::EvidenceMode::Off
             && self.metrics.window_start.is_some()
@@ -239,8 +274,8 @@ impl Session {
                 let value: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&request).map_err(|e| e.to_string())?)
                         .unwrap_or_default();
-                std::fs::remove_file(&request).map_err(|e| e.to_string())?;
                 if value["launcher_hold"] == "release" {
+                    std::fs::remove_file(&request).map_err(|e| e.to_string())?;
                     self.carousel_hold_requested = false;
                     self.carousel_sequence = None;
                     self.screensaver_requested = false;
@@ -255,6 +290,9 @@ impl Session {
                                 .ok_or("duration_ms must be an integer between 1000 and 45000")?,
                         )
                     };
+                    let evidence_mode =
+                        frame_evidence::EvidenceMode::from_request(&value["frame_evidence"])?;
+                    std::fs::remove_file(&request).map_err(|e| e.to_string())?;
                     self.screensaver_requested =
                         value["launcher_screensaver"].as_bool().unwrap_or(false);
                     self.carousel_hold_requested =
@@ -270,8 +308,6 @@ impl Session {
                     self.force_card_fallback =
                         value["launcher_fallback"].as_bool().unwrap_or(false);
                     self.measurement_duration_ms = requested_duration_ms;
-                    let evidence_mode =
-                        frame_evidence::EvidenceMode::from_request(&value["frame_evidence"])?;
                     self.metrics.frame_evidence.reset(evidence_mode);
                     self.begin();
                 }
@@ -390,30 +426,104 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn window_opening_iteration_keeps_its_first_frame_and_drop() {
+        use frame_evidence::EvidenceMode;
+        let root =
+            std::env::temp_dir().join(format!("magik-first-evidence-{}", std::process::id()));
+        let mut session = test_session(root.clone());
+        session.metrics.frame_evidence.reset(EvidenceMode::Phases);
+        session.set_measurement_duration(Some(1000));
+        session.begin();
+        // Loop entry occurs before tick opens the window. CPU phase zero can
+        // already be filled on this candidate, just as in the launcher.
+        let mut first = session.frame_evidence_candidate(1, 10).unwrap();
+        assert!(!session.frame_evidence_active());
+        first.cpu_us[0] = Some(12);
+        session.start -= Duration::from_millis(MEASUREMENT_WARMUP_MS);
+        session.tick(16, 8).unwrap();
+        assert!(session.frame_evidence_active());
+        first.record.dropped_frames = 1;
+        session.metrics.counters.drops += 1;
+        session.record_frame_evidence(first, Instant::now());
+        session.start -= Duration::from_millis(1000);
+        session.tick(16, 8).unwrap();
+        let window = session.metrics.window.as_ref().unwrap();
+        let frames = window["frame_evidence"]["frames"].as_array().unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["attempt_id"], 1);
+        assert_eq!(frames[0]["phases"]["cpu_us"][0], 12);
+        assert_eq!(
+            frames[0]["previous_read_bracket_us"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            frames[0]["observation"]["dropped_frames"],
+            window["dropped_frames"]
+        );
+        assert!(session.frame_evidence_candidate(2, 20).is_none());
+        // A candidate created before a closing tick must also be excluded.
+        session.record_frame_evidence(first, Instant::now());
+        assert_eq!(session.metrics.frame_evidence.json()["observed_frames"], 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_evidence_request_preserves_session_and_can_be_corrected() {
+        let root =
+            std::env::temp_dir().join(format!("magik-invalid-evidence-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = test_session(root.clone());
+        session.carousel_hold_requested = true;
+        session.measurement_duration_ms = Some(8000);
+        session.carousel_sequence = Some(CarouselSequence {
+            taps: 2,
+            tap_interval_ms: 200,
+            hold_ms: 1000,
+        });
+        session.carousel_taps_sent = 1;
+        session.begin();
+        let motion_started = session.metrics.motion_started_ms;
+        let request = root.join("measure-request");
+        std::fs::write(
+            &request,
+            r#"{"duration_ms":1000,"launcher_hold":false,"frame_evidence":"phase"}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        assert!(session.tick(16, 8).is_err());
+        assert!(request.exists());
+        assert!(session.carousel_hold_requested);
+        assert_eq!(session.measurement_duration_ms, Some(8000));
+        assert_eq!(session.carousel_taps_sent, 1);
+        assert_eq!(session.carousel_sequence.unwrap().taps, 2);
+        assert_eq!(session.metrics.motion_started_ms, motion_started);
+        assert_eq!(
+            session.metrics.frame_evidence.mode,
+            frame_evidence::EvidenceMode::Off
+        );
+        std::fs::write(
+            &request,
+            r#"{"duration_ms":1000,"frame_evidence":"phases"}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert!(!request.exists());
+        assert_eq!(session.measurement_duration_ms, Some(1000));
+        assert_eq!(
+            session.metrics.frame_evidence.mode,
+            frame_evidence::EvidenceMode::Phases
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A session with idle defaults; tests override only what they exercise.
     fn test_session(root: PathBuf) -> Session {
-        Session {
-            metrics: PresentationMetrics::default(),
-            start: Instant::now(),
-            root,
-            previews: PreviewProducer::new(),
-            profile: None,
-            last_write: Instant::now(),
-            last_request: Instant::now(),
-            ready: false,
-            clock_mode: None,
-            measurement_duration_ms: None,
-            clock_advanced: false,
-            force_card_fallback: false,
-            carousel_hold_requested: false,
-            carousel_hold_active: false,
-            carousel_sequence: None,
-            carousel_taps_sent: 0,
-            scheduling_evidence: false,
-            scheduling_start: None,
-            ui_motion: false,
-            screensaver_requested: false,
-        }
+        let mut session = Session::new(root);
+        session.last_write = Instant::now();
+        session.scheduling_evidence = false;
+        session
     }
 
     #[test]
@@ -509,7 +619,7 @@ mod tests {
             session.last_request -= Duration::from_millis(101);
             assert!(session.tick(16, 8).unwrap_err().contains("duration_ms"));
             assert!(session.metrics.motion_started_ms.is_none());
-            assert!(!root.join("measure-request").exists());
+            assert!(root.join("measure-request").exists());
         }
         std::fs::write(root.join("measure-request"), r#"{"duration_ms":45000}"#).unwrap();
         session.last_request -= Duration::from_millis(101);

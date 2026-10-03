@@ -826,7 +826,7 @@ pub(super) fn sync_bridge_launcher_light(
     measure_model_projection: bool,
     ui: &UiDisplay,
 ) -> LauncherBridgeSyncTiming {
-    let model_started = measure_model_projection.then(Instant::now);
+    let mut model_started = measure_model_projection.then(Instant::now);
     models.sync(
         app,
         nav,
@@ -835,9 +835,7 @@ pub(super) fn sync_bridge_launcher_light(
         defer_arcade_overlay_bridge,
         Some((ui.output_w(), ui.output_h())),
     );
-    let model_projection_us = model_started
-        .map(|started| started.elapsed().as_micros())
-        .unwrap_or(0);
+    let model_projection_us = u128::from(bridge_stage_us(&mut model_started));
     let active_games_loading = active_system_games_loading(catalog, nav);
     sync_launcher_layout_if_changed(app, nav, ui);
     sync_launcher_confirm_bridge(

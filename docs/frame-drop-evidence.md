@@ -8,7 +8,9 @@ scripts/magik check animation-roundtrip --frame-evidence phases --installed-sha2
 ```
 
 `off` is the default. Both modes preserve the route, FrameClock, input locks,
-rendering, scheduling and drop gates. Do not combine this option with `--profile`.
+rendering and scheduling. Validated refresh repeats remain the drop authority;
+motion is sampled before rendering can retire a trick. Do not combine this option
+with `--profile`.
 The same installed executable can run OFF/ON/OFF without deploying between modes.
 Each command runs three fresh native test leases.
 
@@ -204,3 +206,63 @@ All three routes pass with zero retention overflow, complete confirmed-frame CPU
 evidence, valid helper ordering, zero latch rejections and matching posts/flips.
 Mean process CPU is 18.5636 ms per moving presentation. This does not establish
 a speedup or resolve the existing observer-budget/FPGA-cutoff limitations.
+
+
+## Review corrections
+
+Review of the launcher wiring found gaps that the original collector-only tests
+did not cover. These corrections preserve pixels, FrameClock and input behavior.
+
+| Finding | Correction and regression evidence |
+| --- | --- |
+| Motion missing on telemetry failure; inconsistent superseded motion | One pre-raster navigation/card snapshot supplies motion independently of telemetry. An actual Arcade direction-input sequence exercises failed observation, superseded post, Home restart and replacement. |
+| Missing window-opening frame | Loop-entry candidates cover warmup and the iteration that opens inside `Session::tick`; only an open window retains them. A real Session tick/open/drop/close sequence checks the first record against the window total. |
+| Discarded input-priority raster | The restart path retains its produced ID, raster timeline and input identity before continuing, with zero invented refresh drops. The launcher sequence checks consecutive produced IDs across abandonment and replacement. |
+| Stale helper dispatch origin | New jobs timestamp dispatch after stale work is drained. Completions carry that actual dispatch; the existing source-replacement/pixel-parity sequence also compares it with the discarded worker's final clock sample. |
+| Final trick labelled settled | Pose, content and motion are sampled before raster retirement. The actual asynchronous level-change test renders the terminal trick frame and verifies it retains `level-deal`, full progress and the lock. |
+| Stale first read bracket | Baseline telemetry, attempt ID and nullable bracket share one observation value. An unbracketed replacement explicitly has a null bracket, never zeros or an older read. |
+| Invalid mode partially applies request | Duration and evidence mode validate before deleting the request or mutating session fields. A bad mode preserves the request and active state; correcting it starts the new measurement. |
+| Timing cleanup | The four mandatory helper Instants are plain values, renderer IDs use AtomicU64 and light/full bridge model timing uses the same optional clock helper. |
+
+Candidates take the first CPU sample during warmup to retain a real loop-entry
+sample if tick opens the window in that iteration. Warmup records and their
+observer costs are not retained. This explicit phase-mode overhead remains
+subject to the existing observer-budget limitation.
+
+The cited 4.089/4.131 ms helper delays are **schedstat run-delay deltas during
+helper execution**, not dispatch-to-start times. The saved repeat-0 records at
+sequences 160/190 have no discarded helper (`discarded_helper_us = 0`,
+`discarded_generation = null`). Their dispatch-to-start times are 72/403 us.
+The stale-dispatch bug therefore does not invalidate these two run-delay
+observations. Dispatch-to-start values from old captures that did discard work
+are unqualified and must not be interpreted as scheduling delay.
+
+The two PR #217 review points are already fixed in the merged base
+`4b5c8a5bc`: oversized watch metrics use the JSON body without interrupting logs,
+frames or following updates, and NEON parity explicitly exercises opaque and
+rounded-cap source columns, with a minimum fast-path coverage assertion. The
+large-watch streaming regression was rerun and passes.
+
+Review-fix native validation: `20261003T140800Z-dd9dbce33b7f`, all three routes
+pass using the same executable SHA256
+`3a3e1842738a203317257a2e22e8ca6bcfd6c6118beb889fb7d95c70a44b4645`
+(parent `a4d018501` plus the uncommitted review fixes).
+
+| Repeat | Drops | CPU / moving presentation | Retained frames | Sampler/selection p99 |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 16 | 18.6389 ms | 124 | 137 us |
+| 1 | 19 | 18.6212 ms | 123 | 101 us |
+| 2 | 18 | 18.5329 ms | 121 | 132 us |
+
+Mean moving process CPU is 18.5977 ms. Every route has zero retention overflow
+and latch rejections, matching posts/flips, complete confirmed-frame CPU/helper
+evidence and retained frame drops equal to its window total. Terminal trick
+records remain `level-deal` at full progress with motion and the lock retained.
+These are reporting-correction checks, not a speedup claim. Hardware did not
+exercise telemetry read failure or input-priority raster abandonment in this
+route; the shared launcher sequence regressions cover those paths.
+
+Focused validation passes: 21 support tests, four helper/profile/pixel tests,
+launcher navigation/restart and bracket regressions, the actual asynchronous
+trick sequence, nine host CLI tests, UI/tooling/support Clippy, the large-watch
+streaming regression and the ARM release build used above.

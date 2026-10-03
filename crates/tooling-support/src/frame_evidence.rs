@@ -95,7 +95,7 @@ pub struct FrameEvidence {
     pub baseline_reset: bool,
     pub telemetry_valid: bool,
     pub telemetry_before_us: u64,
-    pub previous_read_bracket_us: [u64; 2],
+    pub previous_read_bracket_us: Option<[u64; 2]>,
     pub refresh_counter: Option<u32>,
     pub telemetry_flags: Option<u16>,
     pub slot: u8,

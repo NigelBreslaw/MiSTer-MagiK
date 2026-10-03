@@ -5,6 +5,8 @@ use super::launcher_compositor::{
     LauncherPresentBackend, LauncherPresentResult, LauncherPresentStatus,
 };
 use super::launcher_loop::LaunchReturnSession;
+#[cfg(feature = "tooling")]
+use super::launcher_pacing::FrameProductionClass;
 use super::launcher_pacing::{FrameProductionTrace, LauncherPacingTrace};
 use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
@@ -2830,6 +2832,127 @@ pub(super) fn cpu_thread_us() -> Option<u64> {
     clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
+/// Keep a baseline's identity and optional read bracket together. Replacing an
+/// unbracketed observation must not inherit timestamps from an earlier read.
+#[cfg(feature = "tooling")]
+#[derive(Clone, Copy)]
+pub(super) struct ToolingPresentationObservation {
+    pub(super) telemetry: mister_magik_latch_contract::PresentationTelemetry,
+    pub(super) at: Instant,
+    pub(super) motion: bool,
+    pub(super) attempt_id: u64,
+    pub(super) read_bracket_us: Option<[u64; 2]>,
+}
+#[cfg(feature = "tooling")]
+impl ToolingPresentationObservation {
+    pub(super) fn new(
+        telemetry: mister_magik_latch_contract::PresentationTelemetry,
+        at: Instant,
+        motion: bool,
+        attempt_id: u64,
+        read_before: Option<Instant>,
+        origin: Instant,
+    ) -> Self {
+        Self {
+            telemetry,
+            at,
+            motion,
+            attempt_id,
+            read_bracket_us: read_before.map(|before| {
+                [
+                    before.saturating_duration_since(origin).as_micros() as u64,
+                    at.saturating_duration_since(origin).as_micros() as u64,
+                ]
+            }),
+        }
+    }
+}
+
+/// Observe the pose before rendering can retire it. This also supplies the
+/// shared motion decision for confirmed and superseded presentations, even
+/// when the telemetry read fails.
+#[cfg(feature = "tooling")]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn capture_evidence_state(
+    evidence: &mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    nav: &LauncherNav,
+    card: Option<&super::launcher_card_home::LauncherCardHomeSession>,
+    class: FrameProductionClass,
+    logical_time_us: u64,
+    input_generation: u64,
+    produced_frame_id: u64,
+) -> bool {
+    let card = card.filter(|_| nav.screen == Screen::Home);
+    let motion = class != FrameProductionClass::EventDriven
+        || nav.screen == Screen::Arcade && nav.arcade.is_scroll_active()
+        || card.is_some_and(|card| card.is_animating());
+    if let Some(frame) = evidence.as_mut() {
+        frame.motion = motion;
+        frame.produced_frame_id = produced_frame_id;
+        frame.logical_time_us = logical_time_us;
+        frame.view = if nav.screen == Screen::Home {
+            "home"
+        } else if nav.screen == Screen::Arcade {
+            if nav.system_page_mode == launcher::SystemPageMode::Hub {
+                "system-hub"
+            } else {
+                "games-list"
+            }
+        } else {
+            "other"
+        };
+        frame.menu_token = nav
+            .current_menu_id()
+            .bytes()
+            .fold(0xcbf29ce484222325u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+            });
+        frame.selected = if nav.screen == Screen::Home {
+            nav.selected
+        } else {
+            nav.arcade.selected
+        };
+        frame.input_generation = input_generation;
+        if let Some(card) = card {
+            (frame.pose_phase, frame.pose_progress) = card.evidence_pose();
+            frame.content_generation = Some(card.content_generation());
+            frame.card_snapshot_locked = card.is_level_trick_active();
+        }
+    }
+    motion
+}
+
+/// Input can invalidate a completed disposable raster before it is posted.
+/// Keep the produced ID and execution span; only refresh telemetry counts drops.
+#[cfg(feature = "tooling")]
+pub(super) fn record_abandoned_evidence_raster(
+    evidence: &mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    session: Option<&mut mister_magik_tooling_support::Session>,
+    origin: Instant,
+    render_start: Instant,
+    render_end: Instant,
+) {
+    capture_evidence_cpu(evidence, 2, origin);
+    capture_evidence_cpu(evidence, 6, origin);
+    if let Some(mut frame) = evidence.take()
+        && let Some(session) = session
+    {
+        let started = Instant::now();
+        frame.outcome = "input-priority-restart";
+        frame.finish_us = started.saturating_duration_since(origin).as_micros() as u64;
+        frame.record.reason = "raster abandoned for input before posting; not a counted drop";
+        frame.record.timeline = Some(
+            mister_magik_tooling_support::measurement::FramePhaseTimeline {
+                frame_begin_us: frame.begin_us,
+                render_start_us: render_start.saturating_duration_since(origin).as_micros() as u64,
+                render_end_us: render_end.saturating_duration_since(origin).as_micros() as u64,
+                ..Default::default()
+            },
+        );
+        session.record_frame_evidence(frame, started);
+    }
+}
+
 /// Diagnostic-only CPU samples bracketed in the app timeline. Unavailable stays null.
 #[cfg(feature = "tooling")]
 pub(super) fn capture_evidence_cpu(
@@ -2913,6 +3036,137 @@ fn usize_to_u32_saturating(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "tooling")]
+    #[test]
+    fn evidence_tracks_scroll_telemetry_failure_restart_and_replacement() {
+        use mister_magik_tooling_support::{Session, frame_evidence::EvidenceMode};
+        let now = Instant::now();
+        let mut session = Session::new(std::env::temp_dir().join("unused-launcher-evidence-test"));
+        session
+            .metrics
+            .frame_evidence
+            .reset(EvidenceMode::Neighbors);
+        session.metrics.motion_started_ms = Some(0);
+        session.metrics.window_start = Some((0, session.metrics.counters.clone()));
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade.handle_direction_input(1, 0, now, 10);
+        assert!(nav.arcade.is_scroll_active());
+        let mut first = session.frame_evidence_candidate(1, 0);
+        assert!(capture_evidence_state(
+            &mut first,
+            &nav,
+            None,
+            FrameProductionClass::EventDriven,
+            0,
+            1,
+            1
+        ));
+        // Telemetry failure has no state update: the real navigation state
+        // still labels the motion and causes retention, including successors.
+        let mut frame = first.take().unwrap();
+        frame.outcome = "active";
+        assert!(frame.motion && !frame.telemetry_valid);
+        session.record_frame_evidence(frame, now);
+        let mut superseded = session.frame_evidence_candidate(2, 16_667);
+        capture_evidence_state(
+            &mut superseded,
+            &nav,
+            None,
+            FrameProductionClass::EventDriven,
+            16_667,
+            1,
+            2,
+        );
+        let mut frame = superseded.take().unwrap();
+        frame.outcome = "superseded-before-confirmation";
+        session.record_frame_evidence(frame, now);
+        // A disposable Home raster is produced, then abandoned for new input.
+        nav.screen = Screen::Home;
+        let mut raster = session.frame_evidence_candidate(3, 33_334);
+        capture_evidence_state(
+            &mut raster,
+            &nav,
+            None,
+            FrameProductionClass::EventDriven,
+            33_334,
+            1,
+            3,
+        );
+        record_abandoned_evidence_raster(&mut raster, Some(&mut session), now, now, now);
+        assert!(raster.is_none());
+        nav.selected = 1;
+        let mut replacement = session.frame_evidence_candidate(4, 33_334);
+        capture_evidence_state(
+            &mut replacement,
+            &nav,
+            None,
+            FrameProductionClass::EventDriven,
+            33_334,
+            2,
+            4,
+        );
+        let mut frame = replacement.unwrap();
+        frame.outcome = "active";
+        session.record_frame_evidence(frame, now);
+        let capture = session.metrics.frame_evidence.json();
+        let frames = capture["frames"].as_array().unwrap();
+        assert_eq!(frames.len(), 4);
+        assert_eq!(capture["unrecorded_loop_iterations"], 0);
+        for (i, frame) in frames.iter().enumerate() {
+            assert_eq!(frame["produced_frame_id"], i + 1);
+            assert_eq!(frame["observation"]["dropped_frames"], 0);
+        }
+        assert_eq!(frames[0]["motion"], true);
+        assert_eq!(frames[1]["motion"], true);
+        assert_eq!(frames[2]["outcome"], "input-priority-restart");
+        assert_eq!(frames[3]["input_generation"], 2);
+    }
+
+    #[cfg(feature = "tooling")]
+    #[test]
+    fn observation_replacement_never_carries_a_previous_read_bracket() {
+        let origin = Instant::now();
+        let telemetry = mister_magik_latch_contract::PresentationTelemetry {
+            owned_vblank_count: 0,
+            presented_vblank_count: 0,
+            repeated_vblank_count: 0,
+            ownership_loss_count: 0,
+            active_sequence: 0,
+            flags: 0,
+            crc: 0,
+        };
+        let first = ToolingPresentationObservation::new(
+            telemetry,
+            origin + Duration::from_micros(2),
+            false,
+            1,
+            Some(origin),
+            origin,
+        );
+        assert_eq!(first.read_bracket_us, Some([0, 2]));
+        // Warmup or a prior OFF window does not perform bracket reads.
+        let next = ToolingPresentationObservation::new(
+            telemetry,
+            origin + Duration::from_micros(9),
+            true,
+            2,
+            None,
+            origin,
+        );
+        assert_eq!(next.attempt_id, 2);
+        assert_eq!(next.read_bracket_us, None);
+        let measured = ToolingPresentationObservation::new(
+            telemetry,
+            origin + Duration::from_micros(14),
+            true,
+            3,
+            Some(origin + Duration::from_micros(11)),
+            origin,
+        );
+        assert_eq!(measured.read_bracket_us, Some([11, 14]));
+    }
 
     #[test]
     fn fresh_analytics_lease_keeps_previous_mode_during_transient_read_failure() {
