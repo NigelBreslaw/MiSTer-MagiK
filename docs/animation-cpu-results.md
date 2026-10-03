@@ -664,3 +664,32 @@ average 20 drops per route. This is consistent with run-to-run noise and gives
 no audit-related speedup or cadence claim. The full-stage and exact-pixel savings
 above remain the reason to keep the implementation. The branch still requires
 CI's broad Rust/ARM/visual assurance and does not achieve zero-drop 60 fps.
+
+
+## PR review follow-up — oversized watch metrics and opaque parity
+
+The watch loop previously put all metrics in its 64 KiB control header. Larger
+values fail framing before an event can be sent, ending the watch connection.
+The fix (`314515af9`) preserves legacy headers for small updates and reuses the
+bounded 1 MiB JSON body writer for larger `watch-metrics` updates. The client
+normalizes both formats before viewer consumption; `watch-metrics-body-v1`
+capability selection upgrades an older service when the explicit watch command
+needs it. The control `metrics-body` path retains the same bounds and behavior.
+
+The agent socket regression sends an oversized renderer-profile fixture,
+then receives logs, preview bytes and a second metrics update on the same stream.
+Two watch regressions and the control metrics-body regression pass; 23 host
+client/viewer/CLI tests and agent Clippy also pass. This establishes the bounded
+transport behavior using actual loopback sockets, not a claim that a physical
+MiSTer watch failure was observed. No device deployment or performance rerun
+was needed for this protocol and test-only follow-up.
+
+The prior NEON parity fixture already made every third source fully opaque.
+Coverage is now explicit: fully opaque sources, eight-row translucent caps
+around an opaque interior, arbitrary alpha and transparent sources. An
+independent count requires at least 1,000 cases with four or more valid interior
+output rows. Production-flag ARM compilation and QEMU correctness pass:
+17,743 opaque vector-loop cases, 1,774,103 interior rows, all 40,000 projection
+comparisons and the existing interpolation/blend comparisons agree exactly.
+QEMU is correctness evidence, not MiSTer performance evidence. No production
+kernel or launcher timing code changed.
