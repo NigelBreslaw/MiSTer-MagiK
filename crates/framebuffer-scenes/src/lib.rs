@@ -571,7 +571,7 @@ pub fn expand_rgb565_rgb8(source: &[Rgb565Pixel], output: &mut [u8]) -> bool {
         }
         return true;
     }
-    for (out, packed) in output.chunks_exact_mut(3).zip(source) {
+    for (out, packed) in output.as_chunks_mut::<3>().0.iter_mut().zip(source) {
         let (r, g, b) = (packed.0 >> 11, (packed.0 >> 5) & 63, packed.0 & 31);
         out.copy_from_slice(&[
             ((r << 3) | (r >> 2)) as u8,
@@ -1169,11 +1169,11 @@ mod tests {
             assert!(expand_rgb565_rgb8(source, &mut output[offset..end]));
             assert!(output[..offset].iter().all(|byte| *byte == 0xa5));
             assert!(output[end..].iter().all(|byte| *byte == 0xa5));
-            for (rgb, pixel) in output[offset..end].chunks_exact(3).zip(source) {
+            for (rgb, pixel) in output[offset..end].as_chunks::<3>().0.iter().zip(source) {
                 let (r, g, b) = (pixel.0 >> 11, (pixel.0 >> 5) & 63, pixel.0 & 31);
                 assert_eq!(
                     rgb,
-                    [
+                    &[
                         ((r << 3) | (r >> 2)) as u8,
                         ((g << 2) | (g >> 4)) as u8,
                         ((b << 3) | (b >> 2)) as u8

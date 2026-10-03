@@ -51,6 +51,7 @@ pub fn warm_in_background() {
                 device_rgb565(kind);
                 // Only immutable pixel data crosses threads. Slint Image
                 // construction and its renderer cache remain on the UI thread.
+                #[cfg(any(feature = "ui", feature = "ui-preview"))]
                 crate::launcher_presentation::device_pixel_buffer(kind);
             }
         });
