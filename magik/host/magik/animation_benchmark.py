@@ -79,6 +79,9 @@ def _settled_metrics(metrics, before_ms, deadline):
     """A fresh wall-time sample must report idle; late frame-locked motion may take longer."""
     while True:
         value = metrics()
+        assert value.get("window") is None, (
+            "Measurement window ended before the animation step settled"
+        )
         assert type(value.get("ui_motion")) is bool, "Missing UI motion evidence"
         assert time.monotonic() < deadline, (
             "Animation did not settle inside the route window"
@@ -296,7 +299,7 @@ def animation_roundtrip(
         poll_delay_ms = 2_000 if route in {"root", "consoles"} else 1_000
         time.sleep(poll_delay_ms / 1_000)
         after = _settled_metrics(
-            metrics, before["elapsed_ms"], requested_at + duration_ms / 1000 + 1
+            metrics, before["elapsed_ms"], requested_at + duration_ms / 1000 - 2
         )
         tree = _tree(app)
         if expected:

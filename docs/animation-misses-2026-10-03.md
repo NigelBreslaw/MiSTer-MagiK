@@ -147,3 +147,8 @@ The PR audits subsequently consolidated route configuration and navigation into
 The measured inputs, waits, windows and destination assertions are preserved.
 This harness cleanup passed the focused host tests; the device evidence remains
 from the recorded pre-cleanup executable and workload.
+
+A later review restored the conservative settle deadline and added an immediate
+failure when a completed window appears during a step. Previously recorded
+successful routes still passed the explicit device window-boundary and counter
+sum checks. This deadline-policy correction was host-tested, not rerun on Dev.

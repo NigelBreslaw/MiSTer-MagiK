@@ -412,6 +412,7 @@ struct HubText {
 struct NavigationViewPresenter {
     hub_text: Option<HubText>,
     menu_items_key: Option<(usize, String)>,
+    published_menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     menu_item_presentation: Option<Rc<VecModel<MenuItemPresentation>>>,
     projected_selected_index: Option<usize>,
@@ -994,6 +995,10 @@ impl LauncherViewPresenters {
         timing.stages_us[1] = presenter_stage(&mut stage);
         if nav.screen == Screen::Home {
             self.sync_home_menu(app, nav, catalog_version);
+        } else if let Some(version) = catalog_version {
+            // Prepare the return menu on catalog adoption, without touching
+            // the hidden Home bindings or its current scanout image.
+            let _ = self.menu_items(nav, version);
         }
         self.publish_selection_feedback(&app.global::<FeedbackView>());
 
@@ -1272,12 +1277,13 @@ impl LauncherViewPresenters {
         let navigation = app.global::<NavigationView>();
         if let Some(catalog_version) = catalog_version {
             let key = (catalog_version, nav.current_menu_id().to_string());
-            if self.navigation.menu_items_key.as_ref() != Some(&key) {
+            if self.navigation.published_menu_items_key.as_ref() != Some(&key) {
                 let menu_items = self.menu_items(nav, catalog_version);
                 let menu_item_presentation = self.menu_item_presentation();
                 bridge_churn_record_model_replacements(2);
                 navigation.set_menu_item_presentation(menu_item_presentation);
                 navigation.set_menu_items(menu_items);
+                self.navigation.published_menu_items_key = Some(key);
             }
         }
         self.sync_menu_item_state(nav);

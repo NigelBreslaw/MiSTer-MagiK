@@ -1967,8 +1967,17 @@ mod tests {
                     .global::<slint_ui::launcher::NavigationView>()
                     .get_menu_items()
         );
+        let before_home = crate::launcher_presentation::bridge_churn_snapshot();
         nav.screen = Screen::Home;
-        models.sync(&app, &nav, &catalog, Some(2), false, None);
+        models.sync_measured(&app, &nav, &catalog, Some(2), false, None, true);
+        let after_home = crate::launcher_presentation::bridge_churn_snapshot();
+        assert_eq!(after_home.saturating_sub(before_home).row_allocations, 0);
+        let prepared = models.menu_items(&nav, 2);
+        assert_eq!(
+            prepared,
+            app.global::<slint_ui::launcher::NavigationView>()
+                .get_menu_items()
+        );
         assert!(
             before
                 != app

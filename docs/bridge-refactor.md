@@ -182,3 +182,40 @@ and lazy mapped-row membership discovery. Host validation: 176 navigation,
 24 bridge, 7 worker and 12 persistence/import tests plus the lazy-row regression
 and frontend/catalog Clippy. These correctness fixes have not been measured on
 MiSTer; the earlier performance results remain tied to their recorded build.
+
+## Follow-up review: refresh lifecycle and deferred work
+
+| Finding | Resolution |
+| --- | --- |
+| 1. Unchanged user data retains catalog row positions | Already fixed by catalog projection invalidation in `f7c4db136`. |
+| 2. Refresh returns a permanently cached database snapshot | Refresh now performs a fresh coherent read. A failed favourite write/projection invalidates the worker cache and schedules one bounded read retry; failure of that retry does not loop. |
+| 3. Early favourite skips legacy import | Import completion is independent of snapshot caching. The worker retains its initial import context until import succeeds, then releases it. |
+| 4. Historical totals can open empty installed lists | Historical PLAYED/SAVED totals retain their documented meaning; activation checks installed references for Recent/Favourites. No catalog scan was added to count getters. |
+| 5. Arcade counts and MRU use different membership | Already fixed by actual collection membership and an aggregate MRU filtered before the limit in `f7c4db136`. |
+| 6. Negative counts cast to huge unsigned values | All maintained-count read paths clamp negative values to zero. |
+| 7. Settle deadline extends beyond the window | Restored the earlier deadline and reject a completed measurement window immediately, including an idle sample. |
+| 8. Replace indexed per-system reads with one window query | Rejected the proposed window query after host measurement; reuse one prepared statement across indexed per-system reads instead. |
+| 9. Clone the catalog for every refresh | Refresh borrows the catalog; only the first import request owns a clone. Later requests carry member IDs. |
+| 10. Rebuild Home models on the first return frame | Prepare models during hidden-view catalog adoption and track publication separately. Returning Home publishes the prepared models with zero row allocations in the state-sequence test. |
+
+The SQL comparison used host Python SQLite in memory, 40 systems, the same index
+and sixteen references per result, and medians over 20 repetitions:
+
+| Records per system | Indexed reads | Window/rank query |
+| --- | ---: | ---: |
+| 16 | 0.289 ms | 0.685 ms |
+| 100 | 0.292 ms | 2.500 ms |
+| 1,000 | 0.298 ms | 22.567 ms |
+
+These are query-plan measurements on the host, not MiSTer timing or whole-snapshot
+cost. The window query scans/ranks all summary rows; indexed reads stop after
+sixteen per system. No additional dependency or statement-cache feature is
+needed: the existing prepared statement is rebound for each system.
+
+Final host checks for this review: 177 navigation, 24 bridge, 10 worker,
+13 persistence/import and 15 host benchmark/CLI tests pass, with frontend/catalog
+Clippy and Rust diagnostics. Regressions cover writes from another database
+connection, favouriting before import, one catalog payload across repeated
+refreshes, negative counts, empty installed saved lists, allocation-free menu
+return and completed benchmark windows. Device measurements have not been
+repeated for these changes.

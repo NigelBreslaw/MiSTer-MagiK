@@ -36,3 +36,17 @@ def test_stalled_animation_fails_before_the_measurement_window_can_end(monkeypat
 def test_missing_motion_evidence_cannot_be_treated_as_idle():
     with pytest.raises(AssertionError, match="Missing UI motion"):
         animation_benchmark._settled_metrics(lambda: {"elapsed_ms": 3_100}, 1_000, 10)
+
+
+def test_completed_window_is_rejected_even_when_motion_has_settled(monkeypatch):
+    monkeypatch.setattr(animation_benchmark.time, "monotonic", lambda: 0)
+    with pytest.raises(AssertionError, match="window ended"):
+        animation_benchmark._settled_metrics(
+            lambda: {
+                "elapsed_ms": 3_500,
+                "ui_motion": False,
+                "window": {"end_ms": 3_400},
+            },
+            1_000,
+            10,
+        )
