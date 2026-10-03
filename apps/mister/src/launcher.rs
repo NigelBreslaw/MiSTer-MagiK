@@ -2501,7 +2501,7 @@ impl LauncherNav {
         let memory_key = collection_filter_memory_key(&collection.id, &self.arcade_filter.active);
         if !self.game_list_memory.contains_key(&memory_key) {
             let representative = self
-                .recent_launch_refs
+                .active_recent_refs()
                 .iter()
                 .find_map(|path| {
                     self.active_arcade_game_view(catalog, &collection.id)
@@ -11645,6 +11645,50 @@ mod tests {
             &catalog,
         );
         assert_eq!(nav.confirm_action, Some(ConfirmAction::RemoveFavourite));
+    }
+
+    #[test]
+    fn system_entry_uses_its_saved_recent_when_global_recents_are_other_systems() {
+        let catalog = crate::arcade_catalog::ArcadeCatalog::new(
+            std::path::PathBuf::new(),
+            vec![
+                crate::test_support::arcade_game("Alpha")
+                    .system_id("snes")
+                    .path("a.sfc")
+                    .build(),
+                crate::test_support::arcade_game("Beta")
+                    .system_id("snes")
+                    .path("b.sfc")
+                    .build(),
+                crate::test_support::arcade_game("NES game")
+                    .system_id("nes")
+                    .path("n.nes")
+                    .build(),
+            ],
+            vec![
+                crate::arcade_catalog::GameSystemEntry {
+                    id: "snes".into(),
+                    title: "SNES".into(),
+                    count: 2,
+                },
+                crate::arcade_catalog::GameSystemEntry {
+                    id: "nes".into(),
+                    title: "NES".into(),
+                    count: 1,
+                },
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        let mut snapshot = mister_magik_catalog::user_state::UserStateSnapshot {
+            recent_launch_refs: vec!["n.nes".into()],
+            ..Default::default()
+        };
+        snapshot
+            .recent_by_system
+            .insert("snes".into(), vec!["b.sfc".into()]);
+        nav.set_user_state_snapshot(&catalog, snapshot);
+        assert!(nav.open_system(&catalog, "snes"));
+        assert_eq!(nav.arcade.selected, 1);
     }
 
     #[test]
