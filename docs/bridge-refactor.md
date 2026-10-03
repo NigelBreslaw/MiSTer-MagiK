@@ -2,8 +2,8 @@
 
 The bridge now publishes cached user data. It does not scan game collections to
 compute recent or favourite counts. The implementation is rebased onto
-`6fc86fe7f` (PR #219), whose pacing and scheduling changes require a fresh native
-baseline before attributing frame-drop changes to this work.
+`6fc86fe7f` (PR #219), with a fresh native baseline and two comparison builds measured on that same
+base. Dev was reserved exclusively for these completed campaigns.
 
 ## Measured cause
 
@@ -72,16 +72,64 @@ covered by state-sequence tests. Device images remain prepared/cached when their
 kind becomes known, so view scoping does not defer expensive pixel construction
 to the hub's first raster.
 
-## Validation and outstanding native work
+## Rebased native comparison
 
-Rebased checks pass: 172 navigation tests, 24 bridge tests, user-state worker
+Each build completed three instrumented Consoles → Nintendo → SNES hub → Games
+→ return journeys on PR #219. Hub bridge values below are the maximum retained
+system-hub bridge batch in each journey; they are not whole-route cumulative
+times. CPU is whole-process CPU per moving presentation.
+
+| Build | Hub bridge, three repeats | Recent + favourite reads | Route drops | Mean moving CPU |
+| --- | --- | --- | --- | --- |
+| Instrumented baseline | 12.667 / 13.120 / 12.902 ms | 11.989–12.600 ms combined | 7 / 6 / 9 | 18.355 ms |
+| Maintained counts | 0.534 / 0.640 / 0.464 ms | 5–6 us combined | 6 / 6 / 5 | 18.520 ms |
+| Full audited refactor | 0.470 / 0.424 / 0.423 ms | 5–6 us combined | 10 / 7 / 5 | 18.349 ms |
+
+Mean retained hub bridge cost fell from 12.896 ms to 0.439 ms, a 96.6% reduction.
+Every final sample meets the 0.5 ms target. Baseline and final each dropped 22
+frames across three routes. The CPU difference is negligible; neither an overall
+CPU reduction nor a frame-drop improvement is established. The counts-only
+drop result is too small a sample to establish a separate benefit. Remaining
+rendering, pacing and latch deadlines still need work before claiming 60 fps
+with zero drops. These phase-instrumented routes do not establish uninstrumented
+performance.
+
+All nine measurement journeys passed, with zero evidence retention overflow,
+zero latch rejections and matched physical latch posts/flips. Evidence retention
+is selective; the bridge figures describe the captured hub-entry batches, not
+every frame of a route.
+
+| Build | Source revision | Native measurement run |
+| --- | --- | --- |
+| Baseline | `9373aaad8` | `20261003T165857Z-20c283680d67` |
+| Maintained counts | `cf9ba1520` | `20261003T170616Z-d3624b075c59` |
+| Final | `b2cd60791` | `20261003T171454Z-ae956ce1cde0` |
+
+Final installed executable SHA-256:
+`a18064e8ce99222d87fed68fba9e7965a6c920de51a271e90467b9ea10b3e691`.
+
+## Validation and boundaries
+
+Rebased checks pass: 173 navigation tests, 24 bridge tests, user-state worker
 sequences, persistence/import and transaction rollback tests, lazy reference
 resolution, launch-plan replacement, UI-only Clippy and catalog Clippy. Rust LSP
 diagnostics are clear in the managed worktree. The final rebased ARM release
 build passes.
 
-Outstanding: exclusive Dev availability, a fresh instrumented baseline on PR
-#219, repeated counts-only/final measurements, and the native control/visual
-journey. Old measurements must not be mixed with the new base when estimating
-frame-drop changes. Raw runs and build logs remain ignored under
-`build/magik-results/` and `outputs/bridge-refactor/`.
+Baseline and final native control/visual journeys passed
+(`20261003T170312Z-62ccb4dd77b0` and `20261003T172017Z-9b61bcae530d`).
+They exercise A, Back, the Select action queue and a tap during the locked trick.
+These are Dev controls, not physical joystick qualification. Captures come from
+`fpga-latched-scanout-slots`, RGB565, 960×540. CRT/portrait output was not qualified.
+
+After excluding the clock and game-preview rectangles, Games and root captures
+are pixel-identical. Hub and Select-return hub differ in 547 pixels, confined to
+the favourites count glyph: baseline shows 0, final shows 1. This is not a
+zero-difference visual result. The new count reads stored per-system identities;
+the old count intersected references with installed catalogue rows. The device
+journey does not independently verify that stored identity against the installed
+game list. Layout and artwork otherwise match in these settled captures.
+
+Raw runs, build logs and the aggregated comparison remain ignored under
+`build/magik-results/` and `outputs/bridge-refactor/`. Old pre-PR #219 measurements
+above are provenance only and are not mixed into this comparison.
