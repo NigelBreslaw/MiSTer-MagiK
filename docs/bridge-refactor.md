@@ -160,3 +160,25 @@ Clippy, and Rust LSP diagnostics. These final API/cache/harness cleanups were
 validated on the host; the native measurements above refer to `b2cd60791` and
 were not repeated after cleanup. Card artwork, geometry and FrameClock behavior
 were not edited in either audit.
+
+## PR review fixes: saved-list catalog and Arcade membership
+
+Saved-list indices now track the catalog projection independently of user-data
+changes. Catalog replacement and hydration rebuild those row positions, including
+when the user snapshot is unchanged. Membership and counts use the actual
+`menu:arcade` view; NeoGeo activity in the separate SNK collection is excluded
+from initial and incremental Arcade summaries.
+
+The worker reads Arcade MRU references across the collection's member systems,
+filtering membership before ordering and the 16-entry limit. Console history can
+fill global recents without hiding older Arcade plays. A catalog membership
+change refreshes that cached projection. Membership discovery reads mapped system
+IDs without materializing game rows. Count getters remain cached scalar reads.
+
+Regression validation covers saved games across row insertion and hydrated row
+reordering, legacy Arcade plus CPS1/CPS2/System16 plays followed by 17 console
+plays, NeoGeo exclusion, incremental favourite changes, worker membership changes
+and lazy mapped-row membership discovery. Host validation: 176 navigation,
+24 bridge, 7 worker and 12 persistence/import tests plus the lazy-row regression
+and frontend/catalog Clippy. These correctness fixes have not been measured on
+MiSTer; the earlier performance results remain tied to their recorded build.

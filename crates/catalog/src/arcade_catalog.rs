@@ -191,6 +191,13 @@ impl SystemCollectionRows {
         }
     }
 
+    fn source_system_id(&self, ordinal: usize) -> Option<&str> {
+        match self {
+            Self::Owned(games) => games.get(ordinal).map(|game| game.system_id.as_ref()),
+            Self::NavPack(games) => (ordinal < games.count).then_some(games.system_id.as_ref()),
+        }
+    }
+
     fn iter(&self) -> SystemCollectionRowsIter<'_> {
         SystemCollectionRowsIter {
             rows: self,
@@ -809,6 +816,19 @@ impl<'a> ArcadeGameView<'a> {
         }
     }
 
+    pub fn source_system_id(self, index: usize) -> Option<&'a str> {
+        match self {
+            Self::Collection(collection) => collection.games.source_system_id(index),
+            Self::CollectionIndexed {
+                collection,
+                indexes,
+            } => indexes
+                .get(index)
+                .and_then(|ordinal| collection.games.source_system_id(*ordinal)),
+            _ => self.get(index).map(|game| game.system_id.as_ref()),
+        }
+    }
+
     pub fn position_launch_ref(self, reference: &str) -> Option<usize> {
         (0..self.len()).find(|index| self.launch_ref(*index) == Some(reference))
     }
@@ -1363,11 +1383,11 @@ impl ArcadeCatalog {
 
     pub fn search_source_system_ids(&self, collection_id: &str) -> Vec<String> {
         let mut seen = HashSet::new();
-        self.system_game_view(collection_id)
-            .iter()
-            .filter_map(|game| {
-                let system_id = game.system_id.to_string();
-                seen.insert(system_id.clone()).then_some(system_id)
+        let games = self.system_game_view(collection_id);
+        (0..games.len())
+            .filter_map(|ordinal| {
+                let system = games.source_system_id(ordinal)?;
+                seen.insert(system).then(|| system.to_owned())
             })
             .collect()
     }
@@ -2923,6 +2943,10 @@ mod tests {
         let view = ArcadeGameView::collection(&collection);
         assert_eq!(view.position_launch_ref("magik-plan:c64:1856"), Some(1856));
         assert_eq!(view.position_launch_ref("missing"), None);
+        assert_eq!(view.source_system_id(1856), Some("c64"));
+        let catalog = ArcadeCatalog::new(PathBuf::new(), Vec::new(), Vec::new())
+            .with_system_collection(Arc::new(collection.clone()));
+        assert_eq!(catalog.search_source_system_ids("c64"), ["c64"]);
         let indexes = [1856, 64];
         let selected = ArcadeGameView::collection_indexed(&collection, &indexes);
         assert_eq!(selected.launch_ref(0), Some("magik-plan:c64:1856"));

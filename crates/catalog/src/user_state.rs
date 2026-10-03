@@ -30,6 +30,7 @@ pub struct SystemUserCounts {
 pub struct UserStateSnapshot {
     pub favourite_launch_refs: Vec<String>,
     pub recent_launch_refs: Vec<String>,
+    pub arcade_recent_refs: Vec<String>,
     pub favourites_by_system: HashMap<String, Vec<String>>,
     pub recent_by_system: HashMap<String, Vec<String>>,
     pub system_counts: HashMap<String, SystemUserCounts>,
@@ -225,7 +226,7 @@ impl UserStateStore {
             .map_err(|error| format!("mark import source: {error}"))
     }
 
-    pub fn read_snapshot(&self) -> Result<UserStateSnapshot, String> {
+    pub fn read_snapshot(&self, arcade_systems: &[String]) -> Result<UserStateSnapshot, String> {
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction()
@@ -268,6 +269,8 @@ impl UserStateStore {
         }
         drop(statement);
         snapshot.recent_launch_refs = snapshot_recent_refs(&transaction, None)?;
+        snapshot.arcade_recent_refs =
+            snapshot_collection_recent_refs(&transaction, arcade_systems)?;
         for (system, counts) in &snapshot.system_counts {
             if counts.recent != 0 {
                 snapshot.recent_by_system.insert(
@@ -387,6 +390,26 @@ fn snapshot_recent_refs(
         .map_err(|e| format!("query recent refs: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("read recent refs: {e}"))
+}
+
+fn snapshot_collection_recent_refs(
+    connection: &Connection,
+    systems: &[String],
+) -> Result<Vec<String>, String> {
+    if systems.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat_n("?", systems.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut statement = connection.prepare(&format!(
+        "SELECT launch_ref FROM user_recent_games WHERE system_id IN ({placeholders}) ORDER BY last_played_at DESC,last_session_id DESC LIMIT 16"
+    )).map_err(|e| format!("prepare collection recents: {e}"))?;
+    statement
+        .query_map(rusqlite::params_from_iter(systems), |row| row.get(0))
+        .map_err(|e| format!("query collection recents: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read collection recents: {e}"))
 }
 
 /// Additive derived tables keep schema-v1 writers compatible: their existing
@@ -563,7 +586,7 @@ mod tests {
         store.record_play(&nes, 20).unwrap();
         store.record_play(&snes, 30).unwrap();
         store.record_play(&snes, 5).unwrap();
-        let mut snapshot = store.read_snapshot().unwrap();
+        let mut snapshot = store.read_snapshot(&[]).unwrap();
         assert_eq!(snapshot.system_counts["snes"].recent, 1);
         assert_eq!(snapshot.system_counts["nes"].recent, 1);
         assert_eq!(
@@ -584,7 +607,7 @@ mod tests {
         store.set_favourite(&snes, false, 44).unwrap();
         let reopened = UserStateStore::open(store.path())
             .unwrap()
-            .read_snapshot()
+            .read_snapshot(&[])
             .unwrap();
         assert_eq!(reopened.system_counts["snes"].favourites, 0);
         assert_eq!(reopened.system_counts["nes"].favourites, 1);
@@ -592,9 +615,66 @@ mod tests {
     }
 
     #[test]
+    fn collection_recents_merge_member_systems_before_applying_the_limit() {
+        let store = temporary_store("arcade-collection-recents");
+        let members = ["arcade", "cps1", "cps2", "system16"].map(str::to_owned);
+        for (ordinal, system) in members.iter().enumerate() {
+            store
+                .record_play(
+                    &UserGameIdentity {
+                        system_id: system.clone(),
+                        launch_ref: format!("{system}.mra"),
+                        ..game(system)
+                    },
+                    ordinal as i64 + 1,
+                )
+                .unwrap();
+        }
+        store
+            .record_play(
+                &UserGameIdentity {
+                    system_id: "cps1".into(),
+                    launch_ref: "cps1.mra".into(),
+                    ..game("cps1")
+                },
+                4,
+            )
+            .unwrap();
+        store
+            .record_play(
+                &UserGameIdentity {
+                    system_id: "neogeo".into(),
+                    launch_ref: "neo.mra".into(),
+                    ..game("neo")
+                },
+                5,
+            )
+            .unwrap();
+        for ordinal in 0..17 {
+            store
+                .record_play(&game(&format!("console-{ordinal}")), 100 + ordinal)
+                .unwrap();
+        }
+        let snapshot = store.read_snapshot(&members).unwrap();
+        assert_eq!(snapshot.recent_launch_refs.len(), 16);
+        assert!(
+            snapshot
+                .recent_launch_refs
+                .iter()
+                .all(|reference| reference.contains("console-"))
+        );
+        assert_eq!(snapshot.recent_by_system["arcade"], ["arcade.mra"]);
+        assert_eq!(
+            snapshot.arcade_recent_refs,
+            ["cps1.mra", "system16.mra", "cps2.mra", "arcade.mra"]
+        );
+        assert_eq!(snapshot.system_counts["cps1"].recent, 1);
+    }
+
+    #[test]
     fn failed_favourite_refresh_keeps_the_cached_snapshot_until_a_successful_read() {
         let store = temporary_store("failed-favourite-refresh");
-        let mut snapshot = store.read_snapshot().unwrap();
+        let mut snapshot = store.read_snapshot(&[]).unwrap();
         let before = snapshot.clone();
         store.set_favourite(&game("one"), true, 10).unwrap();
         let connection = store.connection().unwrap();
@@ -628,7 +708,7 @@ mod tests {
         store.set_favourite(&game("one"), true, 1).unwrap();
         let upgraded = UserStateStore::open(store.path()).unwrap();
         assert_eq!(
-            upgraded.read_snapshot().unwrap().system_counts["snes"],
+            upgraded.read_snapshot(&[]).unwrap().system_counts["snes"],
             SystemUserCounts {
                 recent: 2,
                 favourites: 1
@@ -644,11 +724,11 @@ mod tests {
         // An old writer's existing statement still updates all maintained state.
         connection.execute("INSERT INTO play_sessions(system_id,stable_key,title,launch_ref,payload_path,played_at) VALUES('nes','three','Three','three.nes','three.nes',40)", []).unwrap();
         assert_eq!(
-            upgraded.read_snapshot().unwrap().system_counts["nes"].recent,
+            upgraded.read_snapshot(&[]).unwrap().system_counts["nes"].recent,
             1
         );
         assert_eq!(
-            upgraded.read_snapshot().unwrap().recent_launch_refs[0],
+            upgraded.read_snapshot(&[]).unwrap().recent_launch_refs[0],
             "three.nes"
         );
     }
@@ -660,7 +740,7 @@ mod tests {
         let transaction = connection.transaction().unwrap();
         transaction.execute("INSERT INTO play_sessions(system_id,stable_key,title,launch_ref,payload_path,played_at) VALUES('snes','one','One','one.sfc','one.sfc',10)", []).unwrap();
         drop(transaction);
-        let snapshot = store.read_snapshot().unwrap();
+        let snapshot = store.read_snapshot(&[]).unwrap();
         assert!(snapshot.recent_launch_refs.is_empty());
         assert!(snapshot.system_counts.is_empty());
     }

@@ -149,6 +149,7 @@ fn worker(
         }
     };
     let mut cached: Option<UserStateSnapshot> = None;
+    let mut arcade_systems = Vec::new();
     while let Ok(request) = requests.recv() {
         let completed_favourite = match &request {
             UserStateRequest::SetFavourite { game, .. } => Some(game.launch_ref.clone()),
@@ -156,7 +157,15 @@ fn worker(
         };
         let result = match request {
             UserStateRequest::Refresh { catalog, now } => {
-                if let Some(snapshot) = cached.as_ref() {
+                let mut members =
+                    catalog.search_source_system_ids(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
+                members.sort_unstable();
+                if cached.is_some() && arcade_systems != members {
+                    store.read_snapshot(&members).inspect(|snapshot| {
+                        arcade_systems = members;
+                        cached = Some(snapshot.clone());
+                    })
+                } else if let Some(snapshot) = cached.as_ref() {
                     Ok(snapshot.clone())
                 } else {
                     // Legacy resolution belongs to this worker, once at startup.
@@ -167,7 +176,8 @@ fn worker(
                         .map(|game| catalog.user_game_identity_for_entry(game))
                         .collect::<Vec<_>>();
                     import_legacy_snes(&store, &games, &media_root, now).and_then(|_| {
-                        let snapshot = store.read_snapshot()?;
+                        let snapshot = store.read_snapshot(&members)?;
+                        arcade_systems = members;
                         cached = Some(snapshot.clone());
                         Ok(snapshot)
                     })
@@ -183,7 +193,7 @@ fn worker(
                         store.refresh_favourites(snapshot, &game.system_id)?;
                         snapshot
                     }
-                    None => cached.insert(store.read_snapshot()?),
+                    None => cached.insert(store.read_snapshot(&arcade_systems)?),
                 };
                 Ok(snapshot.clone())
             }),
@@ -266,6 +276,55 @@ mod tests {
             UserStateEvent::Snapshot { .. }
         ));
         session
+    }
+
+    #[test]
+    fn catalog_membership_change_refreshes_cached_arcade_recents() {
+        let root = TestDirectory::new();
+        let store = UserStateStore::open(root.0.join("state.sqlite3")).unwrap();
+        for (system, played_at) in [("cps1", 10), ("cps2", 20)] {
+            store
+                .record_play(
+                    &UserGameIdentity {
+                        system_id: system.into(),
+                        stable_key: system.into(),
+                        launch_ref: format!("{system}.mra"),
+                        ..game()
+                    },
+                    played_at,
+                )
+                .unwrap();
+        }
+        let make_catalog = |systems: &[&str]| {
+            crate::test_support::arcade_catalog(
+                systems
+                    .iter()
+                    .map(|system| {
+                        crate::test_support::arcade_game(*system)
+                            .system_id(*system)
+                            .path(format!("{system}.mra"))
+                            .build()
+                    })
+                    .collect(),
+                systems
+                    .iter()
+                    .map(|system| crate::test_support::arcade_system(*system, 1))
+                    .collect(),
+            )
+        };
+        let mut session = ready_session(&root);
+        session.refresh(make_catalog(&["cps1"]), 30).unwrap();
+        let UserStateEvent::Snapshot { snapshot, .. } = poll_until(&mut session) else {
+            panic!("snapshot");
+        };
+        assert_eq!(snapshot.arcade_recent_refs, ["cps1.mra"]);
+        session
+            .refresh(make_catalog(&["cps1", "cps2"]), 40)
+            .unwrap();
+        let UserStateEvent::Snapshot { snapshot, .. } = poll_until(&mut session) else {
+            panic!("snapshot");
+        };
+        assert_eq!(snapshot.arcade_recent_refs, ["cps2.mra", "cps1.mra"]);
     }
 
     #[test]
