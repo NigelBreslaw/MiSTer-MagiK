@@ -217,6 +217,7 @@ impl Agent {
             "metrics-v1",
             "metrics-body-v1",
             "watch-v1",
+            "watch-metrics-body-v1",
             "capture-framebuffer",
             "artifacts-v1",
             "agent-update-v1",
@@ -897,27 +898,7 @@ impl Agent {
     fn metrics_body(&self, stream: &mut TcpStream, request: &Envelope) -> Result<(), FrameError> {
         match self.read_metrics() {
             Ok(value) if value.is_object() => {
-                let body = serde_json::to_vec(&value).map_err(|e| FrameError::Io(e.to_string()))?;
-                if body.len() > 1024 * 1024 {
-                    return write_frame(
-                        stream,
-                        &response(
-                            &request.id,
-                            "error",
-                            serde_json::json!({"code":"metrics-too-large"}),
-                        ),
-                        &[],
-                    );
-                }
-                write_frame(
-                    stream,
-                    &response(
-                        &request.id,
-                        "metrics",
-                        serde_json::json!({"encoding":"json"}),
-                    ),
-                    &body,
-                )
+                write_metrics_body(stream, request, "metrics", &value)
             }
             _ => write_frame(
                 stream,
@@ -998,15 +979,21 @@ impl Agent {
         loop {
             self.renew_viewer_lease();
             if let Ok(metrics) = self.read_metrics() {
-                write_frame(
-                    stream,
-                    &response(
-                        &request.id,
+                let header = response(
+                    &request.id,
+                    "watch-metrics",
+                    serde_json::json!({"metrics":metrics}),
+                );
+                if serde_json::to_vec(&header).is_ok_and(|bytes| bytes.len() <= MAX_HEADER_BYTES) {
+                    write_frame(stream, &header, &[])?;
+                } else {
+                    write_metrics_body(
+                        stream,
+                        request,
                         "watch-metrics",
-                        serde_json::json!({"metrics":metrics}),
-                    ),
-                    &[],
-                )?;
+                        &header.fields["metrics"],
+                    )?;
+                }
             }
             let (logs, frame) = self.observation.snapshot(log_sequence, frame_sequence);
             for (sequence, line) in logs {
@@ -1620,6 +1607,36 @@ fn artifact_request_error(
     )
 }
 
+/// Metrics use a bounded JSON body when they cannot fit a control header.
+fn write_metrics_body(
+    stream: &mut TcpStream,
+    request: &Envelope,
+    operation: &str,
+    value: &serde_json::Value,
+) -> Result<(), FrameError> {
+    let body = serde_json::to_vec(value).map_err(|e| FrameError::Io(e.to_string()))?;
+    if body.len() > 1024 * 1024 {
+        return write_frame(
+            stream,
+            &response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"metrics-too-large"}),
+            ),
+            &[],
+        );
+    }
+    write_frame(
+        stream,
+        &response(
+            &request.id,
+            operation,
+            serde_json::json!({"encoding":"json"}),
+        ),
+        &body,
+    )
+}
+
 fn response(id: &str, op: &str, value: serde_json::Value) -> Envelope {
     let mut fields = value.as_object().cloned().expect("responses are objects");
     Envelope {
@@ -2155,6 +2172,65 @@ mod tests {
             value
         );
         server.join().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn large_watch_metrics_keep_logs_frames_and_following_updates_streaming() {
+        let directory =
+            std::env::temp_dir().join(format!("magik-large-watch-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let value = serde_json::json!({"window":{"renderer_profile":{
+            "evidence":"x".repeat(MAX_HEADER_BYTES + 1024)
+        }}});
+        std::fs::write(
+            directory.join("probe-metrics.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        let agent = Agent::with_state_root(
+            "test".into(),
+            "token".into(),
+            directory.join("install"),
+            directory.clone(),
+        );
+        agent.observation.record_log("still streaming".into());
+        agent.observation.record_frame(0, vec![1, 2, 3]);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            agent.watch(
+                &mut stream,
+                &response("watch", "watch", serde_json::json!({})),
+                &[],
+            )
+        });
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(read_frame(&mut stream).unwrap().0.op, "watch-ready");
+        let (header, body) = read_frame(&mut stream).unwrap();
+        assert_eq!(header.op, "watch-metrics");
+        assert_eq!(header.fields["encoding"], "json");
+        assert!(body.len() > MAX_HEADER_BYTES);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            value
+        );
+        assert_eq!(read_frame(&mut stream).unwrap().0.op, "watch-log");
+        let (header, body) = read_frame(&mut stream).unwrap();
+        assert_eq!(header.op, "watch-frame");
+        assert_eq!(body, [1, 2, 3]);
+        let (header, body) = read_frame(&mut stream).unwrap();
+        assert_eq!(header.op, "watch-metrics");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            value
+        );
+        stream.shutdown(std::net::Shutdown::Both).unwrap();
+        assert!(server.join().unwrap().is_err());
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -43,7 +43,7 @@ CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
     "test-bridge-v1",
     "test-session",
 }
-WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
+WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1", "watch-metrics-body-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
 CHECK_SCENARIOS = (
     "smoke",

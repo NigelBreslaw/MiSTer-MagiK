@@ -192,3 +192,64 @@ def test_metrics_falls_back_only_for_unsupported_body_operation():
     thread.start()
     assert NativeAgent("127.0.0.1", "token", port).metrics() == {"presentations": 42}
     thread.join()
+
+
+@pytest.mark.parametrize("in_body", [False, True])
+def test_watch_metrics_decode_legacy_headers_and_large_bodies_without_losing_next_event(
+    in_body,
+):
+    import json
+
+    metrics = (
+        {"window": {"renderer_profile": "x" * (70 * 1024)}}
+        if in_body
+        else {"presentations": 42}
+    )
+    local, peer = socket.socketpair()
+
+    def serve():
+        with peer:
+            send_message(
+                peer,
+                Envelope(
+                    "watch",
+                    "watch-metrics",
+                    "",
+                    {"encoding": "json"} if in_body else {"metrics": metrics},
+                ),
+                json.dumps(metrics).encode() if in_body else b"",
+            )
+            send_message(
+                peer, Envelope("watch", "watch-log", "", {"line": "still streaming"})
+            )
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        local.settimeout(2)
+        event, body = NativeAgent.read_watch_event(local)
+        assert event.fields["metrics"] == metrics
+        assert body == b""
+        assert NativeAgent.read_watch_event(local)[0].operation == "watch-log"
+    finally:
+        local.close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    "body,encoding", [(b"[]", "json"), (b"broken", "json"), (b"{}", "unknown")]
+)
+def test_watch_rejects_malformed_metrics_bodies(body, encoding):
+    from magik.protocol import ProtocolError
+
+    local, peer = socket.socketpair()
+    try:
+        send_message(
+            peer, Envelope("watch", "watch-metrics", "", {"encoding": encoding}), body
+        )
+        with pytest.raises(ProtocolError):
+            NativeAgent.read_watch_event(local)
+    finally:
+        local.close()
+        peer.close()

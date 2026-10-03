@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import time
 import uuid
@@ -9,6 +10,16 @@ from collections.abc import Mapping
 
 from .compatibility import AgentStatus
 from .protocol import Envelope, ProtocolError, receive_message, send_message, sha256_hex
+
+
+def _decode_metrics(body: bytes) -> dict[str, object]:
+    try:
+        value = json.loads(body)
+    except ValueError as error:
+        raise ProtocolError("invalid metrics JSON") from error
+    if not isinstance(value, dict):
+        raise ProtocolError("metrics body must be an object")
+    return value
 
 
 class AgentError(RuntimeError):
@@ -110,8 +121,6 @@ class NativeAgent:
         return self._successful("diagnostics")
 
     def metrics(self) -> Mapping[str, object]:
-        import json
-
         response, body = self._request("metrics-body")
         if (
             response.operation == "error"
@@ -122,10 +131,7 @@ class NativeAgent:
             raise AgentError.from_fields(response.fields)
         if response.operation != "metrics" or response.fields.get("encoding") != "json":
             raise ProtocolError("invalid metrics body response")
-        value = json.loads(body)
-        if not isinstance(value, dict):
-            raise ProtocolError("metrics body must be an object")
-        return value
+        return _decode_metrics(body)
 
     def read_profile_artifact(self, profile_id: str, name: str) -> bytes:
         response, body = self._request(
@@ -186,6 +192,17 @@ class NativeAgent:
         response, body = receive_message(connection)
         if response.operation not in {"watch-metrics", "watch-log", "watch-frame"}:
             raise AgentError(f"unexpected watch event: {response.operation}")
+        if response.operation == "watch-metrics":
+            if response.fields.get("encoding") == "json":
+                response = Envelope(
+                    response.request_id,
+                    response.operation,
+                    response.token,
+                    {"metrics": _decode_metrics(body)},
+                )
+                body = b""
+            elif body:
+                raise ProtocolError("invalid watch metrics encoding")
         return response, body
 
     def device_operation(self, operation: str, fields=None, *, timeout=None):
