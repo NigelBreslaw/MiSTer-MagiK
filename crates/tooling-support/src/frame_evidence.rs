@@ -139,7 +139,6 @@ pub struct FrameEvidenceCapture {
     recent: VecDeque<FrameEvidence>,
     retained: Vec<FrameEvidence>,
     successor_frames: usize,
-    last: Option<FrameEvidence>,
     overflow: u64,
     gaps: u64,
     observed: u64,
@@ -193,10 +192,10 @@ impl FrameEvidenceCapture {
             return;
         }
         self.observed += 1;
-        if let Some(previous) = self.last {
+        if let Some(previous) = self.recent.back() {
             self.gaps += frame.attempt_id.saturating_sub(previous.attempt_id + 1);
         }
-        let edge = self.last.is_none_or(|previous| {
+        let edge = self.recent.back().is_none_or(|previous| {
             previous.motion != frame.motion
                 || previous.input_generation != frame.input_generation
                 || previous.menu_token != frame.menu_token
@@ -221,7 +220,6 @@ impl FrameEvidenceCapture {
             self.recent.pop_front();
         }
         self.recent.push_back(frame);
-        self.last = Some(frame);
     }
     pub fn json(&self) -> Value {
         let mut samples = self.observer_us.clone();

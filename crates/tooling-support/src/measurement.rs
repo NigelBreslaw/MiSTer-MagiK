@@ -23,7 +23,7 @@ pub struct FrameWorkTiming {
     pub secondary_run_delay_us: Option<u64>,
 }
 impl FrameWorkTiming {
-    pub(crate) fn json(self) -> Value {
+    fn json(self) -> Value {
         json!({"producer_us":self.producer_us,
             "helper_ahead":self.helper_ahead,"helper_ahead_lead_us":self.helper_ahead_lead_us,
             "discarded_helper_us":self.discarded_helper_us,
@@ -96,7 +96,7 @@ pub struct FramePhaseTimeline {
     pub repeated_refresh_delta: u32,
 }
 impl FramePhaseTimeline {
-    pub(crate) fn json(self) -> Value {
+    fn json(self) -> Value {
         json!({
             "clock":"process-monotonic-us",
             "previous_observation_us":self.previous_observation_us,
