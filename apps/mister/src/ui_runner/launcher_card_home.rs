@@ -899,11 +899,20 @@ impl LauncherCardHomeSession {
 }
 
 fn home_renderer(prepared: &PreparedLauncher) -> Box<ParallelLauncherRenderer> {
+    // The helper sleeps between bands, so real-time priority only applies
+    // while it renders. Without it, CPU0 background work that is already
+    // running keeps the core for its whole time slice: 2-4 ms of a ~3 ms
+    // frame margin.
     fn setup() {
         use mister_magik_catalog::runtime_thread::{
-            RuntimeThreadRole, apply_runtime_thread_policy,
+            RuntimeThreadRole, ThreadScheduler, apply_runtime_thread_policy_override,
         };
-        apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
+        let role = RuntimeThreadRole::LauncherCardRenderer;
+        apply_runtime_thread_policy_override(
+            role,
+            role.default_policy()
+                .with_scheduler(ThreadScheduler::RoundRobin { priority: 1 }),
+        );
     }
     let clocks = std::env::var_os("MISTER_MAGIK2_STATE_ROOT")
         .is_some()
