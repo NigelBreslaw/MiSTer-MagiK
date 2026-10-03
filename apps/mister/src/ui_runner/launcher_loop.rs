@@ -13156,22 +13156,22 @@ pub(super) fn run_launcher_loop(
                                     Ok(delta) => {
                                         metrics.counters.owned_vblanks += u64::from(delta.owned_vblank_delta);
                                         metrics.counters.presented_vblanks += u64::from(delta.presented_vblank_delta);
-                                        // A first frame's baseline restarts at its render, so this
-                                        // spans that frame's work up to its post.
-                                        let first_frame_work_us = post_timing
-                                            .map_or(frame_t4, |(posted, _)| posted)
-                                            .saturating_duration_since(at)
-                                            .as_micros() as u64;
-                                        let dropped = mister_magik_tooling_support::measurement::charged_refresh_repeats(
-                                            was_animating, animation_active, delta.repeated_vblank_delta,
-                                            first_frame_work_us, pacer.period_us(),
-                                        );
-                                        metrics.counters.drops += dropped;
-                                        if !was_animating && animation_active {
+                                        let repeated = u64::from(delta.repeated_vblank_delta);
+                                        let dropped = if !was_animating && animation_active {
+                                            // A first frame's baseline restarts at its render, so
+                                            // this spans that frame's work up to its post.
+                                            let work_us = post_timing
+                                                .map_or(frame_t4, |(posted, _)| posted)
+                                                .saturating_duration_since(at)
+                                                .as_micros() as u64;
+                                            let dropped = mister_magik_tooling_support::measurement::first_frame_drops(
+                                                repeated, work_us, pacer.period_us(),
+                                            );
                                             metrics.counters.motion_starts += 1;
-                                            metrics.counters.first_frame_wait_refreshes +=
-                                                u64::from(delta.repeated_vblank_delta) - dropped;
-                                        }
+                                            metrics.counters.first_frame_wait_refreshes += repeated - dropped;
+                                            dropped
+                                        } else if animation_active || was_animating { repeated } else { 0 };
+                                        metrics.counters.drops += dropped;
                                         if dropped != 0 || tooling_frame_evidence.is_some() {
                                             let record = mister_magik_tooling_support::measurement::DroppedFrameRecord {
                                                 reason: "owned refresh repeated during motion; see observation interval and phase timeline",

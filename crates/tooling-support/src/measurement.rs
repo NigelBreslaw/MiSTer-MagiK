@@ -151,30 +151,13 @@ impl DroppedFrameRecord {
     }
 }
 
-/// Repeated refreshes charged as drops for one observation. Motion starting
-/// from rest has no earlier refresh to meet: input can arrive anywhere in a
-/// period, so frame 0 may wait one refresh for scanout. `first_frame_work_us`
-/// runs from that frame's start to its post: repeats it would cause even when
-/// started on a refresh boundary are overruns and still count. Every repeat
-/// after frame 0 is a drop; repeats while idle are deliberate reuse.
-pub fn charged_refresh_repeats(
-    was_animating: bool,
-    animating: bool,
-    repeated: u32,
-    first_frame_work_us: u64,
-    period_us: u64,
-) -> u64 {
-    let repeated = u64::from(repeated);
-    match (was_animating, animating) {
-        (false, false) => 0,
-        (false, true) => {
-            let overrun = first_frame_work_us
-                .div_ceil(period_us.max(1))
-                .saturating_sub(1);
-            repeated.saturating_sub(1).max(overrun).min(repeated)
-        }
-        _ => repeated,
-    }
+/// Drops charged to the first frame of motion from rest. Input can arrive
+/// anywhere in a period, so that frame may wait one refresh for scanout.
+/// `work_us` runs from the frame's start to its post: repeats that work would
+/// cause even from a refresh boundary are overruns and still count.
+pub fn first_frame_drops(repeated: u64, work_us: u64, period_us: u64) -> u64 {
+    let overrun = work_us.div_ceil(period_us.max(1)).saturating_sub(1);
+    repeated.saturating_sub(1).max(overrun).min(repeated)
 }
 
 #[derive(Default, Clone)]
@@ -480,22 +463,16 @@ mod tests {
     #[test]
     fn first_frame_from_rest_may_wait_one_refresh() {
         const PERIOD: u64 = 16_667;
-        let charged =
-            |was, now, repeated, work| charged_refresh_repeats(was, now, repeated, work, PERIOD);
-        // Idle reuse is never charged.
-        assert_eq!(charged(false, false, 3, 0), 0);
         // Device browse start: input 9.4 ms into a period, 14.0 ms of work.
         // Frame 0 lands one refresh later; a wait, not a drop.
-        assert_eq!(charged(false, true, 1, 14_042), 0);
+        assert_eq!(first_frame_drops(0, 14_042, PERIOD), 0);
+        assert_eq!(first_frame_drops(1, 14_042, PERIOD), 0);
         // Device Games entry: 25.8 ms would miss from a boundary too.
-        assert_eq!(charged(false, true, 1, 25_827), 1);
+        assert_eq!(first_frame_drops(1, 25_827, PERIOD), 1);
         // Device hub entry: 35.9 ms costs two refreshes; a third is the wait.
-        assert_eq!(charged(false, true, 3, 35_903), 2);
+        assert_eq!(first_frame_drops(3, 35_903, PERIOD), 2);
         // A short frame 0 is still charged beyond its one wait.
-        assert_eq!(charged(false, true, 3, 14_042), 2);
-        // After frame 0, and while motion ends, every repeat is a drop.
-        assert_eq!(charged(true, true, 1, 0), 1);
-        assert_eq!(charged(true, false, 2, 0), 2);
+        assert_eq!(first_frame_drops(3, 14_042, PERIOD), 2);
     }
 
     #[test]
