@@ -169,8 +169,9 @@ fn decode_resource(bytes: &[u8]) -> Result<DecodedFont, String> {
         return Err("bitmap font resource has invalid metrics".to_string());
     }
     // Bytes 42..46 hold the generator CRC. Resources are compiled into the
-    // binary and `checked_in_resources_are_deterministic` pins them, so
-    // runtime decoding relies on the structural checks below instead.
+    // binary and pinned byte-for-byte by `checked_in_resources_are_deterministic`
+    // and `hub_fonts_match_the_prototype_title_sizes`, so runtime decoding
+    // relies on the structural checks below instead.
 
     let family_end = HEADER_LEN
         .checked_add(family_len)

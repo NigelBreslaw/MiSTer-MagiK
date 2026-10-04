@@ -311,6 +311,8 @@ pub struct MetadataStore {
     file: File,
     entries: Vec<IndexEntry>,
     status: MetadataStatus,
+    /// Shards whose decoded bytes matched their index digest in this store.
+    verified: std::sync::Mutex<Vec<bool>>,
 }
 
 /// Run the read-only qualification probe used on a real MiSTer. The compact
@@ -535,6 +537,7 @@ impl MetadataStore {
         }
         Ok(Self {
             file,
+            verified: std::sync::Mutex::new(vec![false; entries.len()]),
             entries,
             status: MetadataStatus {
                 format: FORMAT,
@@ -625,10 +628,24 @@ impl MetadataStore {
                 entry.id_name
             ));
         }
-        // The installed file is verified by release/Downloader hashes, and the
-        // index itself is checked on open. Re-hashing megabytes on each shard
-        // read added nothing beyond LZ4 framing, exact length and the
-        // bounds-checked decoders. Shard digests remain identity for callers.
+        // LZ4 blocks carry no checksum, so damaged literals can still decode to
+        // plausible rows of the right length. Verify each shard once per store:
+        // the store keeps its open handle, and publication replaces by rename.
+        let index = self
+            .entries
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, entry))
+            .expect("shard entry belongs to this store");
+        let verified = self.verified.lock().unwrap_or_else(|e| e.into_inner())[index];
+        if !verified {
+            if Sha256::digest(&decoded).as_slice() != entry.digest {
+                return Err(format!(
+                    "metadata shard {} checksum mismatch",
+                    entry.id_name
+                ));
+            }
+            self.verified.lock().unwrap_or_else(|e| e.into_inner())[index] = true;
+        }
         Ok(decoded)
     }
 }
@@ -1970,6 +1987,26 @@ mod tests {
         let mut corrupted = bytes;
         corrupted[95] = 1;
         assert!(MetadataStore::from_bytes(&corrupted).is_err());
+    }
+
+    #[test]
+    fn shard_content_is_verified_before_first_use() {
+        let mut builder = MetadataFileBuilder::new();
+        builder.add_software("nes", &sample()).expect("add");
+        let bytes = builder.encode().expect("encode");
+        let store = MetadataStore::from_bytes(&bytes).expect("open");
+        assert_eq!(store.software_shard("nes").unwrap().unwrap(), sample());
+        assert_eq!(store.software_shard("nes").unwrap().unwrap(), sample());
+
+        // Same framing and length, different content: only the digest notices.
+        let mut store = MetadataStore::from_bytes(&bytes).expect("open");
+        store.entries[0].digest[0] ^= 1;
+        assert!(
+            store
+                .software_shard("nes")
+                .unwrap_err()
+                .contains("checksum mismatch")
+        );
     }
 
     #[test]

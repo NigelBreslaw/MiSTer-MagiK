@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Read as _;
 use std::path::Path;
 
 const DEVELOPMENT_VERMAGIC: &str = "6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ";
@@ -88,9 +89,7 @@ fn resolve_installed_with_runtime(
         "scanout_metadata_sha256",
         &paths.scanout_metadata_path(),
     )?;
-    // The GUI is the process running this check, not a scanout dependency.
-    // Hashing its whole executable delayed every boot; the manager verifies
-    // installed GUI bytes, and diagnostics still compare them with gui_sha256.
+    verify_installed_gui(&manifest, paths)?;
 
     let metadata = parse_metadata(&paths.scanout_metadata_path())?;
     require_metadata(&metadata, "kernel_release", DEVELOPMENT_KERNEL_RELEASE)?;
@@ -195,16 +194,71 @@ fn verify_artifact(manifest: &ParsedManifest, hash_field: &str, path: &Path) -> 
     let expected = manifest
         .required(hash_field)
         .map_err(|error| error.to_string())?;
-    let bytes =
-        fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let mut observed = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
-        write!(&mut observed, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    if observed != expected {
+    if sha256_file(path)? != expected {
         return Err(format!("{hash_field} mismatch"));
     }
     Ok(())
+}
+
+const GUI_VERIFIED_STAMP: &str = "platform-gui-verified-v1";
+
+/// The installed GUI must belong to the qualified platform tuple, but hashing
+/// the whole executable on every boot is expensive. After one full check the
+/// manifest hash is stamped with the file's size and mtime; a replaced GUI or
+/// changed manifest misses the stamp and is hashed again.
+fn verify_installed_gui(manifest: &ParsedManifest, paths: &DevicePaths) -> Result<(), String> {
+    let expected = manifest
+        .required("gui_sha256")
+        .map_err(|error| error.to_string())?;
+    let gui = paths.gui_path();
+    let stamp_path = paths.app_path(GUI_VERIFIED_STAMP);
+    let metadata =
+        fs::metadata(&gui).map_err(|error| format!("cannot read {}: {error}", gui.display()))?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |time| time.as_nanos());
+    let stamp = format!("{expected} {} {modified}\n", metadata.len());
+    let stamped = fs::File::open(&stamp_path).ok().and_then(|file| {
+        let mut text = String::new();
+        (&file).take(256).read_to_string(&mut text).ok()?;
+        Some(text)
+    });
+    if stamped.as_deref() == Some(stamp.as_str()) {
+        return Ok(());
+    }
+    if sha256_file(&gui)? != expected {
+        let _ = fs::remove_file(&stamp_path);
+        return Err("gui_sha256 mismatch".to_owned());
+    }
+    // Best effort: without a writable stamp every boot keeps the full check.
+    let temporary = stamp_path.with_extension("next");
+    if fs::write(&temporary, &stamp).is_ok() && fs::rename(&temporary, &stamp_path).is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file =
+        fs::File::open(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let mut observed = String::with_capacity(64);
+    for byte in digest.finalize() {
+        write!(&mut observed, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(observed)
 }
 
 fn parse_metadata(path: &Path) -> Result<BTreeMap<String, String>, String> {
@@ -436,14 +490,35 @@ mod tests {
     }
 
     #[test]
-    fn profile_resolution_does_not_hash_the_running_gui() {
+    fn installed_gui_is_hashed_once_then_stamped_until_it_changes() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-scanout-profile-gui-{}",
             std::process::id()
         ));
         let paths = development_fixture(&root);
-        fs::write(paths.gui_path(), b"rebuilt runtime").unwrap();
+        let gui = paths.gui_path();
+        let stamp = paths.app_path(GUI_VERIFIED_STAMP);
         assert_eq!(resolve_development(&root, &paths), Ok(DEVELOPMENT_PROFILE));
+        assert!(stamp.is_file(), "a verified GUI is stamped");
+
+        // A matching stamp skips the hash: same size and mtime, different bytes.
+        let modified = fs::metadata(&gui).unwrap().modified().unwrap();
+        fs::write(&gui, b"RUNTIME").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&gui)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(resolve_development(&root, &paths), Ok(DEVELOPMENT_PROFILE));
+
+        // A replaced GUI misses the stamp and is rejected against the manifest.
+        fs::write(&gui, b"different runtime").unwrap();
+        assert_eq!(
+            resolve_development(&root, &paths),
+            Err("gui_sha256 mismatch".to_owned())
+        );
+        assert!(!stamp.exists(), "a failed check clears the stamp");
         fs::remove_dir_all(root).unwrap();
     }
 

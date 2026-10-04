@@ -7,6 +7,7 @@ mod catalog_operations;
 mod desktop;
 mod device;
 mod device_identity;
+mod file_hash;
 mod fpga_evidence;
 mod input_probe;
 mod main_control;
@@ -1691,56 +1692,8 @@ fn relay_until_deadline(
     }
 }
 
-/// File identity for hash reuse. Publication renames a new file into place, so
-/// a replaced artifact has a different inode even when its size and FAT mtime match.
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-struct HashedFile {
-    device: u64,
-    inode: u64,
-    len: u64,
-    modified: (i64, i64),
-    changed: (i64, i64),
-}
-
-impl HashedFile {
-    fn of(path: &Path) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = fs::metadata(path).ok()?;
-        Some(Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            len: metadata.len(),
-            modified: (metadata.mtime(), metadata.mtime_nsec()),
-            changed: (metadata.ctime(), metadata.ctime_nsec()),
-        })
-    }
-}
-
-const MAX_CACHED_HASHES: usize = 32;
-
-/// Executables are tens of MB and every host connection asks for status, so
-/// unchanged files are hashed once per agent process.
 fn installed_hash(path: &Path) -> Option<String> {
-    static CACHE: std::sync::OnceLock<Mutex<std::collections::HashMap<HashedFile, String>>> =
-        std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    let before = HashedFile::of(path)?;
-    if let Some(hash) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&before) {
-        return Some(hash.clone());
-    }
-    let hash: String = Sha256::digest(fs::read(path).ok()?)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    // Only reuse a hash whose file did not change while it was being read.
-    if HashedFile::of(path) == Some(before) {
-        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-        if cache.len() >= MAX_CACHED_HASHES {
-            cache.clear();
-        }
-        cache.insert(before, hash.clone());
-    }
-    Some(hash)
+    file_hash::sha256(path).ok()
 }
 
 #[cfg(test)]
@@ -2006,8 +1959,16 @@ mod tests {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+        let digests = || file_hash::DIGESTS.get();
+        let before = digests();
         assert_eq!(installed_hash(&artifact), Some(expected.clone()));
+        assert_eq!(digests(), before + 1);
         assert_eq!(installed_hash(&artifact), Some(expected));
+        assert_eq!(
+            digests(),
+            before + 1,
+            "unchanged artifact must not be re-hashed"
+        );
         // Same length, republished by rename: the cached hash must not survive.
         let hex = |body: &[u8]| {
             Sha256::digest(body)
@@ -2023,6 +1984,7 @@ mod tests {
         )
         .expect("republish artifact");
         assert_eq!(installed_hash(&artifact), Some(hex(b"probe Payload")));
+        assert_eq!(digests(), before + 2);
         let _ = std::fs::remove_dir_all(directory);
     }
 

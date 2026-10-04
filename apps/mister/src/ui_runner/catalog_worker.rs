@@ -6,7 +6,6 @@ use crate::cpu_profile::CatalogBuildProfiler;
 use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
-use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(all(test, unix))]
@@ -362,8 +361,6 @@ struct CatalogWorkerWireEvent {
     collection_items_total: u64,
     #[serde(default)]
     collection_items: Vec<String>,
-    #[serde(default)]
-    collection_checksum: String,
 }
 
 #[derive(Default)]
@@ -385,23 +382,9 @@ struct CatalogWorkerCollectionAssembly {
     chunks: u32,
     total_items: usize,
     next_index: u32,
-    checksum: String,
     items: Vec<String>,
     generation: u64,
     all_published_systems: bool,
-}
-
-fn catalog_worker_collection_checksum(items: &[String]) -> String {
-    let mut digest = Sha256::new();
-    for item in items {
-        digest.update(item.as_bytes());
-        digest.update([0]);
-    }
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 impl CatalogWorkerProtocolState {
@@ -435,11 +418,6 @@ impl CatalogWorkerProtocolState {
                 || event.collection_index >= event.collection_chunks
                 || event.collection_items.len() > MAX_CATALOG_WORKER_COLLECTION_CHUNK_ITEMS
                 || event.collection_items_total > MAX_CATALOG_WORKER_COLLECTION_ITEMS_TOTAL as u64
-                || event.collection_checksum.len() != 64
-                || !event
-                    .collection_checksum
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit())
                 || event
                     .collection_items
                     .iter()
@@ -505,7 +483,6 @@ impl CatalogWorkerProtocolState {
                 chunks: event.collection_chunks,
                 total_items: event.collection_items_total as usize,
                 next_index: 0,
-                checksum: event.collection_checksum.clone(),
                 items: Vec::with_capacity(event.collection_items_total as usize),
                 generation: event.generation,
                 all_published_systems: event.all_published_systems,
@@ -516,7 +493,6 @@ impl CatalogWorkerProtocolState {
             .ok_or_else(|| "catalog worker collection chunk arrived out of order".to_string())?;
         if assembly.chunks != event.collection_chunks
             || assembly.total_items != event.collection_items_total as usize
-            || assembly.checksum != event.collection_checksum
             || assembly.generation != event.generation
             || assembly.all_published_systems != event.all_published_systems
             || assembly.next_index != event.collection_index
@@ -539,10 +515,10 @@ impl CatalogWorkerProtocolState {
             return Ok(None);
         }
         let assembly = slot.take().expect("collection assembly");
-        if assembly.items.len() != assembly.total_items
-            || catalog_worker_collection_checksum(&assembly.items) != assembly.checksum
-        {
-            return Err("catalog worker collection checksum or count differs".to_string());
+        // Ordered sequences, chunk indexes and the announced total already bind
+        // the assembly; this executable is on both ends of the pipe.
+        if assembly.items.len() != assembly.total_items {
+            return Err("catalog worker collection count differs".to_string());
         }
         match event.collection.as_str() {
             "plan" => Ok(Some(CatalogWorkerMessage::ReconciliationPlanReady {
@@ -849,6 +825,10 @@ fn load_catalog_worker_snapshot_at(
     if !metadata.file_type().is_file() || metadata.len() > max_bytes as u64 {
         return Err("catalog worker snapshot is not a bounded regular file".to_string());
     }
+    if metadata.len() != expected_bytes {
+        let _ = std::fs::remove_file(&expected);
+        return Err("catalog worker snapshot size differs".to_string());
+    }
     let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(0));
     std::fs::File::open(&expected)
         .map_err(|error| format!("open catalog worker snapshot: {error}"))?
@@ -905,7 +885,6 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
         collection_chunks: 0,
         collection_items_total: 0,
         collection_items: Vec::new(),
-        collection_checksum: String::new(),
     };
     match message {
         CatalogWorkerMessage::Progress { phase, work_units } => {
@@ -1030,7 +1009,6 @@ fn catalog_worker_collection_chunk_events(
         .len()
         .div_ceil(MAX_CATALOG_WORKER_COLLECTION_CHUNK_ITEMS)
         .max(1);
-    let checksum = catalog_worker_collection_checksum(items);
     let mut events = Vec::with_capacity(chunk_count);
     let mut append_chunk = |index: usize, chunk: &[String]| -> Result<(), String> {
         let mut event = blank_worker_wire_event("collection-chunk");
@@ -1039,7 +1017,6 @@ fn catalog_worker_collection_chunk_events(
         event.collection_chunks = chunk_count as u32;
         event.collection_items_total = items.len() as u64;
         event.collection_items = chunk.to_vec();
-        event.collection_checksum = checksum.clone();
         event.generation = generation;
         event.all_published_systems = all_published_systems;
         let encoded_bytes = serde_json::to_vec(&event)
@@ -1129,7 +1106,6 @@ fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
         collection_chunks: 0,
         collection_items_total: 0,
         collection_items: Vec::new(),
-        collection_checksum: String::new(),
     }
 }
 
@@ -2019,7 +1995,6 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             collection_chunks: 0,
             collection_items_total: 0,
             collection_items: Vec::new(),
-            collection_checksum: String::new(),
         };
         let _ = output.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
         let _ = write_worker_wire_event(&mut *output, &event);
@@ -2804,7 +2779,6 @@ mod tests {
             collection_chunks: 0,
             collection_items_total: 0,
             collection_items: Vec::new(),
-            collection_checksum: String::new(),
         };
         let encoded = serde_json::to_string(&event).unwrap();
         let decoded: CatalogWorkerWireEvent = serde_json::from_str(&encoded).unwrap();
@@ -3040,7 +3014,7 @@ mod tests {
         let mut bad_handshake = blank_worker_wire_event("handshake");
         bad_handshake.run_id = "run-bad".to_string();
         assert_eq!(malformed_state.validate(&bad_handshake), Ok(true));
-        malformed[0].collection_checksum = "0".repeat(64);
+        malformed[0].collection_items_total = 3;
         assert_eq!(malformed_state.validate(&malformed[0]), Ok(false));
         assert!(malformed_state.collect_collection(&malformed[0]).is_err());
     }
