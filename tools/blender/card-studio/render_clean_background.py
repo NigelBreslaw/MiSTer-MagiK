@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT_SCENES = {
-    "01_arcade.rgb888": "MAGIK_01_ARCADE",
+    "01_arcade.rgb888": "MAGIK_01_ARCADE_CABINET",
     "02_consoles.rgb888": "MAGIK_02_CONSOLES",
     "03_computers.rgb888": "MAGIK_04_COMPUTERS",
     "04_handhelds.rgb888": "MAGIK_03_HANDHELDS",
@@ -24,6 +24,7 @@ ROOT_SCENES = {
     "06_settings.rgb888": "MAGIK_05_SETTINGS",
 }
 STUDIOS = {
+    "arcade": "MiSTer-MagiK-Arcade-Cabinet.blend",
     "root": "MiSTer-MagiK-Card-Studio.blend",
     "console": "MiSTer-MagiK-Console-Studio.blend",
     "computer": "MiSTer-MagiK-Computer-Studio.blend",
@@ -99,16 +100,25 @@ def main():
     (args.output / "masks").mkdir(exist_ok=True)
     records = []
     for group, project in STUDIOS.items():
-        selected = [
-            name
-            for name in files
-            if (
-                name in ROOT_SCENES if group == "root" else name.startswith(group + "-")
-            )
-        ]
+        if group == "arcade":
+            selected = [name for name in files if name == "01_arcade.rgb888"]
+        elif group == "root":
+            selected = [
+                name
+                for name in files
+                if name in ROOT_SCENES and name != "01_arcade.rgb888"
+            ]
+        else:
+            selected = [name for name in files if name.startswith(group + "-")]
         if not selected:
             continue
-        blend = args.blend_dir / project
+        # Arcade now shares the front-on cabinet pose with the Arcade hub.
+        # Never silently fall back to the older angled card in the six-card studio.
+        blend = (
+            Path(__file__).resolve().parent / project
+            if group == "arcade"
+            else args.blend_dir / project
+        )
         bpy.ops.wm.open_mainfile(filepath=str(blend.resolve()))
         prefs = bpy.context.preferences.addons["cycles"].preferences
         try:
@@ -147,7 +157,7 @@ def main():
             scene.render.image_settings.color_mode = "RGBA"
             scene.render.image_settings.color_depth = "8"
             scene.cycles.device = device_type
-            scene.cycles.samples = 192 if group == "root" else 64
+            scene.cycles.samples = 192 if group in ("root", "arcade") else 64
             scene.cycles.use_denoising = True
             master = args.output / "masters" / (Path(name).stem + ".png")
             scene.render.filepath = str(master.resolve())

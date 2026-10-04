@@ -46,7 +46,10 @@ that transition or treat the small card image as full-screen background art.
 
 All 42 cards, including the six original launcher cards, are rendered without
 studio floor/sweep meshes, visible world backgrounds or compositor bloom.
-Hardware, cameras, materials and lights retain their scene settings. Transparent
+Hardware, cameras, materials and lights retain their scene settings. Arcade uses
+the current front-on `MAGIK_01_ARCADE_CABINET` scene and its card camera, saved in
+`tools/blender/card-studio/MiSTer-MagiK-Arcade-Cabinet.blend`; it does not use the
+older angled Arcade scene in the original six-card studio. Transparent
 1500x2100 masters are composited onto exact black and reduced in linear light to
 360x504 RGB888. This changes only baked artwork; the launcher's mirrored
 reflections remain enabled. Pure-black interior pixels still traverse the opaque

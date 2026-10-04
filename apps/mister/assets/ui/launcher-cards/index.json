@@ -106,7 +106,7 @@
     },
     "root:arcade": {
       "file": "01_arcade.rgb888",
-      "sha256": "62edbb9b49ff750dbfc7adf8fe7324d7f8960b6c16a589942832a4dc6ddeb3b2"
+      "sha256": "e944b412d6d059a905b41306db0060fb7b2fc9ff44814b42d565686a26e1e443"
     },
     "root:computers": {
       "file": "03_computers.rgb888",
