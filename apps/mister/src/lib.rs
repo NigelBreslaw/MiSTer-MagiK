@@ -108,6 +108,7 @@ pub use mister_magik_mister_runtime::latch_readiness;
 pub mod latch_failure_report;
 pub mod launch_preparation;
 pub mod launcher;
+pub mod launcher_artwork;
 pub mod launcher_home;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod launcher_presentation;

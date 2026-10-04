@@ -45,22 +45,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         favourites: 1,
         collections: 77,
     });
-    let rgb_assets = [
-        "01_arcade",
-        "02_consoles",
-        "03_computers",
-        "04_handhelds",
-        "05_favourites",
-        "06_settings",
-    ]
-    .map(|name| {
-        std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("assets/ui/launcher-cards/{name}.rgb888")),
-        )
-    })
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()?;
+    let root_keys: Vec<_> = snapshot
+        .cards
+        .iter()
+        .map(|card| format!("root:{}", card.name.to_ascii_lowercase()))
+        .collect();
+    let rgb_assets = mister_magik_fb::launcher_artwork::load_cards(
+        &mister_magik_fb::launcher_artwork::asset_root(),
+        &root_keys,
+    );
     let rgb_artwork: Vec<_> = rgb_assets.iter().map(Vec::as_slice).collect();
     for (name, scene) in [
         ("hdmi-landscape", LauncherScene::new(960, 540)),
@@ -90,6 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("arcade", 0, 0),
             ("computers", 2, 0),
             ("favourites", 4, 0),
+            ("settings", 5, 0),
             ("moving", 0, 230),
         ] {
             prepared.render_frame(BrowseFrame {
@@ -122,12 +116,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if name.ends_with("landscape") && (name.starts_with("hdmi") || name.starts_with("crt-240"))
         {
             review_level_trick(&output, name, scene, &mut prepared, fonts)?;
+            review_installed_systems(&output, name, scene, fonts)?;
         }
     }
     Ok(())
 }
 
-/// Consoles opened from the root: generic maker cards, breadcrumb and the
+/// Consoles opened from the root: installed maker artwork, breadcrumb and the
 /// level-change trick from the Consoles root card.
 fn review_level_trick(
     output: &std::path::Path,
@@ -168,15 +163,16 @@ fn review_level_trick(
         }),
     };
     let prepare_started = std::time::Instant::now();
-    let mut consoles = if scene.uses_responsive_layout() {
-        scene
-            .prepare_initial_with_rgb888_artwork_and_typography(data, &[], fonts)
-            .finish()
-    } else {
-        scene
-            .prepare_initial_with_artwork_and_typography(data, &[], fonts)
-            .finish()
-    };
+    let keys = ["atari", "sega", "sony", "nintendo", "nec", "snk"]
+        .map(|maker| format!("menu:consoles:{maker}"));
+    let artwork = mister_magik_fb::launcher_artwork::load_cards(
+        &mister_magik_fb::launcher_artwork::asset_root(),
+        &keys,
+    );
+    let sources: Vec<_> = artwork.iter().map(Vec::as_slice).collect();
+    let mut consoles = scene
+        .prepare_initial_with_rgb888_artwork_and_typography(data, &sources, fonts)
+        .finish();
     eprintln!(
         "{name}: nested level prepared in {:?}",
         prepare_started.elapsed()
@@ -227,6 +223,87 @@ fn review_level_trick(
             &output.join(format!("{name}-browse-{progress:03}.ppm")),
             scene,
             consoles.pixels(),
+        )?;
+    }
+    Ok(())
+}
+
+/// A mixture of installed systems and a missing source uses the real loader.
+fn review_installed_systems(
+    output: &std::path::Path,
+    name: &str,
+    scene: LauncherScene,
+    fonts: LauncherTypography<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (group, id, colour, entries) in [
+        (
+            "nintendo",
+            LauncherCardId::Consoles,
+            0x2a7f,
+            [
+                ("nes", "NES"),
+                ("fds", "FDS"),
+                ("snes", "SNES"),
+                ("satellaview", "SATELLAVIEW"),
+                ("n64", "NINTENDO 64"),
+            ],
+        ),
+        (
+            "computers",
+            LauncherCardId::Computers,
+            0xedc6,
+            [
+                ("apple-ii", "APPLE II"),
+                ("c64", "COMMODORE 64"),
+                ("amiga", "AMIGA"),
+                ("x68000", "X68000"),
+                ("unavailable", "GENERIC"),
+            ],
+        ),
+    ] {
+        let cards = entries.map(|(_, name)| LauncherCard {
+            id,
+            name,
+            colour,
+            games: Some(123),
+        });
+        let keys = entries.map(|(key, _)| key.to_owned());
+        let pixels = mister_magik_fb::launcher_artwork::load_cards(
+            &mister_magik_fb::launcher_artwork::asset_root(),
+            &keys,
+        );
+        let sources: Vec<_> = pixels.iter().map(Vec::as_slice).collect();
+        let data = LauncherData {
+            cards: &cards,
+            selected: 2,
+            library_games: 0,
+            collections: 0,
+            favourites: 0,
+            clock: "07:28",
+            level: LauncherLevel::Nested(NestedLevel {
+                path: &[group],
+                games: 615,
+                children: 5,
+                children_label: "SYSTEMS",
+                detail: None,
+                accent: colour,
+            }),
+        };
+        let mut prepared = scene
+            .prepare_initial_with_rgb888_artwork_and_typography(data, &sources, fonts)
+            .finish();
+        prepared.render_frame(BrowseFrame {
+            selected: 2,
+            target: 2,
+            phase: BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+        });
+        write_ppm(
+            &output.join(format!("{name}-{group}.ppm")),
+            scene,
+            prepared.pixels(),
         )?;
     }
     Ok(())

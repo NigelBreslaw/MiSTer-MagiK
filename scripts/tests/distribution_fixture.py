@@ -9,7 +9,7 @@ import json
 import zipfile
 
 from scripts.magik_ci import distribution as dist
-from scripts.magik_ci import manifest
+from scripts.magik_ci import manifest, card_artwork
 
 
 def load_script(name):
@@ -34,6 +34,26 @@ class CandidateFixture:
         (
             self.stage / dist.PUBLIC["scanout_metadata"].removeprefix("/media/fat/")
         ).write_text("vermagic=5.15.1-MiSTer SMP mod_unload ARMv7 p2v8 \n")
+        artwork = self.stage / dist.APP / card_artwork.RELATIVE_PATH
+        pixels = bytes(card_artwork.SOURCE_BYTES)
+        (artwork / "fixture.rgb888").write_bytes(pixels)
+        (artwork / "index.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "width": 360,
+                    "height": 504,
+                    "format": "RGB888",
+                    "cards": {
+                        key: {
+                            "file": "fixture.rgb888",
+                            "sha256": hashlib.sha256(pixels).hexdigest(),
+                        }
+                        for key in card_artwork.ROOT_KEYS
+                    },
+                }
+            )
+        )
         self.fields = manifest.parse_fields(
             (
                 manifest.SCHEMA_PATH.parent / "generated/platform-v3.public.fixture"

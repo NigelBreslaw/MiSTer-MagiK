@@ -1,0 +1,184 @@
+{
+  "cards": {
+    "acornatom": {
+      "file": "computer-acornatom.rgb888",
+      "sha256": "6010539e1c4f80ca44564a654d9b1023c65e6980b0cab26bd4f1c7e71808fa5d"
+    },
+    "altair8800": {
+      "file": "computer-altair8800.rgb888",
+      "sha256": "dd42bf3c96168de8c672c62f817dd0510c3dd1e803a073feece9fdcd16adbab8"
+    },
+    "amiga": {
+      "file": "computer-amiga.rgb888",
+      "sha256": "2ca01a6080e36ea668dd117a1485dd6b42e16951aedb7212a2f5db73423b01d4"
+    },
+    "amigacd32": {
+      "file": "computer-amigacd32.rgb888",
+      "sha256": "e4efc2476dce1478ad5bb287c7fe661335b4a10410f1195353f7c5d80757c400"
+    },
+    "amstrad": {
+      "file": "computer-amstrad.rgb888",
+      "sha256": "00be2546498e9802e409a6353e39b3f6c2a60f498e19cd1c3c767883699e6fbe"
+    },
+    "ao486": {
+      "file": "computer-ao486.rgb888",
+      "sha256": "d86d7acb50b1e2c95d2551013d3ebd7e0d8efa6d58dedd1d0003ed77f8195c25"
+    },
+    "apple-ii": {
+      "file": "computer-apple-ii.rgb888",
+      "sha256": "1749ad59060a699b34bb537a085babf9af27d953fccd93ad04203f73957f99fc"
+    },
+    "c64": {
+      "file": "computer-c64.rgb888",
+      "sha256": "d0e0d890bfcad0f9b308c23cc6b8b6f2059db0b6848990fcc6af69ed7edc8bf1"
+    },
+    "dos": {
+      "file": "computer-dos.rgb888",
+      "sha256": "1f30fb4ac62ae626eb75b1c1e0d58488d4d0a1f15b9543a7020dee6e814a94d9"
+    },
+    "fds": {
+      "file": "console-fds.rgb888",
+      "sha256": "a874d714e27001cab9143c5cc6cf3da83101d45360bb4ed31a393f8c6d7b7bf7"
+    },
+    "fmtowns": {
+      "file": "computer-fmtowns.rgb888",
+      "sha256": "fbcd6030a385b3e69918622e01e3a9800a88092a4fbb6176b9c7177117169075"
+    },
+    "megacd": {
+      "file": "console-megacd.rgb888",
+      "sha256": "96aa15d11f41c7a76093b9a6cf7ad5dd630c1272df73dac42b0e1634b51721ff"
+    },
+    "megadrive": {
+      "file": "console-megadrive.rgb888",
+      "sha256": "73987000928a78a5c1551a22af40ee80af47772245e2a93082ac0cdf3bddb658"
+    },
+    "menu:computers:acorn": {
+      "file": "computer-family-acorn.rgb888",
+      "sha256": "cf004942c0afc0315b2558ecf4fa738ab4b0e67cc4852ed4105082c1b33831ed"
+    },
+    "menu:computers:apple": {
+      "file": "computer-family-apple.rgb888",
+      "sha256": "b372e6216c7768d7a14934488f44d29a5fa631dff8eb4536ac985dad4a2f4dff"
+    },
+    "menu:computers:commodore": {
+      "file": "computer-family-commodore.rgb888",
+      "sha256": "0e232427441ad6afed9bc61542d0c5b3e71b5b48012dfaed560bb07b33a225c5"
+    },
+    "menu:computers:dos-pc": {
+      "file": "computer-family-dos-pc.rgb888",
+      "sha256": "8f31453edfd10232bf1e8a019e1e5ad84d69c8795eb2d1a79c3f0e959907259c"
+    },
+    "menu:computers:japanese": {
+      "file": "computer-family-japanese.rgb888",
+      "sha256": "160f1002b286aa693f02aa3ed7f7dfcb1cb00fa981c2885dba67a7cb6440caf5"
+    },
+    "menu:computers:other": {
+      "file": "computer-family-other.rgb888",
+      "sha256": "398e526a527abeec93c08fef80fdb987764f4957e1e8d8d66ab9d56213c2a0bc"
+    },
+    "menu:computers:sinclair": {
+      "file": "computer-family-sinclair.rgb888",
+      "sha256": "e062b49a33d89a78c032de161edfc1dd35ea08b81d4996a6c7cce2158db458ca"
+    },
+    "menu:computers:tandy": {
+      "file": "computer-family-tandy.rgb888",
+      "sha256": "94353745a907f625972e90229cae1771364bd125d02541f394e7d0651587be17"
+    },
+    "menu:consoles:nintendo": {
+      "file": "console-nintendo.rgb888",
+      "sha256": "6de108de5b650b54b07b409b8f645a1a0d1f535101e1289acca0ea3496376159"
+    },
+    "menu:consoles:sega": {
+      "file": "console-sega.rgb888",
+      "sha256": "d222dafa168f2d42f5fdeb553cf298ad987b9279ab727cd5c1f3dca4dbe3bc4c"
+    },
+    "n64": {
+      "file": "console-n64.rgb888",
+      "sha256": "10e50def09018ee9dc8bb0b770d7adac0c98414443631c17374194a29b0278d1"
+    },
+    "nes": {
+      "file": "console-nes.rgb888",
+      "sha256": "c660004f45a08a6ff1606afd8c353438d0ff814a45d0ec77b3881d5ca8f7f7b4"
+    },
+    "pc98": {
+      "file": "computer-pc98.rgb888",
+      "sha256": "4fb9cd1c4eec41674143c24ba386c005ad510a7a84a99006a2abd46a1565c2f8"
+    },
+    "root:arcade": {
+      "file": "01_arcade.rgb888",
+      "sha256": "62edbb9b49ff750dbfc7adf8fe7324d7f8960b6c16a589942832a4dc6ddeb3b2"
+    },
+    "root:computers": {
+      "file": "03_computers.rgb888",
+      "sha256": "c15fb06d5cec36480fcd5330ee0a31b4546570ec4226242ae5f6ba4c4e252bd6"
+    },
+    "root:consoles": {
+      "file": "02_consoles.rgb888",
+      "sha256": "f2a0d9d5306ed822d0ab005b4998b2ff6617c05f62ed4fc782cc4dde52947ed4"
+    },
+    "root:favourites": {
+      "file": "05_favourites.rgb888",
+      "sha256": "9970ac672de8348ab2940c943eb99ea6060944889a8c5a57f15cba1f1f64869f"
+    },
+    "root:handhelds": {
+      "file": "04_handhelds.rgb888",
+      "sha256": "555b3d3ad8738ffbcad2ced6ef7de69d84e59971c7fc344454c162794f11ff82"
+    },
+    "root:settings": {
+      "file": "06_settings.rgb888",
+      "sha256": "b024d0ad846ffd0b96cd7b8a77e39f83e26d468fa1b20ff298d9c895a16a21dc"
+    },
+    "s32x": {
+      "file": "console-s32x.rgb888",
+      "sha256": "ac749c03e32c91120d1d7c051f23a91fdf48d31070e80ca55770883d68c1e216"
+    },
+    "satellaview": {
+      "file": "console-satellaview.rgb888",
+      "sha256": "9becb0cc6ce1d2f1e135ea4dca6d1a7b82a857f9624118db475cd3f84601ea38"
+    },
+    "saturn": {
+      "file": "console-saturn.rgb888",
+      "sha256": "b9b80d22f0907d93ed1ebd6cbd45e4c0767159acf3e4d5194bcccabf548e5f2b"
+    },
+    "sg1000": {
+      "file": "console-sg1000.rgb888",
+      "sha256": "5e4c3a29e95b67136639f8ff898ab2face85178cc12e8106bf57af17b94a5f4a"
+    },
+    "sharp-x1": {
+      "file": "computer-x1.rgb888",
+      "sha256": "e924060533de5f5bf1de150ba681c5284a46778caea6a70d800ddd7ea9b24289"
+    },
+    "sms": {
+      "file": "console-sms.rgb888",
+      "sha256": "54b4f68f1f242813a10d3342953ff5849072be48b3b99c70fd4108f035b0d317"
+    },
+    "snes": {
+      "file": "console-snes.rgb888",
+      "sha256": "d942a5507ce9f06571b48b197ecb3fb2fef0cf60981d8661cd278800450e50e3"
+    },
+    "spectrum": {
+      "file": "computer-zx-spectrum.rgb888",
+      "sha256": "abb6919f6c9865fe793f52a968997257d103b7119baab8bdc616c42b0ec74123"
+    },
+    "trs-80": {
+      "file": "computer-trs-80.rgb888",
+      "sha256": "daedc69b713eaf43f6f69408a42fbbefa82c4451dffe4a6dcf2aa4779372d2fd"
+    },
+    "x1": {
+      "file": "computer-x1.rgb888",
+      "sha256": "e924060533de5f5bf1de150ba681c5284a46778caea6a70d800ddd7ea9b24289"
+    },
+    "x68000": {
+      "file": "computer-x68000.rgb888",
+      "sha256": "0d5e6efec1576511434f6cc6f5581a8c4593dd1a2e2f7ce3726b9a3fa1249380"
+    },
+    "zx-spectrum": {
+      "file": "computer-zx-spectrum.rgb888",
+      "sha256": "abb6919f6c9865fe793f52a968997257d103b7119baab8bdc616c42b0ec74123"
+    }
+  },
+  "format": "RGB888",
+  "height": 504,
+  "schema": 1,
+  "width": 360
+}

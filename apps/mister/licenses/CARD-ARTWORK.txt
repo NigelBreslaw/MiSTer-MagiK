@@ -1,0 +1,196 @@
+MiSTer MagiK card artwork
+
+Rendered and composed for MiSTer MagiK. Original model credits and license
+links follow. Models were repositioned, scaled, and lit for card artwork;
+materials were adjusted as noted. Baked studio floors, background sweeps and
+compositor bloom were removed for the black-background card renders.
+Only rendered images ship with the app.
+
+MiSTer MagiK — 3D model credits
+
+These models contribute geometry to the editable console-card studio.
+The source geometry retains the licenses listed below. MiSTer MagiK
+scene composition, lighting and integration are separate project work.
+
+Nintendo Entertainment System
+Creator: archived BlendSwap account
+Creator URL: See source listing
+Source: https://blendswap.com/blend/22665
+License: CC0-1.0
+License URL: https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Selected source hardware objects; excluded source cameras, lights and environments; Repositioned and scaled to the existing MiSTer MagiK card rigs; Packed the required original textures; Adapted material roughness for the shared satin studio lighting; Added small non-destructive plastic edge bevels; Restored a separate loading-flap hinge while preserving the rendered pose
+Used in: MAGIK_CONSOLE_NES, MAGIK_CONSOLE_NINTENDO
+
+Sega Genesis Model 2 / Sega Mega Drive
+Creator: Zerescas
+Creator URL: https://sketchfab.com/zerescas
+Source: https://sketchfab.com/3d-models/sega-genesis-model-2-sega-mega-drive-d8feaa413cc847a599e6a484cc4ed2b6
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Changes: Selected source hardware objects; excluded source cameras, lights and environments; Repositioned and scaled to the existing MiSTer MagiK card rigs; Packed the required original textures; Adapted material roughness for the shared satin studio lighting
+Used in: MAGIK_CONSOLE_MEGADRIVE
+
+SEGA Mega Drive Control Pad
+Creator: Pan_Ar4ik
+Creator URL: https://sketchfab.com/tistol.artem
+Source: https://sketchfab.com/3d-models/sega-mega-drive-control-pad-b27740df3ba44ca9bb21cae8ddb4c532
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Changes: Selected source hardware objects; excluded source cameras, lights and environments; Repositioned and scaled to the existing MiSTer MagiK card rigs; Packed the required original textures; Adapted material roughness for the shared satin studio lighting; Separated controller body from the original long cable and plug; retained the existing independently animated cable route
+Used in: MAGIK_CONSOLE_MEGACD, MAGIK_CONSOLE_MEGADRIVE, MAGIK_CONSOLE_S32X, MAGIK_CONSOLE_SEGA
+
+MiSTer MagiK — 3D model credits
+
+These models contribute geometry to the editable computer-card studio.
+The source geometry retains the licenses listed below. MiSTer MagiK
+scene composition, lighting and integration are separate project work.
+
+Apple II Computer
+Creator: dark_igorek
+Creator URL: https://sketchfab.com/dark_igorek
+Source: https://sketchfab.com/3d-models/apple-ii-computer-b5d316548d634f16a72dd503db0aa01b
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_APPLE_II, MAGIK_COMPUTER_FAMILY_APPLE
+
+Commodore Amiga 500 || Computer
+Creator: dark_igorek
+Creator URL: https://sketchfab.com/dark_igorek
+Source: https://sketchfab.com/3d-models/commodore-amiga-500-computer-9c21f636edd44371ac81ce1c3ff6c987
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_AMIGA, MAGIK_COMPUTER_FAMILY_COMMODORE
+
+Retro console Amiga CD32
+Creator: Scar56
+Creator URL: https://sketchfab.com/Scar56
+Source: https://sketchfab.com/3d-models/retro-console-amiga-cd32-db60410314e1467381d3751c213c3696
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_AMIGACD32
+
+Commodore 64 || Computer (Full Pack)
+Creator: dark_igorek
+Creator URL: https://sketchfab.com/dark_igorek
+Source: https://sketchfab.com/3d-models/commodore-64-computer-full-pack-1f43612fa2d54041bbe2bdff8164c2cd
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_C64, MAGIK_COMPUTER_FAMILY_COMMODORE
+
+Radio Shack TRS-80 Model 1
+Creator: denisstephane
+Creator URL: https://sketchfab.com/denisstephane
+Source: https://sketchfab.com/3d-models/radio-shack-trs-80-model-1-9e3277cd95274f248d12b91dff3ea1cb
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_FAMILY_TANDY, MAGIK_COMPUTER_TRS_80
+
+IBM PC XT 5150
+Creator: denisstephane
+Creator URL: https://sketchfab.com/denisstephane
+Source: https://sketchfab.com/3d-models/ibm-pc-xt-5150-556af16d476d4144bab11ed744a849e6
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_DOS, MAGIK_COMPUTER_FAMILY_DOS_PC
+
+PC-9801UX
+Creator: darekagomi
+Creator URL: https://sketchfab.com/darekagomi
+Source: https://sketchfab.com/3d-models/pc-9801ux-2befdff3817c4b1f86373149f3328e2f
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_FAMILY_JAPANESE, MAGIK_COMPUTER_PC98
+
+AMSTRAD CPC 6128
+Creator: denisstephane
+Creator URL: https://sketchfab.com/denisstephane
+Source: https://sketchfab.com/3d-models/amstrad-cpc-6128-877bbe563043437b9db029bf867ed0f0
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_AMSTRAD, MAGIK_COMPUTER_FAMILY_OTHER
+
+Altair 8800 and Disk Drive
+Creator: silverthegamer
+Creator URL: https://sketchfab.com/silverthegamer
+Source: https://sketchfab.com/3d-models/altair-8800-and-disk-drive-d936f3d8def246178892d7b4dc2f89b7
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_ALTAIR8800, MAGIK_COMPUTER_FAMILY_OTHER
+
+Acorn Atom Computer
+Creator: devilmarkus
+Creator URL: https://sketchfab.com/devilmarkus
+Source: https://sketchfab.com/3d-models/acorn-atom-computer-6af3eb990e504dffbb9b26f49270c7fe
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Selected hardware components; excluded unrelated studio objects and decorative logo planes; Repositioned and scaled for 5:7 card scenes; Adjusted material roughness for shared studio lighting
+Used in: MAGIK_COMPUTER_ACORNATOM, MAGIK_COMPUTER_FAMILY_ACORN
+
+Zx Spectrum 128K || Computer
+Creator: dark_igorek
+Creator URL: https://sketchfab.com/dark_igorek
+Source: https://sketchfab.com/3d-models/zx-spectrum-128k-computer-e9431d5bc4a84ff789b9553cbc3f9f3b
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Scaled and posed for the MiSTer MagiK computer card studio; Adjusted surface roughness for shared lighting; Excluded the source presentation text board
+Used in: MAGIK_COMPUTER_FAMILY_SINCLAIR, MAGIK_COMPUTER_ZX_SPECTRUM
+
+INTEL 486
+Creator: Egodrio
+Creator URL: https://sketchfab.com/Egodrio
+Source: https://sketchfab.com/3d-models/intel-486-1e3acce6d58741c38fc3cd6771a4bd1b
+License: CC-BY-4.0
+License URL: https://creativecommons.org/licenses/by/4.0/
+Usage: Retain source attribution and license notices.
+Changes: Scaled and posed for the MiSTer MagiK computer card studio; Adjusted surface roughness for shared lighting
+Used in: MAGIK_COMPUTER_AO486
+
+FUJITSU Personal Computer [FM TOWNS2] (1989:Japan)
+Creator: Comugi
+Creator URL: https://3dwarehouse.sketchup.com/user/0030441124188143459434525
+Source: https://3dwarehouse.sketchup.com/model/17df7761-1880-4a14-810e-11c08b1adecc/FUJITSU-Personal-Computer-FM-TOWNS2-1989Japan
+License: 3D Warehouse General Model License
+License URL: https://3dwarehouse.sketchup.com/tos/#license
+Usage: Private source libraries; distribute rendered creations/combined works only, preserving model identification and notices. No standalone source-model redistribution.
+Changes: Selected computer and separate keyboard/mouse components; excluded external CRTs, bundled game screenshots, long cables and unrelated accessories; Scaled and posed components under shared MiSTer MagiK lighting; Used portrait studio framing; preserved hardware identification and source notices; Preserved glTF single-sided material behavior in Cycles to avoid reverse-face artifacts; Adjusted exported diffuse reflectance while retaining printed texture detail; Selected the tower only; keyboard and mouse omitted after close-up review; Retained the source translucent CD cover and disc materials
+Used in: MAGIK_COMPUTER_FMTOWNS
+
+SHARP Personal Computer X1D (1983:Japan)
+Creator: Comugi
+Creator URL: https://3dwarehouse.sketchup.com/user/0030441124188143459434525
+Source: https://3dwarehouse.sketchup.com/model/78cc6ea8-25e2-4ada-bddd-b8716bac0479/SHARP-Personal-Computer-X1D-1983Japan
+License: 3D Warehouse General Model License
+License URL: https://3dwarehouse.sketchup.com/tos/#license
+Usage: Private source libraries; distribute rendered creations/combined works only, preserving model identification and notices. No standalone source-model redistribution.
+Changes: Selected computer and separate keyboard/mouse components; excluded external CRTs, bundled game screenshots, long cables and unrelated accessories; Scaled and posed components under shared MiSTer MagiK lighting; Corrected exported plastic metallic values; made source demonstration skeleton materials opaque; Used portrait studio framing; preserved hardware identification and source notices; Preserved glTF single-sided material behavior in Cycles to avoid reverse-face artifacts
+Used in: MAGIK_COMPUTER_X1
+
+SHARP Personal computer X68000 XVI
+Creator: Comugi
+Creator URL: https://3dwarehouse.sketchup.com/user/0030441124188143459434525
+Source: https://3dwarehouse.sketchup.com/model/6c5f0799-f8e1-43c4-a9c1-14c54730f46a/SHARP-Personal-computer-X68000-XVI
+License: 3D Warehouse General Model License
+License URL: https://3dwarehouse.sketchup.com/tos/#license
+Usage: Private source libraries; distribute rendered creations/combined works only, preserving model identification and notices. No standalone source-model redistribution.
+Changes: Selected computer and separate keyboard/mouse components; excluded external CRTs, bundled game screenshots, long cables and unrelated accessories; Scaled and posed components under shared MiSTer MagiK lighting; Corrected exported plastic metallic values; made source demonstration skeleton materials opaque; Used portrait studio framing; preserved hardware identification and source notices; Preserved glTF single-sided material behavior in Cycles to avoid reverse-face artifacts
+Used in: MAGIK_COMPUTER_X68000

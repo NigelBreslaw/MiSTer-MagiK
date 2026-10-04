@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 // Directly shipped third-party assets remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 11] = [
+pub const LICENSE_TITLES: [&str; 12] = [
     "MiSTer MagiK",
     "FFmpeg",
     "Slint",
@@ -18,11 +18,12 @@ pub const LICENSE_TITLES: [&str; 11] = [
     "Rust standard library",
     "zlib",
     "libpng",
+    "Card artwork",
 ];
 
-pub const LICENSE_KINDS: [&str; 11] = [
+pub const LICENSE_KINDS: [&str; 12] = [
     "GPL-3.0", "LGPL-2.1", "GPL-3.0", "OFL-1.1", "LICENSED", "OFL-1.1", "BSD-2", "OFL-1.1", "MIT",
-    "ZLIB", "LIBPNG",
+    "ZLIB", "LIBPNG", "CC / GML",
 ];
 
 const GPL3: &str = include_str!("../../../LICENSE");
@@ -90,6 +91,7 @@ pub fn text(index: usize) -> &'static str {
         6 => SPLEEN,
         7 => TERMINUS_FONT,
         8..=10 => RUST_LIBRARIES,
+        11 => include_str!("../licenses/CARD-ARTWORK.txt"),
         _ => GPL3,
     }
 }
@@ -189,7 +191,8 @@ mod tests {
                 "Terminus",
                 "Rust standard library",
                 "zlib",
-                "libpng"
+                "libpng",
+                "Card artwork"
             ]
         );
         assert_eq!(text(2), GPL3);
