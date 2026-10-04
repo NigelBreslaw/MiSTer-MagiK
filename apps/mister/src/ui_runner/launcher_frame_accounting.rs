@@ -3148,7 +3148,17 @@ mod tests {
             1,
             3,
         );
+        let work = mister_magik_tooling_support::measurement::FrameWorkTiming {
+            producer_us: 123,
+            ..Default::default()
+        };
+        raster.as_mut().unwrap().record.work = Some(work);
+        session.metrics.counters.card_rendered_frames = 1;
+        session.metrics.counters.card_producer_total_us = work.producer_us;
         record_abandoned_evidence_raster(&mut raster, Some(&mut session), now, now, now);
+        assert_eq!(session.metrics.counters.card_rendered_frames, 1);
+        assert_eq!(session.metrics.counters.card_producer_total_us, 123);
+        assert_eq!(session.metrics.counters.presentations, 0);
         assert!(raster.is_none());
         nav.selected = 1;
         let mut replacement = session.frame_evidence_candidate(4, 33_334);
@@ -3175,6 +3185,7 @@ mod tests {
         assert_eq!(frames[0]["motion"], true);
         assert_eq!(frames[1]["motion"], true);
         assert_eq!(frames[2]["outcome"], "input-priority-restart");
+        assert_eq!(frames[2]["observation"]["work"]["producer_us"], 123);
         assert_eq!(frames[3]["input_generation"], 2);
     }
 

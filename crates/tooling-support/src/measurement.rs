@@ -175,6 +175,8 @@ pub struct Counters {
     pub motion_starts: u64,
     pub first_frame_wait_refreshes: u64,
     pub rejections: u64,
+    /// Producer attempts, including frames discarded for input before posting.
+    /// Delivered frames are counted separately in `card_delivered_frames`.
     pub card_rendered_frames: u64,
     pub card_delivered_frames: u64,
     pub card_reused_frames: u64,
