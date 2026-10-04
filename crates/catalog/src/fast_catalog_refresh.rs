@@ -2121,18 +2121,23 @@ fn check_watch_index(
         check.containers_checked = check.containers_checked.saturating_add(1);
         let path = Path::new(&container.path);
         let observed = metadata_cache.get(path).and_then(|metadata| *metadata);
+        // Optional containers record zeros when no regular file was present,
+        // whether the path was absent or something else (such as a directory).
+        let recorded_no_file = container.size == 0
+            && container.modified_ns == 0
+            && container.changed_ns == 0
+            && container.inode == 0;
         let Some(observed) = observed else {
-            if container.size == 0
-                && container.modified_ns == 0
-                && container.changed_ns == 0
-                && container.inode == 0
-            {
+            if recorded_no_file {
                 continue;
             }
             check.status = FastSourceCheckStatus::Changed;
             check.reason = format!("container unavailable: {}", container.path);
             return;
         };
+        if recorded_no_file && !observed.is_file {
+            continue;
+        }
         if !observed.is_file
             || observed.size != container.size
             || observed.modified_ns != container.modified_ns
@@ -3572,6 +3577,41 @@ mod tests {
         };
         check_watch_index(&watch, &cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn optional_container_that_is_not_a_file_stays_unchanged_until_a_file_appears() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-optional-directory");
+        let metadata = root.join("metadata.dat");
+        fs::create_dir_all(&metadata).unwrap();
+        let watch = FastSystemWatchIndex {
+            schema: REFRESH_SCHEMA,
+            system_id: "arcade".to_string(),
+            adapter_version: 0,
+            core_profile_fingerprint: "0".repeat(64),
+            roots: Vec::new(),
+            directories: Vec::new(),
+            containers: vec![capture_optional_container(&metadata).unwrap()],
+        };
+        let check = || {
+            let cache = build_watch_metadata_cache(std::iter::once(&watch), &[]).0;
+            let mut check = FastSystemSourceCheck {
+                system_id: "arcade".to_string(),
+                status: FastSourceCheckStatus::Rescan,
+                directories_checked: 0,
+                containers_checked: 0,
+                elapsed_us: 0,
+                reason: String::new(),
+            };
+            check_watch_index(&watch, &cache, &mut check);
+            check.status
+        };
+        assert_eq!(check(), FastSourceCheckStatus::Unchanged);
+        fs::remove_dir(&metadata).unwrap();
+        assert_eq!(check(), FastSourceCheckStatus::Unchanged);
+        fs::write(&metadata, b"metadata").unwrap();
+        assert_eq!(check(), FastSourceCheckStatus::Changed);
         let _ = fs::remove_dir_all(root);
     }
 
