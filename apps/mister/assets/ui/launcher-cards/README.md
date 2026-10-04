@@ -121,3 +121,16 @@ output geometry and keep native bitmap text and silhouette coverage.
 
 Scanout stays RGB565. The superseded 180x252 RGB565 source copies and quality
 switches have been removed. No animation poses or angle atlases are stored.
+
+## Company and family artwork
+
+`brand-*.rgb888` replaces the former controller piles and 3D family text with
+flat logo-led graphics. The 15 identities are shared by 21 maker/family entries;
+the six root images and individual system images are unchanged. Source vectors,
+credits and regeneration instructions are in `tools/brand-cards/`.
+
+`contains_name` is optional and defaults to false. A valid image with a company
+wordmark suppresses the duplicate native title; icon-only logos keep the name,
+and all failed loads restore the generic title. Game counts remain native.
+The installed set uses corporate colour fields; dark alternatives are review
+outputs only, without adding another runtime image cache or focus policy.

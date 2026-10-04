@@ -194,3 +194,81 @@ License URL: https://3dwarehouse.sketchup.com/tos/#license
 Usage: Private source libraries; distribute rendered creations/combined works only, preserving model identification and notices. No standalone source-model redistribution.
 Changes: Selected computer and separate keyboard/mouse components; excluded external CRTs, bundled game screenshots, long cables and unrelated accessories; Scaled and posed components under shared MiSTer MagiK lighting; Corrected exported plastic metallic values; made source demonstration skeleton materials opaque; Used portrait studio framing; preserved hardware identification and source notices; Preserved glTF single-sided material behavior in Cycles to avoid reverse-face artifacts
 Used in: MAGIK_COMPUTER_X68000
+
+
+Maker and family card logos (2026-10-05)
+
+These flat graphic cards replace the former maker hardware compositions.
+Logos identify the represented companies; trademark rights remain with their
+respective owners. No endorsement is implied. Copyright status below is as
+recorded by each source. PD-textlogo denotes simple geometric/text marks.
+
+Nintendo
+Author: Nintendo
+Source: https://commons.wikimedia.org/wiki/File:Nintendo.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+Sega
+Author: Sega
+Source: https://commons.wikimedia.org/wiki/File:SEGA_logo.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+Atari
+Author: Atari Corporation
+Source: https://commons.wikimedia.org/wiki/File:AtariFuji.svg
+Copyright status: CC0-1.0
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+Commodore
+Author: Commodore International; vector by Pixel8
+Source: https://commons.wikimedia.org/wiki/File:Commodore_logo.svg
+Copyright status: PD-textlogo
+Changes: C= symbol extracted from the first three original elements; lettering omitted because the app draws the name.
+
+Apple
+Author: Rob Janoff / Apple
+Source: https://commons.wikimedia.org/wiki/File:Apple_Computer_Logo_rainbow.svg
+Copyright status: PD-textlogo; PD-US-no-notice
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+Sinclair
+Author: Sinclair; vector derivative by Polluks
+Source: https://commons.wikimedia.org/wiki/File:Sinclair.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+Tandy
+Author: Tandy Corporation
+Source: https://commons.wikimedia.org/wiki/File:Tandy_computer_logo.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+Sony
+Author: Yasuo Kuroki / Sony
+Source: https://commons.wikimedia.org/wiki/File:Sony_logo.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+NEC
+Author: NEC Corporation
+Source: https://commons.wikimedia.org/wiki/File:NEC_logo.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+SNK
+Author: SNK
+Source: https://commons.wikimedia.org/wiki/File:SNK_logo.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+Bandai
+Author: Bandai
+Source: https://commons.wikimedia.org/wiki/File:BANDAI.svg
+Copyright status: PD-textlogo
+Changes: Scaled and recoloured for flat card artwork; original contours retained.
+
+The Acorn card uses plain company-name typography; its non-free historical
+logo is not included. DOS/PC, Japanese Computers and Other use original simple
+graphic symbols, not third-party company marks.

@@ -1,0 +1,110 @@
+{
+  "retrieved": "2026-10-05",
+  "logos": [
+    {
+      "file": "nintendo.svg",
+      "brand": "Nintendo",
+      "author": "Nintendo",
+      "source": "https://commons.wikimedia.org/wiki/File:Nintendo.svg",
+      "license": "PD-textlogo",
+      "sha256": "a972eb3be97db7b179f41b7b706ea6f46496c96e5c68b946315e8f5596e585fe",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained.",
+      "download": "https://upload.wikimedia.org/wikipedia/commons/archive/0/0d/20170707114758%21Nintendo.svg"
+    },
+    {
+      "file": "sega.svg",
+      "brand": "Sega",
+      "author": "Sega",
+      "source": "https://commons.wikimedia.org/wiki/File:SEGA_logo.svg",
+      "license": "PD-textlogo",
+      "sha256": "1318476f255d611d39ff67f1e5d4cb5891a35e35fcaf77885873c191b26148a9",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained."
+    },
+    {
+      "file": "atari-fuji.svg",
+      "brand": "Atari",
+      "author": "Atari Corporation",
+      "source": "https://commons.wikimedia.org/wiki/File:AtariFuji.svg",
+      "license": "CC0-1.0",
+      "sha256": "9483fa15b959cb1c0124036375520852f829df7fba8c5f8f6e2a9ebf4579cbc7",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained."
+    },
+    {
+      "file": "commodore.svg",
+      "brand": "Commodore",
+      "author": "Commodore International; vector by Pixel8",
+      "source": "https://commons.wikimedia.org/wiki/File:Commodore_logo.svg",
+      "license": "PD-textlogo",
+      "sha256": "75e53f2afd86bc8acd515a2c81b9f2eee2dfd1a69f28e908881fa8a85f8f3606",
+      "changes": "C= symbol extracted from the first three original elements; lettering omitted because the app draws the name."
+    },
+    {
+      "file": "apple.svg",
+      "brand": "Apple",
+      "author": "Rob Janoff / Apple",
+      "source": "https://commons.wikimedia.org/wiki/File:Apple_Computer_Logo_rainbow.svg",
+      "license": "PD-textlogo; PD-US-no-notice",
+      "sha256": "eae5d62f7a0cf46bf048c2e5a18d4fe4fdbcc64573215e4de9078e7771de0d13",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained."
+    },
+    {
+      "file": "sinclair.svg",
+      "brand": "Sinclair",
+      "author": "Sinclair; vector derivative by Polluks",
+      "source": "https://commons.wikimedia.org/wiki/File:Sinclair.svg",
+      "license": "PD-textlogo",
+      "sha256": "33a623e4c3bf0c34a4766162a93a725cc323789a986a8c9e6fe264615ac79ea7",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained.",
+      "download_sha256": "4ad8e8310f40d2761662fce5ae8806d3d3a1d0a44f26e408f60a6211b138c5ca",
+      "source_normalization": "CRLF line endings converted to LF; SVG geometry unchanged."
+    },
+    {
+      "file": "tandy.svg",
+      "brand": "Tandy",
+      "author": "Tandy Corporation",
+      "source": "https://commons.wikimedia.org/wiki/File:Tandy_computer_logo.svg",
+      "license": "PD-textlogo",
+      "sha256": "bbf7b86b97035d0b6b01e2492dfd755d7296a09a7a371835902212ba36064c28",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained."
+    },
+    {
+      "file": "sony.svg",
+      "brand": "Sony",
+      "author": "Yasuo Kuroki / Sony",
+      "source": "https://commons.wikimedia.org/wiki/File:Sony_logo.svg",
+      "license": "PD-textlogo",
+      "sha256": "f6191bc69f8df259c86a13dc9582ba9ed2e0101d4452ba3f1d33ec8e907ddda0",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained."
+    },
+    {
+      "file": "nec.svg",
+      "brand": "NEC",
+      "author": "NEC Corporation",
+      "source": "https://commons.wikimedia.org/wiki/File:NEC_logo.svg",
+      "license": "PD-textlogo",
+      "sha256": "2ac8621150ab14602d69d6cfd3f755af2c57f2b1dc2ba6f1ae26098ceafd5620",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained."
+    },
+    {
+      "file": "snk.svg",
+      "brand": "SNK",
+      "author": "SNK",
+      "source": "https://commons.wikimedia.org/wiki/File:SNK_logo.svg",
+      "license": "PD-textlogo",
+      "sha256": "7e49ffb9ef1069570fa1166a6b47993a92a9df32df4a241bed74c00b497eb0ab",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained.",
+      "download_sha256": "7724968ae1cfc2895cf5e7f426b7e5223ee4434731dd6a080b8c6766d7f5ac9f",
+      "source_normalization": "CRLF line endings converted to LF; SVG geometry unchanged."
+    },
+    {
+      "file": "bandai.svg",
+      "brand": "Bandai",
+      "author": "Bandai",
+      "source": "https://commons.wikimedia.org/wiki/File:BANDAI.svg",
+      "license": "PD-textlogo",
+      "sha256": "45a1b4db6bd60313f1d4b1cd2ec2335745683377a74d278567c9bc39db82d6a4",
+      "changes": "Scaled and recoloured for flat card artwork; original contours retained."
+    }
+  ],
+  "acorn_note": "Historical logo at https://en.wikipedia.org/wiki/File:Acorn_computers_logo_rendered_with_text.svg is labelled non-free. It is not included. The Acorn card uses plain company-name typography, not a replacement trademark."
+}

@@ -1235,6 +1235,7 @@ mod tests {
                     &mut |_| LauncherArtwork {
                         pixels: std::borrow::Cow::Borrowed(&[]),
                         retry: true,
+                        contains_name: false,
                     },
                     Some(session.fonts.typography()),
                     &mut LauncherFaceCache::default(),
