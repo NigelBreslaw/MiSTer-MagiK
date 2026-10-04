@@ -11,6 +11,7 @@ import time
 import webbrowser
 from pathlib import Path
 
+from .artwork import ensure as ensure_artwork
 from .apps import APPLICATIONS, application, repository
 from .bootstrap import BootstrapError, SshBootstrap
 from .build import ensure_arm_agent, ensure_arm_application, ensure_arm_package
@@ -586,8 +587,12 @@ def ensure_application(
             "prebuilt": built.prebuilt,
         },
     )
+    artwork_changed = app.name == "magik" and ensure_artwork(
+        probe_root / "assets/ui/launcher-cards", agent, run
+    )
     healthy = (
-        status.fields.get("running") is True
+        not artwork_changed
+        and status.fields.get("running") is True
         and status.fields.get("artifact") == app.name
         and status.fields.get("running_sha256") == artifact_hash
         and status.fields.get("ready") is True

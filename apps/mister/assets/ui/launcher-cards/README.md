@@ -13,7 +13,10 @@ Model credits, licence links and modifications are in
 The ZIP and Downloader packages install the index and pixels under
 `/media/fat/mister-magik/assets/ui/launcher-cards/`. Development builds resolve
 `/media/fat/mister-magik-dev/assets/ui/launcher-cards/` through the existing
-`DevicePaths` layout contract. `magik deploy` still transfers only the binary.
+`DevicePaths` layout contract. `magik deploy` now validates and installs the complete indexed pack through
+the native Dev artwork installer before starting the app. Unchanged packs are
+not uploaded again; an artwork change restarts an otherwise-current launcher
+so cached generic faces are replaced.
 The six root renders are also built into the binary as a fallback, so a Dev
 installation without the artwork directory retains the canonical root workload.
 Installed root artwork takes precedence when readable. Nested artwork still

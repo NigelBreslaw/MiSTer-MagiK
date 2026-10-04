@@ -16,6 +16,9 @@ impl Drop for Staged {
     }
 }
 impl Staged {
+    pub fn open(&self) -> Result<File, String> {
+        File::open(&self.path).map_err(|e| e.to_string())
+    }
     pub fn publish(&self, destination: &Path) -> Result<(), String> {
         fs::rename(&self.path, destination).map_err(|e| e.to_string())?;
         File::open(
