@@ -611,6 +611,18 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         Ok(Some(grant))
     }
 
+    /// Release an unpublished frame abandoned for newer input. Its writes must
+    /// not remain resident, and a stale completion cannot release a newer grant.
+    pub(in crate::ui_runner) fn discard_completed_hidden_frame(
+        &mut self,
+        completed: CompletedHiddenFrame,
+    ) {
+        if self.outstanding_direct_grant == Some(completed.grant) {
+            self.outstanding_direct_grant = None;
+            self.invalidate_direct_slot(completed.grant.slot_index);
+        }
+    }
+
     pub(in crate::ui_runner) fn present_completed_hidden_frame<H: LatchHardware>(
         &mut self,
         completed: CompletedHiddenFrame,
@@ -1950,6 +1962,145 @@ mod tests {
         assert_eq!(
             presenter.buffers.buffer_mut(2).pixels[0],
             Rgb565Pixel(0x5aa5)
+        );
+    }
+
+    #[test]
+    fn repeated_input_cancellation_releases_and_reseeds_the_direct_slot() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: (0..6)
+                .map(|_| Ok(status(BASE1, 0x0001)))
+                .chain([Ok(status(BASE2, 0x0001))])
+                .collect(),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let damage = [
+            DirtyRect {
+                x0: 0,
+                x1: 2,
+                y0: 1,
+                y1: 2,
+            },
+            DirtyRect {
+                x0: 2,
+                x1: WIDTH,
+                y0: 1,
+                y1: 2,
+            },
+        ];
+        let mut previous_generation = 0;
+        for colour in [11, 13, 17] {
+            let pixels = vec![Rgb565Pixel(colour); WIDTH * HEIGHT];
+            let view = CachedFrameView::new(&pixels, WIDTH, HEIGHT);
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    view,
+                    &DirtyRectList::new(),
+                    [view; 2],
+                    damage,
+                    1,
+                )
+                .unwrap()
+                .expect("new input must not strand the previous direct reservation");
+            assert!(copy.completed.grant.generation > previous_generation);
+            previous_generation = copy.completed.grant.generation;
+            assert!(
+                presenter
+                    .buffers
+                    .buffer_mut(2)
+                    .pixels
+                    .iter()
+                    .all(|p| p.0 == colour)
+            );
+            // A press/release or direction change arrives after the pixels were
+            // written but before publication. Repeated interruptions stay safe.
+            presenter.discard_completed_hidden_frame(copy.completed);
+            assert!(hardware.post_bases.is_empty());
+            assert_eq!(presenter.direct_slot_content_generation[1], None);
+        }
+        let pixels = vec![Rgb565Pixel(23); WIDTH * HEIGHT];
+        let view = CachedFrameView::new(&pixels, WIDTH, HEIGHT);
+        let replacement = presenter
+            .try_copy_direct_hidden_tiles(
+                &mut hardware,
+                &mut display,
+                view,
+                &DirtyRectList::new(),
+                [view; 2],
+                damage,
+                1,
+            )
+            .unwrap()
+            .expect("direct rendering resumes after input settles");
+        assert!(
+            presenter
+                .buffers
+                .buffer_mut(2)
+                .pixels
+                .iter()
+                .all(|p| p.0 == 23)
+        );
+        let stats = presenter
+            .present_completed_hidden_frame(
+                replacement.completed,
+                &mut hardware,
+                &mut display,
+                false,
+            )
+            .unwrap();
+        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+        assert_eq!(hardware.post_bases, [BASE2]);
+    }
+
+    #[test]
+    fn discarding_a_stale_completion_cannot_release_the_replacement() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: (0..4)
+                .map(|_| Ok(status(BASE1, 0x0001)))
+                .chain([Ok(status(BASE2, 0x0001))])
+                .collect(),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let abandoned = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
+                pixels.fill(Rgb565Pixel(11));
+                true
+            })
+            .unwrap()
+            .unwrap();
+        presenter.discard_completed_hidden_frame(abandoned.clone());
+        let replacement = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
+                pixels.fill(Rgb565Pixel(13));
+                true
+            })
+            .unwrap()
+            .expect("replacement gets a new reservation");
+        assert_ne!(abandoned.grant.generation, replacement.grant.generation);
+        presenter.discard_completed_hidden_frame(abandoned);
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_none()
+        );
+        presenter
+            .present_completed_hidden_frame(replacement, &mut hardware, &mut display, false)
+            .unwrap();
+        assert_eq!(hardware.post_bases, [BASE2]);
+        assert!(
+            presenter
+                .buffers
+                .buffer_mut(2)
+                .pixels
+                .iter()
+                .all(|p| p.0 == 13)
         );
     }
 

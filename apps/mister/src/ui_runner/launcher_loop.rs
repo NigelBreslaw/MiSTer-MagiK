@@ -11163,11 +11163,15 @@ pub(super) fn run_launcher_loop(
                 || composition_decision.retirement_generation.is_some(),
             startup_intro.is_some(),
         ) {
-            // Slint has already updated the cached RGB565 image, but this
-            // disposable frame has not reached a hidden scanout slot. Carry a
-            // full cached-frame copy into the replacement so damage consumed
-            // by this abandoned raster cannot diverge from either hidden slot.
-            unpublished_cached_frame_present = true;
+            if let Some(completed) = completed_hidden_frame_for_present.take() {
+                // Direct Home rendering already reserved and wrote a hidden slot.
+                // Release it before restarting, or every later direct grant fails.
+                launcher_presenter.discard_completed_hidden_frame(completed);
+            } else {
+                // Slint consumed cached-image damage without publishing it. Carry
+                // a full copy into the replacement so both slots remain coherent.
+                unpublished_cached_frame_present = true;
+            }
             launcher_response_trace.record_lab(Some(serde_json::json!({
                 "phase": "input-priority-restart",
                 "checkpoint": "after-slint-raster",

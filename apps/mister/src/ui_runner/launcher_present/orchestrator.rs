@@ -686,6 +686,15 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
+    pub(in crate::ui_runner) fn discard_completed_hidden_frame(
+        &mut self,
+        completed: CompletedHiddenFrame,
+    ) {
+        if let LauncherPresenterState::Latch(latch) = &mut self.state {
+            latch.discard_completed_hidden_frame(completed);
+        }
+    }
+
     pub(in crate::ui_runner) fn try_render_startup_intro_hidden_frame<R>(
         &mut self,
         hardware: &mut Fpga,
