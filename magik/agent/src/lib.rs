@@ -7,6 +7,7 @@ mod catalog_operations;
 mod desktop;
 mod device;
 mod device_identity;
+mod file_hash;
 mod fpga_evidence;
 mod input_probe;
 mod main_control;
@@ -1692,12 +1693,7 @@ fn relay_until_deadline(
 }
 
 fn installed_hash(path: &Path) -> Option<String> {
-    Some(
-        Sha256::digest(fs::read(path).ok()?)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    )
+    file_hash::sha256(path).ok()
 }
 
 #[cfg(test)]
@@ -1963,7 +1959,32 @@ mod tests {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+        let digests = || file_hash::DIGESTS.get();
+        let before = digests();
+        assert_eq!(installed_hash(&artifact), Some(expected.clone()));
+        assert_eq!(digests(), before + 1);
         assert_eq!(installed_hash(&artifact), Some(expected));
+        assert_eq!(
+            digests(),
+            before + 1,
+            "unchanged artifact must not be re-hashed"
+        );
+        // Same length, republished by rename: the cached hash must not survive.
+        let hex = |body: &[u8]| {
+            Sha256::digest(body)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        publish_atomically(
+            &directory,
+            "probe",
+            &hex(b"probe Payload"),
+            b"probe Payload",
+        )
+        .expect("republish artifact");
+        assert_eq!(installed_hash(&artifact), Some(hex(b"probe Payload")));
+        assert_eq!(digests(), before + 2);
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -2148,7 +2169,8 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("magik-metrics-body-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let value = serde_json::json!({"window":{"evidence":"x".repeat(MAX_METRICS_BODY_BYTES - 1024)}});
+        let value =
+            serde_json::json!({"window":{"evidence":"x".repeat(MAX_METRICS_BODY_BYTES - 1024)}});
         std::fs::write(
             directory.join("probe-metrics.json"),
             serde_json::to_vec(&value).unwrap(),

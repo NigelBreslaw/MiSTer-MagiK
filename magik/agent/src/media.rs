@@ -1,7 +1,6 @@
 //! Explicit media maintenance using the same manifest, identity and paths as MagiK.
 use mister_magik_media_contract::{self as contract, update};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -40,21 +39,7 @@ fn fetch(url: &str, limit: usize) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn hash(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0; 65536];
-    loop {
-        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        digest.update(&buffer[..n]);
-    }
-    Ok(digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    crate::file_hash::sha256(path)
 }
 
 fn download(url: &str, bytes: u64, sha256: &str, destination: &Path) -> Result<(), String> {

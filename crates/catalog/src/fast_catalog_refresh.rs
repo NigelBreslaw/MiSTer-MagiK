@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 4;
+const REFRESH_SCHEMA: u32 = 5;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
@@ -114,7 +114,6 @@ pub struct FastWatchedContainer {
     pub modified_ns: i128,
     pub changed_ns: i128,
     pub inode: u64,
-    pub content_directory_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -737,12 +736,6 @@ impl FastSystemWatchIndex {
         )?;
         for directory in &self.directories {
             validate_sha256(&directory.entry_fingerprint, "directory fingerprint")?;
-        }
-        for container in &self.containers {
-            validate_sha256(
-                &container.content_directory_fingerprint,
-                "container directory fingerprint",
-            )?;
         }
         Ok(())
     }
@@ -2128,18 +2121,23 @@ fn check_watch_index(
         check.containers_checked = check.containers_checked.saturating_add(1);
         let path = Path::new(&container.path);
         let observed = metadata_cache.get(path).and_then(|metadata| *metadata);
+        // Optional containers record zeros when no regular file was present,
+        // whether the path was absent or something else (such as a directory).
+        let recorded_no_file = container.size == 0
+            && container.modified_ns == 0
+            && container.changed_ns == 0
+            && container.inode == 0;
         let Some(observed) = observed else {
-            if container.size == 0
-                && container.modified_ns == 0
-                && container.changed_ns == 0
-                && container.inode == 0
-            {
+            if recorded_no_file {
                 continue;
             }
             check.status = FastSourceCheckStatus::Changed;
             check.reason = format!("container unavailable: {}", container.path);
             return;
         };
+        if recorded_no_file && !observed.is_file {
+            continue;
+        }
         if !observed.is_file
             || observed.size != container.size
             || observed.modified_ns != container.modified_ns
@@ -2537,19 +2535,14 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
 fn capture_container(path: &Path) -> Result<FastWatchedContainer, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("stat watched container {}: {error}", path.display()))?;
-    let mut digest = Sha256::new();
-    digest.update(path.to_string_lossy().as_bytes());
-    digest.update(metadata.len().to_le_bytes());
-    digest.update(modified_ns(&metadata).to_le_bytes());
-    digest.update(changed_ns(&metadata).to_le_bytes());
-    digest.update(inode(&metadata).to_le_bytes());
+    // Change checks compare these stat fields directly; the whole watch is
+    // fingerprinted by `source_fingerprint`.
     Ok(FastWatchedContainer {
         path: path.to_string_lossy().into_owned(),
         size: metadata.len(),
         modified_ns: modified_ns(&metadata),
         changed_ns: changed_ns(&metadata),
         inode: inode(&metadata),
-        content_directory_fingerprint: sha256_digest_hex(digest.finalize()),
     })
 }
 
@@ -2563,9 +2556,6 @@ fn capture_optional_container(path: &Path) -> Result<FastWatchedContainer, Strin
                 modified_ns: 0,
                 changed_ns: 0,
                 inode: 0,
-                content_directory_fingerprint: sha256_digest_hex(Sha256::digest(
-                    format!("{}\0absent", path.display()).as_bytes(),
-                )),
             });
         }
         Err(error) => {
@@ -3587,6 +3577,41 @@ mod tests {
         };
         check_watch_index(&watch, &cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn optional_container_that_is_not_a_file_stays_unchanged_until_a_file_appears() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-optional-directory");
+        let metadata = root.join("metadata.dat");
+        fs::create_dir_all(&metadata).unwrap();
+        let watch = FastSystemWatchIndex {
+            schema: REFRESH_SCHEMA,
+            system_id: "arcade".to_string(),
+            adapter_version: 0,
+            core_profile_fingerprint: "0".repeat(64),
+            roots: Vec::new(),
+            directories: Vec::new(),
+            containers: vec![capture_optional_container(&metadata).unwrap()],
+        };
+        let check = || {
+            let cache = build_watch_metadata_cache(std::iter::once(&watch), &[]).0;
+            let mut check = FastSystemSourceCheck {
+                system_id: "arcade".to_string(),
+                status: FastSourceCheckStatus::Rescan,
+                directories_checked: 0,
+                containers_checked: 0,
+                elapsed_us: 0,
+                reason: String::new(),
+            };
+            check_watch_index(&watch, &cache, &mut check);
+            check.status
+        };
+        assert_eq!(check(), FastSourceCheckStatus::Unchanged);
+        fs::remove_dir(&metadata).unwrap();
+        assert_eq!(check(), FastSourceCheckStatus::Unchanged);
+        fs::write(&metadata, b"metadata").unwrap();
+        assert_eq!(check(), FastSourceCheckStatus::Changed);
         let _ = fs::remove_dir_all(root);
     }
 
