@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 4;
+const REFRESH_SCHEMA: u32 = 5;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
@@ -114,7 +114,6 @@ pub struct FastWatchedContainer {
     pub modified_ns: i128,
     pub changed_ns: i128,
     pub inode: u64,
-    pub content_directory_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -737,12 +736,6 @@ impl FastSystemWatchIndex {
         )?;
         for directory in &self.directories {
             validate_sha256(&directory.entry_fingerprint, "directory fingerprint")?;
-        }
-        for container in &self.containers {
-            validate_sha256(
-                &container.content_directory_fingerprint,
-                "container directory fingerprint",
-            )?;
         }
         Ok(())
     }
@@ -2537,19 +2530,14 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
 fn capture_container(path: &Path) -> Result<FastWatchedContainer, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("stat watched container {}: {error}", path.display()))?;
-    let mut digest = Sha256::new();
-    digest.update(path.to_string_lossy().as_bytes());
-    digest.update(metadata.len().to_le_bytes());
-    digest.update(modified_ns(&metadata).to_le_bytes());
-    digest.update(changed_ns(&metadata).to_le_bytes());
-    digest.update(inode(&metadata).to_le_bytes());
+    // Change checks compare these stat fields directly; the whole watch is
+    // fingerprinted by `source_fingerprint`.
     Ok(FastWatchedContainer {
         path: path.to_string_lossy().into_owned(),
         size: metadata.len(),
         modified_ns: modified_ns(&metadata),
         changed_ns: changed_ns(&metadata),
         inode: inode(&metadata),
-        content_directory_fingerprint: sha256_digest_hex(digest.finalize()),
     })
 }
 
@@ -2563,9 +2551,6 @@ fn capture_optional_container(path: &Path) -> Result<FastWatchedContainer, Strin
                 modified_ns: 0,
                 changed_ns: 0,
                 inode: 0,
-                content_directory_fingerprint: sha256_digest_hex(Sha256::digest(
-                    format!("{}\0absent", path.display()).as_bytes(),
-                )),
             });
         }
         Err(error) => {
