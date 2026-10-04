@@ -5,7 +5,10 @@ use std::{collections::VecDeque, time::Instant};
 
 const PREDECESSORS: usize = 3;
 const SUCCESSORS: usize = 2;
-const CAPACITY: usize = 256;
+// Diagnostic-only reservation: a dense 45-second 60 Hz window already has
+// 2,700 produced frames, before superseded attempts. Keep a bounded margin
+// so a consistently slow route retains evidence rather than only its start.
+const CAPACITY: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EvidenceMode {
@@ -63,8 +66,14 @@ pub struct FrameEvidence {
     pub input_sequence: Option<u64>,
     pub input_captured_monotonic_us: Option<u64>,
     pub input_dequeued_us: Option<u64>,
+    /// Process-relative boundaries: callbacks/tooling, timers, lifecycle, device,
+    /// readiness, catalog, media, launch, navigation, qualification, benchmark,
+    /// housekeeping. Populated only in phase captures.
+    pub pre_input_boundaries_us: [u64; 12],
     pub input_epoch: u64,
     pub bridge_us: u64,
+    pub direct_hidden_copy_us: u64,
+    pub direct_hidden_copy_bytes: u64,
     pub bridge_model_us: Option<u64>,
     pub bridge_stages_us: Option<[u64; 6]>,
     pub bridge_presenter_us: Option<[u64; 4]>,
@@ -73,6 +82,11 @@ pub struct FrameEvidence {
     pub bridge_allocation_us: u64,
     pub bridge_models_replaced: u64,
     pub destination_reveal_us: u64,
+    pub destination_stage_us: Option<[u64; 4]>,
+    /// Nested list costs: row preparation, then composition into the destination.
+    pub destination_list_us: Option<[u64; 2]>,
+    /// Native Home raster followed by Slint overlay composition, both nested in render.
+    pub home_composition_us: [u64; 2],
     pub card_snapshot_locked: bool,
     pub producer_ready_depth: usize,
     pub producer_ready_age_us: u64,
@@ -95,6 +109,7 @@ pub struct FrameEvidence {
     pub content_generation: Option<u64>,
     pub input_generation: u64,
     pub motion: bool,
+    pub motion_continues_after_present: Option<bool>,
     pub baseline_reset: bool,
     pub telemetry_valid: bool,
     pub telemetry_before_us: u64,
@@ -114,11 +129,12 @@ impl FrameEvidence {
             "helper":self.helper.map(HelperEvidence::json),"input_sequence":self.input_sequence,
             "input_captured_monotonic_us":self.input_captured_monotonic_us,
             "input_dequeued_us":self.input_dequeued_us,
-            "bridge_us":self.bridge_us,"bridge_model_us":self.bridge_model_us,"bridge_stages_us":self.bridge_stages_us,
+            "pre_input_boundaries_us":self.pre_input_boundaries_us,
+            "direct_hidden_copy_us":self.direct_hidden_copy_us,"direct_hidden_copy_bytes":self.direct_hidden_copy_bytes,"bridge_us":self.bridge_us,"bridge_model_us":self.bridge_model_us,"bridge_stages_us":self.bridge_stages_us,
             "bridge_presenter_us":self.bridge_presenter_us,"bridge_hub_counts_us":self.bridge_hub_counts_us,
             "bridge_counters_enabled":self.bridge_counters_enabled,
             "bridge_allocation_us":self.bridge_allocation_us,"bridge_models_replaced":self.bridge_models_replaced,
-            "destination_reveal_us":self.destination_reveal_us,"card_snapshot_locked":self.card_snapshot_locked,
+            "destination_reveal_us":self.destination_reveal_us,"destination_stage_us":self.destination_stage_us,"destination_list_us":self.destination_list_us,"home_composition_us":self.home_composition_us,"card_snapshot_locked":self.card_snapshot_locked,
             "producer_ready_depth":self.producer_ready_depth,"producer_ready_age_us":self.producer_ready_age_us,
             "producer_cancelled":self.producer_cancelled}));
         json!({"phases":phases,"attempt_id":self.attempt_id,"produced_frame_id":self.produced_frame_id,
@@ -129,6 +145,7 @@ impl FrameEvidence {
             "menu_token":self.menu_token,"view":self.view,"selected":self.selected,"pose_phase":self.pose_phase,
             "pose_progress":self.pose_progress,"content_generation":self.content_generation,
             "input_generation":self.input_generation,"input_epoch":self.input_epoch,"motion":self.motion,
+            "motion_continues_after_present":self.motion_continues_after_present,
             "baseline_reset":self.baseline_reset,"telemetry_valid":self.telemetry_valid,
             "telemetry_before_us":self.telemetry_before_us,
             "previous_read_bracket_us":self.previous_read_bracket_us,
@@ -252,6 +269,8 @@ impl FrameEvidenceCapture {
             "bridge_hub_count_labels":["recent","favourites"],
             "bridge_hub_count_scope":"nested within navigation-and-hub; not additive to presenter stages",
             "bridge_counter_scope":"instrumented presenter operations only; excludes catalog and general allocator work",
+            "destination_stage_labels":["preview","list","home","snapshot"],
+            "destination_stage_scope":"wall time nested within custom drawing; capture-only work",
             "cpu_phase_points":["loop-entry","render-start","render-end","custom-end","post-return","active-observed","finish"],
             "observer_scope":"CPU sampler brackets and record selection; excludes clock-only reads and metadata construction",
             "observer_us":{"samples":samples.len(),"total":samples.iter().sum::<u64>(),
@@ -274,6 +293,82 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn full_phase_capture_fits_metrics_transport_with_payload_headroom() {
+        use crate::measurement::{FramePhaseTimeline, FrameWorkTiming};
+        let evidence = FrameEvidence {
+            phases_enabled: true,
+            helper: Some(HelperEvidence {
+                discarded_generation: Some(0),
+                ..Default::default()
+            }),
+            cpu_us: [Some(0); 7],
+            input_sequence: Some(0),
+            input_captured_monotonic_us: Some(0),
+            input_dequeued_us: Some(0),
+            bridge_model_us: Some(0),
+            bridge_stages_us: Some([0; 6]),
+            bridge_presenter_us: Some([0; 4]),
+            bridge_hub_counts_us: Some([0; 2]),
+            destination_stage_us: Some([0; 4]),
+            destination_list_us: Some([0; 2]),
+            previous_observation_attempt_id: Some(0),
+            ownership_loss_count: Some(0),
+            raw_presented_count: Some(0),
+            raw_repeat_count: Some(0),
+            content_generation: Some(0),
+            motion_continues_after_present: Some(false),
+            previous_read_bracket_us: Some([0; 2]),
+            refresh_counter: Some(0),
+            telemetry_flags: Some(0),
+            record: DroppedFrameRecord {
+                owned_refresh_observed: Some(0),
+                active_sequence: Some(0),
+                work: Some(FrameWorkTiming {
+                    discarded_helper_cpu_us: Some(0),
+                    primary_cpu_us: Some(0),
+                    secondary_cpu_us: Some(0),
+                    primary_run_delay_us: Some(0),
+                    secondary_run_delay_us: Some(0),
+                    ..Default::default()
+                }),
+                timeline: Some(FramePhaseTimeline {
+                    post_request_start_us: Some(0),
+                    post_verified_us: Some(0),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        fn widen(value: &mut Value) {
+            match value {
+                Value::Number(_) => *value = u64::MAX.into(),
+                Value::String(_) => *value = "x".repeat(128).into(),
+                Value::Array(values) => values.iter_mut().for_each(widen),
+                Value::Object(values) => values.values_mut().for_each(widen),
+                _ => {}
+            }
+        }
+        let mut frame = evidence.json();
+        widen(&mut frame);
+        let mut capture = FrameEvidenceCapture::default();
+        capture.reset(EvidenceMode::Phases);
+        let mut payload = capture.json();
+        payload["frames"] = vec![frame; CAPACITY].into();
+        // The negotiated metrics-body-32m-v1 contract leaves 4 MiB for
+        // the enclosing window, drop records, thread metrics and clock samples.
+        let bytes = serde_json::to_vec(&payload).unwrap().len();
+        assert!(
+            bytes > 16 * 1024 * 1024,
+            "fixture must exercise the old limit"
+        );
+        assert!(
+            bytes + 4 * 1024 * 1024 < 32 * 1024 * 1024,
+            "full capture uses {bytes} bytes"
+        );
+    }
+
     #[test]
     fn merges_overlapping_drop_neighborhoods_and_keeps_successes() {
         let mut capture = FrameEvidenceCapture::default();
@@ -375,6 +470,34 @@ mod tests {
     }
 
     #[test]
+    fn dense_long_window_retains_every_drop_without_growing_during_capture() {
+        let mut capture = FrameEvidenceCapture::default();
+        capture.reset(EvidenceMode::Phases);
+        let reserved = capture.retained.capacity();
+        for id in 1..=2700 {
+            let mut current = frame(id, 1);
+            current.phases_enabled = true;
+            current.cpu_us = [Some(id * 16_667); 7];
+            current.helper = Some(HelperEvidence::default());
+            current.record.timeline = Some(Default::default());
+            capture.observe(current);
+        }
+        assert_eq!(capture.retained.len(), 2700);
+        assert_eq!(capture.retained.capacity(), reserved);
+        assert_eq!(capture.overflow, 0);
+        assert_eq!(
+            capture
+                .retained
+                .iter()
+                .map(|f| f.record.dropped_frames)
+                .sum::<u64>(),
+            2700
+        );
+        capture.reset(EvidenceMode::Off);
+        assert_eq!(capture.retained.capacity(), 0);
+    }
+
+    #[test]
     fn retention_is_bounded_and_off_allocates_nothing() {
         let mut capture = FrameEvidenceCapture::default();
         capture.observe_timed(frame(1, 1), Instant::now());
@@ -382,7 +505,7 @@ mod tests {
         assert_eq!(capture.observer_us.capacity(), 0);
         assert_eq!(capture.observed, 0);
         capture.reset(EvidenceMode::Neighbors);
-        for id in 1..=1000 {
+        for id in 1..=CAPACITY as u64 + 32 {
             capture.observe(frame(id, 1));
         }
         assert_eq!(capture.retained.len(), CAPACITY);

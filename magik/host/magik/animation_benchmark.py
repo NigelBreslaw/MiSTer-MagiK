@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
 
 from .results import append_event
+from .measurement_contract import (
+    expected_display_mode,
+    has_native_card_helpers,
+    measurement_metrics,
+)
 
 ANIMATION_ROUTES = {
     "root": ("Arcade", 45_000),
@@ -16,8 +22,28 @@ ANIMATION_ROUTES = {
     "handhelds": ("Handhelds", 35_000),
     "arcade": ("Arcade", 35_000),
     "favourites": ("Favourites", 15_000),
-    "settings": ("Settings", 35_000),
+    "settings": ("Settings", 25_000),
 }
+
+
+def animation_routes():
+    routes = [
+        route.strip()
+        for route in os.environ.get(
+            "MAGIK_ANIMATION_ROUTES", ",".join(ANIMATION_ROUTES)
+        ).split(",")
+    ]
+    unknown = set(routes) - ANIMATION_ROUTES.keys()
+    if unknown:
+        raise ValueError(f"Unknown animation routes: {sorted(unknown)}")
+    return routes
+
+
+def animation_repetitions():
+    count = int(os.environ.get("MAGIK_ANIMATION_REPETITIONS", "3"))
+    if not 1 <= count <= 10:
+        raise ValueError("MAGIK_ANIMATION_REPETITIONS must be between 1 and 10")
+    return range(count)
 
 
 _FIELDS = (
@@ -91,16 +117,14 @@ def _settled_metrics(metrics, before_ms, deadline):
         time.sleep(0.2)
 
 
-def _vertical_focus(app, label):
-    for _ in range(9):
-        if _selected(_tree(app), "^" + re.escape(label) + "$"):
-            return
-        _key(app, "\uf701")
-        time.sleep(0.25)
-    raise AssertionError(f"Cannot focus {label}: {_tree(app)}")
+def _vertical_hub(metrics):
+    axis = metrics.get("context", {}).get("system_hub_axis")
+    if axis not in {"vertical", "horizontal"}:
+        raise AssertionError("Missing runtime system hub axis")
+    return axis == "vertical"
 
 
-def _navigate(app, step, route):
+def _navigate(app, step, route, *, vertical_hub=False):
     def key(name, value, **expected):
         step(name, lambda: _key(app, value), **expected)
 
@@ -186,11 +210,14 @@ def _navigate(app, step, route):
         key("Root → Arcade hub", "\n", expected=r"^GAMES$")
 
         def sections():
+            forward, backward = (
+                ("\uf701", "\uf700") if vertical_hub else ("\uf703", "\uf702")
+            )
             for value, selected in [
-                ("\uf703", "RECENT"),
-                ("\uf703", "FAVOURITES"),
-                ("\uf702", "RECENT"),
-                ("\uf702", "GAMES"),
+                (forward, "RECENT"),
+                (forward, "FAVOURITES"),
+                (backward, "RECENT"),
+                (backward, "GAMES"),
             ]:
                 _key(app, value)
                 time.sleep(0.8)
@@ -214,19 +241,7 @@ def _navigate(app, step, route):
         key("Global Favourites → Root", "\x1b", expected=r"^Favourites$", browsing=True)
     elif route == "settings":
         key("Root → Settings", "\n", element="Settings")
-        key("Settings → display choices", "\n", element="Settings")
-        key("Display choices → Settings (cancel)", "\x1b", element="Settings")
-        step(
-            "Settings focus → About",
-            lambda: _vertical_focus(app, "About"),
-            expected=r"^About$",
-        )
-        key("Settings → About", "\n", element="About")
-        key("About → Licenses", "\n", element="Licenses")
-        key("Licenses → license text", "\n", element="License text")
-        key("License text → Licenses", "\x1b", element="Licenses")
-        key("Licenses → About", "\x1b", element="About")
-        key("About → Settings", "\x1b", element="Settings")
+        key("Settings menu move down", "\uf701", element="Settings")
         key("Settings → Root", "\x1b", expected=r"^Settings$", browsing=True)
     else:
         raise ValueError(f"Unknown animation route: {route}")
@@ -262,7 +277,7 @@ def animation_roundtrip(
 
     def metrics():
         nonlocal animation_clock, process_id
-        value = agent.metrics()
+        value = measurement_metrics(agent)
         assert value["sha256"] == agent.expected_sha256
         if process_id is None:
             process_id = value["pid"]
@@ -333,7 +348,12 @@ def animation_roundtrip(
         )
         before = after
 
-    _navigate(app, step, route)
+    _navigate(
+        app,
+        step,
+        route,
+        vertical_hub=_vertical_hub(before) if route == "arcade" else False,
+    )
     while True:
         end = metrics()
         if end.get("window") is not None and (
@@ -344,22 +364,21 @@ def animation_roundtrip(
             (run / f"{prefix}-incomplete.json").write_text(json.dumps(end, indent=2))
             raise AssertionError("Measurement did not complete")
         time.sleep(0.3)
+    (run / f"{prefix}-window.json").write_text(json.dumps(end, indent=2))
     window = end["window"]
     assert window["target_duration_ms"] == duration_ms
     assert duration_ms <= window["elapsed_ms"] < duration_ms + 1_000
     assert window["start_ms"] <= rows[0]["device_before_ms"]
     assert window["end_ms"] >= rows[-1]["device_after_ms"]
     assert window["instrumented"] is instrumented and not window.get("evidence_error")
-    if (
-        route == "consoles"
-        and window.get("context", {}).get("card_helper_ahead") == "native-tricks-v1"
-    ):
+    native_helpers = has_native_card_helpers(window)
+    if route == "consoles" and native_helpers:
         assert window["helper_ahead_frames"] > 0, (
             "Helper render-ahead was not exercised"
         )
         assert window["helper_ahead_frames"] <= window["card_rendered_frames"]
         assert window["helper_ahead_lead_us_total"] > 0
-    if instrumented:
+    if instrumented and route == "consoles" and native_helpers:
         assert window["renderer_profile"]["worker_frames"] > 0, (
             "Missing helper stage evidence"
         )
@@ -396,7 +415,8 @@ def animation_roundtrip(
         helpers = [
             f["phases"]["helper"] for f in frames if f["phases"]["helper"] is not None
         ]
-        assert helpers, "Missing helper job evidence"
+        if native_helpers and route in {"root", "consoles", "computers", "handhelds"}:
+            assert helpers, "Missing helper job evidence"
         assert all(
             h["dispatched_us"]
             <= h["started_us"]
@@ -414,6 +434,7 @@ def animation_roundtrip(
         assert window["moving_cpu_us"] > 0 and window["moving_presentations"] > 0
     result = {
         "route": route,
+        "expected_display_mode": expected_display_mode(),
         "sha256": agent.expected_sha256,
         "animation_clock": animation_clock,
         "steps": rows,

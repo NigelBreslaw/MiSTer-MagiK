@@ -75,6 +75,7 @@ def test_explicit_mini_failure_points_to_retained_evidence(
     [
         [],
         ["animation-roundtrip", "--profile"],
+        ["animation-app", "--profile"],
         ["animation-roundtrip", "--app", "mini-magik"],
     ],
 )
@@ -90,3 +91,15 @@ def test_frame_evidence_rejects_incompatible_workloads_before_dispatch(
         cli.main()
     assert error.value.code == 2
     dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize("flags", [["--frame-evidence", "phases"], ["--profile"], []])
+def test_full_app_benchmark_accepts_separate_diagnostic_modes(
+    monkeypatch, tmp_path, flags
+):
+    monkeypatch.setenv("MISTER_MAGIK2_RESULTS", str(tmp_path))
+    monkeypatch.setattr("sys.argv", ["scripts/magik", "check", "animation-app", *flags])
+    dispatch = Mock(return_value=0)
+    monkeypatch.setattr(cli, "dispatch", dispatch)
+    assert cli.main() == 0
+    assert dispatch.call_args.args[0].scenario == "animation-app"

@@ -216,6 +216,8 @@ impl Agent {
             "test-session",
             "metrics-v1",
             "metrics-body-v1",
+            "metrics-body-16m-v1",
+            "metrics-body-32m-v1",
             "watch-v1",
             "watch-metrics-body-v1",
             "capture-framebuffer",
@@ -1607,6 +1609,8 @@ fn artifact_request_error(
     )
 }
 
+const MAX_METRICS_BODY_BYTES: usize = 32 * 1024 * 1024;
+
 /// Metrics use a bounded JSON body when they cannot fit a control header.
 fn write_metrics_body(
     stream: &mut TcpStream,
@@ -1615,7 +1619,7 @@ fn write_metrics_body(
     value: &serde_json::Value,
 ) -> Result<(), FrameError> {
     let body = serde_json::to_vec(value).map_err(|e| FrameError::Io(e.to_string()))?;
-    if body.len() > 1024 * 1024 {
+    if body.len() > MAX_METRICS_BODY_BYTES {
         return write_frame(
             stream,
             &response(
@@ -2144,7 +2148,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("magik-metrics-body-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let value = serde_json::json!({"window":{"evidence":"x".repeat(MAX_HEADER_BYTES+1024)}});
+        let value = serde_json::json!({"window":{"evidence":"x".repeat(MAX_METRICS_BODY_BYTES - 1024)}});
         std::fs::write(
             directory.join("probe-metrics.json"),
             serde_json::to_vec(&value).unwrap(),
@@ -2173,6 +2177,24 @@ mod tests {
         );
         server.join().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn metrics_body_over_limit_returns_only_a_bounded_error() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = response("limit-test", "metrics-body", serde_json::json!({}));
+            let value = serde_json::json!({"evidence":"x".repeat(MAX_METRICS_BODY_BYTES)});
+            write_metrics_body(&mut stream, &request, "metrics", &value).unwrap();
+        });
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        let (header, body) = read_frame(&mut stream).unwrap();
+        assert_eq!(header.op, "error");
+        assert_eq!(header.fields["code"], "metrics-too-large");
+        assert!(body.is_empty());
+        server.join().unwrap();
     }
 
     #[test]

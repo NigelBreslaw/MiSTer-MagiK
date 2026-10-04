@@ -46,6 +46,7 @@ def pytest_configure(config):
     )
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     selected_app = config.getoption("--magik-app")
     profile = config.getoption("--magik-profile")
@@ -54,6 +55,35 @@ def pytest_collection_modifyitems(config, items):
         matches_app = (item.path.name == "test_magik.py") == (selected_app == "magik")
         is_profile = item.get_closest_marker("magik_profile") is not None
         (selected if matches_app and is_profile == profile else deselected).append(item)
+    campaigns = [
+        item
+        for item in selected
+        if getattr(item, "originalname", "")
+        in {"test_animation_app", "test_animation_app_profile"}
+    ]
+    if campaigns:
+        from .animation_benchmark import animation_repetitions, animation_routes
+
+        routes = animation_routes()
+        repetitions = animation_repetitions() if not profile else range(1)
+        for item in campaigns:
+            params = item.callspec.params
+            if (
+                params["route"] not in routes
+                or params.get("repetition", 0) not in repetitions
+            ):
+                selected.remove(item)
+                deselected.append(item)
+        # Honor the requested route order, preserving all other scenario positions.
+        campaign_order = sorted(
+            (item for item in campaigns if item in selected),
+            key=lambda item: (
+                routes.index(item.callspec.params["route"]),
+                item.callspec.params.get("repetition", 0),
+            ),
+        )
+        ordered = iter(campaign_order)
+        selected = [next(ordered) if item in campaigns else item for item in selected]
     items[:] = selected
     config.hook.pytest_deselected(items=deselected)
 
@@ -96,13 +126,21 @@ def _application_session(request, magik_run):
     )
 
     from .apps import application
+    from .measurement_contract import expected_display_mode, verify_display
 
     profiled = request.config.getoption("--magik-profile")
     profile_id = f"{magik_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
+    evidence_capabilities = (
+        {"metrics-body-32m-v1"}
+        if request.config.getoption("--magik-frame-evidence") != "off"
+        else set()
+    )
     agent, status = connect_agent(
         magik_run,
         (PROFILE_AGENT_CAPABILITIES if profiled else CHECK_AGENT_CAPABILITIES)
         | {"measurement", "measurement-clock-v1"}
+        | evidence_capabilities
+        | ({"device-control-v1"} if expected_display_mode() else set())
         | application(request.config.getoption("--magik-app")).agent_capabilities,
     )
     try:
@@ -136,10 +174,12 @@ def _application_session(request, magik_run):
     except Exception:
         retain_diagnostics(magik_run, agent)
         raise
+    verify_display(agent, magik_run, "before-session")
     with managed_session(
         agent, magik_run, profile_id, "shared application session"
     ) as application:
         yield application, agent, magik_run, profile_id
+    verify_display(agent, magik_run, "after-session")
 
 
 @contextmanager
@@ -153,9 +193,10 @@ def managed_session(agent, run, profile_id, scenario):
         retain_diagnostics(run, agent)
         if profiled:
             try:
-                complete = json.loads(
-                    agent.read_profile_artifact(profile_id, "profile.json")
+                profile_metadata = agent.read_profile_artifact(
+                    profile_id, "profile.json"
                 )
+                complete = json.loads(profile_metadata)
                 if (
                     complete.get("run_id") != profile_id
                     or complete.get("sha256") != agent.expected_sha256
@@ -165,17 +206,35 @@ def managed_session(agent, run, profile_id, scenario):
                     raise AssertionError(
                         "profile has no matching completed sample evidence"
                     )
+                profile_directory = run / "profiles" / profile_id
+                profile_directory.mkdir(parents=True, exist_ok=False)
                 for name in ("profile.json", "profile.folded", "flamegraph.svg"):
-                    data = agent.read_profile_artifact(profile_id, name)
+                    data = (
+                        profile_metadata
+                        if name == "profile.json"
+                        else agent.read_profile_artifact(profile_id, name)
+                    )
                     if not data:
                         raise AssertionError(f"empty profile artifact: {name}")
+                    (profile_directory / name).write_bytes(data)
                     (run / name).write_bytes(data)
+                from .profile_analysis import summarize_profile
+
+                quality = summarize_profile(
+                    (profile_directory / "profile.folded").read_text(),
+                    complete["samples"],
+                )
+                (profile_directory / "profile-quality.json").write_text(
+                    json.dumps(quality, indent=2) + "\n"
+                )
                 append_event(
                     run,
                     {
                         "phase": "profile",
                         "outcome": "retained",
                         "instrumented": True,
+                        "directory": str(profile_directory.relative_to(run)),
+                        "attribution": quality["attribution"],
                         **complete,
                     },
                 )

@@ -1632,6 +1632,10 @@ impl LauncherNav {
             && self.home_card_scroll.scroll.held_dir != 0
     }
 
+    pub fn home_scroll_active(&self) -> bool {
+        self.screen == Screen::Home && self.home_card_scroll.is_scroll_active()
+    }
+
     pub fn home_horizontal_repeat_active(&self) -> bool {
         self.screen == Screen::Home
             && !self.portrait_layout
@@ -2830,6 +2834,7 @@ impl LauncherNav {
         if event.source.kind == crate::input_event::InputSourceKind::Ui
             && event.phase == InputPhase::Pressed
             && self.screen == Screen::Arcade
+            && !self.is_system_hub()
             && !self.arcade_filter.drawer_open
             && !self.arcade_search.is_active(&self.arcade_filter.active)
             && (pressed.dpad_up || pressed.dpad_down)
@@ -3109,7 +3114,7 @@ impl LauncherNav {
             self.leave_arcade(false, &collection_id);
             return None;
         }
-        // Games, Recent and Favourites sit in a row; HDMI portrait stacks them.
+        // Games, Recent and Favourites sit in a row; CRT and HDMI portrait stack them.
         let (next, previous) = if self.portrait_layout || self.crt_layout {
             (pressed.dpad_down, pressed.dpad_up)
         } else {
@@ -7073,11 +7078,57 @@ mod tests {
     }
 
     #[test]
+    fn vertical_system_hub_ui_taps_do_not_move_the_hidden_game_list() {
+        use crate::input_event::{InputSourceKind, LogicalAction};
+        let catalog = multi_game_catalog();
+        for crt in [true, false] {
+            let mut nav = LauncherNav::for_crt_layout(crt);
+            nav.portrait_layout = !crt;
+            assert!(nav.open_default_arcade(&catalog));
+            let now = Instant::now();
+            for (index, (action, selected)) in [
+                (LogicalAction::Down, 1),
+                (LogicalAction::Down, 2),
+                (LogicalAction::Up, 1),
+                (LogicalAction::Up, 0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut event = ordered_event(
+                    index as u64 * 2 + 1,
+                    index as u64 + 1,
+                    action,
+                    InputPhase::Pressed,
+                );
+                event.source.kind = InputSourceKind::Ui;
+                assert!(
+                    nav.handle_action_with_navigation_intents(&event, now, &catalog)
+                        .is_none()
+                );
+                assert!(nav.is_system_hub());
+                assert_eq!(nav.system_hub_selected, selected);
+                assert_eq!(nav.arcade.selected, 0);
+                event.phase = InputPhase::Released;
+                nav.handle_action_with_navigation_intents(&event, now, &catalog);
+                assert_eq!(nav.system_hub_selected, selected);
+                assert_eq!(nav.arcade.selected, 0);
+            }
+            nav.skip_system_page(&catalog);
+            let mut event = ordered_event(11, 6, LogicalAction::Down, InputPhase::Pressed);
+            event.source.kind = InputSourceKind::Ui;
+            nav.handle_action_with_navigation_intents(&event, now, &catalog);
+            assert_eq!(nav.arcade.selected, 1);
+        }
+    }
+
+    #[test]
     fn arcade_ui_taps_move_once_and_controller_presses_wait_for_held_ticks() {
         use crate::input_event::{InputSourceKind, LogicalAction};
         let catalog = multi_game_catalog();
         let mut nav = LauncherNav::new();
         assert!(nav.open_default_arcade(&catalog));
+        nav.skip_system_page(&catalog);
         let now = Instant::now();
         let mut event = ordered_event(1, 1, LogicalAction::Down, InputPhase::Pressed);
         nav.handle_action_with_navigation_intents(&event, now, &catalog);
@@ -7260,6 +7311,32 @@ mod tests {
             .expect("spring should look settled before its velocity reaches zero");
         nav.handle_direction_input(1, 0, visually_settled_at, count);
         assert_eq!(nav.selected, 2);
+    }
+
+    #[test]
+    fn home_motion_remains_active_after_visual_rounding_until_the_spring_settles() {
+        let start = Instant::now();
+        let count = ROOT_HOME_CARDS.len();
+        let mut nav = LauncherNav::new();
+        nav.home_card_scroll
+            .handle_direction_input(1, 0, start, count);
+        nav.home_card_scroll.tick(count, start);
+        assert!(nav.home_scroll_active());
+        nav.home_card_scroll
+            .handle_direction_input(0, 1, start + Duration::from_millis(16), count);
+        let mut rounded_while_moving = false;
+        for frame in 1..=160 {
+            nav.home_card_scroll
+                .tick(count, start + Duration::from_millis(frame * 16));
+            if nav.home_card_scroll.scroll_y == ARCADE_ROW_HEIGHT
+                && !nav.home_card_scroll.is_settled()
+            {
+                rounded_while_moving = true;
+                assert!(nav.home_scroll_active());
+            }
+        }
+        assert!(rounded_while_moving);
+        assert!(!nav.home_scroll_active());
     }
 
     #[test]

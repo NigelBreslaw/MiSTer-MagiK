@@ -66,3 +66,53 @@ missing/null durations retain the five-second default. Unsupported durations
 produce a measurement error rather than silently switching to that default.
 Completed windows retain `requested_duration_ms` and `target_duration_ms` beside
 actual `elapsed_ms`. Profile windows still use their existing ten-second target.
+
+Opt-in frame-neighborhood capture reserves at most 4,096 records before the
+window starts. This covers dense drops throughout a 45-second 60 Hz route
+without per-frame allocation. Overflow remains explicit and fails complete
+evidence validation. Capture OFF reserves no neighborhood storage. The bound
+was increased after a CRT 240p route exhausted the original 256 records.
+
+Detailed-capture sessions require `metrics-body-32m-v1`: the service carries
+up to 32 MiB of JSON in a metrics body, with a bounded error above that limit.
+The host negotiates this capability before starting a session and upgrades a
+compatible service through the normal native path when needed. Ordinary
+measurements continue to accept the existing metrics capability. A serialization
+regression fills all 4,096 phase records, enables every optional branch, widens
+numbers to u64 limits and labels to 128 bytes, and reserves 4 MiB for the
+enclosing metrics. The former 16 MiB body was too small for that payload.
+
+`card_reused_frames` counts confirmed delivery of a requested generation that
+was also presented previously. An unchanged quantized pose is valid delivery;
+only a delivered generation different from the currently requested generation
+is a missing pose. Delivered identity comes from matching completed primary/helper
+pixel buffers, independently of the session request. Physical repeat accounting
+remains separate.
+
+A frame's `motion` describes its pre-render state, including a final animation
+endpoint. `motion_continues_after_present` describes whether another moving
+frame is expected after that frame was confirmed active. Late endpoint frames
+still count; intentional reuse after a confirmed endpoint does not.
+`motion_endpoint_resets` and `idle_baseline_resets` expose those boundaries.
+The latter requires the renderer's no-work branch and an inactive motion signal.
+
+`phases.direct_hidden_copy_us` is nested within the render interval on the
+direct card path. The timeline's `hidden_copy_us` covers later presenter work;
+zero there does not imply the earlier direct copy was free.
+
+Detailed phase evidence also exposes `pre_input_boundaries_us`, twelve absolute
+process-relative timestamps: callbacks/tooling, timers/feedback, lifecycle,
+raw-device poll, readiness, catalog, media, launch lifecycle, navigation,
+qualification, benchmark, and view housekeeping. Subtract the preceding boundary
+(or `begin_us` for the first) to attribute pre-input wall time. These clocks run
+only for phase captures. `destination_stage_us` contains nested wall-time totals
+for preview, list, Home, and snapshot preparation. These values are portions of
+custom composition, not additional frame cost. `direct_hidden_copy_bytes` records its transferred bytes.
+`home_composition_us` splits native Home rasterization from Slint overlay
+composition; both are nested within the render interval.
+
+`destination_list_us` splits the nested list stage into row preparation and
+composition. HDMI can prepare matching visible rows on CPU0 while its hub is
+visible; UI drawing adopts only matching title, badge, favourite and width data,
+and never waits for that worker. Its CPU appears in the process/thread report,
+while these two fields measure only the remaining UI-thread work.

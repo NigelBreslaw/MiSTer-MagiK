@@ -185,11 +185,13 @@ def main() -> int:
         and arguments.frame_evidence != "off"
         and (
             arguments.app != "magik"
-            or arguments.scenario != "animation-roundtrip"
+            or arguments.scenario not in {"animation-roundtrip", "animation-app"}
             or arguments.profile
         )
     ):
-        parser.error("--frame-evidence requires unprofiled MagiK animation-roundtrip")
+        parser.error(
+            "--frame-evidence requires unprofiled MagiK animation-roundtrip or animation-app"
+        )
     if (
         getattr(arguments, "profile_preparation", False)
         or getattr(arguments, "bench_preparation", False)
@@ -477,7 +479,14 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         options += ["--magik-frame-evidence", arguments.frame_evidence]
     if arguments.profile:
         measurements = (
-            {"idle", "motion", "motion-rollover", "motion-held", "animation-roundtrip"}
+            {
+                "idle",
+                "motion",
+                "motion-rollover",
+                "motion-held",
+                "animation-roundtrip",
+                "animation-app",
+            }
             if arguments.app == "magik"
             else {"motion"}
         )

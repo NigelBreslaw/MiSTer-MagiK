@@ -23,6 +23,7 @@ pub mod launcher_parallel;
 pub mod launcher_profile;
 mod launcher_texture;
 pub mod navigation;
+pub mod nearest_axis;
 pub mod orientation;
 pub mod packed_copy;
 pub mod retained_tiles;

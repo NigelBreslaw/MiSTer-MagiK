@@ -6341,8 +6341,8 @@ pub(super) fn run_launcher_loop(
     let renderer_profile_requested = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
     #[cfg(feature = "tooling")]
     let mut tooling_carousel_release: Option<crate::input_event::InputEvent> = None;
-    // Count repeated artwork in ordinary measurement sessions too. A confirmed
-    // 60 Hz post does not imply a fresh carousel pose; CPU sampling is separate.
+    // Grade artwork against the requested pose in ordinary measurements too.
+    // Reusing an unchanged quantized pose is valid; CPU sampling is separate.
     #[cfg(feature = "tooling")]
     let card_presentation_measurement_enabled = tooling.is_some();
     #[cfg(feature = "tooling")]
@@ -6360,9 +6360,11 @@ pub(super) fn run_launcher_loop(
             "native_device_plane": if !layout.is_portrait() && !ui.output_route().is_crt()
                 && (layout.logical_w(), layout.logical_h()) == (960, 540)
                 { "exposed-hdmi-v1" } else { "disabled" },
+            "system_hub_axis": if layout.is_portrait() || ui.output_route().is_crt()
+                { "vertical" } else { "horizontal" },
             "card_helper_ahead": if !layout.is_portrait() && !ui.output_route().is_crt()
                 && (layout.logical_w(), layout.logical_h()) == (960, 540)
-                { "native-tricks-v1" } else { "disabled" },
+                { "native-browse-tricks-v2" } else { "disabled" },
         });
         crate::ui_logln!("magik_context {}", session.metrics.context);
     }
@@ -6400,6 +6402,16 @@ pub(super) fn run_launcher_loop(
                 )
             })
         };
+        macro_rules! note_pre_input_boundary {
+            ($index:expr) => {
+                #[cfg(feature = "tooling")]
+                if let Some(frame) = tooling_frame_evidence.as_mut()
+                    && frame.phases_enabled
+                {
+                    frame.pre_input_boundaries_us[$index] = duration_us(run_start, Instant::now());
+                }
+            };
+        }
         #[cfg(feature = "tooling")]
         if tooling_frame_evidence.is_some()
             && let Some(session) = tooling.as_mut()
@@ -6448,6 +6460,14 @@ pub(super) fn run_launcher_loop(
             if card_presentation_measurement_enabled {
                 session.metrics.process_cpu_us = cpu_process_us();
             }
+            let hub_axis = if layout.is_portrait() || ui.output_route().is_crt() {
+                "vertical"
+            } else {
+                "horizontal"
+            };
+            if session.metrics.context["system_hub_axis"].as_str() != Some(hub_axis) {
+                session.metrics.context["system_hub_axis"] = hub_axis.into();
+            }
             session.set_ui_motion(mister_magik_catalog::ui_motion::active());
             let tooling_tick_start = Instant::now();
             let window_was_open =
@@ -6479,6 +6499,7 @@ pub(super) fn run_launcher_loop(
         }
         gui_profiling.tick(Instant::now());
         let mut scheduler_phase = launcher_response_trace.scheduler_boundary();
+        note_pre_input_boundary!(0);
         screensaver_cpu_profile.poll(frames);
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
             std::thread::sleep(Duration::from_millis(16));
@@ -6681,6 +6702,7 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-timers-feedback", scheduler_phase);
+        note_pre_input_boundary!(1);
         let frame_analytics_mode = frame_accounting.frame_analytics_mode();
         let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let arcade_visual_index_at_loop_start = nav.arcade.visual_index;
@@ -6863,6 +6885,7 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-lifecycle-state", scheduler_phase);
+        note_pre_input_boundary!(2);
         let mut light_bridge_dirty = false;
         let mut pad_changed_for_input =
             if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
@@ -6872,6 +6895,7 @@ pub(super) fn run_launcher_loop(
             };
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-raw-device-poll", scheduler_phase);
+        note_pre_input_boundary!(3);
         if background_work_allowed
             && let Some(sample) = memory_guard.tick(loop_start)
             && sample.changed
@@ -6972,6 +6996,7 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-readiness-maintenance", scheduler_phase);
+        note_pre_input_boundary!(4);
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let slint_animation_active = app.window().has_active_animations();
@@ -7188,6 +7213,7 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("pre-input-catalog", scheduler_phase);
+        note_pre_input_boundary!(5);
         if maybe_present_modal_input_test_dialog(
             &mut modal_input_test_dialog_pending,
             catalog_ready,
@@ -7227,6 +7253,7 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("pre-input-media", scheduler_phase);
+        note_pre_input_boundary!(6);
 
         if let Some(completion) = scheduler.poll_launch_completion(Instant::now()) {
             match completion {
@@ -7291,6 +7318,7 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-launch-lifecycle", scheduler_phase);
+        note_pre_input_boundary!(7);
 
         if arcade_screen_pending && arcade_navigation_ready(catalog_ready, &catalog) {
             let before = LauncherProjectionKey::from_nav(&nav);
@@ -7453,6 +7481,7 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-navigation", scheduler_phase);
+        note_pre_input_boundary!(8);
 
         latch_v5_qualification.poll_control(loop_start);
         latch_v5_qualification.observe_catalog_worker(
@@ -7512,6 +7541,7 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-qualification", scheduler_phase);
+        note_pre_input_boundary!(9);
 
         if let Some(scenario) = launcher_bench_scenario {
             let latch_failure_active = launcher_presenter.latch_failure().is_some();
@@ -7609,6 +7639,7 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-benchmark", scheduler_phase);
+        note_pre_input_boundary!(10);
 
         if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
             nav.screen = screen;
@@ -7657,6 +7688,7 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-view-housekeeping", scheduler_phase);
+        note_pre_input_boundary!(11);
         record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance);
         let (input_phase_yielded, input_batch_empty) = 'input_phase: {
             // Drain immediately before routing so catalog, timer, lifecycle,
@@ -9933,6 +9965,13 @@ pub(super) fn run_launcher_loop(
                 .global::<slint_ui::launcher::OverlayView>()
                 .get_loading_state()
                 != slint_ui::launcher::LoadingState::Active;
+        if native_device_base && nav.is_system_hub() {
+            configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
+            arcade_list_renderer.prepare_visible_rows(
+                active_system_game_view(&catalog, &nav),
+                nav.arcade.visual_index,
+            );
+        }
         let global = app.global::<slint_ui::launcher::MisterUi>();
         if global.get_custom_device_base() != native_device_base {
             global.set_custom_device_base(native_device_base);
@@ -10166,6 +10205,15 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         if render_intent.can_sleep() {
+            #[cfg(feature = "tooling")]
+            if let Some(observation) = tooling_drop_baseline.as_mut()
+                && observation.retire_motion_for_idle(mister_magik_catalog::ui_motion::active())
+                && let Some(session) = tooling.as_mut()
+            {
+                // Completed presents were already accounted. The next render
+                // takes a fresh idle baseline, excluding deliberate scanout reuse.
+                session.metrics.counters.idle_baseline_resets += 1;
+            }
             if let Some(record) = input_latency_lab.cooperative_quantum(input_observation) {
                 launcher_response_trace.record_lab(Some(record));
                 continue;
@@ -10543,10 +10591,15 @@ pub(super) fn run_launcher_loop(
                     frame_production_completed_at = Some(Instant::now());
                     #[cfg(feature = "tooling")]
                     if card_presentation_measurement_enabled {
+                        if let Some(frame) = tooling_frame_evidence.as_mut() {
+                            frame.direct_hidden_copy_us = copy.copy_us;
+                            frame.direct_hidden_copy_bytes = copy.copy.bytes as u64;
+                        }
+                        let rendered = session.rendered_request();
                         card_direct_measurement = Some((
                             copy.copy_us,
-                            request.timestamp_us,
-                            request.generation,
+                            rendered.map_or(0, |pose| pose.timestamp_us),
+                            rendered.map_or(0, |pose| pose.generation),
                             pose_sampled_at.elapsed().as_micros() as u64,
                         ));
                         if let (Some(tooling), Some(timing)) = (tooling.as_mut(), timing) {
@@ -10908,12 +10961,29 @@ pub(super) fn run_launcher_loop(
                 {
                     let retain_cache = card_motion_only && !$full_slint_raster;
                     let copy_damage = session.compositor_copy_damage(retain_cache);
+                    #[cfg(feature = "tooling")]
+                    let home_started = tooling_frame_evidence
+                        .as_ref()
+                        .is_some_and(|frame| frame.phases_enabled)
+                        .then(Instant::now);
+                    let native_home_pixels = session.render();
+                    #[cfg(feature = "tooling")]
+                    let home_native_done = home_started.map(|_| Instant::now());
                     let (dirty, damage, rendered, copied) = layer_target.render_custom_home(
                         &window,
-                        session.render(),
+                        native_home_pixels,
                         $full_slint_raster,
                         copy_damage,
                     );
+                    #[cfg(feature = "tooling")]
+                    if let Some((started, native_done)) = home_started.zip(home_native_done)
+                        && let Some(frame) = tooling_frame_evidence.as_mut()
+                    {
+                        frame.home_composition_us[0] +=
+                            u128_to_u64(native_done.duration_since(started).as_micros());
+                        frame.home_composition_us[1] +=
+                            u128_to_u64(native_done.elapsed().as_micros());
+                    }
                     session.note_compositor_copied(retain_cache && copied.is_some());
                     #[cfg(feature = "tooling")]
                     if let Some(copied) = copied
@@ -11440,6 +11510,10 @@ pub(super) fn run_launcher_loop(
             navigation_transition_frame_active.then_some(loop_start);
         let mut navigation_transition_render_us = 0u128;
         let mut navigation_logical_frame_rendered = false;
+        #[cfg(feature = "tooling")]
+        let mut navigation_frame_rendered = false;
+        #[cfg(feature = "tooling")]
+        let mut navigation_endpoint_rendered = false;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
             let destination_committed = pending_navigation_transition
@@ -11447,6 +11521,12 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = !navigation_capture_source_carrier_rendered;
             if destination_committed && !navigation_transition.destination_ready() {
+                #[cfg(feature = "tooling")]
+                let measure_destination = tooling_frame_evidence
+                    .as_ref()
+                    .is_some_and(|frame| frame.phases_enabled);
+                #[cfg(feature = "tooling")]
+                let mut destination_stage_us = [0; 4];
                 #[cfg(feature = "tooling")]
                 let _profile = mister_magik_framebuffer_scenes::launcher_profile::span(
                     "transition.destination-layers",
@@ -11467,6 +11547,8 @@ pub(super) fn run_launcher_loop(
                             )
                         }));
                 if destination_raster_ready && nav.screen == Screen::Arcade {
+                    #[cfg(feature = "tooling")]
+                    let preview_started = measure_destination.then(Instant::now);
                     let preview_expected = selected_arcade_game_has_preview(&nav, &catalog);
                     let preview_exact = preview_expected
                         && !preview.terminal_empty()
@@ -11502,6 +11584,10 @@ pub(super) fn run_launcher_loop(
                         }
                         true
                     };
+                    #[cfg(feature = "tooling")]
+                    if let Some(started) = preview_started {
+                        destination_stage_us[0] = u128_to_u64(started.elapsed().as_micros());
+                    }
                     if preview_surface_ready && (arcade_status_only || nav.is_system_hub()) {
                         // The Slint status panel is the complete destination for
                         // loading, empty and failed Arcade. Do not paint the old
@@ -11509,17 +11595,22 @@ pub(super) fn run_launcher_loop(
                         destination_layers_ready = true;
                     }
                     if preview_surface_ready && !arcade_status_only && !nav.is_system_hub() {
+                        #[cfg(feature = "tooling")]
+                        let list_started = measure_destination.then(Instant::now);
                         configure_arcade_list_renderer_geometry(
                             &mut arcade_list_renderer,
                             &nav,
                             ui,
                         );
-                        if let Some(update) = arcade_list_renderer.draw(
+                        let list_update = arcade_list_renderer.draw(
                             active_system_game_view(&catalog, &nav),
                             nav.arcade.selected,
                             nav.arcade.visual_index,
                             true,
-                        ) {
+                        );
+                        #[cfg(feature = "tooling")]
+                        let list_draw_done = measure_destination.then(Instant::now);
+                        if let Some(update) = list_update {
                             if navigation_transition.settings_physical_space() {
                                 let _ = layer_target.reclaim_arcade_publication(
                                     &mut arcade_list_renderer,
@@ -11542,6 +11633,18 @@ pub(super) fn run_launcher_loop(
                                     &mut arcade_list_renderer,
                                     update,
                                 );
+                            }
+                        }
+                        #[cfg(feature = "tooling")]
+                        if let Some(started) = list_started {
+                            destination_stage_us[1] = u128_to_u64(started.elapsed().as_micros());
+                            if let Some(draw_done) = list_draw_done
+                                && let Some(frame) = tooling_frame_evidence.as_mut()
+                            {
+                                frame.destination_list_us = Some([
+                                    u128_to_u64(draw_done.duration_since(started).as_micros()),
+                                    u128_to_u64(draw_done.elapsed().as_micros()),
+                                ]);
                             }
                         }
                         destination_layers_ready = true;
@@ -11581,16 +11684,20 @@ pub(super) fn run_launcher_loop(
                             timed_out,
                         );
                     }
-                    // A Home destination is the Rust card launcher under a
-                    // transparent Slint home. The controlled raster only
-                    // recomposes it when the card session looks dirty, which
-                    // it no longer does after returning from Settings, so the
-                    // snapshot (and the settled frame after it) was black.
-                    // Always compose the card home into the destination.
+                    // Restore Home immediately before capture: intermediate transition
+                    // work can overwrite the target after the earlier full raster.
                     if custom_home_active && let Some(session) = launcher_card_home.as_mut() {
+                        #[cfg(feature = "tooling")]
+                        let home_started = measure_destination.then(Instant::now);
                         let _ =
                             layer_target.render_custom_home(window, session.render(), true, None);
+                        #[cfg(feature = "tooling")]
+                        if let Some(started) = home_started {
+                            destination_stage_us[2] = u128_to_u64(started.elapsed().as_micros());
+                        }
                     }
+                    #[cfg(feature = "tooling")]
+                    let snapshot_started = measure_destination.then(Instant::now);
                     if crt_layout {
                         navigation_transition.update_device_reveal_image(
                             selected_device_reveal_image(&preview, crt_backdrop.as_ref(), layout),
@@ -11622,6 +11729,16 @@ pub(super) fn run_launcher_loop(
                         render_transition_frame = false;
                     }
                     navigation_transition.tick(animation_us);
+                    #[cfg(feature = "tooling")]
+                    if let Some(started) = snapshot_started {
+                        destination_stage_us[3] = u128_to_u64(started.elapsed().as_micros());
+                    }
+                }
+                #[cfg(feature = "tooling")]
+                if let Some(frame) = tooling_frame_evidence.as_mut()
+                    && measure_destination
+                {
+                    frame.destination_stage_us = Some(destination_stage_us);
                 }
             }
             if render_transition_frame {
@@ -11723,14 +11840,29 @@ pub(super) fn run_launcher_loop(
                         settings_cog_render_ahead.recycle(frame);
                     }
                     if !rendered_direct {
-                        let _ = navigation_transition
+                        let rendered = navigation_transition
                             .render_into(layer_target.presentation_pixels_mut());
+                        #[cfg(feature = "tooling")]
+                        {
+                            navigation_frame_rendered = rendered.is_ok();
+                        }
+                        #[cfg(not(feature = "tooling"))]
+                        let _ = rendered;
+                    } else {
+                        #[cfg(feature = "tooling")]
+                        {
+                            navigation_frame_rendered = true;
+                        }
                     }
                 } else if navigation_transition
                     .render_into(layer_target.presentation_pixels_mut())
                     .is_ok()
                 {
                     navigation_logical_frame_rendered = true;
+                    #[cfg(feature = "tooling")]
+                    {
+                        navigation_frame_rendered = true;
+                    }
                 }
                 drop(gui_navigation_pmu);
             }
@@ -11744,6 +11876,11 @@ pub(super) fn run_launcher_loop(
                     navigation_transition.frame().endpoint,
                 );
                 let completion = navigation_transition.complete();
+                #[cfg(feature = "tooling")]
+                {
+                    navigation_endpoint_rendered =
+                        navigation_frame_rendered && completion.is_some();
+                }
                 if completion.is_some() {
                     release_full_screen_transition(
                         &mut full_screen_transition,
@@ -12775,7 +12912,18 @@ pub(super) fn run_launcher_loop(
             {
                 let mut next_clock = frame_clock;
                 next_clock.advance();
-                session.prepare_helper_ahead(next_clock.elapsed_us() / 1_000);
+                if session.is_level_trick_active() {
+                    session.prepare_helper_ahead(next_clock.elapsed_us() / 1_000);
+                } else {
+                    let (selected, visual_index) =
+                        nav.home_card_visual_prediction(next_clock.now());
+                    session.prepare_browse_helper_ahead(
+                        next_clock.elapsed_us() / 1_000,
+                        selected,
+                        visual_index,
+                        nav.home_card_browse_prediction(next_clock.now()),
+                    );
+                }
             }
             let wait_start = Instant::now();
             scheduler_phase = launcher_response_trace
@@ -13134,26 +13282,22 @@ pub(super) fn run_launcher_loop(
                         metrics.counters.card_source_age_us =
                             metrics.counters.card_source_age_us.saturating_add(age_us);
                         metrics.last_card_source_timestamp_us = source_timestamp_us;
-                        if metrics.last_card_source_generation != source_generation
-                            || !launcher_card_home
-                                .as_ref()
-                                .is_some_and(|session| session.is_animating())
-                        {
-                            metrics.counters.card_delivered_frames =
-                                metrics.counters.card_delivered_frames.saturating_add(1);
-                        } else {
-                            metrics.counters.card_dropped_frames += 1;
+                        let requested_generation = launcher_card_home
+                            .as_ref()
+                            .expect("a direct card presentation retains its card session")
+                            .current_request()
+                            .generation;
+                        if !metrics.note_card_delivery(requested_generation, source_generation) {
                             if let Some(frame) = tooling_frame_evidence.as_mut() {
                                 frame.missing_fresh_pose += 1;
                             }
                             metrics.record_dropped_frame(mister_magik_tooling_support::measurement::DroppedFrameRecord {
-                                reason:"current pose not updated at presentation; renderer timeline unavailable",
+                                reason:"delivered artwork does not match the requested pose",
                                 workload:mister_magik_tooling_support::measurement::FrameWorkload::Card,
                                 dropped_frames:1,source_generation,source_age_us:age_us,
                                 ..Default::default()
                             });
                         }
-                        metrics.last_card_source_generation = source_generation;
                     } else if card_presentation_measurement_enabled {
                         metrics.counters.card_synchronous_presentations += 1;
                     }
@@ -13263,8 +13407,32 @@ pub(super) fn run_launcher_loop(
                                     Err(error) => metrics.error = Some(error.to_string()),
                                 }
                             }
+                            let card_motion_active = nav.screen == Screen::Home
+                                && launcher_card_home
+                                    .as_ref()
+                                    .is_some_and(|card| card.is_animating());
+                            let other_motion_active = card_motion_active
+                                || nav.home_scroll_active()
+                                || nav.screen == Screen::Home
+                                    && nav.home_horizontal_repeat_active()
+                                || home_horizontal_input_held
+                                || screensaver.active
+                                || navigation_transition.is_active()
+                                || orientation_transition.is_active()
+                                || nav.screen == Screen::Arcade && nav.arcade.is_scroll_active()
+                                || app.window().has_active_animations();
+                            let endpoint_rendered = navigation_endpoint_rendered
+                                || card_direct_frame_rendered && !card_motion_active;
+                            let motion_continues =
+                                animation_active && (!endpoint_rendered || other_motion_active);
+                            if animation_active && !motion_continues {
+                                metrics.counters.motion_endpoint_resets += 1;
+                            }
+                            if let Some(frame) = tooling_frame_evidence.as_mut() {
+                                frame.motion_continues_after_present = Some(motion_continues);
+                            }
                             tooling_drop_baseline = Some(super::launcher_frame_accounting::ToolingPresentationObservation::new(
-                                telemetry, observed_at, animation_active, tooling_attempt_id, evidence_read_before, run_start,
+                                telemetry, observed_at, motion_continues, tooling_attempt_id, evidence_read_before, run_start,
                             ));
                             metrics.last_physical_drop_count =
                                 Some(presented_frame.main_present_drop_count);
