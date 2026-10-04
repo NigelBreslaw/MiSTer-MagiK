@@ -21,9 +21,22 @@ impl std::fmt::Display for SizeLimitExceeded {
 }
 impl std::error::Error for SizeLimitExceeded {}
 
+pub fn size_limit(error: &io::Error) -> Option<&SizeLimitExceeded> {
+    error.get_ref()?.downcast_ref()
+}
+
+fn buffer(capacity: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(usize::try_from(capacity).map_err(io::Error::other)?)
+        .map_err(io::Error::other)?;
+    Ok(bytes)
+}
+
 fn regular_file(path: &Path) -> io::Result<(File, fs::Metadata)> {
     // Following a regular-file symlink remains supported. Inspect its target
-    // before opening; nonblocking open also closes the stat/open FIFO race.
+    // before opening to avoid opening known device nodes. Nonblocking open
+    // also closes the stat/open FIFO race; descriptor validation remains required.
     if !fs::metadata(path)?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -62,7 +75,7 @@ pub fn read(path: impl AsRef<Path>, limit: u64) -> io::Result<Vec<u8>> {
     if size > limit {
         return Err(oversized(size));
     }
-    let mut bytes = Vec::new();
+    let mut bytes = buffer(size.saturating_add(1))?;
     file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
         return Err(oversized(bytes.len() as u64));
@@ -70,13 +83,13 @@ pub fn read(path: impl AsRef<Path>, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Return at most `limit` bytes from the end of a regular log/snapshot file.
+/// Return at most `limit` bytes from the end of a regular log file.
 /// Unlike `read`, a larger file is intentionally truncated rather than rejected.
 pub fn read_tail(path: impl AsRef<Path>, limit: u64) -> io::Result<Vec<u8>> {
     let (mut file, metadata) = regular_file(path.as_ref())?;
     let start = metadata.len().saturating_sub(limit);
     file.seek(SeekFrom::Start(start))?;
-    let mut bytes = Vec::new();
+    let mut bytes = buffer(metadata.len().min(limit))?;
     file.take(limit).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
@@ -86,8 +99,14 @@ mod tests {
     use super::*;
     #[test]
     fn whole_file_and_tail_keep_their_different_limit_contracts() {
-        let root = std::env::temp_dir().join(format!("magik-bounded-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
+        let root = crate::test_support::unique_temp_dir("bounded");
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
         let path = root.join("input");
         fs::write(&path, b"abcdef").unwrap();
         assert_eq!(read(&path, 6).unwrap(), b"abcdef");

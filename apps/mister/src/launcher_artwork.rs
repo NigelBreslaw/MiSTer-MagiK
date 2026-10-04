@@ -71,7 +71,7 @@ fn index(root: &Path) -> std::io::Result<Index> {
     }
     Ok(index)
 }
-fn source(root: &Path, source: &Source) -> Result<Vec<u8>, String> {
+fn source(root: &Path, source: &Source) -> std::io::Result<Vec<u8>> {
     if !source.file.ends_with(".rgb888")
         || source.file.starts_with('.')
         || !source
@@ -79,14 +79,27 @@ fn source(root: &Path, source: &Source) -> Result<Vec<u8>, String> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
     {
-        return Err("invalid card artwork filename".into());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid card artwork filename",
+        ));
     }
-    let bytes = bounded_file::read(root.join(&source.file), SOURCE_BYTES as u64)
-        .map_err(|e| e.to_string())?;
+    let bytes = bounded_file::read(root.join(&source.file), SOURCE_BYTES as u64)?;
     if bytes.len() != SOURCE_BYTES {
-        return Err("card artwork length mismatch".into());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "card artwork length mismatch",
+        ));
     }
     Ok(bytes)
+}
+fn retryable(error: &std::io::Error) -> bool {
+    !matches!(
+        error.kind(),
+        std::io::ErrorKind::InvalidData
+            | std::io::ErrorKind::InvalidInput
+            | std::io::ErrorKind::PermissionDenied
+    )
 }
 struct Loader<'a> {
     root: &'a Path,
@@ -116,9 +129,12 @@ impl<'a> Loader<'a> {
         let index = match index {
             Ok(index) => index,
             Err(error) => {
-                // A missing pack on binary-only Dev installs is expected.
-                // Other errors, or missing nested art, recover on the worker.
-                return fallback(error.kind() != std::io::ErrorKind::NotFound || builtin.is_none());
+                // Absent/invalid packs and canonical built-in roots are stable.
+                return fallback(
+                    builtin.is_none()
+                        && error.kind() != std::io::ErrorKind::NotFound
+                        && retryable(error),
+                );
             }
         };
         let Some(entry) = index
@@ -135,7 +151,7 @@ impl<'a> Loader<'a> {
             },
             Err(error) => {
                 eprintln!("card artwork {key}: {error}; using fallback artwork");
-                fallback(true)
+                fallback(builtin.is_none() && retryable(&error))
             }
         }
     }
@@ -154,9 +170,14 @@ pub(crate) struct CardFaceCache {
     faces: LauncherFaceCache,
     keys: Vec<String>,
     generation: u64,
+    fallbacks: BTreeMap<String, bool>,
 }
 #[cfg(any(feature = "ui", feature = "ui-preview", test))]
 impl CardFaceCache {
+    pub fn retry_failed_artwork(&mut self) {
+        self.fallbacks.retain(|_, retry| !*retry);
+        self.faces.retry_failed_artwork();
+    }
     pub fn prepare(
         &mut self,
         scene: LauncherScene,
@@ -182,6 +203,7 @@ impl CardFaceCache {
             .map(String::as_str)
             .eq(level.cards.iter().map(|c| c.artwork_key.as_str()))
         {
+            self.fallbacks.clear();
             self.keys = level.cards.iter().map(|c| c.artwork_key.clone()).collect();
             self.generation = self.generation.wrapping_add(1).max(1);
         }
@@ -190,7 +212,22 @@ impl CardFaceCache {
             scene
                 .prepare_initial_with_rgb888_loader_and_cache(
                     data,
-                    &mut |i| loader.load(&self.keys[i]),
+                    &mut |i| {
+                        let key = &self.keys[i];
+                        if let Some(&retry) = self.fallbacks.get(key) {
+                            let normalized =
+                                mister_magik_catalog::catalog_classify::normalize_system_id(key);
+                            return LauncherArtwork {
+                                pixels: Cow::Borrowed(built_in(&normalized).unwrap_or(&[])),
+                                retry,
+                            };
+                        }
+                        let result = loader.load(key);
+                        if matches!(result.pixels, Cow::Borrowed(_)) {
+                            self.fallbacks.insert(key.clone(), result.retry);
+                        }
+                        result
+                    },
                     typography,
                     &mut self.faces,
                     self.generation,
@@ -275,7 +312,7 @@ mod tests {
         std::fs::write(f.0.join("index.json"), manifest.to_string()).unwrap();
         let mut loader = Loader::new(&f.0);
         let fallback = loader.load("root:arcade");
-        assert!(fallback.retry);
+        assert!(!fallback.retry);
         assert_eq!(fallback.pixels.as_ref(), built_in("root:arcade").unwrap());
         std::fs::write(f.0.join("repaired.rgb888"), vec![80; SOURCE_BYTES]).unwrap();
         let recovered = Loader::new(&f.0).load("root:arcade");
@@ -314,6 +351,7 @@ mod tests {
         // A successful source is no longer available: an unchanged face must not read it.
         std::fs::remove_file(f.0.join("snes.rgb888")).unwrap();
         std::fs::write(f.0.join("n64.rgb888"), vec![231; SOURCE_BYTES]).unwrap();
+        cache.retry_failed_artwork();
         let recovered = cache.prepare_from(&f.0, scene, &level, 0, "12:01", None);
         assert!(!recovered.needs_artwork_retry());
         assert_eq!(cache.generation, generation);
@@ -328,24 +366,80 @@ mod tests {
         assert_eq!(cache.generation, generation + 1);
     }
     #[test]
-    fn missing_index_is_retried_on_the_next_preparation() {
+    fn count_refreshes_do_not_retry_failed_sources_before_explicit_retry() {
         let f = Fixture::new();
-        let level = level();
+        f.index();
+        let mut level = level();
         let scene = LauncherScene::new(960, 540);
         let mut cache = CardFaceCache::default();
-        assert!(
-            cache
-                .prepare_from(&f.0, scene, &level, 0, "12:00", None)
-                .needs_artwork_retry()
-        );
-        f.index();
+        let first = cache.prepare_from(&f.0, scene, &level, 0, "12:00", None);
+        assert!(first.needs_artwork_retry());
         for name in ["snes", "n64"] {
             std::fs::write(f.0.join(format!("{name}.rgb888")), vec![42; SOURCE_BYTES]).unwrap();
         }
+        // Repair is deliberately invisible to ordinary count/label preparation.
+        for count in 1..4 {
+            level.cards[0].games = Some(count);
+            let prepared = cache.prepare_from(&f.0, scene, &level, 0, "12:00", None);
+            assert!(prepared.needs_artwork_retry());
+        }
+        cache.retry_failed_artwork();
         assert!(
             !cache
                 .prepare_from(&f.0, scene, &level, 0, "12:00", None)
                 .needs_artwork_retry()
         );
+    }
+
+    #[test]
+    fn permanent_pack_and_source_errors_do_not_schedule_retries() {
+        let f = Fixture::new();
+        for manifest in [
+            b"bad json".as_slice(),
+            b"{\"schema\":2,\"width\":360,\"height\":504,\"format\":\"RGB888\",\"cards\":{}}"
+                .as_slice(),
+        ] {
+            std::fs::write(f.0.join("index.json"), manifest).unwrap();
+            for key in ["root:arcade", "snes"] {
+                assert!(!Loader::new(&f.0).load(key).retry);
+            }
+        }
+        std::fs::write(
+            f.0.join("index.json"),
+            vec![b' '; MAX_INDEX_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert!(!Loader::new(&f.0).load("snes").retry);
+        std::fs::remove_file(f.0.join("index.json")).unwrap();
+        std::fs::create_dir(f.0.join("index.json")).unwrap();
+        assert!(!Loader::new(&f.0).load("snes").retry);
+        std::fs::remove_dir(f.0.join("index.json")).unwrap();
+        f.index();
+        assert!(!Loader::new(&f.0).load("escape").retry);
+        for bytes in [vec![0; 1], vec![0; SOURCE_BYTES + 1]] {
+            std::fs::write(f.0.join("snes.rgb888"), bytes).unwrap();
+            assert!(!Loader::new(&f.0).load("snes").retry);
+        }
+    }
+
+    #[test]
+    fn missing_index_is_stable_until_artwork_keys_change() {
+        let f = Fixture::new();
+        let mut level = level();
+        let scene = LauncherScene::new(960, 540);
+        let mut cache = CardFaceCache::default();
+        let first = cache.prepare_from(&f.0, scene, &level, 0, "12:00", None);
+        assert!(!first.needs_artwork_retry());
+        f.index();
+        for name in ["snes", "n64"] {
+            std::fs::write(f.0.join(format!("{name}.rgb888")), vec![42; SOURCE_BYTES]).unwrap();
+        }
+        let unchanged = cache.prepare_from(&f.0, scene, &level, 0, "12:00", None);
+        assert!(!unchanged.needs_artwork_retry());
+        assert!(first.shares_faces_with(&unchanged));
+        level.cards.swap(0, 1);
+        let changed = cache.prepare_from(&f.0, scene, &level, 0, "12:00", None);
+        assert!(!changed.needs_artwork_retry());
+        assert!(!first.shares_faces_with(&changed));
     }
 }

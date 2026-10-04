@@ -10,8 +10,8 @@ use crate::arcade_catalog::{
 use mister_magik_catalog::catalog_config::{self, CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use mister_magik_catalog::device_layout::DeviceLayout;
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -385,25 +385,15 @@ fn read_return_catalog_capsule_at(
 }
 
 fn read_return_catalog_capsule_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    let file = File::open(path).map_err(|e| format!("open return capsule: {e}"))?;
-    let file_len = file
-        .metadata()
-        .map_err(|e| format!("stat return capsule: {e}"))?
-        .len();
-    if file_len > RETURN_CATALOG_CAPSULE_MAX_BYTES {
-        return Err("return capsule exceeds byte limit".to_string());
-    }
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(file_len as usize)
-        .map_err(|e| format!("allocate return capsule read buffer: {e}"))?;
-    file.take(RETURN_CATALOG_CAPSULE_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("read return capsule: {e}"))?;
-    if bytes.len() as u64 > RETURN_CATALOG_CAPSULE_MAX_BYTES {
-        return Err("return capsule exceeds byte limit".to_string());
-    }
-    Ok(bytes)
+    mister_magik_catalog::bounded_file::read(path, RETURN_CATALOG_CAPSULE_MAX_BYTES).map_err(
+        |error| {
+            if mister_magik_catalog::bounded_file::size_limit(&error).is_some() {
+                "return capsule exceeds byte limit".to_string()
+            } else {
+                format!("read return capsule: {error}")
+            }
+        },
+    )
 }
 
 fn decode_return_catalog_capsule(

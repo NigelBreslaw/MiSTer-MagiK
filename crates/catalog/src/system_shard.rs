@@ -1398,10 +1398,7 @@ fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, SystemShardErr
     #[cfg(any(test, feature = "io-test-metrics"))]
     crate::io_test_metrics::record_read();
     crate::bounded_file::read(path, max_bytes as u64).map_err(|error| {
-        if error
-            .get_ref()
-            .is_some_and(|e| e.is::<crate::bounded_file::SizeLimitExceeded>())
-        {
+        if crate::bounded_file::size_limit(&error).is_some() {
             SystemShardError::new("read", "compressed navigation exceeds configured limit")
         } else {
             SystemShardError::with("read shard navigation", error)

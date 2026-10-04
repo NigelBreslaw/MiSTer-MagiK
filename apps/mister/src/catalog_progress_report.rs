@@ -3,7 +3,7 @@
 
 //! Bounded, persistent progress episodes for catalog workers that may never fail.
 
-use mister_magik_catalog::bounded_file::read_tail as read_bounded;
+use mister_magik_catalog::bounded_file::read_tail;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
@@ -495,9 +495,7 @@ fn read_json_snapshot(path: &str) -> Option<Value> {
     let bytes = match mister_magik_catalog::bounded_file::read(path, MAX_JSON_INPUT_BYTES) {
         Ok(bytes) => bytes,
         Err(error) => {
-            let limit = error
-                .get_ref()?
-                .downcast_ref::<mister_magik_catalog::bounded_file::SizeLimitExceeded>()?;
+            let limit = mister_magik_catalog::bounded_file::size_limit(&error)?;
             return Some(json!({
                 "projection_error": "snapshot exceeds bounded JSON input",
                 "bytes": limit.observed,
@@ -541,7 +539,7 @@ fn read_json_snapshot(path: &str) -> Option<Value> {
 }
 
 fn filtered_event_tail(path: &str, pid: u32) -> Vec<String> {
-    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES as u64) else {
+    let Ok(bytes) = read_tail(path, MAX_LOG_BYTES as u64) else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -575,7 +573,7 @@ fn filtered_event_tail(path: &str, pid: u32) -> Vec<String> {
 }
 
 fn filtered_application_log_tail(path: &str) -> Vec<String> {
-    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES as u64) else {
+    let Ok(bytes) = read_tail(path, MAX_LOG_BYTES as u64) else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&bytes);

@@ -36,11 +36,17 @@ changed card labels/counts reload only the affected source on the preparation
 worker. Ordered artwork-key changes advance `asset_generation`, letting the
 renderer invalidate its own cache.
 
-A declared source that fails to load produces a retryable fallback. The existing
-background worker retries failed faces with a 1–30 second backoff while the
-current cards continue to animate. Successful faces are reused. A wholly absent
-pack on a binary-only Dev install uses stable built-in roots without periodic
-rebakes. Unknown system IDs in a valid index intentionally remain generic.
+Missing packs, invalid indexes/files and built-in root fallbacks are stable for
+unchanged artwork keys. Declared nested sources with transient read failures
+(including missing files) are retried on the worker with a 1–30 second backoff.
+Count/label refreshes and prefetch do not bypass that retry schedule. Requests
+and adoption wait for motion to settle; unsuccessful retries reuse fallback
+faces and do not invalidate the visible scene. Successful files are not polled.
+
+Reloading a changed card's source costs 544,320 bytes of filesystem I/O on the
+worker. This trades occasional refresh reads for releasing full-size buffers.
+A same-length file corrupted after installation may display incorrect pixels;
+runtime intentionally does not hash artwork again.
 
 No file reads occur in frame rendering. Successful assets are not watched for
 replacement; restart after updating a pack. Release validation continues to

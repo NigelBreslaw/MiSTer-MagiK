@@ -309,8 +309,9 @@ enum Artwork<'a> {
     Rgb888(&'a [&'a [u8]]),
 }
 
-/// One lazily supplied source. Retryable fallbacks are displayed but not reused
-/// as a successful cache entry. Source pixels are dropped after this card bakes.
+/// One lazily supplied source. Retryable fallbacks are reused until an explicit
+/// retry; their pixels must stay identical within an artwork generation. Source
+/// pixels are dropped after this card bakes.
 pub struct LauncherArtwork {
     pub pixels: std::borrow::Cow<'static, [u8]>,
     pub retry: bool,
@@ -327,6 +328,13 @@ pub struct LauncherFaceCache {
     artwork_kind: u8,
     keys: Vec<CardFaceKey>,
     faces: Vec<Arc<CardFaces>>,
+    retry_artwork: bool,
+}
+impl LauncherFaceCache {
+    /// Only an explicit background retry may revisit failed artwork.
+    pub fn retry_failed_artwork(&mut self) {
+        self.retry_artwork = true;
+    }
 }
 #[derive(Eq, PartialEq)]
 struct CardFaceKey {
@@ -704,6 +712,14 @@ impl PreparedLauncher {
             trick: None,
         }
     }
+    pub fn shares_faces_with(&self, other: &Self) -> bool {
+        self.faces.len() == other.faces.len()
+            && self
+                .faces
+                .iter()
+                .zip(other.faces.iter())
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+    }
     pub fn needs_artwork_retry(&self) -> bool {
         self.retry_artwork
     }
@@ -820,11 +836,21 @@ impl PreparedLauncher {
                 });
                 if let Some(cache) = reusable
                     && cache.keys.get(index) == Some(&keys[index])
-                    && !cache.faces[index].source_retry
+                    && (!cache.faces[index].source_retry || !cache.retry_artwork)
                 {
                     return Arc::clone(&cache.faces[index]);
                 }
                 let loaded = load.as_mut().map(|load| load(index));
+                // A retry that failed again has identical fallback pixels. Keep
+                // its prepared surfaces so the UI can discard an unchanged result.
+                if let Some(cache) = reusable
+                    && cache.keys.get(index) == Some(&keys[index])
+                    && cache.faces[index].source_retry
+                    && loaded.as_ref().is_some_and(|source| source.retry)
+                {
+                    return Arc::clone(&cache.faces[index]);
+                }
+
                 let card = PreparedCard {
                     id: card.id,
                     name: card.name,
@@ -897,6 +923,7 @@ impl PreparedLauncher {
             cache.artwork_kind = artwork_kind;
             cache.keys = keys;
             cache.faces = faces.clone();
+            cache.retry_artwork = false;
         }
         #[cfg(feature = "launcher-profile")]
         let _buffers = crate::launcher_profile::span("prepare.retained_buffers");
@@ -2028,12 +2055,24 @@ mod tests {
             .finish();
         assert!(first.needs_artwork_retry());
         assert_eq!(*calls.borrow(), vec![1; CARDS.len()]);
+        let unchanged = scene
+            .prepare_initial_with_rgb888_loader_and_cache(data(), &mut load, None, &mut cache, 1)
+            .finish();
+        assert!(first.shares_faces_with(&unchanged));
+        assert_eq!(*calls.borrow(), vec![1; CARDS.len()]);
+        cache.retry_failed_artwork();
+        let failed_again = scene
+            .prepare_initial_with_rgb888_loader_and_cache(data(), &mut load, None, &mut cache, 1)
+            .finish();
+        assert!(first.shares_faces_with(&failed_again));
+        assert_eq!(*calls.borrow(), vec![1, 2, 1, 1, 1]);
         failing.set(false);
+        cache.retry_failed_artwork();
         let recovered = scene
             .prepare_initial_with_rgb888_loader_and_cache(data(), &mut load, None, &mut cache, 1)
             .finish();
         assert!(!recovered.needs_artwork_retry());
-        assert_eq!(*calls.borrow(), vec![1, 2, 1, 1, 1]);
+        assert_eq!(*calls.borrow(), vec![1, 3, 1, 1, 1]);
         let mut cards = CARDS;
         cards[2].games = Some(314);
         let mut input = data();
@@ -2043,15 +2082,15 @@ mod tests {
         scene
             .prepare_initial_with_rgb888_loader_and_cache(input, &mut load, None, &mut cache, 1)
             .finish();
-        assert_eq!(*calls.borrow(), vec![1, 2, 2, 1, 1]);
+        assert_eq!(*calls.borrow(), vec![1, 3, 2, 1, 1]);
         scene
             .prepare_initial_with_rgb888_loader_and_cache(input, &mut load, None, &mut cache, 1)
             .finish();
-        assert_eq!(*calls.borrow(), vec![1, 2, 2, 1, 1]);
+        assert_eq!(*calls.borrow(), vec![1, 3, 2, 1, 1]);
         scene
             .prepare_initial_with_rgb888_loader_and_cache(input, &mut load, None, &mut cache, 2)
             .finish();
-        assert_eq!(*calls.borrow(), vec![2, 3, 3, 2, 2]);
+        assert_eq!(*calls.borrow(), vec![2, 4, 3, 2, 2]);
     }
 
     /// Projection, lighting, face swaps and reflections with the clean-background

@@ -350,14 +350,12 @@ impl LauncherCardHomeSession {
         if let Some(id) = self.artwork_retry.take() {
             self.preparation.cancel(id);
         }
-        self.artwork_retry_delay = 1_000;
-        self.artwork_retry_at = self.now_ms.saturating_add(1_000);
     }
 
     /// Retry missing source files on the existing worker. Keep animating the
-    /// current faces while it runs; permanent failures back off to 30 seconds.
+    /// current faces while it runs; only settled frames request/adopt repairs.
     fn poll_artwork_retry(&mut self) {
-        if !self.active || self.trick.is_some() || self.pending.is_some() {
+        if !self.active || self.trick.is_some() || self.pending.is_some() || self.is_animating() {
             return;
         }
         if let Some(id) = self.artwork_retry {
@@ -367,11 +365,15 @@ impl LauncherCardHomeSession {
             if let Some(content) = self.preparation.take(id) {
                 self.artwork_retry = None;
                 let retry = content.needs_artwork_retry();
-                let old = self.prepared.0.replace(content).unwrap();
-                self.retire(Prepared::Built(old));
-                self.refresh_chrome(self.frame.selected);
-                self.content_generation = self.content_generation.wrapping_add(1).max(1);
-                self.content_dirty = true;
+                if self.prepared.shares_faces_with(&content) {
+                    self.retire(Prepared::Built(content));
+                } else {
+                    let old = self.prepared.0.replace(content).unwrap();
+                    self.retire(Prepared::Built(old));
+                    self.refresh_chrome(self.frame.selected);
+                    self.content_generation = self.content_generation.wrapping_add(1).max(1);
+                    self.content_dirty = true;
+                }
                 self.artwork_retry_at = self.now_ms.saturating_add(self.artwork_retry_delay);
                 self.artwork_retry_delay = if retry {
                     (self.artwork_retry_delay * 2).min(30_000)
@@ -384,12 +386,11 @@ impl LauncherCardHomeSession {
             && self.prepared.needs_artwork_retry()
             && self.now_ms >= self.artwork_retry_at
         {
-            self.artwork_retry = self.preparation.request(
+            self.artwork_retry = self.preparation.retry_artwork(
                 self.scene,
                 &self.level,
                 self.frame.selected,
                 &self.clock,
-                false,
             );
             self.artwork_retry_at = self.now_ms.saturating_add(self.artwork_retry_delay);
         }
@@ -1222,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn artwork_retry_runs_on_worker_without_stopping_motion_or_resetting_selection() {
+    fn artwork_retry_waits_for_settled_motion_without_resetting_selection() {
         use mister_magik_framebuffer_scenes::launcher::{LauncherArtwork, LauncherFaceCache};
         let root = snapshot();
         let scene = LauncherScene::new(960, 540);
@@ -1258,7 +1259,12 @@ mod tests {
         .unwrap();
         session.update(scene, &root, 0, 0.0, "12:00", 999, false, None);
         assert!(session.artwork_retry.is_none());
-        session.update(scene, &root, 0, 0.0, "12:00", 1000, false, None);
+        session.update(scene, &root, 1, 0.25, "12:00", 1000, true, None);
+        assert!(
+            session.artwork_retry.is_none(),
+            "motion must defer retry requests"
+        );
+        session.update(scene, &root, 0, 0.0, "12:00", 1001, false, None);
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         session.update(scene, &root, 1, 0.25, "12:00", 1016, true, None);
         assert!(session.prepared.needs_artwork_retry());
@@ -1268,17 +1274,46 @@ mod tests {
         assert_eq!(session.render().len(), scene.width * scene.height);
         release_tx.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
+        // Even a ready result must not be adopted during motion.
+        session.update(scene, &root, 1, 0.25, "12:00", 1032, true, None);
+        assert!(session.prepared.needs_artwork_retry());
         while session.prepared.needs_artwork_retry() {
-            session.update(scene, &root, 1, 0.25, "12:00", 1032, true, None);
+            session.update(scene, &root, 1, 1.0, "12:00", 1048, false, None);
             assert!(Instant::now() < deadline, "artwork did not recover");
             std::thread::yield_now();
         }
-        assert_eq!(session.frame, moving);
-        assert_eq!(session.last_visual_index, 0.25);
+        assert_eq!(session.frame, settled_frame(1));
+        assert_eq!(session.last_visual_index, 1.0);
         assert!(session.artwork_retry.is_none());
         let mut expected = prepare(scene, &root, 1, "12:00", &session.fonts);
-        expected.render_frame(moving);
+        expected.render_frame(settled_frame(1));
         assert_eq!(session.render(), expected.pixels());
+    }
+
+    #[test]
+    fn unchanged_retry_does_not_invalidate_content_and_count_changes_keep_backoff() {
+        let mut level = snapshot();
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "12:00").unwrap();
+        session.update(scene, &level, 0, 0.0, "12:00", 0, false, None);
+        session.render();
+        let generation = session.content_generation;
+        session.artwork_retry = session.preparation.retry_artwork(scene, &level, 0, "12:00");
+        assert!(session.artwork_retry.is_some());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.artwork_retry.is_some() {
+            session.update(scene, &level, 0, 0.0, "12:00", 1000, false, None);
+            assert!(Instant::now() < deadline, "retry did not complete");
+            std::thread::yield_now();
+        }
+        assert_eq!(session.content_generation, generation);
+        assert!(!session.content_dirty);
+        session.artwork_retry_delay = 8_000;
+        session.artwork_retry_at = 9_000;
+        level.cards[0].games = Some(12345);
+        session.update(scene, &level, 0, 0.0, "12:00", 1001, false, None);
+        assert_eq!(session.artwork_retry_delay, 8_000);
+        assert_eq!(session.artwork_retry_at, 9_000);
     }
 
     #[test]

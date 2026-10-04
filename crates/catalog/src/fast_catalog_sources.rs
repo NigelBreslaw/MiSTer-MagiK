@@ -1541,10 +1541,7 @@ fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, St
 
 fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
     crate::bounded_file::read(path, maximum).map_err(|error| {
-        if let Some(limit) = error
-            .get_ref()
-            .and_then(|e| e.downcast_ref::<crate::bounded_file::SizeLimitExceeded>())
-        {
+        if let Some(limit) = crate::bounded_file::size_limit(&error) {
             format!(
                 "{} kind=file-bytes observed={} configured={} path={}",
                 crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,

@@ -3,7 +3,7 @@
 
 //! Bounded, persistent support reports for latch presentation failures.
 
-use mister_magik_catalog::bounded_file::read_tail as read_bounded;
+use mister_magik_catalog::bounded_file::read_tail;
 use mister_magik_mister_runtime::latch_readiness::LatchFailureEvidence;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -217,12 +217,12 @@ fn write_current_pointer(namespace_dir: &Path) -> io::Result<()> {
 }
 
 fn read_json_snapshot(path: &str) -> Option<Value> {
-    let bytes = read_bounded(path, MAX_SNAPSHOT_BYTES as u64).ok()?;
+    let bytes = mister_magik_catalog::bounded_file::read(path, MAX_SNAPSHOT_BYTES as u64).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 fn filtered_log_tail(path: &str) -> Vec<String> {
-    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES as u64) else {
+    let Ok(bytes) = read_tail(path, MAX_LOG_BYTES as u64) else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -354,6 +354,22 @@ mod tests {
     use mister_magik_mister_runtime::latch_readiness::{
         LatchFailure, LatchFailureReason, LatchFailureStage,
     };
+
+    #[test]
+    fn whole_json_snapshot_rejects_an_oversized_valid_json_tail() {
+        let path = std::env::temp_dir().join(format!(
+            "magik-latch-snapshot-{}-{}",
+            std::process::id(),
+            unix_ms()
+        ));
+        let mut bytes = vec![b' '; MAX_SNAPSHOT_BYTES];
+        bytes.extend_from_slice(b"{}");
+        fs::write(&path, bytes).unwrap();
+        assert!(read_json_snapshot(path.to_str().unwrap()).is_none());
+        fs::write(&path, b"{}").unwrap();
+        assert_eq!(read_json_snapshot(path.to_str().unwrap()), Some(json!({})));
+        fs::remove_file(path).unwrap();
+    }
 
     fn evidence() -> LatchFailureEvidence {
         LatchFailureEvidence::from(&LatchFailure::runtime(

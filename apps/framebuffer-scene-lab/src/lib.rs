@@ -26,8 +26,6 @@ use mister_magik_particles::reload::{
     StartupParticleStatus, StartupParticleStatusState, publish_startup_particle_status,
 };
 use serde::Deserialize;
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -339,18 +337,16 @@ pub fn read_effect_recipe(path: &Path) -> Result<EffectRecipe, String> {
 }
 
 fn read_effect_recipe_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
-    let mut bytes = Vec::new();
-    file.take((MAX_RECIPE_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
-    if bytes.len() > MAX_RECIPE_FILE_BYTES {
-        return Err(format!(
-            "{} exceeds the {MAX_RECIPE_FILE_BYTES} byte recipe limit",
-            path.display()
-        ));
-    }
-    Ok(bytes)
+    mister_magik_catalog::bounded_file::read(path, MAX_RECIPE_FILE_BYTES as u64).map_err(|error| {
+        if mister_magik_catalog::bounded_file::size_limit(&error).is_some() {
+            format!(
+                "{} exceeds the {MAX_RECIPE_FILE_BYTES} byte recipe limit",
+                path.display()
+            )
+        } else {
+            format!("read {}: {error}", path.display())
+        }
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
