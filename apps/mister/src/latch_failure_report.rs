@@ -3,11 +3,12 @@
 
 //! Bounded, persistent support reports for latch presentation failures.
 
+use mister_magik_catalog::bounded_file::read_tail as read_bounded;
 use mister_magik_mister_runtime::latch_readiness::LatchFailureEvidence;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
@@ -216,12 +217,12 @@ fn write_current_pointer(namespace_dir: &Path) -> io::Result<()> {
 }
 
 fn read_json_snapshot(path: &str) -> Option<Value> {
-    let bytes = read_bounded(path, MAX_SNAPSHOT_BYTES).ok()?;
+    let bytes = read_bounded(path, MAX_SNAPSHOT_BYTES as u64).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 fn filtered_log_tail(path: &str) -> Vec<String> {
-    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES) else {
+    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES as u64) else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -245,18 +246,6 @@ fn filtered_log_tail(path: &str) -> Vec<String> {
         .collect::<Vec<_>>();
     lines.reverse();
     lines
-}
-
-fn read_bounded(path: &str, limit: usize) -> io::Result<Vec<u8>> {
-    let file = fs::File::open(path)?;
-    let len = file.metadata()?.len();
-    let start = len.saturating_sub(limit as u64);
-    let mut bytes = Vec::with_capacity(limit.min(len as usize));
-    let mut reader = io::BufReader::new(file);
-    use std::io::Seek;
-    reader.seek(io::SeekFrom::Start(start))?;
-    reader.take(limit as u64).read_to_end(&mut bytes)?;
-    Ok(bytes)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {

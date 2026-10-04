@@ -138,6 +138,9 @@ pub(super) struct LauncherCardHomeSession {
     prepared: VisiblePrepared,
     preparation: HomePreparation,
     pending: Option<PendingLevel>,
+    artwork_retry: Option<u64>,
+    artwork_retry_at: u64,
+    artwork_retry_delay: u64,
     trick: Option<LevelTrick>,
     aside: Vec<Aside>,
     now_ms: u64,
@@ -190,6 +193,9 @@ impl LauncherCardHomeSession {
             prepared: VisiblePrepared(Some(Box::new(prepared))),
             preparation,
             pending: None,
+            artwork_retry: None,
+            artwork_retry_at: 1_000,
+            artwork_retry_delay: 1_000,
             trick: None,
             aside: Vec::new(),
             now_ms: 0,
@@ -214,6 +220,7 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn set_inactive(&mut self) {
+        self.cancel_artwork_retry();
         // Preserve a pending destination while away; returning can adopt it
         // without waiting on or destroying a preparation worker here.
         self.invalidate_compositor();
@@ -250,6 +257,7 @@ impl LauncherCardHomeSession {
         }
         let faces_changed = self.scene != scene || self.level.cards != level.cards || level_changed;
         if faces_changed {
+            self.cancel_artwork_retry();
             let matches = self.pending.as_ref().is_some_and(|pending| {
                 pending.scene == scene
                     && pending.level.menu_id == level.menu_id
@@ -334,6 +342,56 @@ impl LauncherCardHomeSession {
             self.content_dirty = true;
             self.preparation_measurement = preparation_started
                 .map(|start| start.elapsed().as_micros().try_into().unwrap_or(u64::MAX));
+        }
+        self.poll_artwork_retry();
+    }
+
+    fn cancel_artwork_retry(&mut self) {
+        if let Some(id) = self.artwork_retry.take() {
+            self.preparation.cancel(id);
+        }
+        self.artwork_retry_delay = 1_000;
+        self.artwork_retry_at = self.now_ms.saturating_add(1_000);
+    }
+
+    /// Retry missing source files on the existing worker. Keep animating the
+    /// current faces while it runs; permanent failures back off to 30 seconds.
+    fn poll_artwork_retry(&mut self) {
+        if !self.active || self.trick.is_some() || self.pending.is_some() {
+            return;
+        }
+        if let Some(id) = self.artwork_retry {
+            if !self.preparation.can_retire(1) {
+                return;
+            }
+            if let Some(content) = self.preparation.take(id) {
+                self.artwork_retry = None;
+                let retry = content.needs_artwork_retry();
+                let old = self.prepared.0.replace(content).unwrap();
+                self.retire(Prepared::Built(old));
+                self.refresh_chrome(self.frame.selected);
+                self.content_generation = self.content_generation.wrapping_add(1).max(1);
+                self.content_dirty = true;
+                self.artwork_retry_at = self.now_ms.saturating_add(self.artwork_retry_delay);
+                self.artwork_retry_delay = if retry {
+                    (self.artwork_retry_delay * 2).min(30_000)
+                } else {
+                    1_000
+                };
+            }
+        }
+        if self.artwork_retry.is_none()
+            && self.prepared.needs_artwork_retry()
+            && self.now_ms >= self.artwork_retry_at
+        {
+            self.artwork_retry = self.preparation.request(
+                self.scene,
+                &self.level,
+                self.frame.selected,
+                &self.clock,
+                false,
+            );
+            self.artwork_retry_at = self.now_ms.saturating_add(self.artwork_retry_delay);
         }
     }
 
@@ -426,6 +484,7 @@ impl LauncherCardHomeSession {
     /// Start the level-change trick toward `level`. The destination is the one
     /// set aside for it if there is one, else it is built on a worker.
     fn begin_trick(&mut self, level: CardLevelSnapshot, selected: usize) {
+        self.cancel_artwork_retry();
         if !self.preparation.can_retire(2) {
             return;
         }
@@ -1051,7 +1110,7 @@ fn prepare(
         .collect();
     let artwork =
         crate::launcher_artwork::load_cards(&crate::launcher_artwork::asset_root(), &keys);
-    let sources: Vec<_> = artwork.iter().map(Vec::as_slice).collect();
+    let sources: Vec<_> = artwork.iter().map(|pixels| pixels.as_ref()).collect();
     level.with_data(selected, clock, |data| {
         scene
             .prepare_initial_with_rgb888_artwork_and_typography(data, &sources, fonts.typography())
@@ -1068,19 +1127,7 @@ fn prepare_cached(
     fonts: &LauncherFonts,
     cache: &mut CardFaceCache,
 ) -> PreparedLauncher {
-    cache.load(level);
-    let rgb888: Vec<&[u8]> = cache.artwork.iter().map(Vec::as_slice).collect();
-    level.with_data(selected, clock, |data| {
-        scene
-            .prepare_initial_with_rgb888_artwork_typography_and_cache(
-                data,
-                &rgb888,
-                fonts.typography(),
-                &mut cache.faces,
-                1,
-            )
-            .finish()
-    })
+    cache.prepare(scene, level, selected, clock, Some(fonts.typography()))
 }
 
 impl Drop for LauncherCardHomeSession {
@@ -1172,6 +1219,66 @@ mod tests {
             );
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn artwork_retry_runs_on_worker_without_stopping_motion_or_resetting_selection() {
+        use mister_magik_framebuffer_scenes::launcher::{LauncherArtwork, LauncherFaceCache};
+        let root = snapshot();
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, root.clone(), 0, "12:00").unwrap();
+        let failed = root.with_data(0, "12:00", |data| {
+            scene
+                .prepare_initial_with_rgb888_loader_and_cache(
+                    data,
+                    &mut |_| LauncherArtwork {
+                        pixels: std::borrow::Cow::Borrowed(&[]),
+                        retry: true,
+                    },
+                    Some(session.fonts.typography()),
+                    &mut LauncherFaceCache::default(),
+                    1,
+                )
+                .finish()
+        });
+        session.prepared.0 = Some(Box::new(failed));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let ui_thread = std::thread::current().id();
+        session.preparation = HomePreparation::start(
+            Arc::clone(&session.fonts),
+            root.menu_id.clone(),
+            CardFaceCache::default(),
+            move |_| {
+                assert_ne!(std::thread::current().id(), ui_thread);
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            },
+        )
+        .unwrap();
+        session.update(scene, &root, 0, 0.0, "12:00", 999, false, None);
+        assert!(session.artwork_retry.is_none());
+        session.update(scene, &root, 0, 0.0, "12:00", 1000, false, None);
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        session.update(scene, &root, 1, 0.25, "12:00", 1016, true, None);
+        assert!(session.prepared.needs_artwork_retry());
+        assert_eq!(session.last_visual_index, 0.25);
+        let moving = session.frame;
+        assert_ne!(moving, settled_frame(0));
+        assert_eq!(session.render().len(), scene.width * scene.height);
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.prepared.needs_artwork_retry() {
+            session.update(scene, &root, 1, 0.25, "12:00", 1032, true, None);
+            assert!(Instant::now() < deadline, "artwork did not recover");
+            std::thread::yield_now();
+        }
+        assert_eq!(session.frame, moving);
+        assert_eq!(session.last_visual_index, 0.25);
+        assert!(session.artwork_retry.is_none());
+        let mut expected = prepare(scene, &root, 1, "12:00", &session.fonts);
+        expected.render_frame(moving);
+        assert_eq!(session.render(), expected.pixels());
     }
 
     #[test]

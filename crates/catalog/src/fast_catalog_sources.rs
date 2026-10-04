@@ -31,7 +31,6 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1541,32 +1540,22 @@ fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, St
 }
 
 fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
-    let metadata =
-        fs::metadata(path).map_err(|error| format!("metadata {}: {error}", path.display()))?;
-    if metadata.len() > maximum {
-        return Err(format!(
-            "{} kind=file-bytes observed={} configured={} path={}",
-            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
-            metadata.len(),
-            maximum,
-            path.display(),
-        ));
-    }
-    let file = fs::File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
-    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(usize::MAX));
-    file.take(maximum.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
-    if bytes.len() as u64 > maximum {
-        return Err(format!(
-            "{} kind=file-bytes observed={} configured={} path={}",
-            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
-            bytes.len(),
-            maximum,
-            path.display(),
-        ));
-    }
-    Ok(bytes)
+    crate::bounded_file::read(path, maximum).map_err(|error| {
+        if let Some(limit) = error
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<crate::bounded_file::SizeLimitExceeded>())
+        {
+            format!(
+                "{} kind=file-bytes observed={} configured={} path={}",
+                crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+                limit.observed,
+                limit.limit,
+                path.display()
+            )
+        } else {
+            format!("read {}: {error}", path.display())
+        }
+    })
 }
 
 fn direct_row(system_id: &str, category: &str, path: &Path, title: String) -> SystemGame {

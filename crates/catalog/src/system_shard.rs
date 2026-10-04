@@ -1397,16 +1397,16 @@ fn elapsed_us(started: std::time::Instant) -> u64 {
 fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, SystemShardError> {
     #[cfg(any(test, feature = "io-test-metrics"))]
     crate::io_test_metrics::record_read();
-    let size = fs::metadata(path)
-        .map_err(|error| SystemShardError::with("stat shard navigation", error))?
-        .len();
-    if size > max_bytes as u64 {
-        return Err(SystemShardError::new(
-            "read",
-            "compressed navigation exceeds configured limit",
-        ));
-    }
-    fs::read(path).map_err(|error| SystemShardError::with("read shard navigation", error))
+    crate::bounded_file::read(path, max_bytes as u64).map_err(|error| {
+        if error
+            .get_ref()
+            .is_some_and(|e| e.is::<crate::bounded_file::SizeLimitExceeded>())
+        {
+            SystemShardError::new("read", "compressed navigation exceeds configured limit")
+        } else {
+            SystemShardError::with("read shard navigation", error)
+        }
+    })
 }
 
 fn meta_text(connection: &Connection, key: &str) -> Result<String, SystemShardError> {

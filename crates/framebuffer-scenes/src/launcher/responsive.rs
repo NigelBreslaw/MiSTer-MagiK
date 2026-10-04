@@ -388,6 +388,7 @@ impl Layout {
             crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h)
         });
         CardFaces {
+            source_retry: false,
             compact,
             detail: crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h),
             back,

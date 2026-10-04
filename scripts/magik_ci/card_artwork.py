@@ -3,10 +3,11 @@
 
 """Validate the runtime card pack shared by ZIP and Downloader installs."""
 
-import hashlib
 import json
 import re
 from pathlib import Path
+
+from .common import sha256_file
 
 RELATIVE_PATH = "assets/ui/launcher-cards"
 SOURCE_BYTES = 360 * 504 * 3
@@ -56,6 +57,6 @@ def validate(root: Path) -> set[str]:
             or path.stat().st_size != SOURCE_BYTES
         ):
             raise ValueError(f"invalid card artwork file: {name}")
-        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        if sha256_file(path) != digest:
             raise ValueError(f"card artwork checksum mismatch: {name}")
     return {"index.json", *files}

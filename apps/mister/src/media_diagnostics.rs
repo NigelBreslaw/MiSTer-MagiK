@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -160,7 +160,7 @@ fn run(receiver: mpsc::Receiver<Event>) {
     let boot = sanitize(&boot);
     let session = unix_ms();
     let ledger_path = tmp.join("media-diagnostics-budget.json");
-    let ledger: Value = read_bounded(&ledger_path)
+    let ledger: Value = mister_magik_catalog::bounded_file::read(&ledger_path, MAX_BYTES as u64)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or(Value::Null);
@@ -180,7 +180,7 @@ fn run(receiver: mpsc::Receiver<Event>) {
     let mut journal = Journal::default();
     let platform_path =
         mister_magik_catalog::device_layout::current_app_path("platform-v3.manifest");
-    if let Ok(bytes) = read_bounded(&platform_path) {
+    if let Ok(bytes) = mister_magik_catalog::bounded_file::read(&platform_path, MAX_BYTES as u64) {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(&bytes)
             .iter()
@@ -243,17 +243,6 @@ fn run(receiver: mpsc::Receiver<Event>) {
 
 fn persistent_budget_available(saved: u64, last_saved_ms: u64, now: u64) -> bool {
     saved < 16 && now.saturating_sub(last_saved_ms) >= 60_000
-}
-
-fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    fs::File::open(path)?
-        .take((MAX_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_BYTES {
-        return Err(io::Error::other("media diagnostic input exceeds bound"));
-    }
-    Ok(bytes)
 }
 
 fn atomic_json(path: &Path, value: &Value) -> io::Result<()> {

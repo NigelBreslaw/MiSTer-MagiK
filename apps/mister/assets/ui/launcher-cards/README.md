@@ -13,20 +13,38 @@ Model credits, licence links and modifications are in
 The ZIP and Downloader packages install the index and pixels under
 `/media/fat/mister-magik/assets/ui/launcher-cards/`. Development builds resolve
 `/media/fat/mister-magik-dev/assets/ui/launcher-cards/` through the existing
-`DevicePaths` layout contract. `magik deploy` currently transfers only the binary;
-this PR does not add development-service asset transfer. A Dev installation must
-already contain the artwork directory. Host previews default to this source-tree
-directory. `MISTER_MAGIK_CARD_ASSETS` overrides the directory for previews or an
-explicitly configured installation.
+`DevicePaths` layout contract. `magik deploy` still transfers only the binary.
+The six root renders are also built into the binary as a fallback, so a Dev
+installation without the artwork directory retains the canonical root workload.
+Installed root artwork takes precedence when readable. Nested artwork still
+requires the filesystem pack. The fallback costs about 3.3 MB in the binary and
+is borrowed directly; it does not allocate six extra source buffers.
 
-The app reads the index and validates pixel sizes/checksums during initial card
-preparation and on the existing background preparation worker. Each bounded
-level cache keeps its sources with its prepared faces. Counts, labels and clock
-refreshes reuse those sources; changes to ordered artwork IDs invalidate them.
-No file reads or checksums occur in frame rendering. Restart after replacing an
-installed pack; assets are not hot-reloaded. Absent, incompatible or corrupt
-files retain their carousel slots and show generic cards. Release validation
-rejects incomplete or corrupt packs before publication.
+Host previews default to this source-tree directory. `MISTER_MAGIK_CARD_ASSETS`
+overrides it for previews or an explicitly configured installation. Preview
+keys come from `CardLevelSnapshot`, independently of displayed labels.
+
+Packaging/Downloader verify SHA-256 checksums. Runtime loading checks the index
+format and exact pixel length, with no repeated content hashing. The shared
+bounded-file reader rejects non-regular files before opening and uses nonblocking
+open plus a descriptor type check on Unix to close the FIFO/symlink race.
+
+The face cache requests source pixels only for a cache miss, and releases each
+source immediately after its compact/detail faces have been prepared. No level
+cache retains full-size source images. Clock/selection refreshes reuse all faces;
+changed card labels/counts reload only the affected source on the preparation
+worker. Ordered artwork-key changes advance `asset_generation`, letting the
+renderer invalidate its own cache.
+
+A declared source that fails to load produces a retryable fallback. The existing
+background worker retries failed faces with a 1–30 second backoff while the
+current cards continue to animate. Successful faces are reused. A wholly absent
+pack on a binary-only Dev install uses stable built-in roots without periodic
+rebakes. Unknown system IDs in a valid index intentionally remain generic.
+
+No file reads occur in frame rendering. Successful assets are not watched for
+replacement; restart after updating a pack. Release validation continues to
+reject incomplete or checksum-invalid packs before publication.
 
 ## One source size for HDMI and CRT
 

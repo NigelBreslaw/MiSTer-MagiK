@@ -6,7 +6,7 @@ use mister_magik_fb::bitmap_font_resource::{
     jersey_25_console_bitmap_font, launcher_bitmap_font, nocive_15_console_bitmap_font,
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
 };
-use mister_magik_fb::launcher_home::{LauncherHomeCounts, LauncherHomeSnapshot};
+use mister_magik_fb::launcher_home::{CardLevelSnapshot, LauncherHomeCounts, LauncherHomeSnapshot};
 use mister_magik_framebuffer_scenes::{
     Rgb565Pixel,
     launcher::{
@@ -45,16 +45,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         favourites: 1,
         collections: 77,
     });
-    let root_keys: Vec<_> = snapshot
+    let root_keys: Vec<_> = CardLevelSnapshot::root(&snapshot)
         .cards
         .iter()
-        .map(|card| format!("root:{}", card.name.to_ascii_lowercase()))
+        .map(|card| card.artwork_key.clone())
         .collect();
     let rgb_assets = mister_magik_fb::launcher_artwork::load_cards(
         &mister_magik_fb::launcher_artwork::asset_root(),
         &root_keys,
     );
-    let rgb_artwork: Vec<_> = rgb_assets.iter().map(Vec::as_slice).collect();
+    let rgb_artwork: Vec<_> = rgb_assets.iter().map(|pixels| pixels.as_ref()).collect();
     for (name, scene) in [
         ("hdmi-landscape", LauncherScene::new(960, 540)),
         ("hdmi-portrait", LauncherScene::new(540, 960)),
@@ -169,7 +169,7 @@ fn review_level_trick(
         &mister_magik_fb::launcher_artwork::asset_root(),
         &keys,
     );
-    let sources: Vec<_> = artwork.iter().map(Vec::as_slice).collect();
+    let sources: Vec<_> = artwork.iter().map(|pixels| pixels.as_ref()).collect();
     let mut consoles = scene
         .prepare_initial_with_rgb888_artwork_and_typography(data, &sources, fonts)
         .finish();
@@ -272,7 +272,7 @@ fn review_installed_systems(
             &mister_magik_fb::launcher_artwork::asset_root(),
             &keys,
         );
-        let sources: Vec<_> = pixels.iter().map(Vec::as_slice).collect();
+        let sources: Vec<_> = pixels.iter().map(|pixels| pixels.as_ref()).collect();
         let data = LauncherData {
             cards: &cards,
             selected: 2,
