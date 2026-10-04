@@ -177,3 +177,45 @@ include worker execution and delivery costs, with a specific budget-overrun caus
 when measured and an explicit unknown cause otherwise. CPU sampling is disabled;
 thread CPU clocks remain available. A run measures performance and does not claim
 zero drops merely because its scenario checks passed.
+
+## Full launcher navigation campaign
+
+`scripts/magik check animation-app` runs three separate windows for each route:
+all root cards in both directions; Consoles → Nintendo → SNES → Games;
+Computers → Sinclair → ZX Spectrum → Games; Handhelds → Nintendo → Game Boy
+→ Games; Arcade hub/list/drawers; global Favourites; and the Settings menu.
+Each route returns to the root. Settings only opens its menu and changes focus;
+Favourites opens its list and returns. Games are never launched.
+This covers each category and representative hierarchy depths, not every system.
+Use `check motion-held` separately for uninterrupted carousel rotation.
+
+Repeat `animation-app --frame-evidence phases` for bounded drop neighborhoods
+with per-phase CPU clocks and helper timestamps. Run `animation-app --profile`
+separately for one sampled profile per route. Set `MAGIK_ANIMATION_ROUTES` to a
+comma-separated subset of route names for focused diagnosis.
+`MAGIK_ANIMATION_REPETITIONS` accepts 1–10 ordinary or frame-evidence windows
+per route (default three); sampled profiles remain one per route. Every completed
+sampled profile is retained under `profiles/RUN_ID/`; root-level profile files
+remain the last completed profile for compatibility. Events link profiles to routes.
+Each profile directory also contains `profile-quality.json`, validating sample
+totals and reporting thread/symbol coverage, symbol depths and attribution limits.
+Completed raw windows are saved before validation, including when a check fails.
+
+Compare ordinary and diagnostic runs on the same executable hash and record the
+selected display mode and authoritative scanout geometry. CRT uses the shared
+compositor path; helper-only checks apply only when `card_helper_ahead` reports
+`native-tricks-v1` or `native-browse-tricks-v2`. The latter also prepares the
+next ordinary browse pose from the existing FrameClock prediction; generation
+and source matching still reject changed input. On CRT, use process CPU and
+whole-frame transfer evidence. A passing scenario proves route execution and evidence consistency, not zero dropped frames.
+CPU samples are aggregated over a route; thread sample shares are not calibrated
+CPU shares (use measured thread CPU clocks). Samples do not identify the stack at an
+individual missed deadline. Frame neighborhoods retain host timing and CPU evidence,
+but FPGA acceptance/cutoff times are unavailable. Keep that attribution limit explicit.
+
+Pin a campaign with `MAGIK_EXPECT_DISPLAY_MODE=crt-240p60` and
+`MAGIK_EXPECT_RENDER_SIZE=640x240`. The fixture verifies Main's mode before
+and after every session; route, motion and idle measurements reject wrong
+geometry, including stale embedded windows. The pin also selects the CRT hub’s
+vertical controls. These guards do not change mode.
+Arrange exclusive device use across concurrent chats before a long campaign.

@@ -624,6 +624,27 @@ impl LineBufferProvider for BackgroundOverlayLines<'_> {
     ) {
         let line = &mut self.line[range.clone()];
         render(line);
+        if self.layout.rotation() == mister_magik_framebuffer_scenes::OutputRotation::None {
+            let destination_start = y * self.layout.physical_stride() + range.start;
+            let source_start = y * self.layout.logical_width() + range.start;
+            let destination = &mut self.cached[destination_start..destination_start + line.len()];
+            let source = &self.background[source_start..source_start + line.len()];
+            // Home normally has no visible Slint overlay. Copy its native row
+            // without doing per-pixel orientation and index calculations.
+            if line.iter().all(|overlay| overlay.alpha == 0) {
+                for (pixel, base) in destination.iter_mut().zip(source) {
+                    pixel.0 = base.0;
+                }
+            } else {
+                for ((pixel, base), overlay) in destination.iter_mut().zip(source).zip(line) {
+                    pixel.0 = base.0;
+                    if overlay.alpha != 0 {
+                        pixel.blend(*overlay);
+                    }
+                }
+            }
+            return;
+        }
         for (x, overlay) in range.zip(line.iter().copied()) {
             let (logical_x, logical_y) = self.layout.physical_to_logical(x, y);
             let base = self.background[logical_y * self.layout.logical_width() + logical_x];
@@ -1152,6 +1173,65 @@ impl UiFrameTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_overlay_rows_match_scalar_mapping_with_alpha_and_padding() {
+        use mister_magik_framebuffer_scenes::OutputRotation;
+        for rotation in [
+            OutputRotation::None,
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let layout = Rgb565OutputLayout::new(9, 7, 13, rotation).unwrap();
+            let background: Vec<_> = (0..9 * 7)
+                .map(|i| mister_magik_framebuffer_scenes::Rgb565Pixel((i * 73) as u16))
+                .collect();
+            for transparent in [true, false] {
+                for y in 0..layout.physical_height() {
+                    let range = 1..layout.physical_width() - 1;
+                    let overlays: Vec<_> = range
+                        .clone()
+                        .map(|x| {
+                            let alpha = if transparent {
+                                0
+                            } else {
+                                [0, 1, 127, 128, 254, 255][x % 6]
+                            };
+                            PremultipliedRgbaColor {
+                                alpha,
+                                red: alpha / 3,
+                                green: alpha / 2,
+                                blue: alpha / 4,
+                            }
+                        })
+                        .collect();
+                    let mut actual = vec![Rgb565Pixel(0x88bc); layout.len()];
+                    let mut expected = actual.clone();
+                    for (x, overlay) in range.clone().zip(overlays.iter().copied()) {
+                        let (lx, ly) = layout.physical_to_logical(x, y);
+                        let pixel = &mut expected[y * layout.physical_stride() + x];
+                        pixel.0 = background[ly * layout.logical_width() + lx].0;
+                        if overlay.alpha != 0 {
+                            pixel.blend(overlay);
+                        }
+                    }
+                    let mut line = vec![PremultipliedRgbaColor::default(); layout.physical_width()];
+                    BackgroundOverlayLines {
+                        cached: &mut actual,
+                        line: &mut line,
+                        background: &background,
+                        layout,
+                    }
+                    .process_line(y, range, |pixels| pixels.copy_from_slice(&overlays));
+                    assert!(
+                        actual == expected,
+                        "rotation={rotation:?}, row={y}, transparent={transparent}"
+                    );
+                }
+            }
+        }
+    }
+
     use crate::framebuffer::damage::DIRTY_RECT_LIST_CAP;
 
     fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {

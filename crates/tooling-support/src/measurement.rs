@@ -177,6 +177,9 @@ pub struct Counters {
     pub rejections: u64,
     pub card_rendered_frames: u64,
     pub card_delivered_frames: u64,
+    pub card_reused_frames: u64,
+    pub idle_baseline_resets: u64,
+    pub motion_endpoint_resets: u64,
     pub card_dropped_frames: u64,
     pub card_synchronous_presentations: u64,
     pub card_continuous_presentations: u64,
@@ -223,6 +226,22 @@ pub struct PresentationMetrics {
     pub(crate) previous_motion_cpu_sample: Option<(Option<u64>, u64, bool)>,
 }
 impl PresentationMetrics {
+    /// Grade delivery against the requested pose, not the previous presentation.
+    /// Quantized spring positions may legitimately request identical artwork.
+    pub fn note_card_delivery(&mut self, requested: u64, delivered: u64) -> bool {
+        let current = requested == delivered;
+        if current {
+            self.counters.card_delivered_frames += 1;
+            if self.last_card_source_generation == delivered {
+                self.counters.card_reused_frames += 1;
+            }
+        } else {
+            self.counters.card_dropped_frames += 1;
+        }
+        self.last_card_source_generation = delivered;
+        current
+    }
+
     /// Reserve on begin; drop records perform no allocation or serialisation.
     pub fn record_dropped_frame(&mut self, record: DroppedFrameRecord) {
         self.last_dropped_frame = Some(record);
@@ -298,6 +317,9 @@ impl PresentationMetrics {
             "discarded_helper_us_total": self.work_timings.iter().map(|t| t.discarded_helper_us).sum::<u64>(),
 
             "card_delivered_frames":c.card_delivered_frames-baseline.card_delivered_frames,
+            "card_reused_frames":c.card_reused_frames-baseline.card_reused_frames,
+            "idle_baseline_resets":c.idle_baseline_resets-baseline.idle_baseline_resets,
+            "motion_endpoint_resets":c.motion_endpoint_resets-baseline.motion_endpoint_resets,
 
             "card_synchronous_presentations":c.card_synchronous_presentations-baseline.card_synchronous_presentations,
             "card_continuous_presentations":c.card_continuous_presentations-baseline.card_continuous_presentations,
@@ -442,6 +464,9 @@ impl PresentationMetrics {
             "card_rendered_frames":self.counters.card_rendered_frames,
 
             "card_delivered_frames":self.counters.card_delivered_frames,
+            "card_reused_frames":self.counters.card_reused_frames,
+            "idle_baseline_resets":self.counters.idle_baseline_resets,
+            "motion_endpoint_resets":self.counters.motion_endpoint_resets,
             "card_dropped_frames":self.counters.card_dropped_frames,
 
             "card_producer_total_us":self.counters.card_producer_total_us,
@@ -473,6 +498,23 @@ mod tests {
         assert_eq!(first_frame_drops(3, 35_903, PERIOD), 2);
         // A short frame 0 is still charged beyond its one wait.
         assert_eq!(first_frame_drops(3, 14_042, PERIOD), 2);
+    }
+
+    #[test]
+    fn quantized_pose_reuse_is_delivery_but_an_old_requested_pose_is_a_drop() {
+        let mut metrics = PresentationMetrics::default();
+        // A settling spring requests repeated quantized poses before its endpoint.
+        for generation in [84, 85, 85, 86, 86, 86, 87] {
+            assert!(metrics.note_card_delivery(generation, generation));
+        }
+        assert_eq!(metrics.counters.card_delivered_frames, 7);
+        assert_eq!(metrics.counters.card_reused_frames, 3);
+        assert_eq!(metrics.counters.card_dropped_frames, 0);
+        // Repeating 87 is a miss when the caller actually requested 88.
+        assert!(!metrics.note_card_delivery(88, 87));
+        assert_eq!(metrics.counters.card_dropped_frames, 1);
+        assert!(metrics.note_card_delivery(88, 88));
+        assert_eq!(metrics.counters.card_delivered_frames, 8);
     }
 
     #[test]

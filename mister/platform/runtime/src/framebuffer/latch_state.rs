@@ -2508,11 +2508,10 @@ mod tests {
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         state.sync_hardware(None, 0, true, 7);
 
-        assert!(
-            state
-                .plan_next(input(None, None, None, None, None))
-                .is_none()
-        );
+        assert!(matches!(
+            state.plan_next(input(None, None, None, None, None)),
+            Err(LatchPlanError::NoWritableSlot)
+        ));
     }
 
     #[test]

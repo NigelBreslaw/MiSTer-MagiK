@@ -18,7 +18,7 @@ from actions import (
     validate_development_paths,
 )
 from magik.results import append_event
-from magik.animation_benchmark import ANIMATION_ROUTES
+from magik.animation_benchmark import animation_repetitions, animation_routes
 from catalog_equivalence import (
     catalog_identity,
     assert_catalog_equivalent,
@@ -312,25 +312,45 @@ def test_device_plane(journey_application_session):
     device_plane_journey(app, agent, run)
 
 
-@pytest.mark.parametrize("repetition", range(3))
-@pytest.mark.parametrize(
-    "route",
-    os.environ.get(
-        "MAGIK_ANIMATION_ROUTES",
-        ",".join(ANIMATION_ROUTES),
-    ).split(","),
-)
-def test_animation_app(journey_application_session, repetition, route):
+@pytest.mark.parametrize("repetition", animation_repetitions())
+@pytest.mark.parametrize("route", animation_routes())
+def test_animation_app(journey_application_session, repetition, route, request):
     from magik.animation_benchmark import animation_roundtrip
 
     app, agent, run, _ = journey_application_session
-    result = animation_roundtrip(app, agent, run, repetition, route=route)
+    result = animation_roundtrip(
+        app,
+        agent,
+        run,
+        repetition,
+        route=route,
+        frame_evidence=request.config.getoption("--magik-frame-evidence"),
+    )
     append_event(
         run,
         {
             "phase": "animation-app",
             "outcome": "measured",
             "repetition": repetition,
+            **result,
+        },
+    )
+
+
+@pytest.mark.magik_profile
+@pytest.mark.parametrize("route", animation_routes())
+def test_animation_app_profile(journey_application_session, route):
+    from magik.animation_benchmark import animation_roundtrip
+
+    app, agent, run, profile_id = journey_application_session
+    result = animation_roundtrip(app, agent, run, 0, route=route, instrumented=True)
+    append_event(
+        run,
+        {
+            "phase": "animation-app",
+            "outcome": "measured",
+            "profile_id": profile_id,
+            "repetition": 0,
             **result,
         },
     )

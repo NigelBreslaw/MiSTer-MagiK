@@ -256,6 +256,12 @@ pub fn compose_preview_frame(
     if clear_screen || matches!(frame.pixels, PreviewPixels::Empty) {
         clear_rect(destination, screen, frame_width, frame_height, surface);
     }
+    let source_columns = mister_magik_framebuffer_scenes::nearest_axis::NearestAxis::new(
+        frame.source_width,
+        frame.display_width,
+        (rect.x0 as isize - image_x).max(0) as usize,
+        rect.width(),
+    )?;
     match frame.pixels {
         PreviewPixels::Empty => {}
         PreviewPixels::Rgb565 {
@@ -266,10 +272,7 @@ pub fn compose_preview_frame(
                 let source_y = ((y as isize - image_y).max(0) as usize * frame.source_height
                     / frame.display_height)
                     .min(frame.source_height - 1);
-                for x in rect.x0..rect.x1 {
-                    let source_x = ((x as isize - image_x).max(0) as usize * frame.source_width
-                        / frame.display_width)
-                        .min(frame.source_width - 1);
+                for (x, source_x) in (rect.x0..rect.x1).zip(source_columns) {
                     let source_index = source_y * stride_pixels + source_x;
                     if let Some(pixel) = pixels.get(source_index) {
                         destination[surface.row_start(y, x)] = *pixel;
@@ -282,10 +285,7 @@ pub fn compose_preview_frame(
                 let source_y = ((y as isize - image_y).max(0) as usize * frame.source_height
                     / frame.display_height)
                     .min(frame.source_height - 1);
-                for x in rect.x0..rect.x1 {
-                    let source_x = ((x as isize - image_x).max(0) as usize * frame.source_width
-                        / frame.display_width)
-                        .min(frame.source_width - 1);
+                for (x, source_x) in (rect.x0..rect.x1).zip(source_columns) {
                     let source_index = (source_y * frame.source_width + source_x) * 3;
                     if let Some(rgb) = pixels.get(source_index..source_index + 3) {
                         destination[surface.row_start(y, x)] =
@@ -651,6 +651,85 @@ mod tests {
         assert_eq!(destination[3], source[1]);
         assert_eq!(destination[12], source[2]);
         assert_eq!(destination[15], source[3]);
+    }
+
+    #[test]
+    fn preview_scaling_matches_division_oracle_with_crop_stride_and_both_formats() {
+        let (width, height, stride) = (24, 20, 27);
+        let screen = DirtyRect {
+            x0: 2,
+            y0: 3,
+            x1: 22,
+            y1: 18,
+        };
+        for (sw, sh, dw, dh) in [(7, 5, 13, 11), (13, 11, 5, 7), (8, 8, 8, 8), (3, 9, 31, 27)] {
+            let rgb: Vec<u8> = (0..sw * sh * 3).map(|i| (i * 71) as u8).collect();
+            let source_stride = sw + 3;
+            let mut source = vec![Rgb565Pixel(0xffff); source_stride * sh];
+            for y in 0..sh {
+                for x in 0..sw {
+                    let i = (y * sw + x) * 3;
+                    source[y * source_stride + x] =
+                        rgb888_to_rgb565(rgb[i], rgb[i + 1], rgb[i + 2]);
+                }
+            }
+            for pixels in [
+                PreviewPixels::Rgb8(&rgb),
+                PreviewPixels::Rgb565 {
+                    pixels: &source,
+                    stride_pixels: source_stride,
+                },
+            ] {
+                for clear in [false, true] {
+                    for (ox, oy) in [(0, 0), (2, 3)] {
+                        let surface = PreviewSurface {
+                            x: ox,
+                            y: oy,
+                            stride,
+                        };
+                        let mut actual = vec![Rgb565Pixel(0x4567); stride * height];
+                        let mut expected = actual.clone();
+                        let ix = screen.x0 as isize + (screen.width() as isize - dw as isize) / 2;
+                        let iy = screen.y0 as isize + (screen.rows() as isize - dh as isize) / 2;
+                        for y in screen.y0..screen.y1 {
+                            for x in screen.x0..screen.x1 {
+                                let out = (y - oy) * stride + x - ox;
+                                if clear {
+                                    expected[out] = Rgb565Pixel(0);
+                                }
+                                let (dx, dy) = (x as isize - ix, y as isize - iy);
+                                if dx >= 0 && dy >= 0 && dx < dw as isize && dy < dh as isize {
+                                    expected[out] = source[(dy as usize * sh / dh) * source_stride
+                                        + dx as usize * sw / dw];
+                                }
+                            }
+                        }
+                        assert!(
+                            compose_preview_frame(
+                                &mut actual,
+                                width,
+                                height,
+                                screen,
+                                PreviewFrame {
+                                    pixels,
+                                    source_width: sw,
+                                    source_height: sh,
+                                    display_width: dw,
+                                    display_height: dh
+                                },
+                                clear,
+                                surface
+                            )
+                            .is_some()
+                        );
+                        assert!(
+                            actual == expected,
+                            "source={sw}x{sh} display={dw}x{dh} clear={clear} origin={ox},{oy}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

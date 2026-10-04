@@ -158,6 +158,21 @@ impl ArcadeListRasterMetrics {
 }
 
 impl ArcadeListStyle {
+    fn fonts(self) -> (ConsoleFont, ConsoleFont) {
+        (
+            ConsoleFont::new_with_typeface_and_row_filter(
+                self.title_font_px,
+                self.title_typeface,
+                self.glyph_row_filter,
+            ),
+            ConsoleFont::new_with_typeface_and_row_filter(
+                self.meta_font_px,
+                self.meta_typeface,
+                self.glyph_row_filter,
+            ),
+        )
+    }
+
     const fn hdmi() -> Self {
         Self {
             row_height: ARCADE_ROW_HEIGHT,
@@ -517,9 +532,12 @@ pub struct ArcadeListRenderer {
     title_font: ConsoleFont,
     meta_font: ConsoleFont,
     row_cache: HashMap<usize, CachedArcadeRow>,
+    row_preparer: Option<HdmiRowPreparer>,
+    row_preparer_failed: bool,
     favourite_launch_refs: HashSet<String>,
     favourite_launch_refs_revision: u64,
     surface: Vec<Rgb565Pixel>,
+    sparse_metadata_enabled: bool,
     surface_nonfill_runs: Vec<Vec<(usize, usize)>>,
     surface_selected_text_runs: Vec<Vec<(usize, usize)>>,
     selection_gradient: Vec<Rgb565Pixel>,
@@ -773,6 +791,60 @@ pub struct CachedArcadeRow {
     pub last_used: u64,
 }
 
+impl CachedArcadeRow {
+    fn matches(&self, game: &ArcadeGameEntry, is_favourite: bool) -> bool {
+        arc_str_eq(&self.title, &game.title)
+            && self.is_new == game.is_new
+            && self.is_favourite == is_favourite
+    }
+}
+
+/// At most one bounded visible-row batch is in flight. The worker owns its
+/// fonts and temporary pixels; the UI only adopts rows matching its current view.
+struct HdmiRowPreparer {
+    requests: std::sync::mpsc::SyncSender<(usize, Vec<(usize, CachedArcadeRow)>)>,
+    results: std::sync::mpsc::Receiver<(usize, Vec<(usize, CachedArcadeRow)>)>,
+    pending: bool,
+}
+
+impl HdmiRowPreparer {
+    fn spawn() -> std::io::Result<Self> {
+        let (requests, work) =
+            std::sync::mpsc::sync_channel::<(usize, Vec<(usize, CachedArcadeRow)>)>(1);
+        let (ready, results) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("arcade-row-prep".into())
+            .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::LauncherCardRenderer,
+                );
+                let style = ArcadeListStyle::hdmi();
+                let (mut title_font, mut meta_font) = style.fonts();
+                while let Ok((width, mut rows)) = work.recv() {
+                    for (index, row) in &mut rows {
+                        row.pixels = render_arcade_row(
+                            width,
+                            style,
+                            (&mut title_font, &mut meta_font),
+                            &row.title,
+                            row.is_new,
+                            row.is_favourite,
+                            *index,
+                        );
+                    }
+                    if ready.send((width, rows)).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            requests,
+            results,
+            pending: false,
+        })
+    }
+}
+
 struct CachedArcadeRowFingerprint {
     title: Arc<str>,
     is_new: bool,
@@ -843,21 +915,17 @@ impl ArcadeListRenderer {
 
     fn new_with_style(style: ArcadeListStyle, crt_metrics: Option<CrtUiMetrics>) -> Self {
         let crt_base_style = crt_metrics.map(|_| style);
+        let (title_font, meta_font) = style.fonts();
         Self {
-            title_font: ConsoleFont::new_with_typeface_and_row_filter(
-                style.title_font_px,
-                style.title_typeface,
-                style.glyph_row_filter,
-            ),
-            meta_font: ConsoleFont::new_with_typeface_and_row_filter(
-                style.meta_font_px,
-                style.meta_typeface,
-                style.glyph_row_filter,
-            ),
+            title_font,
+            meta_font,
             row_cache: HashMap::new(),
+            row_preparer: None,
+            row_preparer_failed: false,
             favourite_launch_refs: HashSet::new(),
             favourite_launch_refs_revision: u64::MAX,
             surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
+            sparse_metadata_enabled: style.crt_palette,
             surface_nonfill_runs: vec![Vec::new(); ARCADE_LIST_H],
             surface_selected_text_runs: vec![Vec::new(); ARCADE_LIST_H],
             selection_gradient: if !style.crt_palette {
@@ -1017,6 +1085,113 @@ impl ArcadeListRenderer {
         self.favourite_launch_refs_revision = revision;
     }
 
+    fn poll_prepared_rows(&mut self, games: ArcadeGameView<'_>) {
+        let Some(worker) = self.row_preparer.as_mut() else {
+            return;
+        };
+        let (width, rows) = match worker.results.try_recv() {
+            Ok(result) => {
+                worker.pending = false;
+                result
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.row_preparer_failed = true;
+                self.row_preparer = None;
+                return;
+            }
+        };
+        if self.style.crt_palette || self.width != width {
+            return;
+        }
+        for (index, mut row) in rows {
+            let Some(game) = games.get(index) else {
+                continue;
+            };
+            if !row.matches(
+                game,
+                self.favourite_launch_refs.contains(game.mra_path.as_ref()),
+            ) {
+                continue;
+            }
+            if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
+                prune_arcade_row_cache(&mut self.row_cache);
+            }
+            row.last_used = self.next_row_cache_epoch();
+            self.row_cache.insert(index, row);
+        }
+    }
+
+    /// Prepare the upcoming HDMI Games rows while its hub is visible. Drawing
+    /// never waits for this worker: unavailable or stale rows use the normal path.
+    pub fn prepare_visible_rows(&mut self, games: ArcadeGameView<'_>, visual_index: f32) {
+        self.poll_prepared_rows(games);
+        if self.style.crt_palette
+            || self.row_preparer_failed
+            || self
+                .row_preparer
+                .as_ref()
+                .is_some_and(|worker| worker.pending)
+        {
+            return;
+        }
+        let visual_px = arcade_visual_px(
+            visual_index,
+            self.style.row_height,
+            self.style.scroll_quantum_y,
+        );
+        let Some((first, end)) = arcade_visible_window_range_px(
+            games.len(),
+            visual_px,
+            self.style.row_height,
+            self.selection_y(),
+            self.visible_height,
+        ) else {
+            return;
+        };
+        let mut rows = Vec::new();
+        for index in first..=end {
+            let Some(game) = games.get(index) else {
+                continue;
+            };
+            let favourite = self.favourite_launch_refs.contains(game.mra_path.as_ref());
+            if self
+                .row_cache
+                .get(&index)
+                .is_some_and(|row| row.matches(game, favourite))
+            {
+                continue;
+            }
+            rows.push((
+                index,
+                CachedArcadeRow {
+                    title: Arc::clone(&game.title),
+                    is_new: game.is_new,
+                    is_favourite: favourite,
+                    pixels: Vec::new(),
+                    last_used: 0,
+                },
+            ));
+        }
+        if rows.is_empty() {
+            return;
+        }
+        if self.row_preparer.is_none() {
+            match HdmiRowPreparer::spawn() {
+                Ok(worker) => self.row_preparer = Some(worker),
+                Err(error) => {
+                    self.row_preparer_failed = true;
+                    crate::ui_errln!("arcade row preparation unavailable: {error}");
+                    return;
+                }
+            }
+        }
+        let worker = self.row_preparer.as_mut().expect("row preparer started");
+        if worker.requests.try_send((self.width, rows)).is_ok() {
+            worker.pending = true;
+        }
+    }
+
     pub fn draw(
         &mut self,
         games: ArcadeGameView<'_>,
@@ -1024,6 +1199,7 @@ impl ArcadeListRenderer {
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
+        self.poll_prepared_rows(games);
         self.previous_selection_normal_rect = None;
         self.last_filter_draw = None;
         self.last_update_reason = ArcadeListUpdateReason::None;
@@ -1390,17 +1566,15 @@ impl ArcadeListRenderer {
         idx: usize,
         y: isize,
     ) {
-        let needs_render = self.row_cache.get(&idx).is_none_or(|cached| {
-            !arc_str_eq(&cached.title, &game.title)
-                || cached.is_new != game.is_new
-                || cached.is_favourite
-                    != self.favourite_launch_refs.contains(game.mra_path.as_ref())
-        });
+        let is_favourite = self.favourite_launch_refs.contains(game.mra_path.as_ref());
+        let needs_render = self
+            .row_cache
+            .get(&idx)
+            .is_none_or(|cached| !cached.matches(game, is_favourite));
         if needs_render {
             if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
                 prune_arcade_row_cache(&mut self.row_cache);
             }
-            let is_favourite = self.favourite_launch_refs.contains(game.mra_path.as_ref());
             let row = self.render_row(game.title.as_ref(), game.is_new, is_favourite, idx);
             let last_used = self.next_row_cache_epoch();
             self.row_cache.insert(
@@ -1429,17 +1603,18 @@ impl ArcadeListRenderer {
         let copy_h = (clip_y1 - clip_y0) as usize;
         let src_y = (clip_y0 - y) as usize;
         let dst_y = (clip_y0 as usize).saturating_sub(band_y);
-        let mut changed_rows = Vec::with_capacity(copy_h);
         for row_y in 0..copy_h {
             let src = (src_y + row_y) * self.width;
             let viewport_y = band_y + dst_y + row_y;
             let dst_y = (self.surface_y + viewport_y) % self.visible_height;
             let dst = dst_y * self.width;
             self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
-            changed_rows.push(dst_y);
         }
-        for row in changed_rows {
-            self.rebuild_surface_nonfill_runs(row);
+        if self.sparse_metadata_enabled {
+            for viewport_y in clip_y0 as usize..clip_y1 as usize {
+                let row = (self.surface_y + viewport_y) % self.visible_height;
+                self.rebuild_surface_nonfill_runs(row);
+            }
         }
     }
 
@@ -1452,8 +1627,20 @@ impl ArcadeListRenderer {
         }
     }
 
+    fn enable_sparse_metadata(&mut self) {
+        if self.sparse_metadata_enabled {
+            return;
+        }
+        self.sparse_metadata_enabled = true;
+        for row in 0..self.visible_height {
+            self.rebuild_surface_nonfill_runs(row);
+        }
+    }
+
     fn rebuild_surface_nonfill_runs(&mut self, row: usize) {
-        if row >= self.surface_nonfill_runs.len() {
+        // Opaque HDMI composition reads the full row; only backdrop composition
+        // needs these two sparse masks. Preserve eager CRT preparation.
+        if !self.sparse_metadata_enabled || row >= self.surface_nonfill_runs.len() {
             return;
         }
         let surface_row = &self.surface[row * self.width..(row + 1) * self.width];
@@ -1923,6 +2110,7 @@ impl ArcadeListRenderer {
         redraw_selection_frame: bool,
         backdrop_is_fresh: bool,
     ) -> ArcadeListCompositionStats {
+        self.enable_sparse_metadata();
         let started = Instant::now();
         if backdrop.len() < output_layout.len()
             || target.cached_565().len() < output_layout.len()
@@ -2089,6 +2277,7 @@ impl ArcadeListRenderer {
         force_full: bool,
         retained: &mut CrtArcadeOverlayState,
     ) -> ArcadeListCompositionStats {
+        self.enable_sparse_metadata();
         let key = self.crt_overlay_key(output_layout, backdrop_revision, catalog_generation);
         let retained_update = match update {
             ArcadeListUpdate::Full(_) => CrtArcadeOverlayUpdate::Full,
@@ -3086,94 +3275,15 @@ impl ArcadeListRenderer {
         is_favourite: bool,
         idx: usize,
     ) -> Vec<Rgb565Pixel> {
-        let row_height = self.style.row_height as usize;
-        let mut row = vec![Pixel(0); self.width * row_height];
-        draw_arcade_row_background_with_style(&mut row, self.width, idx, self.style);
-        let reserved = match (is_new, is_favourite) {
-            (true, true) => 96,
-            (true, false) => 76,
-            (false, true) => 44,
-            (false, false) => 24,
-        };
-        let available = self.width.saturating_sub(reserved + 14);
-        let title_baseline = if self.style.crt_palette {
-            self.title_font.centered_text_baseline(title, 0, row_height)
-        } else {
-            (row_height / 2 + 6) as isize
-        };
-        if self.style.crt_palette {
-            let title = self.title_font.clipped_text(title, available);
-            self.title_font.draw_text_clipped(
-                &mut row,
-                self.width,
-                self.width,
-                0,
-                row_height,
-                12,
-                title_baseline,
-                &title,
-                self.style.text,
-            );
-        } else {
-            let uppercase = title.to_uppercase();
-            let (base, metadata) = split_arcade_title(&uppercase);
-            let base = self.title_font.clipped_text(base, available).into_owned();
-            let base_width = self.title_font.text_width(&base);
-            self.title_font.draw_text_clipped(
-                &mut row,
-                self.width,
-                self.width,
-                0,
-                row_height,
-                14,
-                title_baseline,
-                &base,
-                self.style.text,
-            );
-            if !metadata.is_empty() {
-                let metadata_x = 14usize.saturating_add(base_width).saturating_add(8);
-                let metadata = self
-                    .meta_font
-                    .clipped_text(metadata, self.width.saturating_sub(reserved + metadata_x));
-                self.meta_font.draw_text_clipped(
-                    &mut row,
-                    self.width,
-                    self.width,
-                    0,
-                    row_height,
-                    metadata_x as isize,
-                    title_baseline,
-                    &metadata,
-                    self.style.muted_text,
-                );
-            }
-        }
-        if is_new {
-            draw_new_badge(
-                &mut row,
-                self.width,
-                row_height,
-                self.style.badge_fill,
-                self.style.badge_text,
-                self.style,
-                &mut self.meta_font,
-            );
-        }
-        if is_favourite {
-            let baseline = self.meta_font.centered_text_baseline("*", 0, row_height);
-            self.meta_font.draw_text_clipped_gradient(
-                &mut row,
-                self.width,
-                self.width,
-                0,
-                row_height,
-                self.width.saturating_sub(22) as isize,
-                baseline,
-                "*",
-                TextGradient::new(Pixel(0x00ffd166), Pixel(0x00ffd166), Pixel(0x00ffd166)),
-            );
-        }
-        row.into_iter().map(pixel_to_rgb565).collect()
+        render_arcade_row(
+            self.width,
+            self.style,
+            (&mut self.title_font, &mut self.meta_font),
+            title,
+            is_new,
+            is_favourite,
+            idx,
+        )
     }
 
     fn render_filter_row(&mut self, item: &ArcadeListItem, idx: usize) -> Vec<Rgb565Pixel> {
@@ -3651,6 +3761,104 @@ fn arcade_hash_bytes(hash: &mut u64, bytes: &[u8]) {
 
 fn arc_str_eq(left: &Arc<str>, right: &Arc<str>) -> bool {
     Arc::ptr_eq(left, right) || left.as_ref() == right.as_ref()
+}
+
+fn render_arcade_row(
+    width: usize,
+    style: ArcadeListStyle,
+    (title_font, meta_font): (&mut ConsoleFont, &mut ConsoleFont),
+    title: &str,
+    is_new: bool,
+    is_favourite: bool,
+    idx: usize,
+) -> Vec<Rgb565Pixel> {
+    let row_height = style.row_height as usize;
+    let mut row = vec![Pixel(0); width * row_height];
+    draw_arcade_row_background_with_style(&mut row, width, idx, style);
+    let reserved = match (is_new, is_favourite) {
+        (true, true) => 96,
+        (true, false) => 76,
+        (false, true) => 44,
+        (false, false) => 24,
+    };
+    let available = width.saturating_sub(reserved + 14);
+    let title_baseline = if style.crt_palette {
+        title_font.centered_text_baseline(title, 0, row_height)
+    } else {
+        (row_height / 2 + 6) as isize
+    };
+    if style.crt_palette {
+        let title = title_font.clipped_text(title, available);
+        title_font.draw_text_clipped(
+            &mut row,
+            width,
+            width,
+            0,
+            row_height,
+            12,
+            title_baseline,
+            &title,
+            style.text,
+        );
+    } else {
+        let uppercase = title.to_uppercase();
+        let (base, metadata) = split_arcade_title(&uppercase);
+        let base = title_font.clipped_text(base, available).into_owned();
+        let base_width = title_font.text_width(&base);
+        title_font.draw_text_clipped(
+            &mut row,
+            width,
+            width,
+            0,
+            row_height,
+            14,
+            title_baseline,
+            &base,
+            style.text,
+        );
+        if !metadata.is_empty() {
+            let metadata_x = 14usize.saturating_add(base_width).saturating_add(8);
+            let metadata =
+                meta_font.clipped_text(metadata, width.saturating_sub(reserved + metadata_x));
+            meta_font.draw_text_clipped(
+                &mut row,
+                width,
+                width,
+                0,
+                row_height,
+                metadata_x as isize,
+                title_baseline,
+                &metadata,
+                style.muted_text,
+            );
+        }
+    }
+    if is_new {
+        draw_new_badge(
+            &mut row,
+            width,
+            row_height,
+            style.badge_fill,
+            style.badge_text,
+            style,
+            meta_font,
+        );
+    }
+    if is_favourite {
+        let baseline = meta_font.centered_text_baseline("*", 0, row_height);
+        meta_font.draw_text_clipped_gradient(
+            &mut row,
+            width,
+            width,
+            0,
+            row_height,
+            width.saturating_sub(22) as isize,
+            baseline,
+            "*",
+            TextGradient::new(Pixel(0x00ffd166), Pixel(0x00ffd166), Pixel(0x00ffd166)),
+        );
+    }
+    row.into_iter().map(pixel_to_rgb565).collect()
 }
 
 fn draw_arcade_row_background_with_style(
@@ -5198,6 +5406,124 @@ mod tests {
                 20
             )]
         );
+    }
+
+    #[test]
+    fn prepared_hdmi_rows_match_synchronous_pixels_without_changing_visible_surface() {
+        let games = games("arcade", 20);
+        let view = ArcadeGameView::contiguous(&games);
+        let mut prepared = ArcadeListRenderer::new();
+        let original = prepared.surface.clone();
+        prepared.prepare_visible_rows(view, 0.0);
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while prepared
+            .row_preparer
+            .as_ref()
+            .is_some_and(|worker| worker.pending)
+        {
+            prepared.poll_prepared_rows(view);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!prepared.row_cache.is_empty());
+        assert!(prepared.surface == original);
+        let mut synchronous = ArcadeListRenderer::new();
+        prepared.draw(view, 0, 0.0, true);
+        synchronous.draw(view, 0, 0.0, true);
+        assert!(prepared.surface == synchronous.surface);
+        for (index, row) in &prepared.row_cache {
+            assert!(row.pixels == synchronous.row_cache[index].pixels);
+        }
+    }
+
+    #[test]
+    fn prepared_rows_reject_changed_content_favourites_and_width() {
+        for mismatch in 0..3 {
+            let games = games("arcade", 3);
+            let view = ArcadeGameView::contiguous(&games);
+            let mut renderer = ArcadeListRenderer::new();
+            let (requests, _work) = std::sync::mpsc::sync_channel(1);
+            let (ready, results) = std::sync::mpsc::sync_channel(1);
+            renderer.row_preparer = Some(HdmiRowPreparer {
+                requests,
+                results,
+                pending: true,
+            });
+            ready
+                .send((
+                    renderer.width + usize::from(mismatch == 2),
+                    vec![(
+                        0,
+                        CachedArcadeRow {
+                            title: if mismatch == 0 {
+                                Arc::from("wrong title")
+                            } else {
+                                Arc::clone(&games[0].title)
+                            },
+                            is_new: games[0].is_new,
+                            is_favourite: mismatch == 1,
+                            pixels: vec![
+                                Rgb565Pixel(0xffff);
+                                renderer.width * renderer.style.row_height as usize
+                            ],
+                            last_used: 0,
+                        },
+                    )],
+                ))
+                .unwrap();
+            renderer.poll_prepared_rows(view);
+            assert!(renderer.row_cache.is_empty());
+            renderer.draw(view, 0, 0.0, true);
+            let mut reference = ArcadeListRenderer::new();
+            reference.draw(view, 0, 0.0, true);
+            assert!(renderer.surface == reference.surface);
+        }
+    }
+
+    #[test]
+    fn hdmi_rows_defer_sparse_metadata_until_backdrop_composition_needs_it() {
+        let games = games("arcade", 12);
+        let mut lazy = ArcadeListRenderer::new();
+        let mut eager = ArcadeListRenderer::new();
+        eager.enable_sparse_metadata();
+        let view = ArcadeGameView::contiguous(&games);
+        lazy.draw(view, 0, 0.0, false);
+        eager.draw(view, 0, 0.0, false);
+        assert!(!lazy.sparse_metadata_enabled);
+        assert!(lazy.surface_nonfill_runs.iter().all(Vec::is_empty));
+        assert!(lazy.surface_selected_text_runs.iter().all(Vec::is_empty));
+        assert!(lazy.surface == eager.surface);
+        let output = Rgb565OutputLayout::new(960, 540, 960, OutputRotation::None).unwrap();
+        let backdrop = vec![Rgb565Pixel(0x1234); output.len()];
+        for position in [0.0, 1.5, 3.0, 0.0] {
+            lazy.draw(view, position as usize, position, false);
+            eager.draw(view, position as usize, position, false);
+            let mut actual = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let mut expected = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            actual.cached_565_mut().copy_from_slice(&backdrop);
+            expected.cached_565_mut().copy_from_slice(&backdrop);
+            assert!(
+                lazy.compose_layer_over_backdrop_to_oriented_cached(
+                    &mut actual,
+                    &backdrop,
+                    output,
+                    false,
+                )
+                .composed
+            );
+            assert!(
+                eager
+                    .compose_layer_over_backdrop_to_oriented_cached(
+                        &mut expected,
+                        &backdrop,
+                        output,
+                        false,
+                    )
+                    .composed
+            );
+            assert!(actual.cached_565() == expected.cached_565());
+            assert!(lazy.sparse_metadata_enabled);
+        }
     }
 
     #[test]

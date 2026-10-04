@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from magik.measurement_contract import has_native_card_helpers, measurement_metrics
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -57,7 +58,7 @@ def motion(
         "motion workload did not complete",
         timeout=5,
     )
-    metrics = agent.metrics()
+    metrics = measurement_metrics(agent)
     if metrics.get("sha256") != agent.expected_sha256:
         raise AssertionError("metrics belong to a different running artifact")
     window = validate_window(
@@ -287,11 +288,11 @@ def launcher_idle(application, agent, *, instrumented=False):
     """Measure the real launcher's ordinary idle loop; no synthetic FPS target."""
     if application.first_window is None:
         raise AssertionError("real launcher window is unavailable")
-    previous = agent.metrics().get("window")
+    previous = measurement_metrics(agent).get("window")
     agent._successful("measure")
     seconds = 10 if instrumented else 5
     time.sleep(2 + seconds + 0.4)
-    metrics = agent.metrics()
+    metrics = measurement_metrics(agent)
     if metrics.get("sha256") != agent.expected_sha256:
         raise AssertionError("metrics belong to another application")
     window = metrics.get("window")
@@ -328,11 +329,11 @@ def _completed_window_metrics(agent, sleep):
     An idle launcher can service the request up to about a second late, so the
     device-timed window may still be running at the nominal deadline.
     """
-    metrics = agent.metrics()
+    metrics = measurement_metrics(agent)
     deadline = time.monotonic() + WINDOW_PICKUP_GRACE_SECONDS
     while metrics.get("window") is None and time.monotonic() < deadline:
         sleep(0.25)
-        metrics = agent.metrics()
+        metrics = measurement_metrics(agent)
     return metrics
 
 
@@ -359,7 +360,7 @@ def launcher_motion(
         # Home preserves an in-progress card spring. A new press can be rejected
         # until it settles; keep this pause outside the measured hold window.
         sleep(1)
-    previous = agent.metrics().get("window")
+    previous = measurement_metrics(agent).get("window")
     request = {
         "launcher_clock": "rollover" if align_rollover else "fixed",
         "launcher_fallback": force_fallback,
@@ -439,12 +440,23 @@ def launcher_motion(
             raise AssertionError(
                 "delivered and dropped frame counts do not cover animation refreshes"
             )
-        if window.get("card_producer_total_us", 0) <= 0:
-            raise AssertionError("instrumented card motion recorded no producer work")
-        if window.get("card_hidden_copy_us", 0) <= 0:
-            raise AssertionError(
-                "instrumented card motion recorded no hidden-slot copy work"
-            )
+        if has_native_card_helpers(window):
+            if window.get("card_producer_total_us", 0) <= 0:
+                raise AssertionError(
+                    "instrumented card motion recorded no producer work"
+                )
+            if window.get("card_hidden_copy_us", 0) <= 0:
+                raise AssertionError(
+                    "instrumented card motion recorded no hidden-slot copy work"
+                )
+        else:
+            if (
+                window.get("process_cpu_us", 0) <= 0
+                or window.get("transfer_us_total", 0) <= 0
+            ):
+                raise AssertionError(
+                    "instrumented compositor motion recorded no CPU/copy work"
+                )
     if (
         held_direction
         and window.get("card_continuous_presentations") != window["presentations"]
@@ -502,7 +514,7 @@ def launcher_screensaver(application, agent, *, sleep=time.sleep):
     _press_key(application, "\uf729")  # Slint Key.Home
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
     sleep(1)
-    previous = agent.metrics().get("window")
+    previous = measurement_metrics(agent).get("window")
     seconds = SCREENSAVER_WINDOW_MS / 1000
     agent._successful(
         "measure",

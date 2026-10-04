@@ -678,6 +678,45 @@ impl LauncherCardHomeSession {
         }
     }
 
+    /// Prepare only the exact next predicted pose. Input remains authoritative:
+    /// the parallel renderer discards this job if the next request differs.
+    pub(super) fn prepare_browse_helper_ahead(
+        &mut self,
+        next_ms: u64,
+        selected: usize,
+        visual_index: f32,
+        nested_frame: Option<BrowseFrame>,
+    ) {
+        if !self.can_render_native() || self.trick.is_some() || next_ms <= self.now_ms {
+            return;
+        }
+        let frame = nested_frame.unwrap_or_else(|| {
+            browse_frame_from_position(
+                selected,
+                visual_index,
+                self.last_visual_index,
+                self.frame,
+                self.level.cards.len(),
+                self.level.cycles(),
+            )
+        });
+        // A quantized duplicate needs no new pixels or speculative worker work.
+        if self.last_rendered == Some((frame, self.content_generation)) {
+            return;
+        }
+        let request = LauncherFrameRequest {
+            frame,
+            timestamp_us: next_ms.saturating_mul(1_000),
+            generation: self.last_request.generation.wrapping_add(1).max(1),
+        };
+        let preparer = self.prepared.frame_preparer();
+        if let Some(renderer) = self.renderer.as_mut()
+            && let Err(error) = renderer.prepare_helper_ahead(&preparer, request)
+        {
+            crate::ui_errln!("browse helper render-ahead failed: {error}");
+        }
+    }
+
     /// A level change is playing. The carousel shows neither level's real
     /// selection, so the launcher must not act on input until it lands.
     pub(super) fn is_level_trick_active(&self) -> bool {
@@ -1433,6 +1472,65 @@ mod tests {
                 assert_eq!(session.render(), serial.pixels());
             }
         }
+    }
+
+    #[test]
+    fn browse_ahead_preserves_pixels_and_rejects_changed_direction_predictions() {
+        for level in [snapshot(), consoles()] {
+            let scene = LauncherScene::new(960, 540);
+            let mut session =
+                LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+            let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
+            session.update(scene, &level, 0, 0.0, "07:28", 0, false, None);
+            session.render_direct_bands();
+            for (tick, position) in [0.25, 0.75, 1.1, 1.8, 1.3, 0.9, -0.25, 0.0]
+                .into_iter()
+                .enumerate()
+            {
+                let next_ms = (tick as u64 + 1) * 16;
+                let predicted = if tick == 4 { 2.1 } else { position };
+                let primary = session.current_primary_pixels().to_vec();
+                let helper = session.current_helper_pixels().to_vec();
+                let request = session.current_request();
+                session.prepare_browse_helper_ahead(next_ms, 0, predicted, None);
+                assert_eq!(session.current_request(), request);
+                assert!(session.current_primary_pixels() == primary);
+                assert!(session.current_helper_pixels() == helper);
+                session.update(scene, &level, 0, position, "07:28", next_ms, false, None);
+                serial.render_frame(session.frame);
+                assert_eq!(session.render(), serial.pixels());
+                let timing = session.last_timing().expect("new pose rendered");
+                assert_eq!(timing.helper_ahead, tick != 4);
+                assert_eq!(timing.discarded_generation.is_some(), tick == 4);
+            }
+        }
+    }
+
+    #[test]
+    fn browse_ahead_uses_the_accepted_nested_frame_and_skips_unchanged_poses() {
+        let scene = LauncherScene::new(960, 540);
+        let level = consoles();
+        let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        session.update(scene, &level, 0, 0.0, "07:28", 0, false, None);
+        session.render();
+        session.prepare_browse_helper_ahead(16, 0, 0.0, None);
+        session.update(scene, &level, 0, 0.0, "07:28", 16, false, None);
+        session.render();
+        assert!(session.last_timing().is_none());
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 1,
+            phase: BrowsePhase::Flipping,
+            direction: Some(BrowseDirection::Right),
+            progress_millis: 32,
+            duration_millis: 460,
+        };
+        session.prepare_browse_helper_ahead(32, 0, 0.99, Some(frame));
+        session.update(scene, &level, 0, 0.99, "07:28", 32, false, Some(frame));
+        let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
+        serial.render_frame(frame);
+        assert_eq!(session.render(), serial.pixels());
+        assert!(session.last_timing().unwrap().helper_ahead);
     }
 
     #[test]

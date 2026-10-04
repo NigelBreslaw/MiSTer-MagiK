@@ -96,13 +96,21 @@ def _application_session(request, magik_run):
     )
 
     from .apps import application
+    from .measurement_contract import expected_display_mode, verify_display
 
     profiled = request.config.getoption("--magik-profile")
     profile_id = f"{magik_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
+    evidence_capabilities = (
+        {"metrics-body-16m-v1"}
+        if request.config.getoption("--magik-frame-evidence") != "off"
+        else set()
+    )
     agent, status = connect_agent(
         magik_run,
         (PROFILE_AGENT_CAPABILITIES if profiled else CHECK_AGENT_CAPABILITIES)
         | {"measurement", "measurement-clock-v1"}
+        | evidence_capabilities
+        | ({"device-control-v1"} if expected_display_mode() else set())
         | application(request.config.getoption("--magik-app")).agent_capabilities,
     )
     try:
@@ -136,10 +144,12 @@ def _application_session(request, magik_run):
     except Exception:
         retain_diagnostics(magik_run, agent)
         raise
+    verify_display(agent, magik_run, "before-session")
     with managed_session(
         agent, magik_run, profile_id, "shared application session"
     ) as application:
         yield application, agent, magik_run, profile_id
+    verify_display(agent, magik_run, "after-session")
 
 
 @contextmanager
@@ -153,9 +163,10 @@ def managed_session(agent, run, profile_id, scenario):
         retain_diagnostics(run, agent)
         if profiled:
             try:
-                complete = json.loads(
-                    agent.read_profile_artifact(profile_id, "profile.json")
+                profile_metadata = agent.read_profile_artifact(
+                    profile_id, "profile.json"
                 )
+                complete = json.loads(profile_metadata)
                 if (
                     complete.get("run_id") != profile_id
                     or complete.get("sha256") != agent.expected_sha256
@@ -165,17 +176,35 @@ def managed_session(agent, run, profile_id, scenario):
                     raise AssertionError(
                         "profile has no matching completed sample evidence"
                     )
+                profile_directory = run / "profiles" / profile_id
+                profile_directory.mkdir(parents=True, exist_ok=False)
                 for name in ("profile.json", "profile.folded", "flamegraph.svg"):
-                    data = agent.read_profile_artifact(profile_id, name)
+                    data = (
+                        profile_metadata
+                        if name == "profile.json"
+                        else agent.read_profile_artifact(profile_id, name)
+                    )
                     if not data:
                         raise AssertionError(f"empty profile artifact: {name}")
+                    (profile_directory / name).write_bytes(data)
                     (run / name).write_bytes(data)
+                from .profile_analysis import summarize_profile
+
+                quality = summarize_profile(
+                    (profile_directory / "profile.folded").read_text(),
+                    complete["samples"],
+                )
+                (profile_directory / "profile-quality.json").write_text(
+                    json.dumps(quality, indent=2) + "\n"
+                )
                 append_event(
                     run,
                     {
                         "phase": "profile",
                         "outcome": "retained",
                         "instrumented": True,
+                        "directory": str(profile_directory.relative_to(run)),
+                        "attribution": quality["attribution"],
                         **complete,
                     },
                 )

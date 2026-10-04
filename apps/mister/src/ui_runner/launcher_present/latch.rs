@@ -405,7 +405,18 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             // A complete tile pair seeds every pixel itself. Partial carousel
             // tiles still need the chrome copy when this slot is unseeded.
             if seed && !whole_frame_tiles {
-                bytes += B::copy_rect(buffer, chrome, full, self.vertical_sampling)?.bytes;
+                // The tile pair fills its own pixels. Seed only the complement
+                // from chrome, so no pixel is copied twice on a cold slot.
+                let mut covered = DirtyRectList::new();
+                covered.push(damage[0]);
+                covered.push(damage[1]);
+                let chrome_seed = mister_magik_fb::framebuffer::target::subtract_dirty_rects(
+                    DirtyRectList::from_one(full),
+                    &covered,
+                );
+                for rect in chrome_seed.iter() {
+                    bytes += B::copy_rect(buffer, chrome, rect, self.vertical_sampling)?.bytes;
+                }
             }
             // Each slot catches up to the current chrome independently.
             // Tile residency cannot suppress a fading header/summary copy.
@@ -1946,7 +1957,7 @@ mod tests {
     fn failed_second_tile_is_not_published_or_marked_coherent() {
         let events = EventLog::default();
         let mut presenter = presenter_with_events(events.clone());
-        presenter.buffers.buffer_mut(2).fail_on_copy = Some(3);
+        presenter.buffers.buffer_mut(2).fail_on_copy = Some(4);
         let mut hardware = FakeHardware {
             statuses: vec![Ok(status(BASE1, 0x0001))],
             events: Some(events.clone()),
@@ -2175,7 +2186,7 @@ mod tests {
             .present_completed_hidden_frame(untouched.completed, &mut hardware, &mut display, false)
             .unwrap();
         let overwritten = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-        assert_eq!(overwritten.copy.bytes, WIDTH * HEIGHT * 2 + 8);
+        assert_eq!(overwritten.copy.bytes, WIDTH * HEIGHT * 2);
         assert_eq!(
             presenter
                 .buffers
@@ -2408,7 +2419,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 copy.copy.bytes,
-                8 + if coherent { 0 } else { WIDTH * HEIGHT * 2 }
+                if coherent { 8 } else { WIDTH * HEIGHT * 2 }
             );
             let pixels = &presenter.buffers.buffer_mut(2).pixels;
             assert_eq!(
@@ -2435,9 +2446,10 @@ mod tests {
             } else {
                 vec![
                     TestEvent::ReadStatus,
-                    TestEvent::Copy,
-                    TestEvent::Copy,
-                    TestEvent::Copy,
+                    TestEvent::Copy, // top chrome band
+                    TestEvent::Copy, // bottom chrome band
+                    TestEvent::Copy, // primary tile
+                    TestEvent::Copy, // helper tile
                     TestEvent::Publish,
                 ]
             };
@@ -2518,7 +2530,7 @@ mod tests {
             assert_eq!(presenter.buffers.buffer_mut(slot).pixels, expected);
             assert_eq!(
                 copy.copy.bytes,
-                if frame < 2 { WIDTH * HEIGHT * 2 + 8 } else { 4 }
+                if frame < 2 { WIDTH * HEIGHT * 2 } else { 4 }
             );
             presenter
                 .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
@@ -2591,7 +2603,7 @@ mod tests {
         assert_eq!(presenter.direct_slot_content_generation[1], None);
         assert!(presenter.outstanding_direct_grant.is_none());
         let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-        assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2 + 8);
+        assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2);
         let mut expected = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
         expected[WIDTH..WIDTH + 2].fill(Rgb565Pixel(11));
         expected[WIDTH + 2..2 * WIDTH].fill(Rgb565Pixel(13));
@@ -2602,7 +2614,7 @@ mod tests {
     }
 
     #[test]
-    fn full_frame_tiles_seed_both_slots_once_but_gapped_tiles_keep_the_chrome_seed() {
+    fn full_frame_and_gapped_tiles_seed_every_pixel_once() {
         for full_frame in [false, true] {
             let events = EventLog::default();
             let mut presenter = presenter_with_events(events.clone());
@@ -2650,7 +2662,7 @@ mod tests {
                     )
                     .unwrap()
                     .unwrap();
-                assert_eq!(copy.copy.bytes, if full_frame { 24 } else { 42 });
+                assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2);
                 let row = [
                     Rgb565Pixel(11),
                     Rgb565Pixel(if full_frame { 11 } else { 7 }),

@@ -50,3 +50,25 @@ def test_completed_window_is_rejected_even_when_motion_has_settled(monkeypatch):
             1_000,
             10,
         )
+
+
+@pytest.mark.parametrize("value", ["0", "11", "invalid"])
+def test_campaign_cannot_silently_run_zero_or_unbounded_repetitions(monkeypatch, value):
+    monkeypatch.setenv("MAGIK_ANIMATION_REPETITIONS", value)
+    with pytest.raises(ValueError):
+        animation_benchmark.animation_repetitions()
+
+
+def test_campaign_defaults_to_three_and_supports_one_diagnostic(monkeypatch):
+    monkeypatch.delenv("MAGIK_ANIMATION_REPETITIONS", raising=False)
+    assert list(animation_benchmark.animation_repetitions()) == [0, 1, 2]
+    monkeypatch.setenv("MAGIK_ANIMATION_REPETITIONS", "1")
+    assert list(animation_benchmark.animation_repetitions()) == [0]
+
+
+def test_campaign_routes_preserve_order_and_reject_unknown_routes(monkeypatch):
+    monkeypatch.setenv("MAGIK_ANIMATION_ROUTES", "settings, root")
+    assert animation_benchmark.animation_routes() == ["settings", "root"]
+    monkeypatch.setenv("MAGIK_ANIMATION_ROUTES", "root,unknown")
+    with pytest.raises(ValueError, match="Unknown animation routes"):
+        animation_benchmark.animation_routes()

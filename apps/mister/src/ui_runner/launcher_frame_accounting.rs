@@ -2845,6 +2845,15 @@ pub(super) struct ToolingPresentationObservation {
 }
 #[cfg(feature = "tooling")]
 impl ToolingPresentationObservation {
+    /// Called only on the renderer's no-work path. Pending animation is not idle.
+    pub(super) fn retire_motion_for_idle(&mut self, motion_active: bool) -> bool {
+        if motion_active || !self.motion {
+            return false;
+        }
+        self.motion = false;
+        true
+    }
+
     pub(super) fn new(
         telemetry: mister_magik_latch_contract::PresentationTelemetry,
         at: Instant,
@@ -3036,6 +3045,51 @@ fn usize_to_u32_saturating(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "tooling")]
+    #[test]
+    fn settled_idle_retires_the_motion_baseline_but_resumed_overruns_still_count() {
+        let origin = Instant::now();
+        let telemetry = mister_magik_latch_contract::PresentationTelemetry {
+            owned_vblank_count: 40,
+            presented_vblank_count: 40,
+            repeated_vblank_count: 0,
+            ownership_loss_count: 0,
+            active_sequence: 40,
+            flags: 0,
+            crc: 0,
+        };
+        let mut moving =
+            ToolingPresentationObservation::new(telemetry, origin, true, 40, Some(origin), origin);
+        assert!(!moving.retire_motion_for_idle(true));
+        assert!(moving.motion);
+        assert!(moving.retire_motion_for_idle(false));
+        assert!(!moving.retire_motion_for_idle(false));
+        assert_eq!(moving.telemetry.owned_vblank_count, 40);
+        // The next render refreshes this idle baseline before doing any work.
+        let resumed = ToolingPresentationObservation::new(
+            mister_magik_latch_contract::PresentationTelemetry {
+                owned_vblank_count: 160,
+                repeated_vblank_count: 120,
+                ..telemetry
+            },
+            origin + Duration::from_secs(2),
+            false,
+            161,
+            None,
+            origin,
+        );
+        assert!(!resumed.motion);
+        assert_eq!(resumed.telemetry.repeated_vblank_count, 120);
+        assert_eq!(
+            mister_magik_tooling_support::measurement::first_frame_drops(1, 25_000, 16_667),
+            1
+        );
+        assert_eq!(
+            mister_magik_tooling_support::measurement::first_frame_drops(1, 8_000, 16_667),
+            0
+        );
+    }
 
     #[cfg(feature = "tooling")]
     #[test]
