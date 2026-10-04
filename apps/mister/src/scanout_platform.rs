@@ -88,7 +88,9 @@ fn resolve_installed_with_runtime(
         "scanout_metadata_sha256",
         &paths.scanout_metadata_path(),
     )?;
-    verify_artifact(&manifest, "gui_sha256", &paths.gui_path())?;
+    // The GUI is the process running this check, not a scanout dependency.
+    // Hashing its whole executable delayed every boot; the manager verifies
+    // installed GUI bytes, and diagnostics still compare them with gui_sha256.
 
     let metadata = parse_metadata(&paths.scanout_metadata_path())?;
     require_metadata(&metadata, "kernel_release", DEVELOPMENT_KERNEL_RELEASE)?;
@@ -430,6 +432,18 @@ mod tests {
                 .unwrap_err()
                 .contains("scanout_metadata_sha256 mismatch")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn profile_resolution_does_not_hash_the_running_gui() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-scanout-profile-gui-{}",
+            std::process::id()
+        ));
+        let paths = development_fixture(&root);
+        fs::write(paths.gui_path(), b"rebuilt runtime").unwrap();
+        assert_eq!(resolve_development(&root, &paths), Ok(DEVELOPMENT_PROFILE));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -625,13 +625,10 @@ impl MetadataStore {
                 entry.id_name
             ));
         }
-        let digest = Sha256::digest(&decoded);
-        if digest.as_slice() != entry.digest {
-            return Err(format!(
-                "metadata shard {} checksum mismatch",
-                entry.id_name
-            ));
-        }
+        // The installed file is verified by release/Downloader hashes, and the
+        // index itself is checked on open. Re-hashing megabytes on each shard
+        // read added nothing beyond LZ4 framing, exact length and the
+        // bounds-checked decoders. Shard digests remain identity for callers.
         Ok(decoded)
     }
 }

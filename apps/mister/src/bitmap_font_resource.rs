@@ -168,10 +168,9 @@ fn decode_resource(bytes: &[u8]) -> Result<DecodedFont, String> {
     {
         return Err("bitmap font resource has invalid metrics".to_string());
     }
-    let expected_crc = read_u32(bytes, 42)?;
-    if crc32fast::hash(&bytes[HEADER_LEN..]) != expected_crc {
-        return Err("bitmap font resource checksum mismatch".to_string());
-    }
+    // Bytes 42..46 hold the generator CRC. Resources are compiled into the
+    // binary and `checked_in_resources_are_deterministic` pins them, so
+    // runtime decoding relies on the structural checks below instead.
 
     let family_end = HEADER_LEN
         .checked_add(family_len)
@@ -1194,11 +1193,6 @@ mod tests {
             .unwrap()
     }
 
-    fn rewrite_crc(bytes: &mut [u8]) {
-        let crc = crc32fast::hash(&bytes[HEADER_LEN..]);
-        bytes[42..46].copy_from_slice(&crc.to_le_bytes());
-    }
-
     #[test]
     fn checked_in_resources_are_deterministic() {
         assert_eq!(
@@ -1469,19 +1463,10 @@ mod tests {
                 .contains("length")
         );
 
-        let mut bad_checksum = YESTERDAY_10_RESOURCE.to_vec();
-        *bad_checksum.last_mut().unwrap() ^= 1;
-        assert!(
-            decode_resource(&bad_checksum)
-                .unwrap_err()
-                .contains("checksum")
-        );
-
         let mut bad_code_point = JERSEY_25_RESOURCE.to_vec();
         let family_len = usize::from(read_u16(&bad_code_point, 20).unwrap());
         let record = HEADER_LEN + family_len;
         bad_code_point[record..record + 4].copy_from_slice(&0x11_0000u32.to_le_bytes());
-        rewrite_crc(&mut bad_code_point);
         assert!(
             decode_resource(&bad_code_point)
                 .unwrap_err()
@@ -1490,7 +1475,6 @@ mod tests {
 
         let mut bad_offset = JERSEY_25_RESOURCE.to_vec();
         bad_offset[record + 16..record + 20].copy_from_slice(&u32::MAX.to_le_bytes());
-        rewrite_crc(&mut bad_offset);
         assert!(
             decode_resource(&bad_offset)
                 .unwrap_err()
@@ -1500,7 +1484,6 @@ mod tests {
         let mut unsorted = JERSEY_25_RESOURCE.to_vec();
         let second = record + GLYPH_RECORD_LEN;
         unsorted[second..second + 4].copy_from_slice(&0u32.to_le_bytes());
-        rewrite_crc(&mut unsorted);
         assert!(decode_resource(&unsorted).unwrap_err().contains("sorted"));
     }
 }

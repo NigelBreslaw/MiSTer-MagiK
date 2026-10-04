@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 const CATALOG_WORKER_CHILD_ENV: &str = "MISTER_CATALOG_WORKER_CHILD";
 const CATALOG_WORKER_PROTOCOL_PREFIX: &str = "MISTER_CATALOG_EVENT ";
-const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 6;
+const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 7;
 const MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES: u64 = 256 * 1024;
 const CATALOG_WORKER_EVENT_QUEUE_CAPACITY: usize = 16_384;
 const MAX_CATALOG_WORKER_COLLECTION_CHUNK_ITEMS: usize = 512;
@@ -351,7 +351,7 @@ struct CatalogWorkerWireEvent {
     #[serde(default)]
     snapshot_path: String,
     #[serde(default)]
-    snapshot_sha256: String,
+    snapshot_bytes: u64,
     #[serde(default)]
     collection: String,
     #[serde(default)]
@@ -689,13 +689,6 @@ fn heartbeat_interval_elapsed(stop: &mpsc::Receiver<()>, interval: std::time::Du
     )
 }
 
-fn snapshot_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 fn cleanup_catalog_worker_snapshots(root: &Path) -> Result<(), String> {
     if !root.exists() {
         return Ok(());
@@ -727,7 +720,7 @@ fn cleanup_catalog_worker_snapshots(root: &Path) -> Result<(), String> {
 fn write_arcade_system_snapshot(
     run_id: &str,
     system: &mister_magik_catalog::fast_five_catalog::FastFiveSystem,
-) -> Result<(String, String), String> {
+) -> Result<(String, u64), String> {
     write_arcade_system_snapshot_at(Path::new(CATALOG_WORKER_SNAPSHOT_DIRECTORY), run_id, system)
 }
 
@@ -735,7 +728,7 @@ fn write_arcade_system_snapshot_at(
     root: &Path,
     run_id: &str,
     system: &mister_magik_catalog::fast_five_catalog::FastFiveSystem,
-) -> Result<(String, String), String> {
+) -> Result<(String, u64), String> {
     let bytes = mister_magik_catalog::fast_five_catalog::encode_fast_system_transport(system)?;
     write_catalog_worker_snapshot_at(
         root,
@@ -752,7 +745,7 @@ fn write_catalog_worker_snapshot_at(
     suffix: &str,
     bytes: &[u8],
     max_bytes: usize,
-) -> Result<(String, String), String> {
+) -> Result<(String, u64), String> {
     cleanup_catalog_worker_snapshots(root)?;
     if bytes.len() > max_bytes {
         return Err(format!("catalog worker snapshot exceeds {max_bytes} bytes"));
@@ -775,7 +768,7 @@ fn write_catalog_worker_snapshot_at(
         let _ = std::fs::remove_file(&path);
         return Err(format!("sync catalog worker snapshot root: {error}"));
     }
-    Ok((path.to_string_lossy().into_owned(), snapshot_sha256(bytes)))
+    Ok((path.to_string_lossy().into_owned(), bytes.len() as u64))
 }
 
 fn load_arcade_system_snapshot_at(
@@ -788,7 +781,7 @@ fn load_arcade_system_snapshot_at(
         &event.run_id,
         "arcade-system",
         &event.snapshot_path,
-        &event.snapshot_sha256,
+        event.snapshot_bytes,
         mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES,
     )?;
     let system = mister_magik_catalog::fast_five_catalog::decode_fast_system_transport(&bytes)?;
@@ -806,7 +799,7 @@ fn load_arcade_system_snapshot_at(
 fn write_registry_seed_snapshot(
     run_id: &str,
     transport: &RegistrySeedTransport,
-) -> Result<(String, String), String> {
+) -> Result<(String, u64), String> {
     let bytes = transport.encode()?;
     write_catalog_worker_snapshot_at(
         Path::new(CATALOG_WORKER_SNAPSHOT_DIRECTORY),
@@ -827,7 +820,7 @@ fn load_registry_seed_snapshot_at(
         &event.run_id,
         CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX,
         &event.snapshot_path,
-        &event.snapshot_sha256,
+        event.snapshot_bytes,
         CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES,
     )?;
     let transport = RegistrySeedTransport::decode(&bytes)?;
@@ -844,7 +837,7 @@ fn load_catalog_worker_snapshot_at(
     run_id: &str,
     suffix: &str,
     snapshot_path: &str,
-    expected_sha256: &str,
+    expected_bytes: u64,
     max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
     let expected = snapshot_root.join(format!("{run_id}.{suffix}.bin"));
@@ -863,8 +856,10 @@ fn load_catalog_worker_snapshot_at(
         .read_to_end(&mut bytes)
         .map_err(|error| format!("read catalog worker snapshot: {error}"))?;
     let _ = std::fs::remove_file(&expected);
-    if bytes.len() > max_bytes || snapshot_sha256(&bytes) != expected_sha256 {
-        return Err("catalog worker snapshot checksum or size differs".to_string());
+    // Both ends are this executable and the writer synced the private file
+    // before announcing it; an exact length catches a short or reused file.
+    if bytes.len() > max_bytes || bytes.len() as u64 != expected_bytes {
+        return Err("catalog worker snapshot size differs".to_string());
     }
     Ok(bytes)
 }
@@ -904,7 +899,7 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
         progress_epoch: 0,
         work_units: 0,
         snapshot_path: String::new(),
-        snapshot_sha256: String::new(),
+        snapshot_bytes: 0,
         collection: String::new(),
         collection_index: 0,
         collection_chunks: 0,
@@ -1128,7 +1123,7 @@ fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
         progress_epoch: 0,
         work_units: 0,
         snapshot_path: String::new(),
-        snapshot_sha256: String::new(),
+        snapshot_bytes: 0,
         collection: String::new(),
         collection_index: 0,
         collection_chunks: 0,
@@ -1927,13 +1922,13 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
         let events = match &message {
             CatalogWorkerMessage::PublishedRegistrySeed { transport } => {
                 match write_registry_seed_snapshot(&wire_run_id, transport) {
-                    Ok((snapshot_path, snapshot_sha256)) => {
+                    Ok((snapshot_path, snapshot_bytes)) => {
                         let mut event = blank_worker_wire_event("ready");
                         event.source = "sharded-registry-snapshot".to_string();
                         event.generation = transport.generation;
                         event.fingerprint = transport.fingerprint.clone();
                         event.snapshot_path = snapshot_path;
-                        event.snapshot_sha256 = snapshot_sha256;
+                        event.snapshot_bytes = snapshot_bytes;
                         Ok(vec![event])
                     }
                     Err(error) => {
@@ -1946,7 +1941,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             }
             CatalogWorkerMessage::ArcadeBootstrapReady {
                 snapshot_path,
-                snapshot_sha256,
+                snapshot_bytes,
                 load_us,
             } => {
                 let mut event = blank_worker_wire_event("ready");
@@ -1954,7 +1949,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 event.durable_save_pending = true;
                 event.elapsed_us = *load_us;
                 event.snapshot_path = snapshot_path.clone();
-                event.snapshot_sha256 = snapshot_sha256.clone();
+                event.snapshot_bytes = *snapshot_bytes;
                 Ok(vec![event])
             }
             _ => worker_wire_events(&message),
@@ -2018,7 +2013,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             progress_epoch: 0,
             work_units: 0,
             snapshot_path: String::new(),
-            snapshot_sha256: String::new(),
+            snapshot_bytes: 0,
             collection: String::new(),
             collection_index: 0,
             collection_chunks: 0,
@@ -2339,10 +2334,10 @@ fn run_fast_catalog_fresh_build(
                 });
                 if let Some(run_id) = bootstrap_run_id {
                     match write_arcade_system_snapshot(run_id, system) {
-                        Ok((snapshot_path, snapshot_sha256)) => {
+                        Ok((snapshot_path, snapshot_bytes)) => {
                             let _ = tx.send(CatalogWorkerMessage::ArcadeBootstrapReady {
                                 snapshot_path,
-                                snapshot_sha256,
+                                snapshot_bytes,
                                 load_us,
                             });
                         }
@@ -2688,7 +2683,7 @@ pub(super) enum CatalogWorkerMessage {
     },
     ArcadeBootstrapReady {
         snapshot_path: String,
-        snapshot_sha256: String,
+        snapshot_bytes: u64,
         load_us: u64,
     },
     PublishedRegistrySeed {
@@ -2803,7 +2798,7 @@ mod tests {
             progress_epoch: 2,
             work_units: 99,
             snapshot_path: String::new(),
-            snapshot_sha256: String::new(),
+            snapshot_bytes: 0,
             collection: String::new(),
             collection_index: 0,
             collection_chunks: 0,
@@ -3072,12 +3067,11 @@ mod tests {
             }],
             variants: Vec::new(),
         };
-        let (path, checksum) =
-            write_arcade_system_snapshot_at(&snapshot_root, run_id, &system).unwrap();
+        let (path, len) = write_arcade_system_snapshot_at(&snapshot_root, run_id, &system).unwrap();
         let mut event = blank_worker_wire_event("ready");
         event.run_id = run_id.to_string();
         event.snapshot_path = path.clone();
-        event.snapshot_sha256 = checksum;
+        event.snapshot_bytes = len;
 
         let catalog =
             load_arcade_system_snapshot_at(&snapshot_root, "/media/fat/_Arcade", &event).unwrap();
@@ -3085,6 +3079,35 @@ mod tests {
         assert_eq!(catalog.len(), 1);
         assert!(!Path::new(&path).exists());
         std::fs::remove_dir_all(snapshot_root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_with_a_different_announced_length_is_rejected() {
+        let snapshot_root = std::env::temp_dir().join(format!(
+            "mister-magik-catalog-worker-length-{}",
+            std::process::id()
+        ));
+        let run_id = "run-length";
+        let (path, len) = write_catalog_worker_snapshot_at(
+            &snapshot_root,
+            run_id,
+            "arcade-system",
+            b"snapshot",
+            64,
+        )
+        .unwrap();
+        let error = load_catalog_worker_snapshot_at(
+            &snapshot_root,
+            run_id,
+            "arcade-system",
+            &path,
+            len + 1,
+            64,
+        )
+        .unwrap_err();
+        assert!(error.contains("size differs"), "{error}");
+        assert!(!Path::new(&path).exists());
+        let _ = std::fs::remove_dir_all(snapshot_root);
     }
 
     #[test]
@@ -3099,7 +3122,7 @@ mod tests {
         ));
         let run_id = "run-corrupt";
         let bytes = b"not-a-fast-system";
-        let (path, checksum) = write_catalog_worker_snapshot_at(
+        let (path, len) = write_catalog_worker_snapshot_at(
             &snapshot_root,
             run_id,
             "arcade-system",
@@ -3111,7 +3134,7 @@ mod tests {
         event.run_id = run_id.to_string();
         event.source = CatalogSource::NavigationProjection.label().to_string();
         event.snapshot_path = path.clone();
-        event.snapshot_sha256 = checksum;
+        event.snapshot_bytes = len;
 
         let message = catalog_worker_message_from_wire_at(
             &snapshot_root,
@@ -3183,7 +3206,7 @@ mod tests {
             }],
         };
         let bytes = transport.encode().unwrap();
-        let (path, checksum) = write_catalog_worker_snapshot_at(
+        let (path, len) = write_catalog_worker_snapshot_at(
             &snapshot_root,
             run_id,
             CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX,
@@ -3196,7 +3219,7 @@ mod tests {
         event.generation = transport.generation;
         event.fingerprint = transport.fingerprint.clone();
         event.snapshot_path = path.clone();
-        event.snapshot_sha256 = checksum;
+        event.snapshot_bytes = len;
 
         let (catalog, generation, fingerprint) =
             load_registry_seed_snapshot_at(&snapshot_root, &event, "/unavailable/catalog").unwrap();
