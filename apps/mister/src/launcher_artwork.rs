@@ -221,6 +221,7 @@ mod tests {
             // Digests are intentionally irrelevant to the runtime read path.
             let manifest = serde_json::json!({"schema":1,"width":360,"height":504,"format":"RGB888","cards":{
                 "snes":{"file":"snes.rgb888","sha256":"not-checked-at-runtime"},
+                "bad":{"file":"snes.rgb888","sha256":"incorrect"},
                 "n64":{"file":"n64.rgb888"},"escape":{"file":"../snes.rgb888"}
             }});
             std::fs::write(self.0.join("index.json"), manifest.to_string()).unwrap();
@@ -283,15 +284,17 @@ mod tests {
     }
 
     #[test]
-    fn runtime_checks_lengths_and_paths_but_does_not_hash_pixels() {
+    fn filesystem_cards_preserve_slots_and_fail_independently() {
         let f = Fixture::new();
         f.index();
         let bytes = vec![123; SOURCE_BYTES];
         std::fs::write(f.0.join("snes.rgb888"), &bytes).unwrap();
-        let keys = ["missing", " SNES ", "escape"].map(String::from);
+        let keys = ["missing", "snes", "bad", "escape", " SNES "].map(String::from);
         let loaded = load_cards(&f.0, &keys);
-        assert!(loaded[0].is_empty() && loaded[2].is_empty());
+        assert!(loaded[0].is_empty() && loaded[3].is_empty());
         assert_eq!(loaded[1].as_ref(), bytes);
+        assert_eq!(loaded[2].as_ref(), bytes);
+        assert_eq!(loaded[4].as_ref(), bytes);
         for bad in [b"truncated".to_vec(), vec![0; SOURCE_BYTES + 1]] {
             std::fs::write(f.0.join("snes.rgb888"), bad).unwrap();
             assert!(load_cards(&f.0, &keys).iter().all(|p| p.is_empty()));
