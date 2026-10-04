@@ -4316,6 +4316,20 @@ fn can_preempt_home_latch_wait(
         && !startup_intro_frame_posted
 }
 
+/// Loop restart after new input arrives between rendering and publication.
+/// Waiting for a slot has not consumed Slint damage and must stay on the direct path.
+pub(in crate::ui_runner) fn restart_unpublished_home_frame(
+    completed: &mut Option<CompletedHiddenFrame>,
+    slint_rasterized: bool,
+    unpublished_cached_frame_present: &mut bool,
+    discard: impl FnOnce(CompletedHiddenFrame),
+) {
+    if let Some(completed) = completed.take() {
+        discard(completed);
+    }
+    *unpublished_cached_frame_present |= slint_rasterized;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn can_preempt_disposable_home_raster(
     screen: Screen,
@@ -10664,8 +10678,6 @@ pub(super) fn run_launcher_loop(
                     }
                     completed_hidden_frame_for_present = Some(copy.completed);
                     card_direct_frame_rendered = true;
-                    card_frame_rendered_last_iteration = true;
-                    session.note_direct_presented();
                 }
                 Ok(None) => {}
                 Err(failure) => launcher_presenter.fail_latch_completion(failure),
@@ -11163,14 +11175,20 @@ pub(super) fn run_launcher_loop(
                 || composition_decision.retirement_generation.is_some(),
             startup_intro.is_some(),
         ) {
-            if let Some(completed) = completed_hidden_frame_for_present.take() {
-                // Direct Home rendering already reserved and wrote a hidden slot.
-                // Release it before restarting, or every later direct grant fails.
-                launcher_presenter.discard_completed_hidden_frame(completed);
-            } else {
-                // Slint consumed cached-image damage without publishing it. Carry
-                // a full copy into the replacement so both slots remain coherent.
-                unpublished_cached_frame_present = true;
+            restart_unpublished_home_frame(
+                &mut completed_hidden_frame_for_present,
+                this_rect.is_some() || !slint_damage.is_empty(),
+                &mut unpublished_cached_frame_present,
+                |completed| launcher_presenter.discard_completed_hidden_frame(completed),
+            );
+            #[cfg(feature = "tooling")]
+            if let Some(frame) = tooling_frame_evidence.as_mut() {
+                // Rendered work is counted once even when input prevents delivery.
+                frame.record.work = card_work_timing;
+                if card_work_timing.is_some() {
+                    frame.record.workload =
+                        mister_magik_tooling_support::measurement::FrameWorkload::Card;
+                }
             }
             launcher_response_trace.record_lab(Some(serde_json::json!({
                 "phase": "input-priority-restart",
@@ -12612,6 +12630,12 @@ pub(super) fn run_launcher_loop(
             presentation.main_present_status,
             presentation.main_present_copy_path,
         );
+        if card_direct_frame_rendered && visible_frame_presented {
+            card_frame_rendered_last_iteration = true;
+            if let Some(session) = launcher_card_home.as_mut() {
+                session.note_direct_presented();
+            }
+        }
         // Posting a buffer and observing it pending proves latch acceptance,
         // not physical presentation. The intro advances only after the final
         // active-sequence confirmation below.
