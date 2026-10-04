@@ -309,6 +309,14 @@ enum Artwork<'a> {
     Rgb888(&'a [&'a [u8]]),
 }
 
+/// One lazily supplied source. Retryable fallbacks are reused until an explicit
+/// retry; their pixels must stay identical within an artwork generation. Source
+/// pixels are dropped after this card bakes.
+pub struct LauncherArtwork {
+    pub pixels: std::borrow::Cow<'static, [u8]>,
+    pub retry: bool,
+}
+
 /// Face cache for an immutable artwork/font context. Advance `asset_generation`
 /// when either input changes. Geometry and all card text/count/colour inputs
 /// are compared independently; only the most recent card generation stays cached.
@@ -320,6 +328,13 @@ pub struct LauncherFaceCache {
     artwork_kind: u8,
     keys: Vec<CardFaceKey>,
     faces: Vec<Arc<CardFaces>>,
+    retry_artwork: bool,
+}
+impl LauncherFaceCache {
+    /// Only an explicit background retry may revisit failed artwork.
+    pub fn retry_failed_artwork(&mut self) {
+        self.retry_artwork = true;
+    }
 }
 #[derive(Eq, PartialEq)]
 struct CardFaceKey {
@@ -380,6 +395,35 @@ impl LauncherScene {
             asset_generation,
         )
     }
+    /// Only calls `load` for faces that cannot be reused. The callback and its
+    /// pixels live exclusively during preparation, never during frame rendering.
+    pub fn prepare_initial_with_rgb888_loader_and_cache(
+        self,
+        data: LauncherData<'_>,
+        load: &mut dyn FnMut(usize) -> LauncherArtwork,
+        typography: Option<LauncherTypography<'_>>,
+        cache: &mut LauncherFaceCache,
+        asset_generation: u64,
+    ) -> InitialLauncher {
+        let mut prepared = PreparedLauncher::new_cached_with_loader(
+            self,
+            data,
+            None,
+            typography,
+            Some(cache),
+            asset_generation,
+            Some(load),
+        );
+        prepared.render_frame(BrowseFrame {
+            selected: data.selected,
+            target: data.selected,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+        });
+        InitialLauncher { prepared }
+    }
     fn initial_cached(
         self,
         data: LauncherData<'_>,
@@ -434,11 +478,13 @@ pub struct PreparedLauncher {
     level_foreign_title: bool,
     cyclic: bool,
     fitted: Vec<Rgb565Pixel>,
+    retry_artwork: bool,
     faces: Arc<Vec<Arc<CardFaces>>>,
     flip_columns: Vec<crate::launcher_flip::Scratch>,
 }
 
 struct CardFaces {
+    source_retry: bool,
     compact: crate::launcher_flip::Face,
     detail: crate::launcher_flip::Face,
     /// The MagiK reverse of a generic card; `None` for cards with artwork.
@@ -666,6 +712,18 @@ impl PreparedLauncher {
             trick: None,
         }
     }
+    pub fn shares_faces_with(&self, other: &Self) -> bool {
+        self.faces.len() == other.faces.len()
+            && self
+                .faces
+                .iter()
+                .zip(other.faces.iter())
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+    }
+    pub fn needs_artwork_retry(&self) -> bool {
+        self.retry_artwork
+    }
+
     /// Owned raster-buffer capacity, excluding strings and small metadata.
     /// This is not process RSS; it makes the quality/cache tradeoff measurable.
     pub fn cached_raster_bytes(&self) -> usize {
@@ -705,13 +763,37 @@ impl PreparedLauncher {
         cache: Option<&mut LauncherFaceCache>,
         asset_generation: u64,
     ) -> Self {
+        Self::new_cached_with_loader(
+            scene,
+            data,
+            artwork,
+            typography,
+            cache,
+            asset_generation,
+            None,
+        )
+    }
+
+    fn new_cached_with_loader(
+        scene: LauncherScene,
+        data: LauncherData<'_>,
+        artwork: Option<Artwork<'_>>,
+        typography: Option<LauncherTypography<'_>>,
+        cache: Option<&mut LauncherFaceCache>,
+        asset_generation: u64,
+        mut load: Option<&mut dyn FnMut(usize) -> LauncherArtwork>,
+    ) -> Self {
         #[cfg(feature = "launcher-profile")]
         let _preparation = crate::launcher_profile::span("prepare.launcher_constructor");
         let keys: Vec<_> = data.cards.iter().map(CardFaceKey::from).collect();
-        let artwork_kind = match artwork {
-            None => 0,
-            Some(Artwork::Rgb565(_)) => 1,
-            Some(Artwork::Rgb888(_)) => 2,
+        let artwork_kind = if load.is_some() {
+            2
+        } else {
+            match artwork {
+                None => 0,
+                Some(Artwork::Rgb565(_)) => 1,
+                Some(Artwork::Rgb888(_)) => 2,
+            }
         };
         let reusable = cache.as_ref().filter(|cache| {
             cache.scene == Some(scene)
@@ -754,9 +836,21 @@ impl PreparedLauncher {
                 });
                 if let Some(cache) = reusable
                     && cache.keys.get(index) == Some(&keys[index])
+                    && (!cache.faces[index].source_retry || !cache.retry_artwork)
                 {
                     return Arc::clone(&cache.faces[index]);
                 }
+                let loaded = load.as_mut().map(|load| load(index));
+                // A retry that failed again has identical fallback pixels. Keep
+                // its prepared surfaces so the UI can discard an unchanged result.
+                if let Some(cache) = reusable
+                    && cache.keys.get(index) == Some(&keys[index])
+                    && cache.faces[index].source_retry
+                    && loaded.as_ref().is_some_and(|source| source.retry)
+                {
+                    return Arc::clone(&cache.faces[index]);
+                }
+
                 let card = PreparedCard {
                     id: card.id,
                     name: card.name,
@@ -773,13 +867,16 @@ impl PreparedLauncher {
                         })
                         .filter(|pixels| pixels.len() == 180 * card_height(180))
                         .copied(),
-                    rgb888: artwork
-                        .and_then(|items| match items {
-                            Artwork::Rgb888(items) => items.get(index),
-                            Artwork::Rgb565(_) => None,
+                    rgb888: loaded
+                        .as_ref()
+                        .map(|source| source.pixels.as_ref())
+                        .or_else(|| {
+                            artwork.and_then(|items| match items {
+                                Artwork::Rgb888(items) => items.get(index).copied(),
+                                Artwork::Rgb565(_) => None,
+                            })
                         })
-                        .filter(|pixels| pixels.len() == 360 * 504 * 3)
-                        .copied(),
+                        .filter(|pixels| pixels.len() == 360 * 504 * 3),
                 };
                 #[cfg(test)]
                 FACE_BAKES.set(FACE_BAKES.get() + 2);
@@ -788,6 +885,7 @@ impl PreparedLauncher {
                     let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
                     let [compact, detail] = artwork::faces_rgb888(&card, typography);
                     CardFaces {
+                        source_retry: false,
                         compact,
                         detail,
                         back: None,
@@ -800,6 +898,7 @@ impl PreparedLauncher {
                         layout.faces(&card, fonts, &mut bodies, data.level.slides())
                     } else {
                         CardFaces {
+                            source_retry: false,
                             compact: bake_face(&card, 180, false, typography, &mut bodies),
                             detail: bake_face(&card, 180, true, typography, &mut bodies),
                             back: bodies.back_face(&card),
@@ -807,6 +906,7 @@ impl PreparedLauncher {
                         }
                     }
                 };
+                faces.source_retry = loaded.as_ref().is_some_and(|source| source.retry);
                 let dithered = responsive.is_none();
                 faces.compact.dithered = dithered;
                 faces.detail.dithered = dithered;
@@ -823,6 +923,7 @@ impl PreparedLauncher {
             cache.artwork_kind = artwork_kind;
             cache.keys = keys;
             cache.faces = faces.clone();
+            cache.retry_artwork = false;
         }
         #[cfg(feature = "launcher-profile")]
         let _buffers = crate::launcher_profile::span("prepare.retained_buffers");
@@ -842,6 +943,7 @@ impl PreparedLauncher {
             } else {
                 vec![Rgb565Pixel(BACKGROUND); scene.width * scene.height]
             },
+            retry_artwork: faces.iter().any(|face| face.source_retry),
             faces: Arc::new(faces),
             flip_columns: (0..if data.level.slides() {
                 CAROUSEL_CAPACITY
@@ -1928,6 +2030,67 @@ mod tests {
             clock: "21:37",
             level: LauncherLevel::Root,
         }
+    }
+
+    #[test]
+    fn lazy_artwork_loads_only_misses_retries_failures_and_uses_generation() {
+        use std::{borrow::Cow, cell::RefCell};
+        let calls = RefCell::new(vec![0; CARDS.len()]);
+        let failing = std::cell::Cell::new(true);
+        let mut load = |i: usize| {
+            calls.borrow_mut()[i] += 1;
+            LauncherArtwork {
+                pixels: if i == 1 && failing.get() {
+                    Cow::Borrowed(&[])
+                } else {
+                    Cow::Owned(vec![80 + i as u8; 360 * 504 * 3])
+                },
+                retry: i == 1 && failing.get(),
+            }
+        };
+        let scene = LauncherScene::new(960, 540);
+        let mut cache = LauncherFaceCache::default();
+        let first = scene
+            .prepare_initial_with_rgb888_loader_and_cache(data(), &mut load, None, &mut cache, 1)
+            .finish();
+        assert!(first.needs_artwork_retry());
+        assert_eq!(*calls.borrow(), vec![1; CARDS.len()]);
+        let unchanged = scene
+            .prepare_initial_with_rgb888_loader_and_cache(data(), &mut load, None, &mut cache, 1)
+            .finish();
+        assert!(first.shares_faces_with(&unchanged));
+        assert_eq!(*calls.borrow(), vec![1; CARDS.len()]);
+        cache.retry_failed_artwork();
+        let failed_again = scene
+            .prepare_initial_with_rgb888_loader_and_cache(data(), &mut load, None, &mut cache, 1)
+            .finish();
+        assert!(first.shares_faces_with(&failed_again));
+        assert_eq!(*calls.borrow(), vec![1, 2, 1, 1, 1]);
+        failing.set(false);
+        cache.retry_failed_artwork();
+        let recovered = scene
+            .prepare_initial_with_rgb888_loader_and_cache(data(), &mut load, None, &mut cache, 1)
+            .finish();
+        assert!(!recovered.needs_artwork_retry());
+        assert_eq!(*calls.borrow(), vec![1, 3, 1, 1, 1]);
+        let mut cards = CARDS;
+        cards[2].games = Some(314);
+        let mut input = data();
+        input.cards = &cards;
+        input.clock = "new clock";
+        input.selected = 3;
+        scene
+            .prepare_initial_with_rgb888_loader_and_cache(input, &mut load, None, &mut cache, 1)
+            .finish();
+        assert_eq!(*calls.borrow(), vec![1, 3, 2, 1, 1]);
+        scene
+            .prepare_initial_with_rgb888_loader_and_cache(input, &mut load, None, &mut cache, 1)
+            .finish();
+        assert_eq!(*calls.borrow(), vec![1, 3, 2, 1, 1]);
+        scene
+            .prepare_initial_with_rgb888_loader_and_cache(input, &mut load, None, &mut cache, 2)
+            .finish();
+        assert_eq!(*calls.borrow(), vec![2, 4, 3, 2, 2]);
     }
 
     /// Projection, lighting, face swaps and reflections with the clean-background

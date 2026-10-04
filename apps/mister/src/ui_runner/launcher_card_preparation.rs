@@ -23,6 +23,7 @@ struct Request {
     level: CardLevelSnapshot,
     selected: usize,
     clock: String,
+    retry_artwork: bool,
 }
 struct State {
     next_id: u64,
@@ -160,6 +161,9 @@ impl HomePreparation {
                         let mut cache = caches.remove(cache_index);
                         let build = |face_cache: &mut CardFaceCache| {
                             before_build(request.id);
+                            if request.retry_artwork {
+                                face_cache.retry_failed_artwork();
+                            }
                             prepare_cached(
                                 request.scene,
                                 &request.level,
@@ -227,6 +231,27 @@ impl HomePreparation {
         clock: &str,
         visible: bool,
     ) -> Option<u64> {
+        self.enqueue(scene, level, selected, clock, visible, false)
+    }
+    pub(super) fn retry_artwork(
+        &self,
+        scene: LauncherScene,
+        level: &CardLevelSnapshot,
+        selected: usize,
+        clock: &str,
+    ) -> Option<u64> {
+        self.enqueue(scene, level, selected, clock, false, true)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue(
+        &self,
+        scene: LauncherScene,
+        level: &CardLevelSnapshot,
+        selected: usize,
+        clock: &str,
+        visible: bool,
+        retry_artwork: bool,
+    ) -> Option<u64> {
         let mut state = self.lock_state();
         if state.stopped || state.interested.len() >= JOBS {
             return None;
@@ -240,6 +265,7 @@ impl HomePreparation {
             level: level.clone(),
             selected,
             clock: clock.into(),
+            retry_artwork,
         };
         if visible {
             state.pending.push_front(request);

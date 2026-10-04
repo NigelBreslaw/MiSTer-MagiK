@@ -829,11 +829,7 @@ fn load_catalog_worker_snapshot_at(
         let _ = std::fs::remove_file(&expected);
         return Err("catalog worker snapshot size differs".to_string());
     }
-    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(0));
-    std::fs::File::open(&expected)
-        .map_err(|error| format!("open catalog worker snapshot: {error}"))?
-        .take(max_bytes as u64 + 1)
-        .read_to_end(&mut bytes)
+    let bytes = mister_magik_catalog::bounded_file::read(&expected, max_bytes as u64)
         .map_err(|error| format!("read catalog worker snapshot: {error}"))?;
     let _ = std::fs::remove_file(&expected);
     // Both ends are this executable and the writer synced the private file

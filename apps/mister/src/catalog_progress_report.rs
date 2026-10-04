@@ -3,10 +3,11 @@
 
 //! Bounded, persistent progress episodes for catalog workers that may never fail.
 
+use mister_magik_catalog::bounded_file::read_tail;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -491,15 +492,17 @@ fn file_snapshot(path: &Path) -> Value {
 }
 
 fn read_json_snapshot(path: &str) -> Option<Value> {
-    let file = fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    if len > MAX_JSON_INPUT_BYTES {
-        return Some(json!({
-            "projection_error": "snapshot exceeds bounded JSON input",
-            "bytes": len,
-        }));
-    }
-    let value: Value = serde_json::from_reader(file).ok()?;
+    let bytes = match mister_magik_catalog::bounded_file::read(path, MAX_JSON_INPUT_BYTES) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let limit = mister_magik_catalog::bounded_file::size_limit(&error)?;
+            return Some(json!({
+                "projection_error": "snapshot exceeds bounded JSON input",
+                "bytes": limit.observed,
+            }));
+        }
+    };
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
     let Value::Object(source) = value else {
         return None;
     };
@@ -536,7 +539,7 @@ fn read_json_snapshot(path: &str) -> Option<Value> {
 }
 
 fn filtered_event_tail(path: &str, pid: u32) -> Vec<String> {
-    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES) else {
+    let Ok(bytes) = read_tail(path, MAX_LOG_BYTES as u64) else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -570,7 +573,7 @@ fn filtered_event_tail(path: &str, pid: u32) -> Vec<String> {
 }
 
 fn filtered_application_log_tail(path: &str) -> Vec<String> {
-    let Ok(bytes) = read_bounded(path, MAX_LOG_BYTES) else {
+    let Ok(bytes) = read_tail(path, MAX_LOG_BYTES as u64) else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -596,18 +599,6 @@ fn filtered_application_log_tail(path: &str) -> Vec<String> {
     }
     lines.reverse();
     lines
-}
-
-fn read_bounded(path: &str, limit: usize) -> io::Result<Vec<u8>> {
-    let file = fs::File::open(path)?;
-    let len = file.metadata()?.len();
-    let start = len.saturating_sub(limit as u64);
-    let mut bytes = Vec::with_capacity(limit.min(len as usize));
-    let mut reader = io::BufReader::new(file);
-    use std::io::Seek;
-    reader.seek(io::SeekFrom::Start(start))?;
-    reader.take(limit as u64).read_to_end(&mut bytes)?;
-    Ok(bytes)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {

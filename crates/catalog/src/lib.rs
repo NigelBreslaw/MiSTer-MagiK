@@ -5,6 +5,7 @@
 
 pub mod arcade_catalog;
 pub mod archive_member;
+pub mod bounded_file;
 mod bounded_lz4;
 #[cfg(feature = "builder")]
 pub mod catalog_acceptance;
