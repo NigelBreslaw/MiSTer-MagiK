@@ -216,6 +216,6 @@ but FPGA acceptance/cutoff times are unavailable. Keep that attribution limit ex
 Pin a campaign with `MAGIK_EXPECT_DISPLAY_MODE=crt-240p60` and
 `MAGIK_EXPECT_RENDER_SIZE=640x240`. The fixture verifies Main's mode before
 and after every session; route, motion and idle measurements reject wrong
-geometry, including stale embedded windows. The pin also selects the CRT hub’s
-vertical controls. These guards do not change mode.
+geometry, including stale embedded windows. Hub controls follow the app’s reported runtime axis, including CRT and HDMI
+portrait without a display pin. These guards do not change mode.
 Arrange exclusive device use across concurrent chats before a long campaign.

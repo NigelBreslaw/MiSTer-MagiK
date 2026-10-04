@@ -85,7 +85,7 @@ fn glyph_alpha_threshold() -> u8 {
 
 /// One framebuffer pixel in MiSTer's xRGB-8888 layout, stored as 0x00RRGGBB.
 /// (Colours verified correct on HDMI, so no R/B swap needed despite FB_FMT_RxB.)
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Pixel(pub u32);
 

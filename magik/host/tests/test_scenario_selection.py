@@ -66,3 +66,52 @@ def test_full_app_routes_forward_requested_frame_evidence(
     benchmark.assert_called_once_with(
         app, agent, tmp_path, 2, route="arcade", frame_evidence="phases"
     )
+
+
+def test_invalid_campaign_overrides_do_not_break_unrelated_collection(monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    scenarios = Path(__file__).resolve().parents[2] / "scenarios/test_magik.py"
+    monkeypatch.setenv("MAGIK_ANIMATION_ROUTES", "invalid")
+    monkeypatch.setenv("MAGIK_ANIMATION_REPETITIONS", "invalid")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "magik.scenario_runner",
+            "--collect-only",
+            "-q",
+            "-k",
+            "idle",
+            str(scenarios),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=os.environ,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "magik.scenario_runner",
+            "--collect-only",
+            "-q",
+            "-k",
+            "animation_app",
+            str(scenarios),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=os.environ,
+    )
+    assert result.returncode != 0
+    assert "Unknown animation routes" in result.stdout + result.stderr

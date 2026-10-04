@@ -910,6 +910,11 @@ impl LauncherCardHomeSession {
     pub(super) fn current_request(&self) -> LauncherFrameRequest {
         self.last_request
     }
+    #[cfg(feature = "tooling")]
+    pub(super) fn rendered_request(&self) -> Option<LauncherFrameRequest> {
+        self.renderer.as_ref()?.rendered_request()
+    }
+
     pub(super) fn last_timing(&self) -> Option<ParallelFrameTiming> {
         self.last_timing
     }
@@ -1826,6 +1831,43 @@ mod tests {
             session.renderer.as_ref().unwrap().helper_thread_id(),
             worker
         );
+    }
+
+    #[cfg(feature = "tooling")]
+    #[test]
+    fn card_delivery_uses_completed_pixels_and_rejects_an_unrendered_motion_request() {
+        let mut session =
+            LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "21:37")
+                .unwrap();
+        session.render_direct_bands();
+        let completed = session.rendered_request().unwrap();
+        let mut metrics = mister_magik_tooling_support::measurement::PresentationMetrics::default();
+        assert!(
+            metrics.note_card_delivery(session.current_request().generation, completed.generation)
+        );
+        // A quantized duplicate retains the same pixel identity and remains valid.
+        session.render_direct_bands();
+        assert_eq!(session.rendered_request(), Some(completed));
+        assert!(
+            metrics.note_card_delivery(session.current_request().generation, completed.generation)
+        );
+        // Request a new moving pose without producing it: the old bands must not
+        // acquire the requested generation simply because submission advanced.
+        let mut pose = session.frame;
+        pose.selected = 1;
+        let requested = session.next_request(pose);
+        assert_eq!(session.rendered_request(), Some(completed));
+        assert!(!metrics.note_card_delivery(
+            requested.generation,
+            session.rendered_request().unwrap().generation
+        ));
+        assert_eq!(metrics.counters.card_dropped_frames, 1);
+        session.frame = pose;
+        session.render_direct_bands();
+        assert!(metrics.note_card_delivery(
+            session.current_request().generation,
+            session.rendered_request().unwrap().generation
+        ));
     }
 
     #[test]

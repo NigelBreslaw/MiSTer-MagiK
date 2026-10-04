@@ -294,6 +294,82 @@ mod tests {
         }
     }
     #[test]
+    fn full_phase_capture_fits_metrics_transport_with_payload_headroom() {
+        use crate::measurement::{FramePhaseTimeline, FrameWorkTiming};
+        let evidence = FrameEvidence {
+            phases_enabled: true,
+            helper: Some(HelperEvidence {
+                discarded_generation: Some(0),
+                ..Default::default()
+            }),
+            cpu_us: [Some(0); 7],
+            input_sequence: Some(0),
+            input_captured_monotonic_us: Some(0),
+            input_dequeued_us: Some(0),
+            bridge_model_us: Some(0),
+            bridge_stages_us: Some([0; 6]),
+            bridge_presenter_us: Some([0; 4]),
+            bridge_hub_counts_us: Some([0; 2]),
+            destination_stage_us: Some([0; 4]),
+            destination_list_us: Some([0; 2]),
+            previous_observation_attempt_id: Some(0),
+            ownership_loss_count: Some(0),
+            raw_presented_count: Some(0),
+            raw_repeat_count: Some(0),
+            content_generation: Some(0),
+            motion_continues_after_present: Some(false),
+            previous_read_bracket_us: Some([0; 2]),
+            refresh_counter: Some(0),
+            telemetry_flags: Some(0),
+            record: DroppedFrameRecord {
+                owned_refresh_observed: Some(0),
+                active_sequence: Some(0),
+                work: Some(FrameWorkTiming {
+                    discarded_helper_cpu_us: Some(0),
+                    primary_cpu_us: Some(0),
+                    secondary_cpu_us: Some(0),
+                    primary_run_delay_us: Some(0),
+                    secondary_run_delay_us: Some(0),
+                    ..Default::default()
+                }),
+                timeline: Some(FramePhaseTimeline {
+                    post_request_start_us: Some(0),
+                    post_verified_us: Some(0),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        fn widen(value: &mut Value) {
+            match value {
+                Value::Number(_) => *value = u64::MAX.into(),
+                Value::String(_) => *value = "x".repeat(128).into(),
+                Value::Array(values) => values.iter_mut().for_each(widen),
+                Value::Object(values) => values.values_mut().for_each(widen),
+                _ => {}
+            }
+        }
+        let mut frame = evidence.json();
+        widen(&mut frame);
+        let mut capture = FrameEvidenceCapture::default();
+        capture.reset(EvidenceMode::Phases);
+        let mut payload = capture.json();
+        payload["frames"] = vec![frame; CAPACITY].into();
+        // The negotiated metrics-body-32m-v1 contract leaves 4 MiB for
+        // the enclosing window, drop records, thread metrics and clock samples.
+        let bytes = serde_json::to_vec(&payload).unwrap().len();
+        assert!(
+            bytes > 16 * 1024 * 1024,
+            "fixture must exercise the old limit"
+        );
+        assert!(
+            bytes + 4 * 1024 * 1024 < 32 * 1024 * 1024,
+            "full capture uses {bytes} bytes"
+        );
+    }
+
+    #[test]
     fn merges_overlapping_drop_neighborhoods_and_keeps_successes() {
         let mut capture = FrameEvidenceCapture::default();
         capture.reset(EvidenceMode::Neighbors);
@@ -417,8 +493,6 @@ mod tests {
                 .sum::<u64>(),
             2700
         );
-        // Extended native metrics-body supports 16 MiB; this dense trace fits.
-        assert!(capture.json().to_string().len() < 16 * 1024 * 1024);
         capture.reset(EvidenceMode::Off);
         assert_eq!(capture.retained.capacity(), 0);
     }

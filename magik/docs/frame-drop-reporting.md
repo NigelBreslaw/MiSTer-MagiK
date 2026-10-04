@@ -73,16 +73,21 @@ without per-frame allocation. Overflow remains explicit and fails complete
 evidence validation. Capture OFF reserves no neighborhood storage. The bound
 was increased after a CRT 240p route exhausted the original 256 records.
 
-Detailed-capture sessions require `metrics-body-16m-v1`: the service carries
-up to 16 MiB of JSON in a metrics body, with a bounded error above that limit.
+Detailed-capture sessions require `metrics-body-32m-v1`: the service carries
+up to 32 MiB of JSON in a metrics body, with a bounded error above that limit.
 The host negotiates this capability before starting a session and upgrades a
 compatible service through the normal native path when needed. Ordinary
-measurements continue to accept the existing metrics capability.
+measurements continue to accept the existing metrics capability. A serialization
+regression fills all 4,096 phase records, enables every optional branch, widens
+numbers to u64 limits and labels to 128 bytes, and reserves 4 MiB for the
+enclosing metrics. The former 16 MiB body was too small for that payload.
 
 `card_reused_frames` counts confirmed delivery of a requested generation that
 was also presented previously. An unchanged quantized pose is valid delivery;
 only a delivered generation different from the currently requested generation
-is a missing pose. Physical repeat accounting remains separate.
+is a missing pose. Delivered identity comes from matching completed primary/helper
+pixel buffers, independently of the session request. Physical repeat accounting
+remains separate.
 
 A frame's `motion` describes its pre-render state, including a final animation
 endpoint. `motion_continues_after_present` describes whether another moving

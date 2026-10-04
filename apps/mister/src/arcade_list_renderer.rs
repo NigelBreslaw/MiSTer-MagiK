@@ -92,7 +92,7 @@ pub const fn crt_arcade_row_height(base_row_height: i32, portrait: bool) -> i32 
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct ArcadeListStyle {
     row_height: i32,
     scroll_quantum_y: i32,
@@ -1101,7 +1101,7 @@ impl ArcadeListRenderer {
                 return;
             }
         };
-        if self.style.crt_palette || self.width != width {
+        if self.style != ArcadeListStyle::hdmi() || self.width != width {
             return;
         }
         for (index, mut row) in rows {
@@ -1126,7 +1126,7 @@ impl ArcadeListRenderer {
     /// never waits for this worker: unavailable or stale rows use the normal path.
     pub fn prepare_visible_rows(&mut self, games: ArcadeGameView<'_>, visual_index: f32) {
         self.poll_prepared_rows(games);
-        if self.style.crt_palette
+        if self.style != ArcadeListStyle::hdmi()
             || self.row_preparer_failed
             || self
                 .row_preparer
@@ -5437,8 +5437,18 @@ mod tests {
     }
 
     #[test]
-    fn prepared_rows_reject_changed_content_favourites_and_width() {
-        for mismatch in 0..3 {
+    fn nonstandard_hdmi_style_does_not_start_the_standard_row_worker() {
+        let mut style = ArcadeListStyle::hdmi();
+        style.row_height += 4;
+        let mut renderer = ArcadeListRenderer::new_with_style(style, None);
+        let games = games("arcade", 3);
+        renderer.prepare_visible_rows(ArcadeGameView::contiguous(&games), 0.0);
+        assert!(renderer.row_preparer.is_none());
+    }
+
+    #[test]
+    fn prepared_rows_reject_changed_content_favourites_width_and_style() {
+        for mismatch in 0..4 {
             let games = games("arcade", 3);
             let view = ArcadeGameView::contiguous(&games);
             let mut renderer = ArcadeListRenderer::new();
@@ -5471,10 +5481,13 @@ mod tests {
                     )],
                 ))
                 .unwrap();
+            if mismatch == 3 {
+                renderer.style.row_height += 4;
+            }
             renderer.poll_prepared_rows(view);
             assert!(renderer.row_cache.is_empty());
             renderer.draw(view, 0, 0.0, true);
-            let mut reference = ArcadeListRenderer::new();
+            let mut reference = ArcadeListRenderer::new_with_style(renderer.style, None);
             reference.draw(view, 0, 0.0, true);
             assert!(renderer.surface == reference.surface);
         }

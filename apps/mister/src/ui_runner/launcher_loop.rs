@@ -6360,6 +6360,8 @@ pub(super) fn run_launcher_loop(
             "native_device_plane": if !layout.is_portrait() && !ui.output_route().is_crt()
                 && (layout.logical_w(), layout.logical_h()) == (960, 540)
                 { "exposed-hdmi-v1" } else { "disabled" },
+            "system_hub_axis": if layout.is_portrait() || ui.output_route().is_crt()
+                { "vertical" } else { "horizontal" },
             "card_helper_ahead": if !layout.is_portrait() && !ui.output_route().is_crt()
                 && (layout.logical_w(), layout.logical_h()) == (960, 540)
                 { "native-browse-tricks-v2" } else { "disabled" },
@@ -6457,6 +6459,14 @@ pub(super) fn run_launcher_loop(
             }
             if card_presentation_measurement_enabled {
                 session.metrics.process_cpu_us = cpu_process_us();
+            }
+            let hub_axis = if layout.is_portrait() || ui.output_route().is_crt() {
+                "vertical"
+            } else {
+                "horizontal"
+            };
+            if session.metrics.context["system_hub_axis"].as_str() != Some(hub_axis) {
+                session.metrics.context["system_hub_axis"] = hub_axis.into();
             }
             session.set_ui_motion(mister_magik_catalog::ui_motion::active());
             let tooling_tick_start = Instant::now();
@@ -10585,10 +10595,11 @@ pub(super) fn run_launcher_loop(
                             frame.direct_hidden_copy_us = copy.copy_us;
                             frame.direct_hidden_copy_bytes = copy.copy.bytes as u64;
                         }
+                        let rendered = session.rendered_request();
                         card_direct_measurement = Some((
                             copy.copy_us,
-                            request.timestamp_us,
-                            request.generation,
+                            rendered.map_or(0, |pose| pose.timestamp_us),
+                            rendered.map_or(0, |pose| pose.generation),
                             pose_sampled_at.elapsed().as_micros() as u64,
                         ));
                         if let (Some(tooling), Some(timing)) = (tooling.as_mut(), timing) {
@@ -10936,7 +10947,6 @@ pub(super) fn run_launcher_loop(
             latency_critical_input_pending,
             "launcher-response.slint-raster",
         );
-        let mut custom_home_full_raster_rendered = false;
         macro_rules! render_launcher_base {
             ($full_slint_raster:expr) => {{
                 if custom_home_active
@@ -10974,8 +10984,6 @@ pub(super) fn run_launcher_loop(
                         frame.home_composition_us[1] +=
                             u128_to_u64(native_done.elapsed().as_micros());
                     }
-                    custom_home_full_raster_rendered |=
-                        $full_slint_raster && rendered && copied.is_some();
                     session.note_compositor_copied(retain_cache && copied.is_some());
                     #[cfg(feature = "tooling")]
                     if let Some(copied) = copied
@@ -11676,14 +11684,9 @@ pub(super) fn run_launcher_loop(
                             timed_out,
                         );
                     }
-                    // The controlled full raster already composes native Home
-                    // pixels and overlays even when the card session is clean.
-                    // Reuse that exact composition in this frame; a deferred
-                    // capture still needs its own restoration on a later frame.
-                    if custom_home_active
-                        && !custom_home_full_raster_rendered
-                        && let Some(session) = launcher_card_home.as_mut()
-                    {
+                    // Restore Home immediately before capture: intermediate transition
+                    // work can overwrite the target after the earlier full raster.
+                    if custom_home_active && let Some(session) = launcher_card_home.as_mut() {
                         #[cfg(feature = "tooling")]
                         let home_started = measure_destination.then(Instant::now);
                         let _ =

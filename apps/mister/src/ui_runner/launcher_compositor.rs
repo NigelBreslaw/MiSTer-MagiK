@@ -1321,6 +1321,41 @@ mod tests {
     }
 
     #[test]
+    fn home_snapshot_restores_cards_after_an_intermediate_target_overwrite() {
+        std::thread::spawn(|| {
+            let window = install_isolated_test_platform();
+            let overlay = NativeHomeOverlayProbe::new().unwrap();
+            window.set_size(PhysicalSize::new(960, 540));
+            overlay.show().unwrap();
+            let ui = UiDisplay::for_framebuffer(960, 540);
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let cards = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0xffff); 960 * 540];
+            let mut layer = LayerTarget::new(&mut target, &ui);
+            layer.render_custom_home(&window, &cards, true, None);
+            layer.render_black();
+            assert!(layer.cached_frame_view().pixels().iter().all(|p| p.0 == 0));
+            // The snapshot path must restore even after a full raster in this pass.
+            layer.render_custom_home(&window, &cards, true, None);
+            assert!(
+                layer
+                    .cached_frame_view()
+                    .pixels()
+                    .iter()
+                    .all(|p| p.0 == 0xffff)
+            );
+            assert!(
+                layer
+                    .presentation_frame_view()
+                    .pixels()
+                    .iter()
+                    .all(|p| p.0 == 0xffff)
+            );
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     fn custom_home_redraw_preserves_native_cards_without_input() {
         std::thread::spawn(|| {
             let window = install_isolated_test_platform();

@@ -217,6 +217,7 @@ impl Agent {
             "metrics-v1",
             "metrics-body-v1",
             "metrics-body-16m-v1",
+            "metrics-body-32m-v1",
             "watch-v1",
             "watch-metrics-body-v1",
             "capture-framebuffer",
@@ -1608,7 +1609,7 @@ fn artifact_request_error(
     )
 }
 
-const MAX_METRICS_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_METRICS_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// Metrics use a bounded JSON body when they cannot fit a control header.
 fn write_metrics_body(
@@ -2147,7 +2148,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("magik-metrics-body-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let value = serde_json::json!({"window":{"evidence":"x".repeat(2 * 1024 * 1024)}});
+        let value = serde_json::json!({"window":{"evidence":"x".repeat(MAX_METRICS_BODY_BYTES - 1024)}});
         std::fs::write(
             directory.join("probe-metrics.json"),
             serde_json::to_vec(&value).unwrap(),

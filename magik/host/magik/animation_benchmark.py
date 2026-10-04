@@ -117,6 +117,13 @@ def _settled_metrics(metrics, before_ms, deadline):
         time.sleep(0.2)
 
 
+def _vertical_hub(metrics):
+    axis = metrics.get("context", {}).get("system_hub_axis")
+    if axis not in {"vertical", "horizontal"}:
+        raise AssertionError("Missing runtime system hub axis")
+    return axis == "vertical"
+
+
 def _navigate(app, step, route, *, vertical_hub=False):
     def key(name, value, **expected):
         step(name, lambda: _key(app, value), **expected)
@@ -345,7 +352,7 @@ def animation_roundtrip(
         app,
         step,
         route,
-        vertical_hub=(expected_display_mode() or "").startswith("crt-"),
+        vertical_hub=_vertical_hub(before) if route == "arcade" else False,
     )
     while True:
         end = metrics()

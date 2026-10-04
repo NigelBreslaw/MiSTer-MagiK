@@ -18,7 +18,7 @@ from actions import (
     validate_development_paths,
 )
 from magik.results import append_event
-from magik.animation_benchmark import animation_repetitions, animation_routes
+from magik.animation_benchmark import ANIMATION_ROUTES
 from catalog_equivalence import (
     catalog_identity,
     assert_catalog_equivalent,
@@ -312,8 +312,8 @@ def test_device_plane(journey_application_session):
     device_plane_journey(app, agent, run)
 
 
-@pytest.mark.parametrize("repetition", animation_repetitions())
-@pytest.mark.parametrize("route", animation_routes())
+@pytest.mark.parametrize("repetition", range(10))
+@pytest.mark.parametrize("route", ANIMATION_ROUTES)
 def test_animation_app(journey_application_session, repetition, route, request):
     from magik.animation_benchmark import animation_roundtrip
 
@@ -338,7 +338,7 @@ def test_animation_app(journey_application_session, repetition, route, request):
 
 
 @pytest.mark.magik_profile
-@pytest.mark.parametrize("route", animation_routes())
+@pytest.mark.parametrize("route", ANIMATION_ROUTES)
 def test_animation_app_profile(journey_application_session, route):
     from magik.animation_benchmark import animation_roundtrip
 

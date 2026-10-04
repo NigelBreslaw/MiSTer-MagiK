@@ -422,6 +422,12 @@ impl ParallelLauncherRenderer {
         self.rendered_split
     }
 
+    /// Identity carried by both completed pixel bands, independent of the caller's request.
+    pub fn rendered_request(&self) -> Option<LauncherFrameRequest> {
+        let primary = self.primary.request()?;
+        (self.helper.as_ref()?.request() == Some(primary)).then_some(primary)
+    }
+
     pub fn helper_pixels(&self, request: LauncherFrameRequest) -> Option<&[Rgb565Pixel]> {
         self.helper
             .as_ref()
