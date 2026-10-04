@@ -26,6 +26,19 @@ card images.
 Each scene is framed for a 1500 by 2100 pixel output. The lower part of the image
 is deliberately quiet so the app can place dynamic text there.
 
+## Current Arcade card
+
+`MiSTer-MagiK-Arcade-Cabinet.blend` contains the current front-facing cabinet
+scene, `MAGIK_01_ARCADE_CABINET`. Its `CARD 5x7` and `UI FRONT` cameras share the
+established pose used by the Arcade hub. This isolated, editable scene has no
+external images, fonts or linked libraries. The older angled Arcade scene in
+the six-card studio remains a design source, not the runtime Arcade card.
+
+`render_clean_background.py` selects this front-facing scene explicitly and
+exports clean-background runtime cards, transparent masters and exact-black
+source masks. See `apps/mister/assets/ui/launcher-cards/README.md` for the full
+runtime export command.
+
 ## Render
 
 Run a fast 600 by 840 preview of every card:

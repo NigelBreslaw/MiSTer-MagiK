@@ -336,6 +336,12 @@ chmod 755 "$STAGE/$PUBLIC_MANAGER_RELATIVE"
 cp "$RUNTIME_METADATA" "$STAGE/$PUBLIC_ROOT_RELATIVE/magik-metadata-v1.bin"
 cp "$ARCADE_UPDATER_INDEX" "$STAGE/$PUBLIC_ROOT_RELATIVE/arcade-updater-index-v1.lz4b"
 
+# Card artwork is mandatory runtime data, independent of the optional screenshot pack.
+mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/ui/launcher-cards"
+cp "$ROOT/apps/mister/assets/ui/launcher-cards/"*.rgb888 \
+  "$ROOT/apps/mister/assets/ui/launcher-cards/index.json" \
+  "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/ui/launcher-cards/"
+
 if [[ -n "$ASSET_PACK" ]]; then
   mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets"
   cp "$ASSET_PACK" "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/$(basename "$ASSET_PACK")"
@@ -375,6 +381,7 @@ cp "$ROOT/LICENSE" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/MiSTer-MagiK-GPL-3.0-o
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/RUST-LIBRARIES.txt"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/FFMPEG-LGPL-2.1-or-later.txt"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/PRESS-START-2P-OFL-1.1.txt"
+cp "$ROOT/apps/mister/licenses/CARD-ARTWORK.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/CARD-ARTWORK.txt"
 cp "$ROOT/apps/mister/licenses/COMMERCIAL-FONTS.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/COMMERCIAL-FONTS.txt"
 cp "$ROOT/apps/mister/licenses/TERMINUS-FONT.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/TERMINUS-FONT-OFL-1.1.txt"
 cp "$ROOT/apps/mister/licenses/SPLEEN.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/SPLEEN-BSD-2-Clause.txt"
@@ -409,6 +416,10 @@ BSD-2-Clause, commercially licensed
 Yesterday 10, Xerxes 10, Nocive 15, and Bacteria 12 bitmap glyphs, and the Arcade Cabinet particle model
 by Lluc Guardiolaa under CC-BY-NC-4.0. Complete notices and attribution are in
 the mister-magik/licenses/ directory.
+
+Rendered console and computer cards use attributed 3D models. Creator names,
+source links, licences and modifications are in licenses/CARD-ARTWORK.txt
+and in the app under Settings > About > Licenses > Card artwork.
 
 magik-metadata-v1.bin is generated metadata, not ROM, BIOS, firmware, or game
 media. It is derived from MAME listxml and software-list data from mamedev/mame at ref:

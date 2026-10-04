@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import manifest
+from . import card_artwork, manifest
 from .common import atomic_write, sha256_file
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +49,8 @@ REQUIRED = {
             "THIRD-PARTY-NOTICES.txt",
             "SOURCE-OFFER.txt",
             "licenses/COMMERCIAL-FONTS.txt",
+            "licenses/CARD-ARTWORK.txt",
+            "assets/ui/launcher-cards/index.json",
         )
     ),
 }
@@ -180,6 +182,7 @@ def verify_root(root: Path) -> dict[str, str]:
             or name.endswith(("/mame.sqlite3", "/hbmame.sqlite3"))
         ):
             raise ValueError(f"forbidden public payload: {name}")
+    card_artwork.validate(root / APP / card_artwork.RELATIVE_PATH)
     fields = manifest.verify(root / APP / "platform-v3.manifest", root, layout="public")
     manager = Path(
         os.environ.get(

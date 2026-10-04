@@ -580,10 +580,14 @@ mod tests {
         session.start -= Duration::from_secs(5);
         assert!(!session.tick(16, 8).unwrap());
         assert_eq!(session.carousel_hold_change(), None);
-        session.start -= Duration::from_secs(3);
+        // Cross the deadline deliberately: tick records actual elapsed time,
+        // which also includes time spent running this test on the real clock.
+        session.start -= Duration::from_millis(3001);
         assert!(session.tick(16, 8).unwrap());
         assert_eq!(session.carousel_hold_change(), Some(false));
-        assert_eq!(session.metrics.window.as_ref().unwrap()["elapsed_ms"], 8000);
+        let window = session.metrics.window.as_ref().unwrap();
+        assert_eq!(window["target_duration_ms"], 8000);
+        assert!(window["elapsed_ms"].as_u64().unwrap() >= 8001);
 
         session.carousel_hold_requested = true;
         session.begin();

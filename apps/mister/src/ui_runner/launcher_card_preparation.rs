@@ -3,9 +3,8 @@
 
 //! One bounded owner of card preparation and background retirement.
 use super::{ASIDE_LEVELS, CardLevelSnapshot, LauncherFonts, prepare_cached};
-use mister_magik_framebuffer_scenes::launcher::{
-    LauncherFaceCache, LauncherScene, PreparedLauncher,
-};
+use crate::launcher_artwork::CardFaceCache;
+use mister_magik_framebuffer_scenes::launcher::{LauncherScene, PreparedLauncher};
 use mister_magik_framebuffer_scenes::launcher_parallel::ParallelLauncherRenderer;
 use std::{
     collections::VecDeque,
@@ -48,14 +47,14 @@ impl HomePreparation {
     pub(super) fn new(
         fonts: Arc<LauncherFonts>,
         initial_level: String,
-        initial_cache: LauncherFaceCache,
+        initial_cache: CardFaceCache,
     ) -> Result<Self, String> {
         Self::start(fonts, initial_level, initial_cache, |_| {})
     }
     pub(super) fn start(
         fonts: Arc<LauncherFonts>,
         initial_level: String,
-        initial_cache: LauncherFaceCache,
+        initial_cache: CardFaceCache,
         before_build: impl Fn(u64) + Send + 'static,
     ) -> Result<Self, String> {
         let shared = Arc::new(Shared {
@@ -153,13 +152,13 @@ impl HomePreparation {
                                 }
                                 caches.push((
                                     request.level.menu_id.clone(),
-                                    LauncherFaceCache::default(),
+                                    CardFaceCache::default(),
                                 ));
                                 caches.len() - 1
                             }
                         };
                         let mut cache = caches.remove(cache_index);
-                        let build = |face_cache: &mut LauncherFaceCache| {
+                        let build = |face_cache: &mut CardFaceCache| {
                             before_build(request.id);
                             prepare_cached(
                                 request.scene,
@@ -176,7 +175,7 @@ impl HomePreparation {
                             Err(_) => {
                                 // A failed build may leave partially updated faces.
                                 // Retry once with cold state, still on this worker.
-                                cache.1 = LauncherFaceCache::default();
+                                cache.1 = CardFaceCache::default();
                                 build(&mut cache.1)
                             }
                         };

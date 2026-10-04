@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Production data model for the card launcher: the six root cards and the
-//! generic cards of every nested hierarchy level.
+//! cards of every nested hierarchy level, with stable artwork identities.
 
 use crate::arcade_catalog::{ArcadeCatalog, MENU_ARCADE_SYSTEM_ID};
 use crate::launcher::LauncherNav;
@@ -108,8 +108,7 @@ const CONSOLES_COLOUR: u16 = 0x2a7f;
 const COMPUTERS_COLOUR: u16 = 0xedc6;
 const HANDHELDS_COLOUR: u16 = 0x2df2;
 
-/// One carousel level with owned labels. The root keeps its approved artwork
-/// cards; nested levels are generic cards in their root collection's colour.
+/// One carousel level with owned labels and stable artwork identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CardLevelSnapshot {
     /// Stable level identity; a change is a level change, not a data refresh.
@@ -122,6 +121,8 @@ pub struct CardLevelSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LevelCard {
+    /// Taxonomy item ID; independent of translated labels and carousel position.
+    pub artwork_key: String,
     pub id: LauncherCardId,
     pub name: String,
     pub games: Option<u32>,
@@ -165,6 +166,7 @@ impl CardLevelSnapshot {
         let cards: Vec<_> = items
             .iter()
             .map(|item| LevelCard {
+                artwork_key: item.id.clone(),
                 id,
                 name: item.title.to_uppercase(),
                 games: Some(saturating_u32(item.count)),
@@ -203,6 +205,15 @@ impl CardLevelSnapshot {
                 .iter()
                 .map(|card| LevelCard {
                     id: card.id,
+                    artwork_key: match card.id {
+                        LauncherCardId::Arcade => "root:arcade",
+                        LauncherCardId::Consoles => "root:consoles",
+                        LauncherCardId::Computers => "root:computers",
+                        LauncherCardId::Handhelds => "root:handhelds",
+                        LauncherCardId::Favourites => "root:favourites",
+                        LauncherCardId::Settings => "root:settings",
+                    }
+                    .to_owned(),
                     name: card.name.to_owned(),
                     games: card.games,
                     colour: card.colour,
@@ -244,7 +255,8 @@ impl CardLevelSnapshot {
         let items = nav.current_menu_items();
         items.len() == self.cards.len()
             && items.iter().zip(&self.cards).all(|(item, card)| {
-                card.games == Some(saturating_u32(item.count))
+                card.artwork_key == item.id
+                    && card.games == Some(saturating_u32(item.count))
                     && card.name.eq_ignore_ascii_case(&item.title)
             })
     }

@@ -9,12 +9,15 @@ use crate::bitmap_font_resource::{
     jersey_25_console_bitmap_font, launcher_bitmap_font, nocive_15_console_bitmap_font,
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
 };
-use crate::launcher_home::{CARD_COUNT, CardLevelSnapshot};
+use crate::launcher_artwork::CardFaceCache;
+#[cfg(test)]
+use crate::launcher_home::CARD_COUNT;
+use crate::launcher_home::CardLevelSnapshot;
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
 use mister_magik_framebuffer_scenes::launcher::{
-    CardSlot, LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherFaceCache, LauncherFrameRequest,
-    LauncherScene, LauncherTypography, LevelChange, PreparedLauncher,
+    CardSlot, LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherFrameRequest, LauncherScene,
+    LauncherTypography, LevelChange, PreparedLauncher,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
     BrowseDirection, BrowseFrame, BrowsePhase, SPRING_POSITION_UNITS,
@@ -44,15 +47,6 @@ struct PendingLevel {
     scene: LauncherScene,
     level: CardLevelSnapshot,
 }
-
-const CARD_RGB888: [&[u8]; CARD_COUNT] = [
-    include_bytes!("../../assets/ui/launcher-cards/01_arcade.rgb888"),
-    include_bytes!("../../assets/ui/launcher-cards/02_consoles.rgb888"),
-    include_bytes!("../../assets/ui/launcher-cards/03_computers.rgb888"),
-    include_bytes!("../../assets/ui/launcher-cards/04_handhelds.rgb888"),
-    include_bytes!("../../assets/ui/launcher-cards/05_favourites.rgb888"),
-    include_bytes!("../../assets/ui/launcher-cards/06_settings.rgb888"),
-];
 
 pub(super) fn scene_for_display(
     ui: &crate::ui_display::UiDisplay,
@@ -179,7 +173,7 @@ impl LauncherCardHomeSession {
         let cog_warm = crate::launcher_presentation::warm_settings_cog();
         let fonts = Arc::new(LauncherFonts::load()?);
         let selected = selected.min(level.cards.len().saturating_sub(1));
-        let mut cache = LauncherFaceCache::default();
+        let mut cache = CardFaceCache::default();
         let prepared = prepare_cached(scene, &level, selected, clock, &fonts, &mut cache);
         let preparation = HomePreparation::new(Arc::clone(&fonts), level.menu_id.clone(), cache)?;
         cabinet_warm
@@ -1050,12 +1044,17 @@ fn prepare(
     clock: &str,
     fonts: &LauncherFonts,
 ) -> PreparedLauncher {
-    // Only the root cards have approved artwork; nested levels are generic.
-    let root = level.is_root();
-    let rgb888: &[&[u8]] = if root { &CARD_RGB888 } else { &[] };
+    let keys: Vec<_> = level
+        .cards
+        .iter()
+        .map(|card| card.artwork_key.clone())
+        .collect();
+    let artwork =
+        crate::launcher_artwork::load_cards(&crate::launcher_artwork::asset_root(), &keys);
+    let sources: Vec<_> = artwork.iter().map(Vec::as_slice).collect();
     level.with_data(selected, clock, |data| {
         scene
-            .prepare_initial_with_rgb888_artwork_and_typography(data, rgb888, fonts.typography())
+            .prepare_initial_with_rgb888_artwork_and_typography(data, &sources, fonts.typography())
             .finish()
     })
 }
@@ -1067,21 +1066,18 @@ fn prepare_cached(
     selected: usize,
     clock: &str,
     fonts: &LauncherFonts,
-    cache: &mut LauncherFaceCache,
+    cache: &mut CardFaceCache,
 ) -> PreparedLauncher {
-    let root = level.is_root();
-    let rgb888: &[&[u8]] = if root { &CARD_RGB888 } else { &[] };
-    // Immutable assets/fonts belong to this session. Root and nested assets
-    // are separate contexts even when card IDs and geometry coincide.
-    let assets = if root { 1 } else { 2 };
+    cache.load(level);
+    let rgb888: Vec<&[u8]> = cache.artwork.iter().map(Vec::as_slice).collect();
     level.with_data(selected, clock, |data| {
         scene
             .prepare_initial_with_rgb888_artwork_typography_and_cache(
                 data,
-                rgb888,
+                &rgb888,
                 fonts.typography(),
-                cache,
-                assets,
+                &mut cache.faces,
+                1,
             )
             .finish()
     })
@@ -1131,6 +1127,7 @@ mod tests {
             cards: ["ATARI", "SEGA", "NINTENDO"]
                 .into_iter()
                 .map(|name| LevelCard {
+                    artwork_key: name.to_ascii_lowercase(),
                     id: mister_magik_framebuffer_scenes::launcher::LauncherCardId::Consoles,
                     name: name.into(),
                     games: Some(10),
@@ -1193,7 +1190,7 @@ mod tests {
             session.preparation = HomePreparation::start(
                 Arc::clone(&session.fonts),
                 root.menu_id.clone(),
-                LauncherFaceCache::default(),
+                CardFaceCache::default(),
                 move |_| {
                     assert_ne!(std::thread::current().id(), ui_thread);
                     if worker_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -1243,7 +1240,7 @@ mod tests {
         session.preparation = HomePreparation::start(
             Arc::clone(&session.fonts),
             root.menu_id.clone(),
-            LauncherFaceCache::default(),
+            CardFaceCache::default(),
             move |_| {
                 if worker_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
                     release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -1311,7 +1308,7 @@ mod tests {
                 session.preparation = HomePreparation::start(
                     Arc::clone(&session.fonts),
                     level.menu_id.clone(),
-                    LauncherFaceCache::default(),
+                    CardFaceCache::default(),
                     move |id| {
                         if id == 1 {
                             entered_tx.send(()).unwrap();
@@ -1385,7 +1382,7 @@ mod tests {
             session.preparation = HomePreparation::start(
                 Arc::clone(&session.fonts),
                 level.menu_id.clone(),
-                LauncherFaceCache::default(),
+                CardFaceCache::default(),
                 move |id| {
                     if id == 1 {
                         entered_tx.send(()).unwrap();
@@ -1431,7 +1428,7 @@ mod tests {
         session.preparation = HomePreparation::start(
             Arc::clone(&session.fonts),
             level.menu_id.clone(),
-            LauncherFaceCache::default(),
+            CardFaceCache::default(),
             move |_| {
                 entered_tx.send(()).unwrap();
                 let _ = release_rx.recv_timeout(Duration::from_secs(5));
