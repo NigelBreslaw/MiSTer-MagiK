@@ -663,6 +663,12 @@ fn sampled_framed_surface(
         as u16
 }
 
+// Half of the primary RGB565 stroke, baked as an opaque colour. Channel
+// least-significant bits are masked before shifting to prevent cross-channel carry.
+fn opaque_inner_stroke(primary: u16) -> u16 {
+    (primary & 0xf7de) >> 1
+}
+
 fn framed_sample(
     card: &PreparedCard<'_>,
     base: u16,
@@ -695,7 +701,7 @@ fn framed_sample(
             },
         )
     } else if !inside_inset(x, y, width, height, 8) {
-        mix_colour(source, BACKGROUND, 205)
+        opaque_inner_stroke(mix_colour(trim, CREAM, 76))
     } else {
         source
     }
@@ -856,6 +862,8 @@ pub(super) fn native_surface(
     let ry = (rx * height * 5 / (width * 7)).max(2);
     let bx = (width / 40).max(2);
     let by = (bx * height * 5).div_ceil(width * 7).max(1);
+    let border = mix_colour(card.colour, CREAM, 48);
+    let stroke = opaque_inner_stroke(border);
     for y in 0..height {
         for x in 0..width {
             let mut sum = [0u64; 3];
@@ -888,10 +896,9 @@ pub(super) fn native_surface(
             let inner = ellipse_coverage(x, y, width, height, rx, ry, bx, by);
             let keyline = ellipse_coverage(x, y, width, height, rx, ry, bx + 1, by + 1);
             if let Some(weight) = (inner * 256).checked_div(outer) {
-                let border = mix_colour(card.colour, CREAM, 48);
                 colour = mix_colour(
                     border,
-                    mix_colour(BACKGROUND, colour, (keyline * 256 / inner.max(1)) as usize),
+                    mix_colour(stroke, colour, (keyline * 256 / inner.max(1)) as usize),
                     weight as usize,
                 );
             } else {
@@ -950,6 +957,29 @@ fn ellipse_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inner_stroke_is_opaque_and_independent_of_artwork() {
+        let red = vec![Rgb565Pixel(rgb(255, 0, 0)); 180 * 252];
+        let blue = vec![Rgb565Pixel(rgb(0, 0, 255)); 180 * 252];
+        let mut card = test_card(rgb(160, 170, 100));
+        for artwork in [&red[..], &blue[..]] {
+            card.artwork = Some(artwork);
+            let point = framed_sample(&card, 0, card.colour, 180, 252, 6 * 8 + 4, 126 * 8 + 4);
+            assert_eq!(
+                point,
+                opaque_inner_stroke(mix_colour(card.colour, CREAM, 76))
+            );
+            let (pixels, alpha) = native_surface(&card, 36, 50, None);
+            let at = 25 * 36 + 2;
+            assert_eq!(
+                pixels[at].0,
+                opaque_inner_stroke(mix_colour(card.colour, CREAM, 48))
+            );
+            assert_eq!(alpha[at], 255);
+            assert!(alpha.iter().any(|&a| a > 0 && a < 255));
+        }
+    }
 
     #[test]
     fn artwork_interior_matches_subpixel_reference_at_every_pixel() {
