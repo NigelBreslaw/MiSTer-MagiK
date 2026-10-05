@@ -44,8 +44,6 @@ def application(name: str = "mini-magik") -> Application:
         quantiser = os.environ.get("MAGIK_CARD_QUANTISER", "current")
         if quantiser not in {"current", "fast"}:
             raise ValueError("MAGIK_CARD_QUANTISER must be current or fast")
-        if quantiser == "fast" and sampler != "axis":
-            raise ValueError("the quantiser experiment requires sampler B (axis)")
         if sampler == "axis":
             app = replace(app, features=(*app.features, "card-axis-filter"))
         if quantiser == "fast":

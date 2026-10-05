@@ -2178,7 +2178,7 @@ mod tests {
             LauncherScene::crt(240, 640),
         ];
         let mut actual = Vec::new();
-        for (route_index, scene) in scenes.into_iter().enumerate() {
+        for scene in scenes {
             let mut prepared =
                 PreparedLauncher::new(scene, data(), Some(Artwork::Rgb888(&faces)), None);
             for direction in [BrowseDirection::Right, BrowseDirection::Left] {
@@ -2201,30 +2201,6 @@ mod tests {
                         progress_millis,
                         duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
                     });
-                    if let Ok(root) = std::env::var("MAGIK_SAMPLER_AB_RENDER_DIR") {
-                        let (w, h) = [(960, 540), (540, 960), (640, 240), (240, 640)][route_index];
-                        let directory = std::path::Path::new(&root);
-                        std::fs::create_dir_all(directory).unwrap();
-                        let mut image = format!("P6\n{w} {h}\n255\n").into_bytes();
-                        for pixel in prepared.pixels() {
-                            let v = pixel.0;
-                            let r = (v >> 11) as u8;
-                            let g = ((v >> 5) & 63) as u8;
-                            let b = (v & 31) as u8;
-                            image.extend_from_slice(&[
-                                (r << 3) | (r >> 2),
-                                (g << 2) | (g >> 4),
-                                (b << 3) | (b >> 2),
-                            ]);
-                        }
-                        std::fs::write(
-                            directory.join(format!(
-                                "route-{route_index}-{direction:?}-{progress_millis}.ppm"
-                            )),
-                            image,
-                        )
-                        .unwrap();
-                    }
                     let hash = prepared
                         .pixels()
                         .iter()

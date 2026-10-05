@@ -15,7 +15,7 @@ pub fn quantise_rgb8(rgb: [u8; 3], x: usize, y: usize) -> Rgb565Pixel {
 /// Experimental centred Bayer noise and saturated RGB565 bit quantisation.
 #[cfg(feature = "card-fast-quantisation")]
 #[inline]
-pub fn quantise_fast_rgb8(rgb: [u8; 3], x: usize, y: usize) -> Rgb565Pixel {
+pub(crate) fn quantise_fast_rgb8(rgb: [u8; 3], x: usize, y: usize) -> Rgb565Pixel {
     let rank = BAYER[y & 3][x & 3] as i16;
     let channel = |value: u8, shift: u32, bias: i16, maximum: i16| {
         ((i16::from(value) + bias).max(0) >> shift).min(maximum) as u16
