@@ -69,6 +69,8 @@ pub(super) struct Column {
     filter: crate::launcher_texture::Filter,
     source_y: i32,
     step: i32,
+    #[cfg(feature = "card-axis-filter")]
+    opaque_margin: usize,
     top: usize,
     bottom: usize,
     reflection_y: i64,
@@ -527,6 +529,8 @@ fn render(
                 filter: face.texture.filter(sxq as i32, footprint),
                 source_y: (zero + clip_top as i64 * step) as i32,
                 step: step as i32,
+                #[cfg(feature = "card-axis-filter")]
+                opaque_margin: face.texture.opaque_margin_axes(step as u32),
                 top,
                 bottom,
                 // Inverse mapping uses pixel centres; convert the lower edge
@@ -551,7 +555,28 @@ fn render(
             {
                 ranges = [
                     (face.height - face.height / 4, face.height),
-                    (8.min(face.height), 9.min(face.height)),
+                    (
+                        {
+                            #[cfg(feature = "card-axis-filter")]
+                            {
+                                column.opaque_margin.min(face.height)
+                            }
+                            #[cfg(not(feature = "card-axis-filter"))]
+                            {
+                                8.min(face.height)
+                            }
+                        },
+                        {
+                            #[cfg(feature = "card-axis-filter")]
+                            {
+                                (column.opaque_margin + 1).min(face.height)
+                            }
+                            #[cfg(not(feature = "card-axis-filter"))]
+                            {
+                                9.min(face.height)
+                            }
+                        },
+                    ),
                     (0, 0),
                     (0, 0),
                 ];
@@ -711,6 +736,7 @@ fn render(
                 let mut project = |top: usize, bottom: usize| {
                     if top < bottom {
                         let index = target.index(x, top);
+                        #[cfg(not(feature = "card-axis-filter"))]
                         crate::launcher_texture::project_card_over_column_quality(
                             source,
                             &mut target.pixels[index..],
@@ -719,6 +745,17 @@ fn render(
                             (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
                             face.dithered,
                             (x, top),
+                        );
+                        #[cfg(feature = "card-axis-filter")]
+                        crate::launcher_texture::project_card_over_column_quality_margin(
+                            source,
+                            &mut target.pixels[index..],
+                            target.pitch,
+                            bottom - top,
+                            (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
+                            face.dithered,
+                            (x, top),
+                            c.opaque_margin,
                         );
                     }
                 };

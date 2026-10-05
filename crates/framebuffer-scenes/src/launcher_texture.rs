@@ -620,6 +620,26 @@ impl Texture {
     }
 
     #[cfg(feature = "card-axis-filter")]
+    fn vertical_choice(&self, footprint_y: u32) -> (usize, u32) {
+        let footprint = footprint_y.max(65536);
+        let level =
+            ((31 - footprint.leading_zeros()).saturating_sub(16) as usize).min(self.vertical.len());
+        let weight = if level < self.vertical.len() {
+            let t = ((footprint >> level).saturating_sub(110218).min(20854) * 256 / 20854).min(256);
+            (t * t * (768 - 2 * t) + 32768) >> 16
+        } else {
+            0
+        };
+        (level, weight)
+    }
+    #[cfg(feature = "card-axis-filter")]
+    pub fn opaque_margin_axes(&self, footprint_y: u32) -> usize {
+        let (level, weight) = self.vertical_choice(footprint_y);
+        let used = level + usize::from(weight > 0);
+        if used == 0 { 8 } else { 8 + (1 << used) }
+    }
+
+    #[cfg(feature = "card-axis-filter")]
     pub fn prepare_column_rows_axes(
         &self,
         filter: Filter,
@@ -629,29 +649,20 @@ impl Texture {
         transition: &mut [u32],
     ) {
         assert!(transition.len() >= output.len());
-        let footprint = footprint_y.max(65536);
-        let level =
-            ((31 - footprint.leading_zeros()).saturating_sub(16) as usize).min(self.vertical.len());
+        let (level, weight) = self.vertical_choice(footprint_y);
         let texture = if level == 0 {
             self
         } else {
             &self.vertical[level - 1]
         };
         texture.prepare_column_rows(filter, start, output);
-        if level < self.vertical.len() {
-            // Last quarter of an octave, with integer smoothstep and no per-column log.
-            let scale = footprint >> level;
-            let t = (scale.saturating_sub(110218) * 256 / 20854).min(256);
-            let weight = (t * t * (768 - 2 * t) + 32768) >> 16;
-            if weight > 0 {
-                self.vertical[level].prepare_column_rows(
-                    filter,
-                    start,
-                    &mut transition[..output.len()],
-                );
-                // Uses the existing ARM NEON RGBA blend before final dither/quantization.
-                mix_rgba(output, &transition[..output.len()], weight);
-            }
+        if weight > 0 {
+            self.vertical[level].prepare_column_rows(
+                filter,
+                start,
+                &mut transition[..output.len()],
+            );
+            mix_rgba(output, &transition[..output.len()], weight);
         }
     }
 
@@ -828,6 +839,7 @@ pub(super) fn over(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)) as u16)
 }
 
+#[cfg(any(not(feature = "card-axis-filter"), not(target_arch = "arm"), test))]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_card_over_column_quality(
     source: &[u32],
@@ -837,6 +849,28 @@ pub(super) fn project_card_over_column_quality(
     sample: (i32, i32),
     dithered: bool,
     origin: (usize, usize),
+) {
+    project_card_over_column_quality_margin(
+        source,
+        destination,
+        pitch,
+        rows,
+        sample,
+        dithered,
+        origin,
+        8,
+    );
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) fn project_card_over_column_quality_margin(
+    source: &[u32],
+    destination: &mut [Rgb565Pixel],
+    pitch: usize,
+    rows: usize,
+    sample: (i32, i32),
+    dithered: bool,
+    origin: (usize, usize),
+    _margin: usize,
 ) {
     if !dithered {
         return project_card_over_column(source, destination, pitch, rows, sample);
@@ -870,7 +904,7 @@ pub(super) fn project_card_over_column_quality(
             );
         }
         // SAFETY: output and coordinate progression checked above. Canonical card
-        // columns share the existing 8-row opaque-interior contract used by
+        // columns share a conservatively proven opaque-interior contract used by
         // project_card_over_column; both bilinear inputs stay within it.
         unsafe {
             magik_launcher_project_dithered_opaque(
@@ -883,9 +917,13 @@ pub(super) fn project_card_over_column_quality(
                 sample.1,
                 origin.0,
                 origin.1,
-                if source.len() > 16 { 8 } else { 0 },
-                if source.len() > 16 {
-                    source.len() - 8
+                if source.len() > 2 * _margin {
+                    _margin
+                } else {
+                    0
+                },
+                if source.len() > 2 * _margin {
+                    source.len() - _margin
                 } else {
                     0
                 },
@@ -1397,6 +1435,31 @@ mod axis_tests {
                 let alpha = p >> 24;
                 for shift in [0, 8, 16] {
                     assert!(((p >> shift) & 255) <= alpha);
+                }
+            }
+        }
+    }
+    #[test]
+    fn filtered_opaque_bounds_are_conservative() {
+        let source = vec![Rgb565Pixel(0xffff); 32 * 64];
+        let t = Texture::new(&source, 32, 64);
+        let mut column = vec![0; 64];
+        let mut scratch = column.clone();
+        for footprint in [65536, 120000, 2 * 65536, 4 * 65536, 8 * 65536, 16 * 65536] {
+            let margin = t.opaque_margin_axes(footprint);
+            for x in [-16384, 0, 65536, 4 * 65536, 16 * 65536, 31 * 65536] {
+                t.prepare_column_rows_axes(
+                    t.filter(x, 100000),
+                    footprint,
+                    0,
+                    &mut column,
+                    &mut scratch,
+                );
+                if 2 * margin < 64
+                    && column[margin] >> 24 == 255
+                    && column[63 - margin] >> 24 == 255
+                {
+                    assert!(column[margin..64 - margin].iter().all(|p| p >> 24 == 255));
                 }
             }
         }
