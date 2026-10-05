@@ -25,8 +25,9 @@ use mister_magik_framebuffer_scenes::settings_cog::{
     COG_ASSET_HEIGHT, COG_ASSET_WIDTH, CrtSettingsGeometry,
 };
 use mister_magik_ui::launcher::{
-    ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
-    MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi, NavigationView, SettingsView,
+    ArcadeLoadState, ArcadeSearchMode, ArcadeView, CatalogActivity, CatalogView, ChoiceOption,
+    ConfirmationKind, FeedbackView, Launcher, LoadingState, MenuItem, MenuItemKind,
+    MenuItemPresentation, MenuItemStatus, MisterUi, NavigationView, OverlayView, SettingsView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -34,6 +35,35 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 pub const SELECTION_FEEDBACK_MIN_VISIBLE: Duration = Duration::from_millis(80);
+
+/// Slint overlays that occlude the Rust Arcade list and preview layers.
+///
+/// Those layers are composed after Slint, so they must stand down whenever a
+/// modal or full-screen overlay is visible. Floating overlays stay in the
+/// header band instead (see `HeaderActivity`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SlintOverlayOcclusion {
+    pub confirm: bool,
+    pub fullscreen: bool,
+}
+
+impl SlintOverlayOcclusion {
+    /// `setup_active` comes from the caller's controller-setup state, which
+    /// leads the published `SetupView` phase.
+    pub fn read(app: &Launcher, setup_active: bool) -> Self {
+        let overlay = app.global::<OverlayView>();
+        Self {
+            confirm: overlay.get_confirmation_kind() != ConfirmationKind::None,
+            fullscreen: app.global::<CatalogView>().get_activity() == CatalogActivity::Foreground
+                || overlay.get_loading_state() == LoadingState::Active
+                || setup_active,
+        }
+    }
+
+    pub fn any(self) -> bool {
+        self.confirm || self.fullscreen
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectionFeedbackTarget {
@@ -1771,6 +1801,44 @@ fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_modal_and_fullscreen_overlay_occludes_direct_layers() {
+        std::thread::spawn(|| {
+            crate::visual_platform::install_isolated_test_platform();
+            let app = Launcher::new().expect("launcher component");
+            let overlay = app.global::<OverlayView>();
+            let catalog = app.global::<CatalogView>();
+            assert!(!SlintOverlayOcclusion::read(&app, false).any());
+            assert_eq!(
+                SlintOverlayOcclusion::read(&app, true),
+                SlintOverlayOcclusion {
+                    confirm: false,
+                    fullscreen: true
+                }
+            );
+            overlay.set_confirmation_kind(ConfirmationKind::RefreshDatabase);
+            assert_eq!(
+                SlintOverlayOcclusion::read(&app, false),
+                SlintOverlayOcclusion {
+                    confirm: true,
+                    fullscreen: false
+                }
+            );
+            overlay.set_confirmation_kind(ConfirmationKind::None);
+            overlay.set_loading_state(LoadingState::Active);
+            assert!(SlintOverlayOcclusion::read(&app, false).fullscreen);
+            overlay.set_loading_state(LoadingState::Idle);
+            catalog.set_activity(CatalogActivity::Foreground);
+            assert!(SlintOverlayOcclusion::read(&app, false).fullscreen);
+            // Background activity is a header pill and leaves the layers up.
+            catalog.set_activity(CatalogActivity::Background);
+            catalog.set_background_activity_visible(true);
+            assert!(!SlintOverlayOcclusion::read(&app, false).any());
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn measured_churn_preserves_outer_profile_and_restores_disabled_state() {

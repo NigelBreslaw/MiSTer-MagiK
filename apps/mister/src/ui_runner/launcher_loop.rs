@@ -9574,8 +9574,10 @@ pub(super) fn run_launcher_loop(
             catalog_view.set_progress_dot_visible(dot_visible);
             request_launcher_redraw!();
         }
-        let confirm_visible =
-            overlay_view.get_confirmation_kind() != slint_ui::launcher::ConfirmationKind::None;
+        let overlay_occlusion =
+            crate::launcher_presentation::SlintOverlayOcclusion::read(&app, setup.is_active());
+        let confirm_visible = overlay_occlusion.confirm;
+        let fullscreen_overlay_visible = overlay_occlusion.fullscreen;
         let confirm_selected =
             if overlay_view.get_selected_choice() == slint_ui::launcher::DialogChoice::Cancel {
                 0
@@ -9766,7 +9768,7 @@ pub(super) fn run_launcher_loop(
             && !memory_guard.active()
             && !screensaver.active
             && !confirm_visible
-            && !catalog_scan_visible
+            && !fullscreen_overlay_visible
             && !nav.arcade_search.is_active(&nav.arcade_filter.active)
         {
             PreviewRoute::Eligible
@@ -9847,7 +9849,7 @@ pub(super) fn run_launcher_loop(
             navigation_destination_layers_ready,
             return_screen: effective_view.return_screen(),
             confirm_visible,
-            fullscreen_overlay_visible: catalog_scan_visible,
+            fullscreen_overlay_visible,
             arcade_ready: active_arcade_games_available
                 || nav.active_collection_id() == Some(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             route_ok: display_session.route_ok(),
@@ -9964,23 +9966,11 @@ pub(super) fn run_launcher_loop(
             && !layout.is_portrait()
             && !ui.output_route().is_crt()
             && (layout.logical_w(), layout.logical_h()) == (960, 540)
-            && !confirm_visible
-            && !catalog_scan_visible
-            && !catalog_background_scan_visible
-            && !setup.is_active()
+            && !overlay_occlusion.any()
             && !screensaver.active
             && !launching
-            && app
-                .global::<slint_ui::launcher::MediaView>()
-                .get_rows()
-                .row_count()
-                == 0
             && app.global::<slint_ui::launcher::SettingsView>().get_popup()
-                == slint_ui::launcher::SettingsPopup::None
-            && app
-                .global::<slint_ui::launcher::OverlayView>()
-                .get_loading_state()
-                != slint_ui::launcher::LoadingState::Active;
+                == slint_ui::launcher::SettingsPopup::None;
         if native_device_base && nav.is_system_hub() {
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             arcade_list_renderer.prepare_visible_rows(

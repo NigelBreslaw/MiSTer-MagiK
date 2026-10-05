@@ -20,6 +20,51 @@ export global PageTheme {
     out property <color> settings-focus-start: #221843;
     // Retained for the separate low-resolution CRT settings variant.
     out property <color> settings-focus-end: #120d24;
+    // Floating panels: Settings pickers, dialogs, and progress toasts.
+    out property <color> panel-background: #0b0913;
+    out property <color> panel-border: #4a3d73;
+    out property <color> panel-scrim: #000000b8;
+    out property <color> button-border: #3a3350;
+    out property <color> button-focus: #1d1535;
+    out property <color> danger: #e86c75;
+}
+
+// Outline button shared by Settings pickers and HDMI dialogs.
+export component OutlineButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> focused;
+    in property <bool> acknowledged;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
+
+    height: 28px;
+    border-width: 1px;
+    border-color: root.focused ? PageTheme.settings-accent
+        : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.button-border;
+    background: root.focused ? PageTheme.button-focus : transparent;
+
+    // Xerxes caps sit 5px below the origin and are 10px tall.
+    Xerxes10 {
+        y: (root.height - 14px) / 2;
+        width: parent.width;
+        text: root.label.to-uppercase();
+        horizontal-alignment: center;
+        color: root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+}
+
+// Library colour bar from Home's summary column, used as a quiet brand mark.
+export component LibraryStripe inherits Rectangle {
+    in property <length> segment: 32px;
+    width: 4 * root.segment + 3 * 4px;
+    height: 4px;
+
+    Rectangle { x: 0px; width: root.segment; background: #e73442; }
+    Rectangle { x: root.segment + 4px; width: root.segment; background: #efc331; }
+    Rectangle { x: 2 * (root.segment + 4px); width: root.segment; background: #52aa5a; }
+    Rectangle { x: 3 * (root.segment + 4px); width: root.segment; background: #2992c6; }
 }
 
 export component PageRule inherits Rectangle {

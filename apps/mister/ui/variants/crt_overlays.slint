@@ -203,7 +203,7 @@ component CrtInlineConfirmButton inherits Rectangle {
     height: CrtPageMetrics.len-y(13);
     background: root.focused ? #302455 : #171223;
     border-width: 1px;
-    border-color: root.focused ? PageTheme.settings-accent : #4a3d73;
+    border-color: root.focused ? PageTheme.settings-accent : PageTheme.panel-border;
 
     if root.focused : FocusHighlight {
         source: SettingsView.focus-highlight-crt-menu;
@@ -304,7 +304,7 @@ export component ConfirmDialog inherits Rectangle {
         height: root.panel-h * 1px;
         background: #0b0913;
         border-width: 1px;
-        border-color: #4a3d73;
+        border-color: PageTheme.panel-border;
         clip: true;
 
         Rectangle { width: parent.width; height: 1px; background: PageTheme.settings-accent; }

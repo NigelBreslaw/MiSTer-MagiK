@@ -3,6 +3,7 @@
 
 import { Nocive15 } from "nocive_15.slint";
 import { Xerxes10 } from "xerxes_10.slint";
+import { OutlineButton, PageTheme } from "page_chrome.slint";
 import {
     ConfirmationKind,
     DialogChoice,
@@ -20,39 +21,22 @@ component PickerOption inherits Rectangle {
 
     height: 28px;
     background: root.highlighted
-        ? @linear-gradient(90deg, #221843 0%, #120d24 70%, transparent 100%)
+        ? @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 70%, transparent 100%)
         : transparent;
 
-    if root.highlighted : Rectangle { width: 3px; background: #9c86e7; }
+    if root.highlighted : Rectangle { x: 0px; width: 3px; background: PageTheme.settings-accent; }
     Xerxes10 {
         x: 16px;
         y: 6px;
         text: root.label.to-uppercase();
-        color: root.highlighted ? #eee8d5 : #8f9796;
+        color: root.highlighted ? PageTheme.cream : PageTheme.muted;
     }
     if root.selected : Rectangle {
         x: root.width - 20px;
         y: 11px;
         width: 6px;
         height: 6px;
-        background: #9c86e7;
-    }
-}
-
-component PickerButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> focused;
-
-    height: 26px;
-    border-width: 1px;
-    border-color: root.focused ? #9c86e7 : #3a3350;
-    background: root.focused ? #1d1535 : transparent;
-    Xerxes10 {
-        y: 6px;
-        width: parent.width;
-        text: root.label.to-uppercase();
-        horizontal-alignment: center;
-        color: root.focused ? #eee8d5 : #8f9796;
+        background: PageTheme.settings-accent;
     }
 }
 
@@ -99,11 +83,11 @@ export component ComboBoxOverlay inherits Rectangle {
         height: root.confirmation ? 108px
             : root.orientation ? 86px
             : 22px + 6 * 28px + 22px + 4 * 28px + 2px;
-        background: #0b0913;
+        background: PageTheme.panel-background;
         border-width: 1px;
-        border-color: #4a3d73;
+        border-color: PageTheme.panel-border;
 
-        Rectangle { height: 2px; background: #9c86e7; }
+        Rectangle { y: 0px; height: 2px; background: PageTheme.settings-accent; }
 
         if !root.confirmation && !root.orientation : Rectangle {
             Xerxes10 { x: 16px; y: 7px; text: "HDMI"; color: #5d6564; }
@@ -135,7 +119,7 @@ export component ComboBoxOverlay inherits Rectangle {
                 y: 12px;
                 text: root.busy || root.failed ? OverlayView.confirmation-title.to-uppercase()
                     : root.orientation ? "KEEP THIS ORIENTATION?" : "KEEP THIS DISPLAY MODE?";
-                color: #eee8d5;
+                color: PageTheme.cream;
             }
             Xerxes10 {
                 x: 16px;
@@ -143,17 +127,19 @@ export component ComboBoxOverlay inherits Rectangle {
                 width: parent.width - 32px;
                 text: root.busy || root.failed ? OverlayView.confirmation-message.to-uppercase()
                     : root.candidate-label;
-                color: root.failed ? #e86c75 : #9c86e7;
+                color: root.failed ? PageTheme.danger : PageTheme.settings-accent;
                 overflow: elide;
             }
-            PickerButton {
+            OutlineButton {
+                height: 26px;
                 x: 12px;
                 y: 68px;
                 width: 143px;
                 label: OverlayView.cancel-label;
                 focused: OverlayView.selected-choice == DialogChoice.cancel;
             }
-            PickerButton {
+            OutlineButton {
+                height: 26px;
                 x: 163px;
                 y: 68px;
                 width: 125px;

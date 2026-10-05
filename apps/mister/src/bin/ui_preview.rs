@@ -34,7 +34,7 @@ mod macos {
         NavigationTransitionState, Screen, settings_display_resolution_index,
         settings_display_resolutions,
     };
-    use mister_magik_fb::launcher_presentation::LauncherViewPresenters;
+    use mister_magik_fb::launcher_presentation::{LauncherViewPresenters, SlintOverlayOcclusion};
     use mister_magik_fb::launcher_runtime::catalog::{
         ShardedCatalogSeed, load_sharded_registry_seed_at,
     };
@@ -1892,14 +1892,24 @@ mod macos {
             } else if let Some(cards) = self.native_cards.as_mut() {
                 cards.set_inactive();
             }
-            if matches!(
-                self.scenario,
-                Scenario::Arcade
-                    | Scenario::ArcadeSearch
-                    | Scenario::ArcadeCrossfade
-                    | Scenario::SystemHub
-            ) && (self.launcher_nav.is_system_hub()
-                || self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready)
+            // Production stops the Rust Arcade layers under modal and
+            // full-screen Slint overlays; composing them here would paint
+            // over the overlay and hide composition-order bugs.
+            if !SlintOverlayOcclusion::read(
+                &self.launcher,
+                self.launcher.global::<SetupView>().get_phase() != ViewSetupPhase::None,
+            )
+            .any()
+                && matches!(
+                    self.scenario,
+                    Scenario::Arcade
+                        | Scenario::ArcadeSearch
+                        | Scenario::ArcadeCrossfade
+                        | Scenario::SystemHub
+                )
+                && (self.launcher_nav.is_system_hub()
+                    || self.launcher.global::<ArcadeView>().get_load_state()
+                        == ArcadeLoadState::Ready)
             {
                 let low_resolution_backdrop = self.crt_backdrop.is_some()
                     && matches!(
