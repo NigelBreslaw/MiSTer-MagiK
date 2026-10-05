@@ -997,6 +997,10 @@ pub(super) fn project_card_over_column_quality_margin(
     #[cfg(target_arch = "arm")]
     {
         unsafe extern "C" {
+            #[cfg_attr(
+                feature = "card-fast-quantisation",
+                link_name = "magik_launcher_project_dithered_fast_opaque"
+            )]
             fn magik_launcher_project_dithered_opaque(
                 out: *mut u16,
                 pitch: usize,
@@ -1093,6 +1097,10 @@ pub(super) fn project_flat_quality(
     #[cfg(target_arch = "arm")]
     {
         unsafe extern "C" {
+            #[cfg_attr(
+                feature = "card-fast-quantisation",
+                link_name = "magik_launcher_flat_dithered_fast"
+            )]
             fn magik_launcher_flat_dithered(
                 out: *mut u16,
                 pitch: usize,
@@ -1151,7 +1159,11 @@ pub(crate) fn over_dithered(p: u32, destination: Rgb565Pixel, x: usize, y: usize
     }
     let bg = rgba(destination, 255 - alpha);
     let channel = |shift: u32| (((p >> shift) & 255) + ((bg >> shift) & 255)).min(255) as u8;
-    crate::dithered_image::quantise_rgb8([channel(0), channel(8), channel(16)], x, y)
+    #[cfg(feature = "card-fast-quantisation")]
+    let quantise = crate::dithered_image::quantise_fast_rgb8;
+    #[cfg(not(feature = "card-fast-quantisation"))]
+    let quantise = crate::dithered_image::quantise_rgb8;
+    quantise([channel(0), channel(8), channel(16)], x, y)
 }
 
 #[cfg(test)]

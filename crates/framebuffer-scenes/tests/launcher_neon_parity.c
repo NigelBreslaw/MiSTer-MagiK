@@ -54,7 +54,33 @@ void reference_project_dithered(uint16_t *out,size_t pitch,const uint32_t *src,
 
 static uint32_t seed=237;
 static uint32_t next(void) {seed=seed*1664525+1013904223;return seed;}
+#ifdef MAGIK_FAST_QUANTISATION
+static int fast_quantisation_parity(void) {
+  for(size_t trial=0;trial<4096;++trial) {
+    size_t h=17+next()%128,rows=1+next()%127,pitch=1+next()%7,x=next()%960,y0=next()%540;
+    uint32_t src[160];uint16_t a[1000],b[1000];
+    for(size_t j=0;j<h;++j) {
+      uint32_t alpha=trial%2?(j>=8 && j<h-8?255:next()%256):next()%256;
+      src[j]=next()%(alpha+1)|(next()%(alpha+1))<<8|(next()%(alpha+1))<<16|alpha<<24;
+    }
+    for(size_t j=0;j<1000;++j)a[j]=b[j]=(uint16_t)next();
+    int32_t q=(int32_t)(next()%196609)-131072,step=1+next()%196608;
+    for(size_t j=0;j<rows;++j) {
+      int32_t qq=q+(int32_t)j*step,r=qq>>16;
+      uint32_t p=r>=0&&(size_t)r<h?src[r]:0,z=r+1>=0&&(size_t)(r+1)<h?src[r+1]:0;
+      a[3+j*pitch]=fast_dither_pixel(scalar(p,z,((uint32_t)qq&65535)>>8),a[3+j*pitch],x,y0+j);
+    }
+    magik_launcher_project_dithered_fast_opaque(b+3,pitch,src,h,rows,q,step,x,y0,trial%2?8:0,trial%2?h-8:0);
+    if(memcmp(a,b,sizeof(a))) {fprintf(stderr,"fast projection mismatch %zu\n",trial);return 1;}
+  }
+  puts("Fast dither: 4096 projection cases including alpha, bounds, stride and tails passed");
+  return 0;
+}
+#endif
 int main(void) {
+#ifdef MAGIK_FAST_QUANTISATION
+  if (fast_quantisation_parity()) return 1;
+#endif
   for(size_t trial=0;trial<4096;++trial) {
     uint32_t src[8][69],a[69],b[69],fused[69];
     for(size_t c=0;c<8;++c)for(size_t j=0;j<69;++j)src[c][j]=next();

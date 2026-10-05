@@ -12,9 +12,49 @@ pub fn quantise_rgb8(rgb: [u8; 3], x: usize, y: usize) -> Rgb565Pixel {
     };
     Rgb565Pixel(channel(rgb[0], 31) << 11 | channel(rgb[1], 63) << 5 | channel(rgb[2], 31))
 }
+/// Experimental centred Bayer noise and saturated RGB565 bit quantisation.
+#[cfg(feature = "card-fast-quantisation")]
+#[inline]
+pub fn quantise_fast_rgb8(rgb: [u8; 3], x: usize, y: usize) -> Rgb565Pixel {
+    let rank = BAYER[y & 3][x & 3] as i16;
+    let channel = |value: u8, shift: u32, bias: i16, maximum: i16| {
+        ((i16::from(value) + bias).max(0) >> shift).min(maximum) as u16
+    };
+    Rgb565Pixel(
+        channel(rgb[0], 3, (rank >> 1) - 4, 31) << 11
+            | channel(rgb[1], 2, (rank >> 2) - 2, 63) << 5
+            | channel(rgb[2], 3, (rank >> 1) - 4, 31),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "card-fast-quantisation")]
+    #[test]
+    fn candidate_preserves_endpoints_and_monotonic_channel_response() {
+        for y in 0..4 {
+            for x in 0..4 {
+                assert_eq!(quantise_fast_rgb8([0; 3], x, y).0, 0);
+                assert_eq!(quantise_fast_rgb8([255; 3], x, y).0, 0xffff);
+                for c in 0..3 {
+                    let mut previous = 0;
+                    for value in 0..=255u8 {
+                        let mut rgb = [0; 3];
+                        rgb[c] = value;
+                        let p = quantise_fast_rgb8(rgb, x, y).0;
+                        let actual = match c {
+                            0 => p >> 11,
+                            1 => (p >> 5) & 63,
+                            _ => p & 31,
+                        };
+                        assert!(actual >= previous);
+                        previous = actual;
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn arm_reciprocal_quantisation_matches_division_for_every_channel() {
         for levels in [31, 63] {

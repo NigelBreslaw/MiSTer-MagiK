@@ -28,5 +28,8 @@ fn main() {
     if c_build_support::force_frame_pointers_requested() {
         build.force_frame_pointer(true);
     }
+    if std::env::var_os("CARGO_FEATURE_CARD_FAST_QUANTISATION").is_some() {
+        build.define("MAGIK_FAST_QUANTISATION", None);
+    }
     build.compile("mister_magik_rgb565_neon");
 }

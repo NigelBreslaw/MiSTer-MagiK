@@ -138,3 +138,20 @@ def test_real_launcher_sampler_feature_is_explicit_and_mini_is_unchanged(monkeyp
     monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "invalid")
     with pytest.raises(ValueError, match="current or axis"):
         application("magik")
+
+
+def test_fast_quantiser_requires_b_and_preserves_mini_features(monkeypatch):
+    from magik.apps import application
+
+    monkeypatch.delenv("MAGIK_CARD_SAMPLER_AB", raising=False)
+    monkeypatch.setenv("MAGIK_CARD_QUANTISER", "fast")
+    with pytest.raises(ValueError, match="requires sampler B"):
+        application("magik")
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "axis")
+    candidate = application("magik")
+    assert "card-axis-filter" in candidate.features
+    assert "card-fast-quantisation" in candidate.features
+    assert "card-fast-quantisation" not in application("mini-magik").features
+    monkeypatch.setenv("MAGIK_CARD_QUANTISER", "invalid")
+    with pytest.raises(ValueError, match="current or fast"):
+        application("magik")

@@ -14,6 +14,7 @@ cc = "1.4.2"
 
 [features]
 card-axis-filter = []
+card-fast-quantisation = []
 launcher-profile = ["dep:mister-magik-perf-events", "dep:serde"]
 
 [dependencies]
