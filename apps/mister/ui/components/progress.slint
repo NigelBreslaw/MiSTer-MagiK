@@ -1,68 +1,74 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
+import { Xerxes10 } from "xerxes_10.slint";
+import { PageTheme } from "page_chrome.slint";
 
 import { MediaPackRow, MediaPackState } from "../api.slint";
 
+// Static 2px track. Callers hide it instead of animating unknown progress, so
+// long scans and downloads never force continuous redraws.
+export component ProgressTrack inherits Rectangle {
+    in property <int> percent;
+    in property <color> fill: PageTheme.settings-accent;
+    property <int> clamped-percent: Math.max(0, Math.min(100, root.percent));
+
+    height: 2px;
+    background: PageTheme.rule;
+    clip: true;
+
+    Rectangle {
+        x: 0px;
+        width: parent.width * root.clamped-percent / 100;
+        height: parent.height;
+        background: root.fill;
+    }
+}
+
+// One screenshot pack: Xerxes caps share a baseline, the track sits beneath.
 export component MediaPackProgressRow inherits Rectangle {
     in property <MediaPackRow> pack;
-    property <int> clamped-percent: Math.max(0, Math.min(100, pack.percent));
-    property <bool> determinate: pack.state != MediaPackState.queued;
+    property <bool> active: pack.state == MediaPackState.downloading;
+    property <bool> failed: pack.state == MediaPackState.failed;
+    property <bool> complete: pack.state == MediaPackState.complete;
 
-    height: 24px;
+    height: 26px;
     background: transparent;
+    accessible-role: progress-indicator;
+    accessible-label: root.pack.system;
+    accessible-description: root.pack.phase-label;
+    accessible-value: root.active ? root.pack.percent + "%" : root.pack.phase-label;
 
-    VerticalLayout {
-        spacing: 2px;
+    status := Xerxes10 {
+        x: parent.width - self.preferred-width;
+        y: 0px;
+        text: root.active ? root.pack.percent + "%" : root.pack.phase-label.to-uppercase();
+        color: root.failed ? PageTheme.danger
+            : root.active ? PageTheme.settings-accent
+            : root.complete ? PageTheme.cream : PageTheme.muted;
+    }
 
-        HorizontalLayout {
-            spacing: 6px;
+    if root.active && root.pack.bytes-label != "" : Xerxes10 {
+        x: status.x - 14px - self.preferred-width;
+        y: 0px;
+        text: root.pack.bytes-label.to-uppercase();
+        color: PageTheme.muted;
+    }
 
-            Spleen6x12 {
-                width: 160px;
-                text: root.pack.system;
-                color: #d7eef8;
-                size: Spleen6x12Size.px8;
-            }
+    Xerxes10 {
+        x: 0px;
+        y: 0px;
+        width: parent.width - status.preferred-width - 160px;
+        text: root.pack.system.to-uppercase();
+        color: root.active || root.complete ? PageTheme.cream : PageTheme.muted;
+        overflow: elide;
+    }
 
-            Spleen6x12 {
-                width: 86px;
-                text: root.pack.phase-label;
-                color: #06d6a0;
-                size: Spleen6x12Size.px8;
-            }
-
-            Spleen6x12 {
-                horizontal-stretch: 1;
-                text: root.pack.pack-position;
-                color: #9080a8;
-                size: Spleen6x12Size.px8;
-                horizontal-alignment: right;
-            }
-        }
-
-        Rectangle {
-            width: parent.width;
-            height: 3px;
-            background: #0e0c14;
-            border-width: 1px;
-            border-color: #5c4a72;
-            clip: true;
-
-            if root.determinate : Rectangle {
-                x: 0;
-                width: parent.width * root.clamped-percent / 100;
-                height: parent.height;
-                background: #06d6a0;
-            }
-
-            if !root.determinate : Rectangle {
-                width: 72px;
-                height: parent.height;
-                x: (parent.width - self.width) * Math.mod(animation-tick() / 1ms, 900) / 900;
-                background: #06d6a0;
-            }
-        }
+    ProgressTrack {
+        y: 20px;
+        width: parent.width;
+        percent: root.complete ? 100 : root.active ? root.pack.percent : 0;
+        fill: root.failed ? PageTheme.danger
+            : root.complete ? PageTheme.settings-accent-deep : PageTheme.settings-accent;
     }
 }

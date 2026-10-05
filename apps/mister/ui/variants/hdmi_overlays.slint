@@ -1,165 +1,214 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
-import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
+// HDMI overlays share the page chrome vocabulary: black ground, cream Nocive
+// headings, Xerxes caps for detail, and the violet Settings accent. Floating
+// panels match the Settings pickers (1px frame, 2px accent cap).
+
+import { Nocive15 } from "../components/nocive_15.slint";
+import { Xerxes10 } from "../components/xerxes_10.slint";
+import {
+    LandscapePageChrome,
+    LibraryStripe,
+    PageTheme,
+    PortraitPageChrome,
+} from "../components/page_chrome.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { CatalogView, DialogChoice, FeedbackView, MediaView, OverlayView } from "../api.slint";
-import { LauncherTile, OsdSideLabel } from "../components/launcher_chrome.slint";
-import { MediaPackProgressRow } from "../components/progress.slint";
+import {
+    CatalogView,
+    DialogChoice,
+    FeedbackView,
+    MediaPackRow,
+    MediaPackState,
+    MediaView,
+    OverlayView,
+    ProgressMode,
+} from "../api.slint";
+import { MediaPackProgressRow, ProgressTrack } from "../components/progress.slint";
 
+component OverlayPanel inherits Rectangle {
+    background: PageTheme.panel-background;
+    border-width: 1px;
+    border-color: PageTheme.panel-border;
+    clip: true;
+
+    Rectangle { x: 0px; y: 0px; width: parent.width; height: 2px; background: PageTheme.settings-accent; }
+    @children
+}
+
+// Foreground scan: shown only while no usable catalog exists, so it owns the
+// whole screen but keeps the persistent header and footer rules.
 export component CatalogScanPopup inherits Rectangle {
-    property <length> scan-osd-width: 56px;
-    property <length> scan-horizontal-padding: 70px;
-    property <length> scan-column-width: root.width > scan-osd-width
-        ? root.width - scan-osd-width
-        : 0px;
-    property <length> scan-content-width: scan-column-width > scan-horizontal-padding * 2
-        ? scan-column-width - scan-horizontal-padding * 2
-        : 0px;
-    property <length> scan-progress-width: scan-content-width < 560px
-        ? scan-content-width
-        : 560px;
+    property <bool> portrait: MisterUi.portrait-layout;
+    property <length> content-top: root.portrait ? 120px : 77px;
+    property <length> content-bottom: root.portrait ? root.height - 68px : 500px;
+    property <length> column-width: Math.min(440px, root.width - 64px);
+    property <bool> determinate: CatalogView.progress-mode == ProgressMode.determinate;
 
     accessible-role: progress-indicator;
     accessible-label: "Catalog scan";
     accessible-description: CatalogView.message;
 
-    background: black;
+    background: PageTheme.background;
 
-    HorizontalLayout {
-        OsdSideLabel { }
+    if !root.portrait : LandscapePageChrome { hint-a: ""; hint-b: ""; hint-right: ""; }
+    if root.portrait : PortraitPageChrome { section: "LIBRARY"; hint-a: ""; hint-b: ""; }
 
-        VerticalLayout {
-            horizontal-stretch: 1;
-            padding-left: root.scan-horizontal-padding;
-            padding-right: root.scan-horizontal-padding;
-            padding-top: 82px;
-            padding-bottom: 76px;
-            spacing: 18px;
-            alignment: center;
-            cross-axis-alignment: center;
+    VerticalLayout {
+        x: (root.width - root.column-width) / 2;
+        y: root.content-top;
+        width: root.column-width;
+        height: root.content-bottom - root.content-top;
+        alignment: center;
 
-            Rectangle { vertical-stretch: 1; background: transparent; }
+        HorizontalLayout {
+            alignment: start;
+            LibraryStripe { }
+        }
+        Rectangle { height: 22px; }
 
-            Spleen6x12 {
-                width: root.scan-content-width;
-                text: "MiSTer MagiK";
-                color: #06d6a0;
-                size: Spleen6x12Size.px24;
-                horizontal-alignment: center;
-            }
+        Xerxes10 {
+            text: (CatalogView.title == "" ? "Building game library" : CatalogView.title).to-uppercase();
+            color: PageTheme.muted;
+        }
+        Rectangle { height: 8px; }
+        Nocive15 {
+            text: CatalogView.message.to-uppercase();
+            color: PageTheme.cream;
+            wrap: word-wrap;
+        }
+        Rectangle { height: 20px; }
 
-            Nocive15 {
-                width: root.scan-content-width;
-                text: CatalogView.message;
-                color: #e8e0f0;
-                size: Nocive15Size.px15;
-                horizontal-alignment: center;
+        if root.determinate : ProgressTrack { percent: CatalogView.percent; }
+        if root.determinate : Rectangle { height: 10px; }
+
+        HorizontalLayout {
+            spacing: 12px;
+            Xerxes10 {
+                horizontal-stretch: 1;
+                text: CatalogView.detail.to-uppercase();
+                color: PageTheme.muted;
                 wrap: word-wrap;
             }
-
-            Spleen6x12 {
-                width: root.scan-content-width;
-                text: CatalogView.title;
-                color: #d7eef8;
-                size: Spleen6x12Size.px8;
-                horizontal-alignment: center;
+            if root.determinate : Xerxes10 {
+                text: Math.max(0, Math.min(100, CatalogView.percent)) + "%";
+                color: PageTheme.settings-accent;
             }
+        }
 
-            Spleen6x12 {
-                width: root.scan-content-width;
-                text: CatalogView.detail;
-                color: #9080a8;
-                size: Spleen6x12Size.px8;
-                horizontal-alignment: center;
-                wrap: word-wrap;
+        if MediaView.rows.length > 0 : VerticalLayout {
+            padding-top: 40px;
+            spacing: 10px;
+
+            Xerxes10 {
+                text: MediaView.summary.to-uppercase();
+                color: PageTheme.muted;
             }
-
-            if MediaView.rows.length > 0 : VerticalLayout {
-                width: root.scan-progress-width;
-                spacing: 5px;
-
-                Spleen6x12 {
-                    text: MediaView.summary;
-                    color: #d7eef8;
-                    size: Spleen6x12Size.px8;
-                    horizontal-alignment: center;
-                }
-
-                for pack in MediaView.rows: MediaPackProgressRow {
-                    pack: pack;
-                }
-            }
-
-            Rectangle { vertical-stretch: 1; background: transparent; }
+            for pack in MediaView.rows : MediaPackProgressRow { pack: pack; }
         }
     }
 }
 
-export component MediaProgressPopup inherits Rectangle {
+// Background activity lives in the page header, left of the clock: every
+// HDMI page keeps that strip clear, and the Rust Arcade list and preview
+// renderers never paint over it.
+component HeaderPill inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <color> value-color: PageTheme.settings-accent;
+    in property <int> percent: -1;
+    in property <color> accent: PageTheme.settings-accent;
+    property <length> label-width: Math.min(label-text.preferred-width, 300px);
 
-    width: MisterUi.portrait-layout ? MisterUi.window-width * 1px - 32px : 560px;
-    height: 100px;
-    x: MisterUi.window-width * 1px / 2 - self.width / 2;
-    y: MisterUi.window-height * 1px - self.height - 24px;
-    background: black;
+    width: 19px + root.label-width
+        + (root.value == "" ? 0px : 8px + value-text.preferred-width) + 9px;
+    height: 18px;
+    background: PageTheme.panel-background;
     border-width: 1px;
-    border-color: #5c4a72;
+    border-color: PageTheme.panel-border;
     clip: true;
+
+    Rectangle { x: 7px; y: 6px; width: 6px; height: 6px; background: root.accent; }
+    label-text := Xerxes10 {
+        x: 19px;
+        y: -1px;
+        width: root.label-width;
+        text: root.label;
+        color: PageTheme.cream;
+        overflow: elide;
+    }
+    value-text := Xerxes10 {
+        x: 19px + root.label-width + 8px;
+        y: -1px;
+        text: root.value;
+        color: root.value-color;
+    }
+    if root.percent >= 0 : ProgressTrack {
+        x: 1px;
+        y: root.height - 3px;
+        width: root.width - 2px;
+        percent: root.percent;
+        fill: root.accent;
+        background: transparent;
+    }
+}
+
+export component MediaProgressPopup inherits HeaderPill {
+    // At most three rows are published; follow the first one downloading.
+    property <int> active-index: MediaView.rows[0].state == MediaPackState.downloading ? 0
+        : MediaView.rows[1].state == MediaPackState.downloading ? 1
+        : MediaView.rows[2].state == MediaPackState.downloading ? 2 : -1;
+    property <bool> failed: MediaView.rows[0].state == MediaPackState.failed
+        || MediaView.rows[1].state == MediaPackState.failed
+        || MediaView.rows[2].state == MediaPackState.failed;
+    property <MediaPackRow> active: MediaView.rows[Math.max(0, root.active-index)];
+    property <int> others: MediaView.rows.length - 1;
+
     accessible-role: progress-indicator;
     accessible-label: "Media download progress";
     accessible-description: MediaView.summary;
 
-    VerticalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        padding-top: 8px;
-        padding-bottom: 8px;
-        spacing: 5px;
-
-        Spleen6x12 {
-            text: MediaView.summary;
-            color: #d7eef8;
-            size: Spleen6x12Size.px8;
-            horizontal-alignment: center;
-        }
-
-        for pack in MediaView.rows: MediaPackProgressRow {
-            pack: pack;
-        }
-    }
+    label: root.active-index >= 0
+        ? (root.active.system + " screenshots").to-uppercase() : "SCREENSHOTS";
+    value: root.active-index >= 0
+        ? root.active.percent + "%" + (root.others > 0 ? "  +" + root.others : "")
+        : root.failed ? "FAILED" : "QUEUED";
+    value-color: root.failed && root.active-index < 0 ? PageTheme.danger
+        : root.active-index >= 0 ? PageTheme.settings-accent : PageTheme.muted;
+    percent: root.active-index >= 0 ? root.active.percent : -1;
+    accent: root.failed && root.active-index < 0 ? PageTheme.danger : PageTheme.settings-accent;
 }
 
-export component BackgroundScanBadge inherits Rectangle {
-
-    width: t.width + 20px;
-    height: 28px;
-    x: MisterUi.window-width * 1px - self.width - 18px;
-    y: MisterUi.window-height * 1px - self.height - 16px;
-    background: #101420;
-    border-width: 1px;
-    border-color: #52647d;
+export component BackgroundScanBadge inherits HeaderPill {
     accessible-role: progress-indicator;
     accessible-label: "Background scan";
     accessible-description: CatalogView.title;
 
+    label: (CatalogView.title == "" ? "Discovering systems" : CatalogView.title).to-uppercase();
+}
 
-    t := HorizontalLayout {
-        alignment: start;
-        width: self.preferred-width;
-        Spleen6x12 {
-            text: CatalogView.title == "" ? "Discovering systems" : CatalogView.title;
-            color: #d7eef8;
-            size: Spleen6x12Size.px8;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
+export component HeaderActivity inherits Rectangle {
+    in property <bool> media-visible;
+    in property <bool> scan-visible;
+    property <bool> portrait: MisterUi.portrait-layout;
+
+    width: strip.preferred-width;
+    height: 18px;
+    // Keep within the band pinned by visual_composition's
+    // header_activity_band_clears_arcade_direct_layers: portrait Arcade
+    // search starts its Rust list at y=56.
+    x: (root.portrait ? MisterUi.window-width * 1px - 104px : 857px) - self.width;
+    y: root.portrait ? 38px : 24px;
+
+    strip := HorizontalLayout {
+        spacing: 8px;
+        if root.media-visible : MediaProgressPopup { }
+        if root.scan-visible : BackgroundScanBadge { }
     }
 }
 
-component CompactDialogButton inherits Rectangle {
+component DialogButton inherits Rectangle {
     in property <string> label;
     in property <bool> focused;
     in property <bool> acknowledged;
@@ -168,112 +217,66 @@ component CompactDialogButton inherits Rectangle {
     accessible-item-selected: root.focused;
     accessible-enabled: true;
 
-    height: 42px;
-    background: focused ? #2a2236 : #181829;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5a4973;
+    height: 28px;
+    border-width: 1px;
+    border-color: root.focused ? PageTheme.settings-accent
+        : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.button-border;
+    background: root.focused ? PageTheme.button-focus : transparent;
 
-    Spleen6x12 {
-        text: root.label;
-        color: root.focused ? #06d6a0 : #e8e0f0;
-        size: Spleen6x12Size.px8;
+    Xerxes10 {
+        y: 7px;
+        width: parent.width;
+        text: root.label.to-uppercase();
         horizontal-alignment: center;
-        vertical-alignment: center;
-        wrap: word-wrap;
+        color: root.focused ? PageTheme.cream : PageTheme.muted;
     }
 }
 
 export component ConfirmDialog inherits Rectangle {
-    property <bool> compact: MisterUi.window-height <= 288;
-    property <bool> portrait: MisterUi.portrait-layout;
-    property <bool> condensed: compact || portrait;
     accessible-role: region;
     accessible-label: "Confirmation";
     accessible-description: OverlayView.confirmation-message;
-    background: #000000b0;
+    background: PageTheme.panel-scrim;
 
-    Rectangle {
-        width: root.portrait ? (MisterUi.window-width - 24) * 1px
-            : root.compact ? (MisterUi.window-width - 16) * 1px : 680px;
-        height: root.portrait ? 250px
-            : root.compact ? (MisterUi.window-height - 12) * 1px : 260px;
-        background: #0e0c14;
-        border-width: root.condensed ? 2px : 4px;
-        border-color: #06d6a0;
+    OverlayPanel {
+        width: Math.min(440px, root.width - 32px);
+        height: content.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
 
-        if !root.condensed : VerticalLayout {
-            padding: 24px;
-            spacing: 18px;
+        content := VerticalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 20px;
+            padding-bottom: 16px;
+            spacing: 10px;
 
             Nocive15 {
-                text: OverlayView.confirmation-title;
-                color: #06d6a0;
-                size: Nocive15Size.px15;
-                horizontal-alignment: center;
-            }
-
-            Spleen6x12 {
-                text: OverlayView.confirmation-message;
-                color: #e8e0f0;
-                size: Spleen6x12Size.px8;
-                horizontal-alignment: center;
+                text: OverlayView.confirmation-title.to-uppercase();
+                color: PageTheme.cream;
                 wrap: word-wrap;
             }
 
-            Rectangle { vertical-stretch: 1; background: transparent; }
-
-            HorizontalLayout {
-                spacing: 16px;
-
-                if OverlayView.cancel-label != "" : LauncherTile {
-                    label: OverlayView.cancel-label;
-                    subtitle: "";
-                    focused: OverlayView.selected-choice == DialogChoice.cancel;
-                    acknowledged: FeedbackView.acknowledged("", "left", FeedbackView.revision);
-                }
-
-                if OverlayView.confirm-label != "" : LauncherTile {
-                    label: OverlayView.confirm-label;
-                    subtitle: "";
-                    focused: OverlayView.selected-choice == DialogChoice.confirm;
-                    acknowledged: FeedbackView.acknowledged("", "right", FeedbackView.revision);
-                }
-            }
-        }
-
-        if root.condensed : VerticalLayout {
-            padding: 10px;
-            spacing: 8px;
-
-            Spleen6x12 {
-                text: OverlayView.confirmation-title;
-                color: #06d6a0;
-                size: Spleen6x12Size.px8;
-                horizontal-alignment: center;
+            Xerxes10 {
+                text: OverlayView.confirmation-message.to-uppercase();
+                color: PageTheme.muted;
                 wrap: word-wrap;
-            }
-
-            Spleen6x12 {
-                text: OverlayView.confirmation-message;
-                color: #e8e0f0;
-                size: Spleen6x12Size.px8;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                wrap: word-wrap;
-                vertical-stretch: 1;
             }
 
             HorizontalLayout {
-                height: 42px;
+                padding-top: 10px;
                 spacing: 8px;
+                alignment: end;
 
-                if OverlayView.cancel-label != "" : CompactDialogButton {
+                if OverlayView.cancel-label != "" : DialogButton {
+                    width: 124px;
                     label: OverlayView.cancel-label;
                     focused: OverlayView.selected-choice == DialogChoice.cancel;
                     acknowledged: FeedbackView.acknowledged("", "left", FeedbackView.revision);
                 }
 
-                if OverlayView.confirm-label != "" : CompactDialogButton {
+                if OverlayView.confirm-label != "" : DialogButton {
+                    width: 124px;
                     label: OverlayView.confirm-label;
                     focused: OverlayView.selected-choice == DialogChoice.confirm;
                     acknowledged: FeedbackView.acknowledged("", "right", FeedbackView.revision);
@@ -287,23 +290,27 @@ export component LoadingOverlay inherits Rectangle {
     accessible-role: progress-indicator;
     accessible-label: OverlayView.loading-message;
     accessible-description: OverlayView.loading-detail;
-    background: #1a1424;
+    background: PageTheme.background;
 
     VerticalLayout {
         alignment: center;
         spacing: 12px;
 
+        HorizontalLayout {
+            alignment: center;
+            padding-bottom: 10px;
+            LibraryStripe { segment: 24px; }
+        }
+
         Nocive15 {
-            text: OverlayView.loading-message;
-            color: #e8e0f0;
-            size: Nocive15Size.px15;
+            text: OverlayView.loading-message.to-uppercase();
+            color: PageTheme.cream;
             horizontal-alignment: center;
         }
 
-        Spleen6x12 {
-            text: OverlayView.loading-detail != "" ? OverlayView.loading-detail : "Please wait...";
-            color: #9080a8;
-            size: Spleen6x12Size.px8;
+        Xerxes10 {
+            text: (OverlayView.loading-detail != "" ? OverlayView.loading-detail : "Please wait").to-uppercase();
+            color: PageTheme.muted;
             horizontal-alignment: center;
         }
     }

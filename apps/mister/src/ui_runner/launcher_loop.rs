@@ -9574,6 +9574,11 @@ pub(super) fn run_launcher_loop(
         }
         let confirm_visible =
             overlay_view.get_confirmation_kind() != slint_ui::launcher::ConfirmationKind::None;
+        // Full-screen Slint overlays own every pixel. The Rust Arcade list and
+        // preview layers are composed after Slint, so they must stand down.
+        let fullscreen_overlay_visible = catalog_scan_visible
+            || overlay_view.get_loading_state() == slint_ui::launcher::LoadingState::Active
+            || setup.is_active();
         let confirm_selected =
             if overlay_view.get_selected_choice() == slint_ui::launcher::DialogChoice::Cancel {
                 0
@@ -9764,7 +9769,7 @@ pub(super) fn run_launcher_loop(
             && !memory_guard.active()
             && !screensaver.active
             && !confirm_visible
-            && !catalog_scan_visible
+            && !fullscreen_overlay_visible
             && !nav.arcade_search.is_active(&nav.arcade_filter.active)
         {
             PreviewRoute::Eligible
@@ -9845,7 +9850,7 @@ pub(super) fn run_launcher_loop(
             navigation_destination_layers_ready,
             return_screen: effective_view.return_screen(),
             confirm_visible,
-            fullscreen_overlay_visible: catalog_scan_visible,
+            fullscreen_overlay_visible,
             arcade_ready: active_arcade_games_available
                 || nav.active_collection_id() == Some(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             route_ok: display_session.route_ok(),

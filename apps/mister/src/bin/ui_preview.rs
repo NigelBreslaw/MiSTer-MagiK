@@ -1892,14 +1892,20 @@ mod macos {
             } else if let Some(cards) = self.native_cards.as_mut() {
                 cards.set_inactive();
             }
-            if matches!(
-                self.scenario,
-                Scenario::Arcade
-                    | Scenario::ArcadeSearch
-                    | Scenario::ArcadeCrossfade
-                    | Scenario::SystemHub
-            ) && (self.launcher_nav.is_system_hub()
-                || self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready)
+            // Production stops the Rust Arcade layers under modal and
+            // full-screen Slint overlays; composing them here would paint
+            // over the overlay and hide composition-order bugs.
+            if !slint_overlay_owns_frame(&self.launcher)
+                && matches!(
+                    self.scenario,
+                    Scenario::Arcade
+                        | Scenario::ArcadeSearch
+                        | Scenario::ArcadeCrossfade
+                        | Scenario::SystemHub
+                )
+                && (self.launcher_nav.is_system_hub()
+                    || self.launcher.global::<ArcadeView>().get_load_state()
+                        == ArcadeLoadState::Ready)
             {
                 let low_resolution_backdrop = self.crt_backdrop.is_some()
                     && matches!(
@@ -4470,6 +4476,14 @@ mod macos {
             _ => {}
         }
         launcher.window().request_redraw();
+    }
+
+    fn slint_overlay_owns_frame(launcher: &Launcher) -> bool {
+        let overlay = launcher.global::<OverlayView>();
+        overlay.get_confirmation_kind() != ConfirmationKind::None
+            || overlay.get_loading_state() == LoadingState::Active
+            || launcher.global::<CatalogView>().get_activity() == CatalogActivity::Foreground
+            || launcher.global::<SetupView>().get_phase() != ViewSetupPhase::None
     }
 
     fn reset_transient_views(catalog: &CatalogView, media: &MediaView, overlay: &OverlayView) {

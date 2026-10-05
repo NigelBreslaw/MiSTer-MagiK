@@ -14,11 +14,10 @@ import { AboutScreen } from "../views/hdmi/about.slint";
 import { SystemHubScreen } from "../views/hdmi/system_hub.slint";
 import { ComboBoxOverlay } from "../components/combo_box.slint";
 import {
-    BackgroundScanBadge,
     CatalogScanPopup,
     ConfirmDialog,
+    HeaderActivity,
     LoadingOverlay,
-    MediaProgressPopup,
 } from "hdmi_overlays.slint";
 
 export component HdmiLauncherUi inherits Rectangle {
@@ -32,10 +31,12 @@ export component HdmiLauncherUi inherits Rectangle {
     if NavigationView.screen == LauncherScreen.license-text : LicenseTextScreen { }
     if NavigationView.screen == LauncherScreen.arcade && NavigationView.system-page-mode == SystemPageMode.hub : SystemHubScreen { }
 
-    if CatalogView.background-activity-visible : BackgroundScanBadge { }
-    if SetupView.phase != SetupPhase.none : SetupOverlay { }
-    if CatalogView.activity != CatalogActivity.foreground && MediaView.rows.length > 0 : MediaProgressPopup {
+    if CatalogView.background-activity-visible
+        || (CatalogView.activity != CatalogActivity.foreground && MediaView.rows.length > 0) : HeaderActivity {
+        media-visible: CatalogView.activity != CatalogActivity.foreground && MediaView.rows.length > 0;
+        scan-visible: CatalogView.background-activity-visible;
     }
+    if SetupView.phase != SetupPhase.none : SetupOverlay { }
     if CatalogView.activity == CatalogActivity.foreground : CatalogScanPopup { }
     if OverlayView.confirmation-kind != ConfirmationKind.none
         && OverlayView.confirmation-kind != ConfirmationKind.display-resolution
