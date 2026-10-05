@@ -58,6 +58,21 @@ def commands(group: str) -> list[list[str]]:
         result = [
             command for manifest in manifests for command in _crate_commands(manifest)
         ]
+        for features in (
+            "card-axis-filter",
+            "card-fast-quantisation",
+            "card-axis-filter,card-fast-quantisation",
+        ):
+            result.append(
+                [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "crates/framebuffer-scenes/Cargo.toml",
+                    "--features",
+                    features,
+                ]
+            )
         result.append(
             [
                 "cargo",

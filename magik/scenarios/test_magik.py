@@ -148,7 +148,7 @@ def test_motion_held(application_session):
         app,
         agent,
         held_direction=True,
-        starting_card="Arcade" if os.environ.get("MAGIK_CARD_SAMPLER_AB") else None,
+        starting_card="Arcade",
         raw_metrics_path=run / "motion-held-metrics.json",
     )
     append_event(run, {"phase": "motion", "outcome": "measured", **result})

@@ -95,3 +95,53 @@ def test_extended_metrics_capability_is_negotiated_only_for_detailed_capture(
     with pytest.raises(RuntimeError, match="stop before device connection"):
         next(scenario_runner._application_session(request, tmp_path))
     assert ("metrics-body-32m-v1" in connect.call_args.args[1]) is required
+
+
+@pytest.mark.parametrize("installed", [False, True])
+@pytest.mark.parametrize("matching", [False, True])
+def test_real_session_validates_renderer_before_scenario(
+    monkeypatch, tmp_path, installed, matching
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from magik import cli, measurement_contract
+
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "axis")
+    monkeypatch.setenv("MAGIK_CARD_QUANTISER", "fast")
+    sha = "a" * 64
+    options = {
+        "--magik-profile": False,
+        "--magik-frame-evidence": "off",
+        "--magik-app": "magik",
+        "--magik-installed-sha256": sha if installed else None,
+    }
+    request = SimpleNamespace(config=SimpleNamespace(getoption=options.__getitem__))
+    context = {
+        "card_sampler": "independent-vertical-prefilter" if matching else "current",
+        "card_quantiser": "centred-bayer-shifts",
+    }
+    agent = SimpleNamespace(metrics=lambda: {"context": context})
+    status = SimpleNamespace(
+        fields={
+            "running": True,
+            "ready": True,
+            "artifact": "magik",
+            "running_sha256": sha,
+        }
+    )
+    monkeypatch.setattr(cli, "connect_agent", lambda *_: (agent, status))
+    monkeypatch.setattr(cli, "ensure_application", lambda *_: None)
+    monkeypatch.setattr(measurement_contract, "verify_display", lambda *_: None)
+
+    @contextmanager
+    def session(*args):
+        yield "app"
+
+    monkeypatch.setattr(scenario_runner, "managed_session", session)
+    generator = scenario_runner._application_session(request, tmp_path)
+    if matching:
+        assert next(generator)[0] == "app"
+        generator.close()
+    else:
+        with pytest.raises(AssertionError, match="does not match"):
+            next(generator)

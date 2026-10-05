@@ -125,7 +125,7 @@ def _application_session(request, magik_run):
         PROFILE_AGENT_CAPABILITIES,
     )
 
-    from .apps import application
+    from .apps import application, validate_renderer_context
     from .measurement_contract import expected_display_mode, verify_display
 
     profiled = request.config.getoption("--magik-profile")
@@ -178,6 +178,8 @@ def _application_session(request, magik_run):
     with managed_session(
         agent, magik_run, profile_id, "shared application session"
     ) as application:
+        if request.config.getoption("--magik-app") == "magik":
+            validate_renderer_context(agent.metrics().get("context"))
         yield application, agent, magik_run, profile_id
     verify_display(agent, magik_run, "after-session")
 

@@ -53,3 +53,22 @@ def application(name: str = "mini-magik") -> Application:
 
 def repository() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def validate_renderer_context(context: object) -> None:
+    """Require runtime evidence, including for prebuilt or already installed binaries."""
+    app = application("magik")
+    expected = {
+        "card_sampler": "independent-vertical-prefilter"
+        if "card-axis-filter" in app.features
+        else "current",
+        "card_quantiser": "centred-bayer-shifts"
+        if "card-fast-quantisation" in app.features
+        else "existing-bayer",
+    }
+    if not isinstance(context, dict) or any(
+        context.get(k) != v for k, v in expected.items()
+    ):
+        raise AssertionError(
+            f"launcher renderer does not match requested features: expected={expected}, actual={context!r}"
+        )
