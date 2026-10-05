@@ -500,6 +500,10 @@ impl Texture {
                 }
             }
         }
+        #[cfg(feature = "card-axis-filter")]
+        if dirty.iter().any(|&row| row) {
+            self.vertical = Self::vertical_family(&self.levels[0]);
+        }
     }
     pub fn storage_bytes(&self) -> usize {
         let base = self
@@ -536,17 +540,6 @@ impl Texture {
             }
         }
         base
-    }
-    #[cfg(feature = "card-axis-filter")]
-    pub fn new_before_rgb8(pixels: &[Rgb565Pixel], width: usize, height: usize) -> Self {
-        Self {
-            levels: vec![Level {
-                pixels: Self::base_pixels(pixels, width, height),
-                width,
-                height,
-            }],
-            vertical: Vec::new(),
-        }
     }
 
     /// Apply RGB8 artwork before building the mip chain, preserving the exact
@@ -653,7 +646,10 @@ impl Texture {
     fn from_base(base: Vec<u32>, width: usize, height: usize) -> Self {
         #[cfg(feature = "launcher-profile")]
         let _mips = crate::launcher_profile::span("prepare.texture_mips");
-        let levels = Self::horizontal_levels(base, width, height);
+        Self::from_levels(Self::horizontal_levels(base, width, height))
+    }
+
+    pub(super) fn from_levels(levels: Vec<Level>) -> Self {
         #[cfg(feature = "card-axis-filter")]
         let vertical = Self::vertical_family(&levels[0]);
         Self {

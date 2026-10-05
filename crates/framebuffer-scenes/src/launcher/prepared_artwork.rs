@@ -158,7 +158,7 @@ impl PreparedArtwork {
                 height: H,
                 reflection_fade_rows: 64,
                 dithered: true,
-                texture: Texture { levels },
+                texture: Texture::from_levels(levels),
             });
             surfaces.push(surface);
         }

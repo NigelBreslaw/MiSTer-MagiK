@@ -147,19 +147,6 @@ impl Face {
             dithered: false,
         }
     }
-    #[cfg(feature = "card-axis-filter")]
-    pub fn new_before_rgb8(pixels: Vec<Rgb565Pixel>, width: usize, height: usize) -> Self {
-        let texture = crate::launcher_texture::Texture::new_before_rgb8(&pixels, width, height);
-        Self {
-            #[cfg(test)]
-            pixels,
-            width,
-            height,
-            reflection_fade_rows: 64,
-            texture,
-            dithered: false,
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
