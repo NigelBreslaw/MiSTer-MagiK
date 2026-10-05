@@ -688,19 +688,9 @@ fn framed_sample(
     );
     if !inside_inset(x, y, width, height, 3) {
         mix_colour(trim, CREAM, 76)
-    } else if !inside_inset(x, y, width, height, 6) {
-        // Discrete inks create the original luminous shoulder without an
-        // RGB565 gradient. Compact faces retain the card's trim hue.
-        mix_colour(
-            source,
-            trim,
-            if x + y < (width + height) * 4 {
-                210
-            } else {
-                160
-            },
-        )
     } else if !inside_inset(x, y, width, height, 8) {
+        // The complete inner stroke is one opaque ink. Artwork must not
+        // contribute colour anywhere in the former shoulder or keyline bands.
         opaque_inner_stroke(mix_colour(trim, CREAM, 76))
     } else {
         source
@@ -965,11 +955,33 @@ mod tests {
         let mut card = test_card(rgb(160, 170, 100));
         for artwork in [&red[..], &blue[..]] {
             card.artwork = Some(artwork);
-            let point = framed_sample(&card, 0, card.colour, 180, 252, 6 * 8 + 4, 126 * 8 + 4);
-            assert_eq!(
-                point,
-                opaque_inner_stroke(mix_colour(card.colour, CREAM, 76))
-            );
+            let expected = opaque_inner_stroke(mix_colour(card.colour, CREAM, 76));
+            let prepared = face(&card, 180, false, None);
+            // Cover every pixel of the former artwork-blended shoulder AND
+            // keyline, on both vertical sides and the top/bottom straight runs.
+            for edge in 3..8 {
+                for y in [32, 100, 126, 200, 220] {
+                    for x in [edge, 179 - edge] {
+                        let point =
+                            framed_sample(&card, 0, card.colour, 180, 252, x * 8 + 4, y * 8 + 4);
+                        assert_eq!(point, expected, "stroke {x},{y}");
+                        assert_eq!(
+                            prepared.pixels[y * 180 + x].0,
+                            expected,
+                            "prepared stroke {x},{y}"
+                        );
+                    }
+                }
+                for x in [32, 90, 148] {
+                    for y in [edge, 251 - edge] {
+                        assert_eq!(
+                            prepared.pixels[y * 180 + x].0,
+                            expected,
+                            "prepared stroke {x},{y}"
+                        );
+                    }
+                }
+            }
             let (pixels, alpha) = native_surface(&card, 36, 50, None);
             let at = 25 * 36 + 2;
             assert_eq!(
