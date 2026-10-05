@@ -191,18 +191,20 @@ pub(super) fn draw_card_labels(
 pub(super) fn draw_face_labels(
     pixels: &mut [Rgb565Pixel],
     card: &PreparedCard<'_>,
+    width: usize,
     detail: bool,
     fonts: Option<LauncherTypography<'_>>,
 ) {
+    let height = card_height(width);
     if let Some(fonts) = fonts {
-        draw_card_labels(pixels, 180, 252, card, 180, 252, detail, fonts);
+        draw_card_labels(pixels, width, height, card, width, height, detail, fonts);
         return;
     }
     // Portable fallback uses the same glyph rectangles, clipped to the face
     // instead of the temporary 960x540 logical surface.
     let mut draw = |mask: &[[u8; 7]], y: usize, maximum: usize| {
-        let scale = ((180 - 24) / (mask.len().max(1) * 6)).clamp(1, maximum) * 256;
-        let origin = 180usize.saturating_sub(mask.len() * 6 * scale / 256) / 2;
+        let scale = ((width - 24) / (mask.len().max(1) * 6)).clamp(1, maximum) * 256;
+        let origin = width.saturating_sub(mask.len() * 6 * scale / 256) / 2;
         for (i, glyph) in mask.iter().enumerate() {
             let glyph_x = origin + i * 6 * scale / 256;
             for (row, bits) in glyph.iter().enumerate() {
@@ -214,18 +216,18 @@ pub(super) fn draw_face_labels(
                     let x1 = (glyph_x + (column + 1) * scale / 256).max(x0 + 1);
                     let y0 = y + row * scale / 256;
                     let y1 = (y + (row + 1) * scale / 256).max(y0 + 1);
-                    for yy in y0..y1.min(252) {
-                        for xx in x0..x1.min(180) {
-                            pixels[yy * 180 + xx] = Rgb565Pixel(CREAM);
+                    for yy in y0..y1.min(height) {
+                        for xx in x0..x1.min(width) {
+                            pixels[yy * width + xx] = Rgb565Pixel(CREAM);
                         }
                     }
                 }
             }
         }
     };
-    draw(&card.name_mask, 252 * 73 / 100, 3);
+    draw(&card.name_mask, height * 73 / 100, 3);
     if detail && card.games.is_some() {
-        draw(&card.games_mask, 252 * 86 / 100, 2);
+        draw(&card.games_mask, height * 86 / 100, 2);
     }
 }
 
@@ -525,49 +527,17 @@ pub(super) fn surface(
             draw_mask_scaled_centered(&mut canvas, 0, height / 4, width, &initial, ink, 8 * 256);
         }
     }
-    if !labels {
-        // Responsive faces add native-size bitmap labels after artwork resampling.
-    } else if let Some(fonts) = typography {
-        draw_card_labels(
-            &mut canvas,
-            LOGICAL_WIDTH,
-            LOGICAL_HEIGHT,
-            card,
-            width,
-            height,
-            detail,
-            fonts,
-        );
-    } else {
-        let title_scale = ((width - 24) / (card.name_mask.len().max(1) * 6)).clamp(1, 3) * 256;
-        draw_mask_scaled_centered(
-            &mut canvas,
-            0,
-            height * 73 / 100,
-            width,
-            &card.name_mask,
-            ink,
-            title_scale,
-        );
-        if detail && card.games.is_some() {
-            draw_mask_scaled_centered(
-                &mut canvas,
-                0,
-                height * 86 / 100,
-                width,
-                &card.games_mask,
-                ink,
-                ((width - 24) / (card.games_mask.len().max(1) * 6)).clamp(1, 2) * 256,
-            );
-        }
-    }
-    (0..height)
+    let mut pixels: Vec<_> = (0..height)
         .flat_map(|y| {
             canvas[y * LOGICAL_WIDTH..y * LOGICAL_WIDTH + width]
                 .iter()
                 .copied()
         })
-        .collect()
+        .collect();
+    if labels {
+        draw_face_labels(&mut pixels, card, width, detail, typography);
+    }
+    pixels
 }
 
 /// The interior of a generic card: the collection colour lit from above and

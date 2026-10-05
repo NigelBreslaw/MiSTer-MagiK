@@ -43,11 +43,7 @@ fn word(bytes: &mut &[u8]) -> Result<u32, String> {
 fn put(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
-fn compress<T: Copy>(bytes: &mut Vec<u8>, pixels: &[T]) {
-    // SAFETY: pixel element types below are fully initialized POD with no padding.
-    let raw = unsafe {
-        std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
-    };
+fn compress(bytes: &mut Vec<u8>, raw: &[u8]) {
     let block = lz4::block::compress(raw, None, false).expect("bounded host artwork");
     put(bytes, block.len() as u32);
     bytes.extend(block);
@@ -71,9 +67,6 @@ fn decode<T: Copy + Default>(bytes: &mut &[u8], count: usize) -> Result<Vec<T>, 
 impl PreparedArtwork {
     /// Host-only generation. Published packs are little endian.
     pub fn encode(source: &[u8], id: LauncherCardId, colour: u16) -> Vec<u8> {
-        const {
-            assert!(cfg!(target_endian = "little"));
-        }
         let rgb = artwork::reduce_rgb888(source);
         let reference = reference(&rgb);
         let card = PreparedCard {
@@ -89,13 +82,29 @@ impl PreparedArtwork {
         let mut bytes = MAGIC.to_vec();
         put(&mut bytes, code(id));
         put(&mut bytes, u32::from(colour));
-        compress(&mut bytes, &rgb);
+        compress(
+            &mut bytes,
+            &rgb.iter().flatten().copied().collect::<Vec<_>>(),
+        );
         for detail in [false, true] {
             let surface = artwork::surface(&card, W, detail, None, false);
-            compress(&mut bytes, &surface);
+            compress(
+                &mut bytes,
+                &surface
+                    .iter()
+                    .flat_map(|p| p.0.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            );
             let face = Face::with_rgb8(surface, &rgb, &reference, W, H);
             for level in &face.texture.levels {
-                compress(&mut bytes, &level.pixels);
+                compress(
+                    &mut bytes,
+                    &level
+                        .pixels
+                        .iter()
+                        .flat_map(|p| p.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                );
             }
         }
         bytes
@@ -164,7 +173,7 @@ impl PreparedArtwork {
         let mut faces = self.faces;
         for (index, (surface, face)) in surfaces.iter_mut().zip(&mut faces).enumerate() {
             let before = surface.clone();
-            artwork::draw_face_labels(surface, card, index == 1, fonts);
+            artwork::draw_face_labels(surface, card, W, index == 1, fonts);
             face.texture
                 .apply_labels(&before, surface, &self.rgb, &reference);
             #[cfg(test)]
