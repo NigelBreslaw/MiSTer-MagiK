@@ -468,9 +468,21 @@ changing the menu, including queued activation, Back and Home. The card session
 resolves the source ID against its retained level once, then freezes that source
 for the entire readiness wait and gather/edge-on/deal sequence. The readiness
 wait settles that committed source rather than freezing an outgoing browse flip.
-Artwork lookup keys are separate from
-navigation IDs. Missing or stale origins adopt the destination without inventing
-an animated source card.
+Artwork lookup keys are separate from navigation IDs. Nested keys default to
+the navigation ID without storing another copy; independent overrides retain the
+root artwork namespace and allow appearance changes without changing identity. OpenMenu binds its source to the requested menu item, even if
+selection changes before application. `CardLevelHandoff` retains the first
+unaccepted source and coalesces later commands into the final destination; an
+undrawn round trip cancels. The display acknowledges only after owning the trick
+or adopting the destination, so queue/retirement admission failures cannot lose
+the receipt. Acknowledgment is shared while the receipt's immutable data remains
+borrowable for the rest of the frame.
+
+Source settling precedes preparation admission. Missing or stale origins finish
+the last accepted source selection without inventing a hierarchy gather. Both
+admission and preparation waits retain the bounded 16 ms retry wakeup without
+continually redrawing the settled source. Rendering fixtures require explicit
+source IDs; they cannot infer activation from a previous BrowseFrame.
 
 A `BrowseFrame.selected` identifies the outgoing half of a carousel flip; it is
 never an activation source. Navigation can settle and commit a queued activation

@@ -141,12 +141,21 @@ pub struct CardLevelSnapshot {
 pub struct LevelCard {
     /// Stable navigation identity. Artwork lookup keys have a separate namespace.
     pub navigation_id: String,
-    /// Asset lookup key; root artwork and navigation use distinct namespaces.
-    pub artwork_key: String,
+    /// Appearance override. Nested cards normally use their navigation ID,
+    /// so equal IDs need no second owned string; roots retain their asset namespace.
+    pub artwork_override: Option<String>,
     pub id: LauncherCardId,
     pub name: String,
     pub games: Option<u32>,
     pub colour: u16,
+}
+
+impl LevelCard {
+    pub fn artwork_key(&self) -> &str {
+        self.artwork_override
+            .as_deref()
+            .unwrap_or(&self.navigation_id)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,7 +195,7 @@ impl CardLevelSnapshot {
             .iter()
             .map(|item| LevelCard {
                 navigation_id: item.id.clone(),
-                artwork_key: item.id.clone(),
+                artwork_override: None,
                 id,
                 name: item.title.to_uppercase(),
                 games: Some(saturating_u32(item.count)),
@@ -226,15 +235,17 @@ impl CardLevelSnapshot {
                 .map(|card| LevelCard {
                     navigation_id: crate::launcher::root_home_card_identity(card.id).to_owned(),
                     id: card.id,
-                    artwork_key: match card.id {
-                        LauncherCardId::Arcade => "root:arcade",
-                        LauncherCardId::Consoles => "root:consoles",
-                        LauncherCardId::Computers => "root:computers",
-                        LauncherCardId::Handhelds => "root:handhelds",
-                        LauncherCardId::Favourites => "root:favourites",
-                        LauncherCardId::Settings => "root:settings",
-                    }
-                    .to_owned(),
+                    artwork_override: Some(
+                        match card.id {
+                            LauncherCardId::Arcade => "root:arcade",
+                            LauncherCardId::Consoles => "root:consoles",
+                            LauncherCardId::Computers => "root:computers",
+                            LauncherCardId::Handhelds => "root:handhelds",
+                            LauncherCardId::Favourites => "root:favourites",
+                            LauncherCardId::Settings => "root:settings",
+                        }
+                        .to_owned(),
+                    ),
                     name: card.name.to_owned(),
                     games: card.games,
                     colour: card.colour,
@@ -268,6 +279,7 @@ impl CardLevelSnapshot {
             ) && self.cards.len() == home.cards.len()
                 && self.cards.iter().zip(&home.cards).all(|(card, root)| {
                     card.id == root.id
+                        && card.navigation_id == crate::launcher::root_home_card_identity(root.id)
                         && card.name == root.name
                         && card.games == root.games
                         && card.colour == root.colour
@@ -276,7 +288,7 @@ impl CardLevelSnapshot {
         let items = nav.current_menu_items();
         items.len() == self.cards.len()
             && items.iter().zip(&self.cards).all(|(item, card)| {
-                card.artwork_key == item.id
+                card.navigation_id == item.id
                     && card.games == Some(saturating_u32(item.count))
                     && card.name.eq_ignore_ascii_case(&item.title)
             })
@@ -375,6 +387,33 @@ fn saturating_u32(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artwork_overrides_do_not_change_navigation_identity_or_duplicate_nested_keys() {
+        use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
+        let catalog = arcade_catalog(
+            vec![arcade_game("Mario").system_id("nes").build()],
+            vec![arcade_system("nes", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let mut root = CardLevelSnapshot::from_runtime(&nav, &catalog);
+        assert_eq!(root.cards[1].navigation_id, CONSOLES_MENU_ID);
+        assert_eq!(root.cards[1].artwork_key(), "root:consoles");
+        root.cards[1].artwork_override = Some("custom-picture".into());
+        assert_eq!(root.cards[1].navigation_id, CONSOLES_MENU_ID);
+        assert!(root.matches_runtime(&nav, &catalog));
+        root.cards[1].navigation_id = "wrong-id".into();
+        assert!(!root.matches_runtime(&nav, &catalog));
+        nav.open_menu(CONSOLES_MENU_ID);
+        let mut nested = CardLevelSnapshot::from_runtime(&nav, &catalog);
+        assert!(!nested.cards.is_empty());
+        assert!(nested.cards.iter().all(
+            |card| card.artwork_override.is_none() && card.artwork_key() == card.navigation_id
+        ));
+        nested.cards[0].artwork_override = Some("custom-picture".into());
+        assert!(nested.matches_runtime(&nav, &catalog));
+    }
 
     #[test]
     fn cards_keep_the_approved_order_and_settings_has_no_fake_count() {

@@ -29,7 +29,7 @@ use mister_magik_core::launcher_effects::{
     StructuredLaunchSelection as EffectStructuredLaunchSelection,
 };
 use mister_magik_framebuffer_scenes::launcher::LauncherCardId;
-use mister_magik_framebuffer_scenes::launcher_navigation::CardLevelTransition;
+use mister_magik_framebuffer_scenes::launcher_navigation::{CardLevelHandoff, CardLevelTransition};
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
 use mister_magik_mister_runtime::runtime_state::SystemRuntimeState;
@@ -46,20 +46,41 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const ROOT_HOME_CARDS: [(LauncherCardId, &str); 6] = [
-    (LauncherCardId::Arcade, "arcade"),
-    (LauncherCardId::Consoles, "menu:consoles"),
-    (LauncherCardId::Computers, "menu:computers"),
-    (LauncherCardId::Handhelds, "menu:handhelds"),
-    (LauncherCardId::Favourites, "__favourites"),
-    (LauncherCardId::Settings, "__settings"),
+    (
+        LauncherCardId::Arcade,
+        root_home_card_identity(LauncherCardId::Arcade),
+    ),
+    (
+        LauncherCardId::Consoles,
+        root_home_card_identity(LauncherCardId::Consoles),
+    ),
+    (
+        LauncherCardId::Computers,
+        root_home_card_identity(LauncherCardId::Computers),
+    ),
+    (
+        LauncherCardId::Handhelds,
+        root_home_card_identity(LauncherCardId::Handhelds),
+    ),
+    (
+        LauncherCardId::Favourites,
+        root_home_card_identity(LauncherCardId::Favourites),
+    ),
+    (
+        LauncherCardId::Settings,
+        root_home_card_identity(LauncherCardId::Settings),
+    ),
 ];
 
-pub(crate) fn root_home_card_identity(id: LauncherCardId) -> &'static str {
-    ROOT_HOME_CARDS
-        .iter()
-        .find(|(card, _)| *card == id)
-        .expect("known root card")
-        .1
+pub(crate) const fn root_home_card_identity(id: LauncherCardId) -> &'static str {
+    match id {
+        LauncherCardId::Arcade => "arcade",
+        LauncherCardId::Consoles => CONSOLES_MENU_ID,
+        LauncherCardId::Computers => COMPUTERS_MENU_ID,
+        LauncherCardId::Handhelds => HANDHELDS_MENU_ID,
+        LauncherCardId::Favourites => "__favourites",
+        LauncherCardId::Settings => "__settings",
+    }
 }
 
 const fn root_home_card_key(index: usize) -> &'static str {
@@ -1219,7 +1240,7 @@ pub struct LauncherNav {
     active_collection_source: Option<HomeViewState>,
     arcade_exit_locked: bool,
     home_card_scroll: ArcadeNav,
-    home_level_transition: Option<CardLevelTransition>,
+    home_level_transition: CardLevelHandoff,
     #[cfg(test)]
     test_repeat: RepeatNav,
     #[cfg(test)]
@@ -1755,7 +1776,7 @@ impl LauncherNav {
             active_collection_source: None,
             arcade_exit_locked: false,
             home_card_scroll: ArcadeNav::new_cyclic(),
-            home_level_transition: None,
+            home_level_transition: CardLevelHandoff::default(),
             #[cfg(test)]
             test_repeat: RepeatNav::default(),
             #[cfg(test)]
@@ -2411,26 +2432,40 @@ impl LauncherNav {
     }
 
     pub fn home_level_transition(&self) -> Option<&CardLevelTransition> {
-        self.home_level_transition.as_ref()
+        self.home_level_transition.pending()
     }
 
-    fn capture_home_level_transition(&self, destination: &str) -> Option<CardLevelTransition> {
-        let source_card = self.current_menu_selected_item_id();
-        (self.screen == Screen::Home
-            && self.current_menu_id() != destination
-            && !source_card.is_empty())
-        .then(|| CardLevelTransition {
-            source_level: self.current_menu_id().to_owned(),
-            source_card: source_card.to_owned(),
-            destination_level: destination.to_owned(),
-        })
+    /// The display owner clears this only after accepting a trick or adopting
+    /// the destination. Resource-admission failures leave the receipt pending.
+    pub fn acknowledge_home_level_transition(&self) {
+        self.home_level_transition.acknowledge();
+    }
+
+    fn record_home_level_transition(&mut self, destination: &str, source_card: Option<&str>) {
+        if self.screen != Screen::Home {
+            self.home_level_transition.replace(None);
+            return;
+        }
+        if self.home_level_transition.redirect_pending(destination) {
+            return;
+        }
+        let source_card = source_card.unwrap_or_else(|| self.current_menu_selected_item_id());
+        let receipt =
+            (self.current_menu_id() != destination && !source_card.is_empty()).then(|| {
+                CardLevelTransition {
+                    source_level: self.current_menu_id().to_owned(),
+                    source_card: source_card.to_owned(),
+                    destination_level: destination.to_owned(),
+                }
+            });
+        self.home_level_transition.replace(receipt);
     }
 
     pub fn open_menu(&mut self, menu_id: &str) -> bool {
         let Some(path) = self.taxonomy.path_to_menu(menu_id) else {
             return false;
         };
-        self.home_level_transition = self.capture_home_level_transition(menu_id);
+        self.record_home_level_transition(menu_id, Some(menu_id));
         if self.screen == Screen::Home {
             self.remember_current_menu_view();
         }
@@ -2452,7 +2487,7 @@ impl LauncherNav {
     }
 
     pub fn go_root(&mut self) {
-        self.home_level_transition = self.capture_home_level_transition(ROOT_MENU_ID);
+        self.record_home_level_transition(ROOT_MENU_ID, None);
         if self.screen == Screen::Home {
             self.remember_current_menu_view();
         }
@@ -2670,7 +2705,7 @@ impl LauncherNav {
             active_collection_source: self.active_collection_source.clone(),
             arcade_exit_locked: self.arcade_exit_locked,
             home_card_scroll: self.home_card_scroll.clone(),
-            home_level_transition: self.home_level_transition.clone(),
+            home_level_transition: self.home_level_transition().cloned(),
         }
     }
 
@@ -2724,7 +2759,8 @@ impl LauncherNav {
         self.active_collection_source = state.active_collection_source;
         self.arcade_exit_locked = state.arcade_exit_locked;
         self.home_card_scroll = state.home_card_scroll;
-        self.home_level_transition = state.home_level_transition;
+        self.home_level_transition
+            .replace(state.home_level_transition);
     }
 
     fn restore_home_view_state(&mut self, source: HomeViewState) {
@@ -2775,8 +2811,8 @@ impl LauncherNav {
         if self.menu_path.len() <= 1 {
             return false;
         }
-        self.home_level_transition =
-            self.capture_home_level_transition(&self.menu_path[self.menu_path.len() - 2]);
+        let destination = self.menu_path[self.menu_path.len() - 2].clone();
+        self.record_home_level_transition(&destination, None);
         self.remember_current_menu_view();
         self.menu_path.pop();
         self.active_collection_id = None;
@@ -7294,6 +7330,7 @@ mod tests {
             nav.home_level_transition().unwrap().source_card,
             COMPUTERS_MENU_ID
         );
+        nav.acknowledge_home_level_transition();
         let selected_key = nav.current_menu_selected_item_id().to_owned();
         assert!(nav.pop_menu());
         let origin = nav.home_level_transition().unwrap();
@@ -7301,7 +7338,9 @@ mod tests {
         assert_eq!(origin.source_card, selected_key);
         assert_eq!(origin.destination_level, ROOT_MENU_ID);
         assert_eq!(nav.selected, 2);
+        nav.acknowledge_home_level_transition();
         assert!(nav.open_menu(CONSOLES_MENU_ID));
+        nav.acknowledge_home_level_transition();
         let selected_key = nav.current_menu_selected_item_id().to_owned();
         nav.go_root();
         assert_eq!(
@@ -7312,6 +7351,68 @@ mod tests {
             nav.home_level_transition().unwrap().destination_level,
             ROOT_MENU_ID
         );
+    }
+
+    #[test]
+    fn delayed_menu_intent_uses_requested_card_after_selection_changes() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.selected = 1;
+        let requested = LauncherEvent {
+            action: LauncherAction::OpenMenu,
+            path: Some(CONSOLES_MENU_ID.into()),
+            settings: None,
+        };
+        nav.selected = 2;
+        assert!(nav.commit_navigation_intent(&requested, &catalog));
+        assert_eq!(
+            nav.home_level_transition().unwrap().source_card,
+            CONSOLES_MENU_ID
+        );
+        assert_eq!(
+            nav.home_level_transition().unwrap().destination_level,
+            CONSOLES_MENU_ID
+        );
+    }
+
+    #[test]
+    fn unacknowledged_navigation_coalesces_and_round_trips_cancel() {
+        let catalog = hierarchy_catalog();
+        for last in [LauncherAction::NavigateBack, LauncherAction::NavigateHome] {
+            let mut nav = LauncherNav::new();
+            nav.sync_launcher_taxonomy(&catalog);
+            assert!(nav.open_menu(CONSOLES_MENU_ID));
+            nav.acknowledge_home_level_transition();
+            assert!(nav.open_menu("menu:consoles:nintendo"));
+            nav.acknowledge_home_level_transition();
+            let source_level = nav.current_menu_id().to_owned();
+            let source_card = nav.current_menu_selected_item_id().to_owned();
+            let back = LauncherEvent {
+                action: LauncherAction::NavigateBack,
+                path: None,
+                settings: None,
+            };
+            assert!(nav.commit_navigation_intent(&back, &catalog));
+            let final_event = LauncherEvent {
+                action: last,
+                path: None,
+                settings: None,
+            };
+            assert!(nav.commit_navigation_intent(&final_event, &catalog));
+            let pending = nav.home_level_transition().unwrap();
+            assert_eq!(pending.source_level, source_level);
+            assert_eq!(pending.source_card, source_card);
+            assert_eq!(pending.destination_level, ROOT_MENU_ID);
+            nav.acknowledge_home_level_transition();
+            assert!(nav.home_level_transition().is_none());
+            assert!(nav.open_menu(CONSOLES_MENU_ID));
+            assert!(nav.pop_menu());
+            assert!(
+                nav.home_level_transition().is_none(),
+                "undrawn round trip cancels"
+            );
+        }
     }
 
     #[test]
