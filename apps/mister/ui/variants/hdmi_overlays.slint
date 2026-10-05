@@ -189,8 +189,8 @@ export component BackgroundScanBadge inherits HeaderPill {
 }
 
 export component HeaderActivity inherits Rectangle {
-    in property <bool> media-visible;
-    in property <bool> scan-visible;
+    in property <bool> media-progress-shown;
+    in property <bool> background-scan-shown;
     property <bool> portrait: MisterUi.portrait-layout;
 
     width: strip.preferred-width;
@@ -203,8 +203,8 @@ export component HeaderActivity inherits Rectangle {
 
     strip := HorizontalLayout {
         spacing: 8px;
-        if root.media-visible : MediaProgressPopup { }
-        if root.scan-visible : BackgroundScanBadge { }
+        if root.media-progress-shown : MediaProgressPopup { }
+        if root.background-scan-shown : BackgroundScanBadge { }
     }
 }
 

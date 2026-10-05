@@ -33,8 +33,8 @@ export component HdmiLauncherUi inherits Rectangle {
 
     if CatalogView.background-activity-visible
         || (CatalogView.activity != CatalogActivity.foreground && MediaView.rows.length > 0) : HeaderActivity {
-        media-visible: CatalogView.activity != CatalogActivity.foreground && MediaView.rows.length > 0;
-        scan-visible: CatalogView.background-activity-visible;
+        media-progress-shown: CatalogView.activity != CatalogActivity.foreground && MediaView.rows.length > 0;
+        background-scan-shown: CatalogView.background-activity-visible;
     }
     if SetupView.phase != SetupPhase.none : SetupOverlay { }
     if CatalogView.activity == CatalogActivity.foreground : CatalogScanPopup { }
