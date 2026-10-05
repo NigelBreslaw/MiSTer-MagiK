@@ -16,9 +16,7 @@ class CardArtworkTests(unittest.TestCase):
     def test_shipped_pack_has_all_approved_sources_and_taxonomy_keys(self):
         root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
         files = card_artwork.validate(root)
-        self.assertEqual(
-            len(files), 101
-        )  # 32 unchanged root/system images + 15 shared family images + index
+        self.assertEqual(len(files), 79)  # 36 sources + 42 prepared faces + index
         self.assertEqual(
             files,
             {
@@ -36,17 +34,27 @@ class CardArtworkTests(unittest.TestCase):
         self.assertLessEqual({k for k in index if ":" not in k}, systems | aliases)
         self.assertEqual(index["spectrum"], index["zx-spectrum"])
         for key in (
-            "nes",
-            "n64",
-            "snes",
-            "saturn",
-            "megadrive",
             "x68000",
             "fmtowns",
             "menu:consoles:sega",
             "menu:computers:japanese",
         ):
             self.assertIn(key, index)
+        for key in (
+            "fds",
+            "megacd",
+            "megadrive",
+            "n64",
+            "nes",
+            "s32x",
+            "satellaview",
+            "saturn",
+            "sg1000",
+            "sms",
+            "snes",
+        ):
+            self.assertNotIn(key, index)
+        self.assertFalse(any(name.startswith("console-") for name in files))
 
     def test_wordmark_metadata_is_boolean_and_family_sources_are_shared(self):
         root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
