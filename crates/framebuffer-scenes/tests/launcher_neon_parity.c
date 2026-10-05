@@ -73,6 +73,26 @@ static int fast_quantisation_parity(void) {
     magik_launcher_project_dithered_fast_opaque(b+3,pitch,src,h,rows,q,step,x,y0,trial%2?8:0,trial%2?h-8:0);
     if(memcmp(a,b,sizeof(a))) {fprintf(stderr,"fast projection mismatch %zu\n",trial);return 1;}
   }
+  // Flat-card gathers, mixed alpha, odd widths and independent output guards.
+  for(size_t trial=0;trial<1024;++trial) {
+    size_t height=1+next()%63,width=1+next()%17,rows=1+next()%31,pitch=width+3;
+    uint32_t source[17*63];uint16_t a[700],b[700];
+    for(size_t j=0;j<width*height;++j)source[j]=next();
+    for(size_t j=0;j<700;++j)a[j]=b[j]=(uint16_t)next();
+    int32_t q=(int32_t)(next()%196609)-131072,step=1+next()%196608;
+    size_t x=next()%960,y0=next()%540;
+    for(size_t y=0;y<rows;++y) {
+      int32_t yy=q+(int32_t)y*step,r=yy>>16;uint32_t w=((uint32_t)yy&65535)>>8;
+      for(size_t xx=0;xx<width;++xx) {
+        uint32_t p=r>=0&&(size_t)r<height?source[xx*height+r]:0;
+        uint32_t z=r+1>=0&&(size_t)(r+1)<height?source[xx*height+r+1]:0;
+        size_t at=3+y*pitch+xx;a[at]=fast_dither_pixel(scalar(p,z,w),a[at],x+xx,y0+y);
+      }
+    }
+    magik_launcher_flat_dithered_fast(b+3,pitch,source,height,height,width,rows,q,step,x,y0);
+    if(memcmp(a,b,sizeof(a))) {fprintf(stderr,"fast flat mismatch %zu\n",trial);return 22;}
+  }
+  puts("1024 flat-card alpha, bounds, odd-width and guard cases match scalar");
   puts("Fast dither: 4096 projection cases including alpha, bounds, stride and tails passed");
   return 0;
 }
@@ -161,6 +181,10 @@ int main(void) {
   }
   vst1_u16(actual,dither_over4(vld1q_u32(p),vld1_u16(dest),vld1_u16(offset)));
   for(size_t j=0;j<4;++j)if(actual[j]!=dither_pixel(p[j],dest[j],x+j,y)) {fprintf(stderr,"over mismatch %u %u %zu\n",bg,alpha,j);return 1;}
+#ifdef MAGIK_FAST_QUANTISATION
+  vst1_u16(actual,fast_over4(vld1q_u32(p),vld1_u16(dest),vld1_u16(offset)));
+  for(size_t j=0;j<4;++j)if(actual[j]!=fast_dither_pixel(p[j],dest[j],x+j,y)) {fprintf(stderr,"fast over mismatch %u %u %zu\n",bg,alpha,j);return 21;}
+#endif
  }
   if(opaque_cases<1000) {fputs("insufficient opaque fast-path coverage\n",stderr);return 7;}
   printf("%zu opaque vector-loop cases covering %zu interior rows\n",opaque_cases,opaque_rows);

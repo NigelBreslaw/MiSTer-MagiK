@@ -864,6 +864,22 @@ static inline uint32x2_t pack_fast2(uint32x2_t p,size_t x,size_t y) {
     (uint16_t)(256-image_threshold[(y+1)&3][x&3]),0,0};
   return vget_low_u32(vmovl_u16(pack_fast16(vcombine_u32(p,vdup_n_u32(0)),vld1_u16(offsets))));
 }
+// Four translucent pixels use the existing exact premultiplied over maths,
+// followed by the accepted fast quantiser. Alpha-zero lanes preserve the background.
+static inline uint16x4_t fast_over4(uint32x4_t p,uint16x4_t dst,uint16x4_t offset) {
+  const uint32x4_t mask=vdupq_n_u32(255);
+  uint16x4_t alpha=vmovn_u32(vshrq_n_u32(p,24));
+  uint16x4_t inverse=vsub_u16(vdup_n_u16(255),alpha);
+  uint16x4_t r=dither_over_channel4(vmovn_u32(vandq_u32(p,mask)),dither_decode5(vshr_n_u16(dst,11)),inverse);
+  uint16x4_t g=dither_over_channel4(vmovn_u32(vandq_u32(vshrq_n_u32(p,8),mask)),dither_decode6(vand_u16(vshr_n_u16(dst,5),vdup_n_u16(63))),inverse);
+  uint16x4_t b=dither_over_channel4(vmovn_u32(vandq_u32(vshrq_n_u32(p,16),mask)),dither_decode5(vand_u16(dst,vdup_n_u16(31))),inverse);
+  uint16x4_t rank=vshr_n_u16(vsub_u16(vdup_n_u16(256),offset),4);
+  int16x4_t rb=vreinterpret_s16_u16(vsub_u16(vshr_n_u16(rank,1),vdup_n_u16(4)));
+  int16x4_t gb=vreinterpret_s16_u16(vsub_u16(vshr_n_u16(rank,2),vdup_n_u16(2)));
+  r=fast_channel(r,rb,3,31);g=fast_channel(g,gb,2,63);b=fast_channel(b,rb,3,31);
+  uint16x4_t packed=vorr_u16(vorr_u16(vshl_n_u16(r,11),vshl_n_u16(g,5)),b);
+  return vbsl_u16(vceq_u16(alpha,vdup_n_u16(0)),dst,packed);
+}
 static uint16_t fast_dither_pixel(uint32_t p, uint16_t dst, size_t x, size_t y) {
   uint32_t a=p>>24;
   if(!a) return dst;
@@ -898,8 +914,16 @@ void magik_launcher_project_dithered_fast(uint16_t *out,size_t pitch,const uint3
         out[(y+2)*pitch]=vget_lane_u16(packed,2);
         out[(y+3)*pitch]=vget_lane_u16(packed,3);
       } else {
-        uint32_t pixels[4];vst1q_u32(pixels,p);
-        for(size_t j=0;j<4;++j) out[(y+j)*pitch]=fast_dither_pixel(pixels[j],out[(y+j)*pitch],x,y0+y+j);
+        uint16x4_t dst=vdup_n_u16(0);
+        dst=vld1_lane_u16(out+y*pitch,dst,0);
+        dst=vld1_lane_u16(out+(y+1)*pitch,dst,1);
+        dst=vld1_lane_u16(out+(y+2)*pitch,dst,2);
+        dst=vld1_lane_u16(out+(y+3)*pitch,dst,3);
+        uint16x4_t packed=fast_over4(p,dst,phase);
+        vst1_lane_u16(out+y*pitch,packed,0);
+        vst1_lane_u16(out+(y+1)*pitch,packed,1);
+        vst1_lane_u16(out+(y+2)*pitch,packed,2);
+        vst1_lane_u16(out+(y+3)*pitch,packed,3);
       }
     } else {
       int32_t qj=q;
@@ -1012,10 +1036,10 @@ void magik_launcher_flat_dithered_fast(uint16_t *out, size_t pitch,
         if (vget_lane_u32(m, 0) == 255 && vget_lane_u32(m, 1) == 255) {
           vst1_u16(out + y * pitch + x, pack_fast4(p, x0 + x, y0 + y));
         } else {
-          uint32_t pixels[4];
-          vst1q_u32(pixels, p);
-          for (size_t j = 0; j < 4; ++j)
-            out[y * pitch + x + j] = fast_dither_pixel(pixels[j], out[y * pitch + x + j], x0 + x + j, y0 + y);
+          uint16_t offsets[4];
+          for(size_t j=0;j<4;++j)offsets[j]=(uint16_t)(256-image_threshold[(y0+y)&3][(x0+x+j)&3]);
+          uint16x4_t packed=fast_over4(p,vld1_u16(out+y*pitch+x),vld1_u16(offsets));
+          vst1_u16(out+y*pitch+x,packed);
         }
       }
     }
