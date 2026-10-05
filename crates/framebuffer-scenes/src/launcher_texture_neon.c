@@ -869,6 +869,14 @@ static inline uint32x2_t pack_fast2(uint32x2_t p,size_t x,size_t y) {
 static inline uint16x4_t fast_over4(uint32x4_t p,uint16x4_t dst,uint16x4_t offset) {
   const uint32x4_t mask=vdupq_n_u32(255);
   uint16x4_t alpha=vmovn_u32(vshrq_n_u32(p,24));
+  // Premultiplied colour over black is already the final RGB value. Retain
+  // alpha-zero semantics even for callers with nonzero RGB in transparent lanes.
+  uint32x2_t background=vreinterpret_u32_u16(dst);
+  uint32x2_t any_background=vorr_u32(background,vrev64_u32(background));
+  if(vget_lane_u32(any_background,0)==0) {
+    uint16x4_t packed=pack_fast16(p,offset);
+    return vbsl_u16(vceq_u16(alpha,vdup_n_u16(0)),dst,packed);
+  }
   uint16x4_t inverse=vsub_u16(vdup_n_u16(255),alpha);
   uint16x4_t r=dither_over_channel4(vmovn_u32(vandq_u32(p,mask)),dither_decode5(vshr_n_u16(dst,11)),inverse);
   uint16x4_t g=dither_over_channel4(vmovn_u32(vandq_u32(vshrq_n_u32(p,8),mask)),dither_decode6(vand_u16(vshr_n_u16(dst,5),vdup_n_u16(63))),inverse);

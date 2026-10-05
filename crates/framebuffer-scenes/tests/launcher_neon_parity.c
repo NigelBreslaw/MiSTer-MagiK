@@ -56,6 +56,23 @@ static uint32_t seed=237;
 static uint32_t next(void) {seed=seed*1664525+1013904223;return seed;}
 #ifdef MAGIK_FAST_QUANTISATION
 static int fast_quantisation_parity(void) {
+  // Exercise the all-black shortcut explicitly; independently varied random
+  // destination lanes almost never make an entire four-pixel group black.
+  for(uint32_t alpha=0;alpha<256;++alpha)for(uint32_t value=0;value<256;++value)
+    for(size_t phase=0;phase<16;++phase)for(size_t vertical=0;vertical<2;++vertical) {
+      uint32_t p[4];uint16_t offsets[4],actual[4];size_t x=phase&3,y=phase>>2;
+      for(size_t j=0;j<4;++j) {
+        uint32_t a=(alpha+j*63)&255;
+        p[j]=value|((value*7+j*17)&255)<<8|((value*13+j*53)&255)<<16|a<<24;
+        offsets[j]=(uint16_t)(256-image_threshold[(y+(vertical?j:0))&3][(x+(vertical?0:j))&3]);
+      }
+      vst1_u16(actual,fast_over4(vld1q_u32(p),vdup_n_u16(0),vld1_u16(offsets)));
+      for(size_t j=0;j<4;++j) {
+        uint16_t expected=fast_dither_pixel(p[j],0,x+(vertical?0:j),y+(vertical?j:0));
+        if(actual[j]!=expected){fprintf(stderr,"black-background mismatch %u %u %zu\n",alpha,value,j);return 23;}
+      }
+    }
+  puts("2097152 all-black alpha/colour/phase groups match scalar compositing");
   for(size_t trial=0;trial<4096;++trial) {
     size_t h=17+next()%128,rows=1+next()%127,pitch=1+next()%7,x=next()%960,y0=next()%540;
     uint32_t src[160];uint16_t a[1000],b[1000];
