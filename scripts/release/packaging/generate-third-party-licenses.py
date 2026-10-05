@@ -63,6 +63,8 @@ def license_files(package):
         candidates.extend(
             sorted(path for path in manifest_dir.glob(pattern) if path.is_file())
         )
+    if package["name"] == "lz4-sys":
+        candidates.append(manifest_dir / "liblz4/lib/LICENSE")
     licenses_dir = manifest_dir / "LICENSES"
     if licenses_dir.is_dir():
         candidates.extend(

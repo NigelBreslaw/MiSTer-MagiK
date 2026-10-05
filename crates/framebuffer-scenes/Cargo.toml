@@ -18,8 +18,13 @@ card-fast-quantisation = []
 launcher-profile = ["dep:mister-magik-perf-events", "dep:serde"]
 
 [dependencies]
+lz4 = "1.28.1"
 mister-magik-perf-events = { path = "../perf-events", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+sha2 = "0.11"
 
 [lints.rust]
 warnings = "deny"

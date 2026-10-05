@@ -34,6 +34,13 @@ struct Source {
     file: String,
     #[serde(default)]
     contains_name: bool,
+    #[serde(default)]
+    prepared: Option<PreparedSource>,
+}
+#[derive(Deserialize)]
+struct PreparedSource {
+    file: String,
+    bytes: usize,
 }
 
 pub fn asset_root() -> PathBuf {
@@ -62,6 +69,8 @@ fn built_in(key: &str) -> Option<&'static [u8]> {
     })
 }
 fn index(root: &Path) -> std::io::Result<Index> {
+    #[cfg(feature = "tooling")]
+    let _index = mister_magik_framebuffer_scenes::launcher_profile::span("prepare.artwork_index");
     let bytes = bounded_file::read(root.join("index.json"), MAX_INDEX_BYTES)?;
     let index: Index = serde_json::from_slice(&bytes)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -86,6 +95,8 @@ fn source(root: &Path, source: &Source) -> std::io::Result<Vec<u8>> {
             "invalid card artwork filename",
         ));
     }
+    #[cfg(feature = "tooling")]
+    let _read = mister_magik_framebuffer_scenes::launcher_profile::span("prepare.artwork_read");
     let bytes = bounded_file::read(root.join(&source.file), SOURCE_BYTES as u64)?;
     if bytes.len() != SOURCE_BYTES {
         return Err(std::io::Error::new(
@@ -112,9 +123,20 @@ impl<'a> Loader<'a> {
         Self { root, index: None }
     }
     fn load(&mut self, key: &str) -> LauncherArtwork {
+        self.load_for(key, None)
+    }
+    fn load_for(
+        &mut self,
+        key: &str,
+        style: Option<(
+            mister_magik_framebuffer_scenes::launcher::LauncherCardId,
+            u16,
+        )>,
+    ) -> LauncherArtwork {
         let normalized = mister_magik_catalog::catalog_classify::normalize_system_id(key);
         let builtin = built_in(&normalized);
         let fallback = |retry| LauncherArtwork {
+            prepared: None,
             pixels: Cow::Borrowed(builtin.unwrap_or(&[])),
             retry,
             contains_name: false,
@@ -147,8 +169,46 @@ impl<'a> Loader<'a> {
         else {
             return fallback(false);
         };
+        if let (Some((id, colour)), Some(prepared)) = (style, &entry.prepared) {
+            let load = || -> Result<_, String> {
+                if !prepared.file.ends_with(".cardtex")
+                    || prepared.file.starts_with('.')
+                    || !prepared
+                        .file
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                    || prepared.bytes
+                        > mister_magik_framebuffer_scenes::launcher::prepared_artwork::MAX_BYTES
+                {
+                    return Err("invalid prepared artwork entry".into());
+                }
+                let bytes =
+                    bounded_file::read(self.root.join(&prepared.file), prepared.bytes as u64)
+                        .map_err(|e| e.to_string())?;
+                if bytes.len() != prepared.bytes {
+                    return Err("prepared artwork length mismatch".into());
+                }
+                mister_magik_framebuffer_scenes::launcher::prepared_artwork::PreparedArtwork::decode(
+                    &bytes, id, colour,
+                )
+            };
+            match load() {
+                Ok(prepared) => {
+                    return LauncherArtwork {
+                        prepared: Some(prepared),
+                        pixels: Cow::Borrowed(&[]),
+                        retry: false,
+                        contains_name: entry.contains_name,
+                    };
+                }
+                Err(error) => {
+                    eprintln!("prepared card artwork {key}: {error}; using source artwork")
+                }
+            }
+        }
         match source(self.root, entry) {
             Ok(bytes) => LauncherArtwork {
+                prepared: None,
                 pixels: Cow::Owned(bytes),
                 retry: false,
                 contains_name: entry.contains_name,
@@ -229,13 +289,16 @@ impl CardFaceCache {
                             let normalized =
                                 mister_magik_catalog::catalog_classify::normalize_system_id(key);
                             return LauncherArtwork {
+                                prepared: None,
                                 pixels: Cow::Borrowed(built_in(&normalized).unwrap_or(&[])),
                                 retry,
                                 contains_name: false,
                             };
                         }
-                        let result = loader.load(key);
-                        if matches!(result.pixels, Cow::Borrowed(_)) {
+                        let native = scene == LauncherScene::new(960, 540);
+                        let style = native.then_some((level.cards[i].id, level.cards[i].colour));
+                        let result = loader.load_for(key, style);
+                        if result.prepared.is_none() && matches!(result.pixels, Cow::Borrowed(_)) {
                             self.fallbacks.insert(key.clone(), result.retry);
                         }
                         result
@@ -289,6 +352,45 @@ mod tests {
         level.cards[0].artwork_key = "snes".into();
         level.cards[1].artwork_key = "n64".into();
         level
+    }
+    #[test]
+    fn prepared_artwork_updates_counts_and_bad_packs_fall_back_to_raw() {
+        use mister_magik_framebuffer_scenes::launcher::prepared_artwork::PreparedArtwork;
+        let f = Fixture::new();
+        f.index();
+        let source = vec![83; SOURCE_BYTES];
+        std::fs::write(f.0.join("snes.rgb888"), &source).unwrap();
+        std::fs::write(f.0.join("n64.rgb888"), &source).unwrap();
+        let mut level = level();
+        let prepared = PreparedArtwork::encode(&source, level.cards[0].id, level.cards[0].colour);
+        std::fs::write(f.0.join("snes.cardtex"), &prepared).unwrap();
+        let mut index: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(f.0.join("index.json")).unwrap()).unwrap();
+        index["cards"]["snes"]["prepared"] =
+            serde_json::json!({"file":"snes.cardtex", "bytes":prepared.len()});
+        std::fs::write(f.0.join("index.json"), index.to_string()).unwrap();
+        let scene = LauncherScene::new(960, 540);
+        for count in [0, 99, u32::MAX] {
+            level.cards[0].games = Some(count);
+            let packed =
+                CardFaceCache::default().prepare_from(&f.0, scene, &level, 0, "12:00", None);
+            // Remove the optional entry to exercise the independent raw builder.
+            let old = index["cards"]["snes"]
+                .as_object_mut()
+                .unwrap()
+                .remove("prepared")
+                .unwrap();
+            std::fs::write(f.0.join("index.json"), index.to_string()).unwrap();
+            let raw = CardFaceCache::default().prepare_from(&f.0, scene, &level, 0, "12:00", None);
+            assert_eq!(packed.pixels(), raw.pixels());
+            index["cards"]["snes"]["prepared"] = old;
+            std::fs::write(f.0.join("index.json"), index.to_string()).unwrap();
+            std::fs::write(f.0.join("snes.cardtex"), &prepared[..prepared.len() - 1]).unwrap();
+            let fallback =
+                CardFaceCache::default().prepare_from(&f.0, scene, &level, 0, "12:00", None);
+            assert_eq!(fallback.pixels(), raw.pixels());
+            std::fs::write(f.0.join("snes.cardtex"), &prepared).unwrap();
+        }
     }
     #[test]
     fn binary_only_install_uses_the_same_six_root_images_without_heap_copies() {

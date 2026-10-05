@@ -19,7 +19,7 @@ not uploaded again; an artwork change restarts an otherwise-current launcher
 so cached generic faces are replaced.
 The six root renders are also built into the binary as a fallback, so a Dev
 installation without the artwork directory retains the canonical root workload.
-Installed root artwork takes precedence when readable. Nested artwork still
+Installed root artwork takes precedence when readable. Native 960x540 landscape additionally loads the indexed `.cardtex` entries; other geometries keep using RGB888 sources. Nested artwork still
 requires the filesystem pack. The fallback costs about 3.3 MB in the binary and
 is borrowed directly; it does not allocate six extra source buffers.
 
@@ -46,8 +46,28 @@ Count/label refreshes and prefetch do not bypass that retry schedule. Requests
 and adoption wait for motion to settle; unsuccessful retries reuse fallback
 faces and do not invalidate the visible scene. Successful files are not polled.
 
-Reloading a changed card's source costs 544,320 bytes of filesystem I/O on the
-worker. This trades occasional refresh reads for releasing full-size buffers.
+The 53 prepared entries add 8,120,232 bytes to the artwork distribution. They
+contain label-free RGB8, RGB565 face surfaces and premultiplied RGBA horizontal
+mips, bound to their renderer format version, category and colour. Current
+names/counts are applied on the worker; only changed mip rows are rebuilt.
+No prepared file contains private fonts or freezes game counts. Unsupported,
+missing or malformed prepared data falls back to the original RGB888 source.
+Other display geometries retain their existing native preparation path.
+
+Generate or verify deterministic prepared files on the host:
+
+```sh
+scripts/cargo run --manifest-path crates/framebuffer-scenes/Cargo.toml --release \
+  --example prepare_card_artwork -- apps/mister/assets/ui/launcher-cards
+# Append --check to verify the committed files and index without writing.
+```
+
+The Dev installer advertises `card-artwork-v2`, verifies all declared file
+checksums at installation and keeps its existing transactional replacement and
+reconciliation. Packaging/Downloader also verify the prepared entries.
+Runtime checks version/style, block lengths and exact declared file length,
+without hashing contents again. A changed card reads its prepared entry on the
+worker; raw-only fallback still costs 544,320 bytes.
 A same-length file corrupted after installation may display incorrect pixels;
 runtime intentionally does not hash artwork again.
 

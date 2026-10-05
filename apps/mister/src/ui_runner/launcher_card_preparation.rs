@@ -24,6 +24,9 @@ struct Request {
     selected: usize,
     clock: String,
     retry_artwork: bool,
+    foreground: bool,
+    #[cfg(feature = "tooling")]
+    queued_at: Option<std::time::Instant>,
 }
 struct State {
     next_id: u64,
@@ -33,7 +36,13 @@ struct State {
     retired: Vec<PreparedContent>,
     retiring_renderer: Option<Box<ParallelLauncherRenderer>>,
     stopped: bool,
+    background_allowed: bool,
+    busy: bool,
     failure: Option<Box<dyn std::any::Any + Send>>,
+    #[cfg(feature = "tooling")]
+    preparation_profile: Vec<serde_json::Value>,
+    #[cfg(feature = "tooling")]
+    profile_overflow: usize,
 }
 struct Shared {
     state: Mutex<State>,
@@ -67,7 +76,13 @@ impl HomePreparation {
                 retired: Vec::with_capacity(RETIRED + JOBS),
                 retiring_renderer: None,
                 stopped: false,
+                background_allowed: true,
+                busy: false,
                 failure: None,
+                #[cfg(feature = "tooling")]
+                preparation_profile: Vec::new(),
+                #[cfg(feature = "tooling")]
+                profile_overflow: 0,
             }),
             wake: Condvar::new(),
         });
@@ -90,6 +105,7 @@ impl HomePreparation {
                                 .state
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner());
+                            state.busy = false;
                             loop {
                                 let cancelled = state
                                     .ready
@@ -97,7 +113,8 @@ impl HomePreparation {
                                     .any(|(id, _)| !state.interested.contains(id));
                                 if state.stopped
                                     || !state.retired.is_empty()
-                                    || !state.pending.is_empty()
+                                    || state.retiring_renderer.is_some()
+                                    || state.pending.iter().any(|request| request.foreground || state.background_allowed)
                                     || cancelled
                                 {
                                     break;
@@ -118,12 +135,13 @@ impl HomePreparation {
                                     index += 1;
                                 }
                             }
-                            let request = if state.stopped {
-                                None
-                            } else {
-                                state.pending.pop_front()
+                            let request = if state.stopped { None } else {
+                                state.pending.iter().position(|request| request.foreground || state.background_allowed)
+                                    .and_then(|index| state.pending.remove(index))
                             };
-                            (request, state.stopped, state.retiring_renderer.take())
+                            let renderer = state.retiring_renderer.take();
+                            state.busy = request.is_some() || !retired.is_empty() || renderer.is_some();
+                            (request, state.stopped, renderer)
                         };
                         retired.clear();
                         drop(renderer);
@@ -158,6 +176,17 @@ impl HomePreparation {
                                 caches.len() - 1
                             }
                         };
+                        #[cfg(feature = "tooling")]
+                        let profiling = mister_magik_framebuffer_scenes::launcher_profile::enabled();
+                        #[cfg(feature = "tooling")]
+                        let profile = profiling.then(|| {
+                            let _ = mister_magik_framebuffer_scenes::launcher_profile::take();
+                            (
+                                std::time::Instant::now(),
+                                crate::ui_runner::launcher_frame_accounting::cpu_thread_us(),
+                                crate::ui_runner::launcher_frame_accounting::thread_run_delay_us(),
+                            )
+                        });
                         let mut cache = caches.remove(cache_index);
                         let build = |face_cache: &mut CardFaceCache| {
                             before_build(request.id);
@@ -184,6 +213,21 @@ impl HomePreparation {
                             }
                         };
                         caches.push(cache);
+                        #[cfg(feature = "tooling")]
+                        let profile = profile.map(|(started, cpu, delay)| {
+                            let cpu_end = crate::ui_runner::launcher_frame_accounting::cpu_thread_us();
+                            let delay_end = crate::ui_runner::launcher_frame_accounting::thread_run_delay_us();
+                            serde_json::json!({
+                                "id": request.id,
+                                "menu": request.level.menu_id,
+                                "cards": request.level.cards.len(),
+                                "queue_us": request.queued_at.map(|queued| started.saturating_duration_since(queued).as_micros() as u64),
+                                "wall_us": started.elapsed().as_micros() as u64,
+                                "cpu_us": cpu.zip(cpu_end).map(|(a,b)| b.saturating_sub(a)),
+                                "run_delay_us": delay.zip(delay_end).map(|(a,b)| b.saturating_sub(a)),
+                                "stages": mister_magik_framebuffer_scenes::launcher_profile::take(),
+                            })
+                        });
                         let mut content = Some(Box::new(prepared));
                         {
                             let mut state = worker_shared
@@ -192,6 +236,14 @@ impl HomePreparation {
                                 .unwrap_or_else(|e| e.into_inner());
                             if !state.stopped && state.interested.contains(&request.id) {
                                 state.ready.push((request.id, content.take().unwrap()));
+                            }
+                            #[cfg(feature = "tooling")]
+                            if let Some(profile) = profile {
+                                if state.preparation_profile.len() < 128 {
+                                    state.preparation_profile.push(profile);
+                                } else {
+                                    state.profile_overflow += 1;
+                                }
                             }
                         }
                         // A cancelled completion is destroyed on this worker.
@@ -266,6 +318,10 @@ impl HomePreparation {
             selected,
             clock: clock.into(),
             retry_artwork,
+            foreground: visible,
+            #[cfg(feature = "tooling")]
+            queued_at: mister_magik_framebuffer_scenes::launcher_profile::enabled()
+                .then(std::time::Instant::now),
         };
         if visible {
             state.pending.push_front(request);
@@ -274,6 +330,39 @@ impl HomePreparation {
         }
         self.shared.wake.notify_one();
         Some(id)
+    }
+    pub(super) fn allow_background(&self, allowed: bool) {
+        let mut state = self.lock_state();
+        if state.background_allowed != allowed {
+            state.background_allowed = allowed;
+            self.shared.wake.notify_one();
+        }
+    }
+    pub(super) fn prioritize(&self, id: u64) {
+        let mut state = self.lock_state();
+        if let Some(index) = state.pending.iter().position(|request| request.id == id) {
+            let mut request = state.pending.remove(index).unwrap();
+            request.foreground = true;
+            state.pending.push_front(request);
+            self.shared.wake.notify_one();
+        }
+    }
+    pub(super) fn quiescent(&self) -> bool {
+        let state = self.lock_state();
+        !state.busy
+            && state.retired.is_empty()
+            && state.retiring_renderer.is_none()
+            && !state.pending.iter().any(|request| request.foreground)
+    }
+
+    #[cfg(feature = "tooling")]
+    pub(super) fn take_preparation_profile(&self) -> serde_json::Value {
+        let mut state = self.lock_state();
+        serde_json::json!({
+            "records": std::mem::take(&mut state.preparation_profile),
+            "overflow": std::mem::take(&mut state.profile_overflow),
+            "scope": "per preparation request; stage wall times are inclusive, not additive",
+        })
     }
     pub(super) fn cancel(&self, id: u64) {
         let mut state = self.lock_state();

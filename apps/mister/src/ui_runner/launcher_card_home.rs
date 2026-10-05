@@ -113,8 +113,8 @@ struct Aside {
 const ASIDE_LEVELS: usize = 5;
 
 /// A level change in progress. The level being left renders the gather while
-/// the destination is made ready; the swap happens at the all-edge-on moment,
-/// holding there if it is not ready yet.
+/// destination and worker are ready before the gather starts. The edge-on
+/// swap only adopts prepared content; animation never waits for preparation.
 struct LevelTrick {
     change: LevelChange,
     source_level: CardLevelSnapshot,
@@ -122,12 +122,12 @@ struct LevelTrick {
     destination_selected: usize,
     source_slot: CardSlot,
     destination_slot: CardSlot,
-    edge_waiting: bool,
+    ready: bool,
     started_ms: u64,
     destination: Option<Prepared>,
-    /// Set when the destination became the prepared level. A late swap
-    /// delays the deal by the time spent holding edge-on.
-    deal_delay_ms: Option<u64>,
+    /// The prepared destination has replaced the source. Animation time is
+    /// always elapsed time from readiness; there is no edge-delay clock.
+    dealing: bool,
 }
 
 pub(super) struct LauncherCardHomeSession {
@@ -152,6 +152,7 @@ pub(super) struct LauncherCardHomeSession {
     frame: BrowseFrame,
     active: bool,
     content_dirty: bool,
+    chrome_refresh_pending: bool,
     content_generation: u64,
     compositor_stale: bool,
     compositor_content_generation: Option<u64>,
@@ -211,6 +212,7 @@ impl LauncherCardHomeSession {
             frame,
             active: false,
             content_dirty: true,
+            chrome_refresh_pending: false,
             content_generation: 1,
             compositor_stale: false,
             compositor_content_generation: None,
@@ -242,8 +244,11 @@ impl LauncherCardHomeSession {
         let count = level.cards.len().max(1);
         let selected = selected.min(count - 1);
         self.now_ms = now_ms;
+        self.preparation
+            .allow_background(!self.is_animating() && self.trick.is_none());
         if self.trick.is_some() {
             if self.active && self.level.menu_id == level.menu_id && self.scene == scene && motion {
+                self.advance_trick();
                 return;
             }
             if !self.finish_trick() {
@@ -336,13 +341,18 @@ impl LauncherCardHomeSession {
             self.level = level.clone();
             self.clock.clear();
             self.clock.push_str(clock);
-            self.content_generation = self.content_generation.wrapping_add(1).max(1);
-            self.refresh_chrome(self.frame.selected);
-
-            self.content_dirty = true;
+            self.chrome_refresh_pending = true;
             self.preparation_measurement = preparation_started
                 .map(|start| start.elapsed().as_micros().try_into().unwrap_or(u64::MAX));
         }
+        if self.chrome_refresh_pending && !self.is_animating() {
+            self.refresh_chrome(self.frame.selected);
+            self.chrome_refresh_pending = false;
+            self.content_generation = self.content_generation.wrapping_add(1).max(1);
+            self.content_dirty = true;
+        }
+        self.preparation
+            .allow_background(!self.is_animating() && self.trick.is_none());
         self.poll_artwork_retry();
     }
 
@@ -504,22 +514,25 @@ impl LauncherCardHomeSession {
         }) else {
             return;
         };
+        self.preparation.allow_background(false);
+        if let Prepared::Building(id) = &destination {
+            self.preparation.prioritize(*id);
+        }
         self.trick = Some(LevelTrick {
             change,
             source_slot: self.prepared.slot_zero(),
             destination_slot: self.scene.slot_zero(!level.is_root()),
-            edge_waiting: false,
+            ready: false,
             source_level: std::mem::replace(&mut self.level, level),
             source_selected: self.frame.selected,
             destination_selected: selected,
             started_ms: self.now_ms,
             destination: Some(destination),
-            deal_delay_ms: None,
+            dealing: false,
         });
-        self.frame = settled_frame(selected);
-        self.last_visual_index = selected as f32;
         self.content_generation = self.content_generation.wrapping_add(1).max(1);
         self.content_dirty = true;
+        self.advance_trick();
     }
 
     /// Taking a completed destination never joins or rebuilds on the UI.
@@ -541,17 +554,19 @@ impl LauncherCardHomeSession {
     }
 
     fn install_destination(&mut self, content: PreparedContent) {
-        let (source, selected) = self.trick.as_ref().map_or_else(
-            || (None, self.frame.selected),
-            |trick| (Some(trick.source_level.clone()), trick.destination_selected),
-        );
+        #[cfg(feature = "tooling")]
+        let _install =
+            mister_magik_framebuffer_scenes::launcher_profile::span("prepare.install_destination");
+        let source = self.trick.as_ref().map(|trick| trick.source_level.clone());
         let old = self.prepared.0.replace(content).unwrap();
         if let Some(source) = source {
             self.set_aside(source, Prepared::Built(old));
         } else {
             self.retire(Prepared::Built(old));
         }
-        self.refresh_chrome(selected);
+        // The worker already prepared coherent chrome. Any stale clock/sidebar
+        // refresh is deferred to idle rather than repainting at the edge.
+        self.chrome_refresh_pending = true;
     }
 
     /// Finish an interruption when ready; otherwise restore the source and
@@ -560,7 +575,7 @@ impl LauncherCardHomeSession {
         let Some(trick) = self.trick.as_ref() else {
             return true;
         };
-        if trick.deal_delay_ms.is_none() {
+        if !trick.dealing {
             if !self.preparation.can_retire(2) {
                 return false;
             }
@@ -585,39 +600,55 @@ impl LauncherCardHomeSession {
     }
 
     /// Render the current trick frame. Returns false once the trick is over.
-    fn render_trick(&mut self) -> bool {
+    fn advance_trick(&mut self) {
         let Some(trick) = self.trick.as_ref() else {
-            return false;
+            return;
         };
-        let elapsed = self.now_ms.saturating_sub(trick.started_ms);
-        let preparing = trick.deal_delay_ms.is_none();
-        let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
-        if preparing
-            && elapsed >= u64::from(LEVEL_TRICK_MILLIS * 45 / 100)
-            && elapsed < edge
-            && let Some(prepared) = self.take_built_destination()
-        {
-            self.trick.as_mut().unwrap().destination = Some(Prepared::Built(prepared));
-        }
-        if preparing && elapsed >= edge {
-            if let Some(prepared) = self.take_built_destination() {
-                self.install_destination(prepared);
-                if let Some(trick) = self.trick.as_mut() {
-                    trick.deal_delay_ms = Some(if trick.edge_waiting {
-                        elapsed - edge
-                    } else {
-                        0
-                    });
-                }
-            } else if let Some(trick) = self.trick.as_mut() {
-                trick.edge_waiting = true;
+        if !trick.ready {
+            if !self.preparation.quiescent() {
+                return;
             }
+            let Some(prepared) = self.take_built_destination() else {
+                return;
+            };
+            let trick = self.trick.as_mut().unwrap();
+            trick.destination = Some(Prepared::Built(prepared));
+            trick.ready = true;
+            trick.started_ms = self.now_ms;
+            self.frame = settled_frame(trick.destination_selected);
+            self.last_visual_index = trick.destination_selected as f32;
         }
+        let trick = self.trick.as_ref().unwrap();
+        let elapsed = self.now_ms.saturating_sub(trick.started_ms);
+        let preparing = !trick.dealing;
+        let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
+        if preparing && elapsed >= edge {
+            // Readiness was established before t=0; no worker/queue operation
+            // is allowed to freeze this pose or move the animation clock.
+            let destination = self.trick.as_mut().unwrap().destination.take().unwrap();
+            let Prepared::Built(prepared) = destination else {
+                unreachable!("transition started without prepared content")
+            };
+            self.install_destination(prepared);
+            self.trick.as_mut().unwrap().dealing = true;
+        }
+    }
+
+    /// Render the prepared state; readiness and swaps precede frame evidence.
+    fn render_trick(&mut self) -> bool {
+        if !self.trick.as_ref().is_some_and(|trick| trick.ready) {
+            return false;
+        }
+        let elapsed = self
+            .now_ms
+            .saturating_sub(self.trick.as_ref().unwrap().started_ms);
+        let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
         let Some(trick) = self.trick.as_ref() else {
             return false;
         };
-        let Some(delay) = trick.deal_delay_ms else {
-            let t = elapsed.min(edge) as u32;
+        if !trick.dealing {
+            debug_assert!(elapsed < edge, "edge state must advance before rendering");
+            let t = elapsed as u32;
             self.render_trick_frame(
                 trick.source_selected,
                 trick.change,
@@ -634,9 +665,7 @@ impl LauncherCardHomeSession {
             }
             return true;
         };
-        let t = elapsed
-            .saturating_sub(delay)
-            .min(u64::from(LEVEL_TRICK_MILLIS)) as u32;
+        let t = elapsed.min(u64::from(LEVEL_TRICK_MILLIS)) as u32;
         self.render_trick_frame(
             trick.destination_selected,
             trick.change,
@@ -694,37 +723,33 @@ impl LauncherCardHomeSession {
         let Some(trick) = self.trick.as_ref() else {
             return;
         };
-        let elapsed = next_ms.saturating_sub(trick.started_ms);
-        let (selected, t, slot, gather) = if let Some(delay) = trick.deal_delay_ms {
-            let t = elapsed.saturating_sub(delay);
-            if t >= u64::from(LEVEL_TRICK_MILLIS) {
-                return;
-            }
-            (
-                trick.destination_selected,
-                t as u32,
-                trick.source_slot,
-                false,
-            )
+        if !trick.ready {
+            return;
+        }
+        let elapsed = next_ms
+            .saturating_sub(trick.started_ms)
+            .min(u64::from(LEVEL_TRICK_MILLIS));
+        let gather = !trick.dealing && elapsed < u64::from(LEVEL_TRICK_EDGE_MILLIS);
+        let (selected, slot) = if gather {
+            (trick.source_selected, trick.destination_slot)
         } else {
-            if elapsed >= u64::from(LEVEL_TRICK_EDGE_MILLIS) {
-                return;
-            }
-            (
-                trick.source_selected,
-                elapsed as u32,
-                trick.destination_slot,
-                true,
-            )
+            (trick.destination_selected, trick.source_slot)
         };
         let request = LauncherFrameRequest {
             frame: settled_frame(selected),
             timestamp_us: next_ms.saturating_mul(1_000),
             generation: self.last_request.generation.wrapping_add(1).max(1),
         };
-        let preparer = self
-            .prepared
-            .level_frame_preparer(selected, trick.change, t, slot, gather);
+        let content = if !gather && !trick.dealing {
+            match trick.destination.as_ref() {
+                Some(Prepared::Built(content)) => content.as_ref(),
+                _ => unreachable!("ready transition lost its destination"),
+            }
+        } else {
+            &*self.prepared
+        };
+        let preparer =
+            content.level_frame_preparer(selected, trick.change, elapsed as u32, slot, gather);
         if let Some(renderer) = self.renderer.as_mut()
             && let Err(error) = renderer.prepare_helper_ahead(&preparer, request)
         {
@@ -778,11 +803,13 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn is_animating(&self) -> bool {
-        self.active && (self.trick.is_some() || self.frame.phase != BrowsePhase::Settled)
+        self.active
+            && (self.trick.as_ref().is_some_and(|trick| trick.ready)
+                || self.frame.phase != BrowsePhase::Settled)
     }
 
     pub(super) fn needs_render(&self) -> bool {
-        self.active && (self.content_dirty || self.is_animating())
+        self.active && (self.content_dirty || self.trick.is_some() || self.is_animating())
     }
 
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
@@ -847,17 +874,15 @@ impl LauncherCardHomeSession {
             && self.pending.is_none()
     }
 
-    #[cfg(feature = "tooling")]
+    #[cfg(any(feature = "tooling", test))]
     pub(super) fn evidence_pose(&self) -> (&'static str, u64) {
         if let Some(trick) = self.trick.as_ref() {
+            if !trick.ready {
+                return ("level-preparing", 0);
+            }
             let elapsed = self.now_ms.saturating_sub(trick.started_ms);
-            if let Some(delay) = trick.deal_delay_ms {
-                (
-                    "level-deal",
-                    elapsed
-                        .saturating_sub(delay)
-                        .min(u64::from(LEVEL_TRICK_MILLIS)),
-                )
+            if trick.dealing {
+                ("level-deal", elapsed.min(u64::from(LEVEL_TRICK_MILLIS)))
             } else {
                 (
                     "level-gather",
@@ -874,6 +899,11 @@ impl LauncherCardHomeSession {
                 u64::from(self.frame.progress_millis),
             )
         }
+    }
+
+    #[cfg(feature = "tooling")]
+    pub(super) fn take_preparation_profile(&self) -> serde_json::Value {
+        self.preparation.take_preparation_profile()
     }
 
     pub(super) const fn content_generation(&self) -> u64 {
@@ -1233,6 +1263,7 @@ mod tests {
                 .prepare_initial_with_rgb888_loader_and_cache(
                     data,
                     &mut |_| LauncherArtwork {
+                        prepared: None,
                         pixels: std::borrow::Cow::Borrowed(&[]),
                         retry: true,
                         contains_name: false,
@@ -2047,6 +2078,84 @@ mod tests {
         assert_eq!(session.current_request().generation, submitted_sequence);
     }
 
+    fn wait_trick_ready(
+        session: &mut LauncherCardHomeSession,
+        scene: LauncherScene,
+        level: &CardLevelSnapshot,
+        selected: usize,
+        clock: &str,
+        now: u64,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.trick.as_ref().is_some_and(|trick| !trick.ready) {
+            session.update(
+                scene,
+                level,
+                selected,
+                selected as f32,
+                clock,
+                now,
+                true,
+                None,
+            );
+            assert!(Instant::now() < deadline, "transition did not become ready");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn blocked_preparation_never_starts_a_transition_that_can_hold_at_the_edge() {
+        let scene = LauncherScene::new(960, 540);
+        let root = snapshot();
+        let target = consoles();
+        let mut session = LauncherCardHomeSession::new(scene, root.clone(), 1, "12:00").unwrap();
+        session.update(scene, &root, 1, 1.0, "12:00", 0, true, None);
+        let old = session.render().to_vec();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        session.preparation = HomePreparation::start(
+            Arc::clone(&session.fonts),
+            root.menu_id.clone(),
+            CardFaceCache::default(),
+            move |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            },
+        )
+        .unwrap();
+        session.update(scene, &target, 0, 0.0, "12:00", 100, true, None);
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        for now in [100, 300, 600, 1_000] {
+            session.update(scene, &target, 0, 0.0, "12:00", now, true, None);
+            assert!(!session.is_animating());
+            assert_eq!(session.evidence_pose(), ("level-preparing", 0));
+            assert_eq!(session.render(), old);
+        }
+        release_tx.send(()).unwrap();
+        wait_trick_ready(&mut session, scene, &target, 0, "12:00", 1_000);
+        assert_eq!(session.trick.as_ref().unwrap().started_ms, 1_000);
+        session.render();
+        // Each produced-frame step advances the pose. It cannot repeat the
+        // edge while waiting for work, even after a deliberately slow load.
+        for t in (16..=928).step_by(16) {
+            session.prepare_helper_ahead(1_000 + t);
+            session.update(scene, &target, 0, 0.0, "12:00", 1_000 + t, true, None);
+            let (phase, progress) = session.evidence_pose();
+            assert_eq!(progress, t.min(u64::from(LEVEL_TRICK_MILLIS)));
+            assert_eq!(
+                phase,
+                if t < u64::from(LEVEL_TRICK_EDGE_MILLIS) {
+                    "level-gather"
+                } else {
+                    "level-deal"
+                }
+            );
+            session.render();
+        }
+        assert!(session.trick.is_none());
+        assert!(session.preparation.quiescent());
+    }
+
     #[test]
     fn level_change_plays_the_trick_then_settles_on_the_destination() {
         let scene = LauncherScene::new(960, 540);
@@ -2055,12 +2164,13 @@ mod tests {
         session.render();
         assert!(!session.is_level_trick_active());
         session.update(scene, &consoles(), 0, 0.0, "21:37", 16, true, None);
+        wait_trick_ready(&mut session, scene, &consoles(), 0, "21:37", 16);
         assert!(session.is_animating());
         assert!(session.is_level_trick_active(), "input is held during it");
         assert!(session.can_render_native());
         assert_eq!(session.compositor_copy_damage(true), None);
         let source_generation = session.current_request().generation;
-        // Gather, then hold edge-on until the worker has prepared the level.
+        // The destination is ready before the gather begins.
         session.update(scene, &consoles(), 0, 0.0, "21:37", 200, true, None);
         session.render();
         assert_eq!(session.current_request().frame.selected, 1);
@@ -2086,11 +2196,7 @@ mod tests {
         assert_eq!(produced, expected.pixels());
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut now = 400;
-        while session
-            .trick
-            .as_ref()
-            .is_some_and(|trick| trick.deal_delay_ms.is_none())
-        {
+        while session.trick.as_ref().is_some_and(|trick| !trick.dealing) {
             assert!(Instant::now() < deadline, "level preparation timed out");
             now += 16;
             session.update(scene, &consoles(), 0, 0.0, "21:37", now, true, None);
@@ -2185,6 +2291,7 @@ mod tests {
             std::thread::yield_now();
         }
         session.update(scene, &consoles(), 0, 0.0, "21:37", 100, true, None);
+        wait_trick_ready(&mut session, scene, &consoles(), 0, "21:37", 100);
         assert!(session.aside.is_empty(), "the prefetched level was used");
         session.update(
             scene,
@@ -2202,11 +2309,7 @@ mod tests {
             helper
         );
         let trick = session.trick.as_ref().unwrap();
-        assert_eq!(
-            trick.deal_delay_ms,
-            Some(0),
-            "no time spent holding edge-on"
-        );
+        assert!(trick.dealing, "prepared destination adopted at the edge");
     }
 
     #[test]
@@ -2257,6 +2360,7 @@ mod tests {
         );
         // Back to the root: the deal starts at the edge without holding.
         session.update(scene, &root, 1, 1.0, "21:38", now + 100, true, None);
+        wait_trick_ready(&mut session, scene, &root, 1, "21:38", now + 100);
         session.update(
             scene,
             &root,
@@ -2268,10 +2372,9 @@ mod tests {
             None,
         );
         session.render();
-        assert_eq!(
-            session.trick.as_ref().unwrap().deal_delay_ms,
-            Some(0),
-            "no time spent holding edge-on"
+        assert!(
+            session.trick.as_ref().unwrap().dealing,
+            "prepared destination adopted at the edge"
         );
     }
 
@@ -2299,6 +2402,7 @@ mod tests {
         );
         // Back to the root: nothing to prepare, so the deal starts at the edge.
         session.update(scene, &snapshot(), 1, 1.0, "21:38", now + 100, true, None);
+        wait_trick_ready(&mut session, scene, &snapshot(), 1, "21:38", now + 100);
         assert!(
             session
                 .aside
@@ -2317,6 +2421,6 @@ mod tests {
             None,
         );
         session.render();
-        assert_eq!(session.trick.as_ref().unwrap().deal_delay_ms, Some(0));
+        assert!(session.trick.as_ref().unwrap().dealing);
     }
 }

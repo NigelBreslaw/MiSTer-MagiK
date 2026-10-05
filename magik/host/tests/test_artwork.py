@@ -36,6 +36,28 @@ def ready(**fields):
     return Envelope("test", "card-artwork-ready", "", fields), b""
 
 
+def test_prepared_entries_are_bundled_once_and_validated(tmp_path):
+    root = fixture(tmp_path / "pack")
+    pixels = b"MGCART01" + bytes(32)
+    (root / "fixture.cardtex").write_bytes(pixels)
+    index = json.loads((root / "index.json").read_text())
+    prepared = {
+        "file": "fixture.cardtex",
+        "bytes": len(pixels),
+        "sha256": hashlib.sha256(pixels).hexdigest(),
+    }
+    for source in index["cards"].values():
+        source["prepared"] = prepared
+    (root / "index.json").write_text(json.dumps(index))
+    payload, count = artwork.bundle(root)
+    size = struct.unpack(">I", payload[:4])[0]
+    assert count == 2
+    assert payload[4 + size : 4 + size + len(pixels)] == pixels
+    (root / "fixture.cardtex").write_bytes(pixels[:-1])
+    with pytest.raises(ValueError):
+        artwork.bundle(root)
+
+
 def test_current_pack_is_a_no_op_and_aliases_are_not_uploaded_twice(tmp_path):
     root = fixture(tmp_path / "pack")
     payload, count = artwork.bundle(root)
@@ -81,10 +103,12 @@ def test_repository_bundle_includes_every_3d_system_and_family_image():
     root = repository() / "apps/mister/assets/ui/launcher-cards"
     payload, count = artwork.bundle(root)
     index = json.loads((root / "index.json").read_text())
-    assert count == len({source["file"] for source in index["cards"].values()})
-    assert (
-        len(payload)
-        == 4 + (root / "index.json").stat().st_size + count * artwork.SOURCE_BYTES
+    names = {source["file"] for source in index["cards"].values()} | {
+        source["prepared"]["file"] for source in index["cards"].values()
+    }
+    assert count == len(names)
+    assert len(payload) == 4 + (root / "index.json").stat().st_size + sum(
+        (root / name).stat().st_size for name in names
     )
     assert all(
         key in index["cards"]

@@ -6502,6 +6502,9 @@ pub(super) fn run_launcher_loop(
                 if let Some(window) = session.metrics.window.as_mut() {
                     window["renderer_profile"] =
                         serde_json::to_value(report).expect("renderer profile JSON");
+                    if let Some(home) = launcher_card_home.as_ref() {
+                        window["card_preparation"] = home.take_preparation_profile();
+                    }
                     window["renderer_profile_scope"] = serde_json::json!(
                         "summed primary/helper stage wall time; not elapsed critical path or stage CPU time"
                     );

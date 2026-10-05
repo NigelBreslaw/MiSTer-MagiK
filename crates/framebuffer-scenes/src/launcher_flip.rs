@@ -93,7 +93,7 @@ pub(super) struct Face {
     pub pixels: Vec<Rgb565Pixel>,
     pub width: usize,
     pub height: usize,
-    reflection_fade_rows: usize,
+    pub(super) reflection_fade_rows: usize,
     pub(super) dithered: bool,
     pub(super) texture: crate::launcher_texture::Texture,
 }
@@ -110,6 +110,26 @@ impl Face {
             width,
             height,
             reflection_fade_rows: (height / 4).clamp(2, 64),
+            texture,
+            dithered: false,
+        }
+    }
+
+    pub(super) fn with_rgb8(
+        pixels: Vec<Rgb565Pixel>,
+        rgb8: &[[u8; 3]],
+        reference: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Self {
+        let texture =
+            crate::launcher_texture::Texture::with_rgb8(&pixels, rgb8, reference, width, height);
+        Self {
+            #[cfg(test)]
+            pixels,
+            width,
+            height,
+            reflection_fade_rows: 64,
             texture,
             dithered: false,
         }

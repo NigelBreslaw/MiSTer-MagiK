@@ -52,26 +52,33 @@ def bundle(root: Path) -> tuple[bytes, int]:
             or not isinstance(source.get("contains_name", False), bool)
         ):
             raise ValueError("invalid card artwork source")
-        if name in files and files[name] != digest:
+        if name in files and files[name] != (digest, SOURCE_BYTES):
             raise ValueError("conflicting card artwork checksums")
-        files[name] = digest
+        files[name] = (digest, SOURCE_BYTES)
+        prepared = source.get("prepared")
+        if prepared is not None:
+            name, digest, size = prepared["file"], prepared["sha256"], prepared["bytes"]
+            if (
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.cardtex", name)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or type(size) is not int
+                or not 16 < size <= 2 * 1024 * 1024
+            ):
+                raise ValueError("invalid prepared card artwork")
+            if name in files and files[name] != (digest, size):
+                raise ValueError("conflicting prepared artwork declarations")
+            files[name] = (digest, size)
     if not files or len(files) > MAX_FILES:
         raise ValueError("card artwork file count exceeds limit")
     payload = bytearray(struct.pack(">I", len(raw)))
     payload.extend(raw)
     for name in sorted(files):
+        digest, size = files[name]
         path = root / name
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or path.stat().st_size != SOURCE_BYTES
-        ):
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
             raise ValueError(f"missing or incomplete card artwork: {name}")
         pixels = path.read_bytes()
-        if (
-            len(pixels) != SOURCE_BYTES
-            or hashlib.sha256(pixels).hexdigest() != files[name]
-        ):
+        if len(pixels) != size or hashlib.sha256(pixels).hexdigest() != digest:
             raise ValueError(f"card artwork checksum mismatch: {name}")
         payload.extend(pixels)
     if len(payload) > MAX_BODY_BYTES:

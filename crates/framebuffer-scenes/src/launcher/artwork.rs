@@ -147,7 +147,7 @@ fn back_surface(card: &PreparedCard<'_>) -> Vec<Rgb565Pixel> {
 /// `width` x `height` the card inside it. A title too wide for the card drops
 /// to the smaller metadata font rather than being clipped.
 #[allow(clippy::too_many_arguments)]
-fn draw_card_labels(
+pub(super) fn draw_card_labels(
     pixels: &mut [Rgb565Pixel],
     stride: usize,
     rows: usize,
@@ -157,6 +157,8 @@ fn draw_card_labels(
     detail: bool,
     fonts: LauncherTypography<'_>,
 ) {
+    #[cfg(feature = "launcher-profile")]
+    let _labels = crate::launcher_profile::span("prepare.labels");
     let heading = fonts.font_for(TextRole::Heading, card.name);
     let title = if heading.measure(card.name) + 12 <= width {
         heading
@@ -183,6 +185,47 @@ fn draw_card_labels(
             &games,
             CREAM,
         );
+    }
+}
+
+pub(super) fn draw_face_labels(
+    pixels: &mut [Rgb565Pixel],
+    card: &PreparedCard<'_>,
+    detail: bool,
+    fonts: Option<LauncherTypography<'_>>,
+) {
+    if let Some(fonts) = fonts {
+        draw_card_labels(pixels, 180, 252, card, 180, 252, detail, fonts);
+        return;
+    }
+    // Portable fallback uses the same glyph rectangles, clipped to the face
+    // instead of the temporary 960x540 logical surface.
+    let mut draw = |mask: &[[u8; 7]], y: usize, maximum: usize| {
+        let scale = ((180 - 24) / (mask.len().max(1) * 6)).clamp(1, maximum) * 256;
+        let origin = 180usize.saturating_sub(mask.len() * 6 * scale / 256) / 2;
+        for (i, glyph) in mask.iter().enumerate() {
+            let glyph_x = origin + i * 6 * scale / 256;
+            for (row, bits) in glyph.iter().enumerate() {
+                for column in 0..5 {
+                    if bits & (1 << (4 - column)) == 0 {
+                        continue;
+                    }
+                    let x0 = glyph_x + column * scale / 256;
+                    let x1 = (glyph_x + (column + 1) * scale / 256).max(x0 + 1);
+                    let y0 = y + row * scale / 256;
+                    let y1 = (y + (row + 1) * scale / 256).max(y0 + 1);
+                    for yy in y0..y1.min(252) {
+                        for xx in x0..x1.min(180) {
+                            pixels[yy * 180 + xx] = Rgb565Pixel(CREAM);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    draw(&card.name_mask, 252 * 73 / 100, 3);
+    if detail && card.games.is_some() {
+        draw(&card.games_mask, 252 * 86 / 100, 2);
     }
 }
 
@@ -242,29 +285,43 @@ impl SrgbTransfer {
     }
 }
 
+pub(super) fn reduce_rgb888(source: &[u8]) -> Vec<[u8; 3]> {
+    assert_eq!(source.len(), 360 * 504 * 3);
+    let transfer = srgb_transfer();
+    let rgb8: Vec<[u8; 3]> = (0..252)
+        .flat_map(|y| (0..180).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            std::array::from_fn(|c| {
+                let i = (y * 2 * 360 + x * 2) * 3 + c;
+                let values = [
+                    source[i],
+                    source[i + 3],
+                    source[i + 360 * 3],
+                    source[i + 360 * 3 + 3],
+                ];
+                // Constant channels need neither a gamma decode nor a binary
+                // search. This is exactly the same rounded sRGB result.
+                if values.iter().all(|&v| v == values[0]) {
+                    return values[0];
+                }
+                let mut sum = 0.0;
+                for value in values {
+                    sum += transfer.decode[value as usize];
+                }
+                transfer.encode(sum / 4.0)
+            })
+        })
+        .collect();
+    rgb8
+}
+
 pub(super) fn faces_rgb888(
     card: &PreparedCard<'_>,
     typography: Option<LauncherTypography<'_>>,
 ) -> [crate::launcher_flip::Face; 2] {
     #[cfg(feature = "launcher-profile")]
     let reduction = crate::launcher_profile::span("prepare.rgb888_linear_reduction");
-    let source = card.rgb888.expect("validated RGB888 source");
-    let transfer = srgb_transfer();
-    let rgb8: Vec<[u8; 3]> = (0..252)
-        .flat_map(|y| (0..180).map(move |x| (x, y)))
-        .map(|(x, y)| {
-            std::array::from_fn(|c| {
-                let mut sum = 0.0;
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        sum += transfer.decode
-                            [source[((y * 2 + dy) * 360 + x * 2 + dx) * 3 + c] as usize];
-                    }
-                }
-                transfer.encode(sum / 4.0)
-            })
-        })
-        .collect();
+    let rgb8 = reduce_rgb888(card.rgb888.expect("validated RGB888 source"));
     #[cfg(feature = "launcher-profile")]
     drop(reduction);
     let reference: Vec<_> = rgb8
@@ -286,16 +343,8 @@ pub(super) fn faces_rgb888(
     std::array::from_fn(|index| {
         #[cfg(feature = "launcher-profile")]
         let _face = crate::launcher_profile::span("prepare.rgb888_face");
-        #[cfg(not(feature = "card-axis-filter"))]
-        let mut face = face(&mapped, 180, index == 1, typography);
-        #[cfg(feature = "card-axis-filter")]
-        let mut face = crate::launcher_flip::Face::new_before_rgb8(
-            surface(&mapped, 180, index == 1, typography, true),
-            180,
-            card_height(180),
-        );
-        face.texture.retain_rgb8(&rgb8, &reference);
-        face
+        let pixels = surface(&mapped, 180, index == 1, typography, true);
+        crate::launcher_flip::Face::with_rgb8(pixels, &rgb8, &reference, 180, 252)
     })
 }
 

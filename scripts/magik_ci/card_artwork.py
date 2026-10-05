@@ -48,16 +48,25 @@ def validate(root: Path) -> set[str]:
             r"[A-Za-z0-9][A-Za-z0-9_.-]*\.rgb888", name
         ) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ValueError("invalid card artwork source")
-        if name in files and files[name] != digest:
+        if name in files and files[name] != (digest, SOURCE_BYTES):
             raise ValueError("conflicting card artwork checksums")
-        files[name] = digest
-    for name, digest in files.items():
+        files[name] = (digest, SOURCE_BYTES)
+        prepared = source.get("prepared")
+        if prepared is not None:
+            name, digest, size = prepared["file"], prepared["sha256"], prepared["bytes"]
+            if (
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.cardtex", name)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or type(size) is not int
+                or not 16 < size <= 2 * 1024 * 1024
+            ):
+                raise ValueError("invalid prepared card artwork")
+            if name in files and files[name] != (digest, size):
+                raise ValueError("conflicting prepared artwork declarations")
+            files[name] = (digest, size)
+    for name, (digest, size) in files.items():
         path = root / name
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or path.stat().st_size != SOURCE_BYTES
-        ):
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
             raise ValueError(f"invalid card artwork file: {name}")
         if sha256_file(path) != digest:
             raise ValueError(f"card artwork checksum mismatch: {name}")

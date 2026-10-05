@@ -312,7 +312,10 @@ enum Artwork<'a> {
 /// One lazily supplied source. Retryable fallbacks are reused until an explicit
 /// retry; their pixels must stay identical within an artwork generation. Source
 /// pixels are dropped after this card bakes.
+pub mod prepared_artwork;
+
 pub struct LauncherArtwork {
+    pub prepared: Option<prepared_artwork::PreparedArtwork>,
     pub pixels: std::borrow::Cow<'static, [u8]>,
     pub retry: bool,
     /// The validated image contains its own wordmark; omit the duplicate title.
@@ -842,7 +845,7 @@ impl PreparedLauncher {
                 {
                     return Arc::clone(&cache.faces[index]);
                 }
-                let loaded = load.as_mut().map(|load| load(index));
+                let mut loaded = load.as_mut().map(|load| load(index));
                 // A retry that failed again has identical fallback pixels. Keep
                 // its prepared surfaces so the UI can discard an unchanged result.
                 if let Some(cache) = reusable
@@ -854,12 +857,14 @@ impl PreparedLauncher {
                 }
 
                 let name = if loaded.as_ref().is_some_and(|source| {
-                    source.contains_name && source.pixels.len() == 360 * 504 * 3
+                    source.contains_name
+                        && (source.prepared.is_some() || source.pixels.len() == 360 * 504 * 3)
                 }) {
                     ""
                 } else {
                     card.name
                 };
+                let prepared_art = loaded.as_mut().and_then(|source| source.prepared.take());
                 let card = PreparedCard {
                     id: card.id,
                     name,
@@ -889,7 +894,16 @@ impl PreparedLauncher {
                 };
                 #[cfg(test)]
                 FACE_BAKES.set(FACE_BAKES.get() + 2);
-                let mut faces = if card.rgb888.is_some() && responsive.is_none() {
+                let mut faces = if let Some(prepared) = prepared_art {
+                    let [compact, detail] = prepared.faces(&card, typography);
+                    CardFaces {
+                        source_retry: false,
+                        compact,
+                        detail,
+                        back: None,
+                        slides: data.level.slides(),
+                    }
+                } else if card.rgb888.is_some() && responsive.is_none() {
                     #[cfg(feature = "launcher-profile")]
                     let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
                     let [compact, detail] = artwork::faces_rgb888(&card, typography);
@@ -2050,6 +2064,7 @@ mod tests {
             .prepare_initial_with_rgb888_loader_and_cache(
                 data(),
                 &mut |_| LauncherArtwork {
+                    prepared: None,
                     pixels: Cow::Owned(vec![80; 360 * 504 * 3]),
                     retry: false,
                     contains_name: true,
@@ -2069,6 +2084,7 @@ mod tests {
             .prepare_initial_with_rgb888_loader_and_cache(
                 expected_data,
                 &mut |_| LauncherArtwork {
+                    prepared: None,
                     pixels: Cow::Owned(vec![80; 360 * 504 * 3]),
                     retry: false,
                     contains_name: false,
@@ -2099,6 +2115,7 @@ mod tests {
         let mut load = |i: usize| {
             calls.borrow_mut()[i] += 1;
             LauncherArtwork {
+                prepared: None,
                 pixels: if i == 1 && failing.get() {
                     Cow::Borrowed(&[])
                 } else {
