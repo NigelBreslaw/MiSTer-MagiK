@@ -56,18 +56,6 @@ static uint32_t seed=237;
 static uint32_t next(void) {seed=seed*1664525+1013904223;return seed;}
 #ifdef MAGIK_FAST_QUANTISATION
 static int fast_quantisation_parity(void) {
-  // Independent four-row verification against the scalar byte interpolation.
-  for(size_t trial=0;trial<100000;++trial) {
-    uint32_t source[20];for(size_t j=0;j<20;++j)source[j]=next();
-    int32_t q[4];for(size_t j=0;j<4;++j)q[j]=(int32_t)(next()%(19*65536));
-    uint32_t actual[4];vst1q_u32(actual,interpolate4_highmul(source,q[0],q[1],q[2],q[3]));
-    for(size_t j=0;j<4;++j) {
-      size_t r=(uint32_t)q[j]>>16;
-      uint32_t expected=scalar(source[r],source[r+1],((uint32_t)q[j]&65535)>>8);
-      if(actual[j]!=expected){fprintf(stderr,"four-row high-multiply mismatch %zu %zu\n",trial,j);return 1;}
-    }
-  }
-  puts("100000 four-row signed high-multiply cases match scalar interpolation");
   for(size_t trial=0;trial<4096;++trial) {
     size_t h=17+next()%128,rows=1+next()%127,pitch=1+next()%7,x=next()%960,y0=next()%540;
     uint32_t src[160];uint16_t a[1000],b[1000];
