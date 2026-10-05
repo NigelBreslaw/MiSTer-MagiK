@@ -286,7 +286,14 @@ pub(super) fn faces_rgb888(
     std::array::from_fn(|index| {
         #[cfg(feature = "launcher-profile")]
         let _face = crate::launcher_profile::span("prepare.rgb888_face");
+        #[cfg(not(feature = "card-axis-filter"))]
         let mut face = face(&mapped, 180, index == 1, typography);
+        #[cfg(feature = "card-axis-filter")]
+        let mut face = crate::launcher_flip::Face::new_before_rgb8(
+            surface(&mapped, 180, index == 1, typography, true),
+            180,
+            card_height(180),
+        );
         face.texture.retain_rgb8(&rgb8, &reference);
         face
     })

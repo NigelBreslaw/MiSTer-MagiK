@@ -471,6 +471,9 @@ impl Texture {
     pub fn new(pixels: &[Rgb565Pixel], width: usize, height: usize) -> Self {
         #[cfg(feature = "launcher-profile")]
         let _texture = crate::launcher_profile::span("prepare.texture_coverage_and_mips");
+        Self::from_base(Self::base_pixels(pixels, width, height), width, height)
+    }
+    fn base_pixels(pixels: &[Rgb565Pixel], width: usize, height: usize) -> Vec<u32> {
         assert_eq!(pixels.len(), width * height);
         let mut base = vec![0; (width + 2) * height];
         for x in 0..width {
@@ -489,7 +492,18 @@ impl Texture {
                 base[(x + 1) * height + y] = rgba(pixels[y * width + source_x], alpha);
             }
         }
-        Self::from_base(base, width, height)
+        base
+    }
+    #[cfg(feature = "card-axis-filter")]
+    pub fn new_before_rgb8(pixels: &[Rgb565Pixel], width: usize, height: usize) -> Self {
+        Self {
+            levels: vec![Level {
+                pixels: Self::base_pixels(pixels, width, height),
+                width,
+                height,
+            }],
+            vertical: Vec::new(),
+        }
     }
 
     pub fn with_alpha(pixels: &[Rgb565Pixel], alpha: &[u8], width: usize, height: usize) -> Self {
