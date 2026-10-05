@@ -574,7 +574,7 @@ fn render(
             } else {
                 0
             };
-            let mut ranges = [(start, face.height), (0, 0), (0, 0), (0, 0)];
+            let mut ranges = [(start, face.height), (0, 0), (0, 0), (0, 0), (0, 0)];
             if let Some((top, bottom)) = prepare_coverage.and_then(|covered| covered.span(x))
                 && start == 0
             {
@@ -583,6 +583,10 @@ fn render(
                     (
                         column.opaque_margin().min(face.height),
                         (column.opaque_margin() + 1).min(face.height),
+                    ),
+                    (
+                        face.height.saturating_sub(column.opaque_margin() + 1),
+                        face.height.saturating_sub(column.opaque_margin()),
                     ),
                     (0, 0),
                     (0, 0),
@@ -600,12 +604,12 @@ fn render(
                         (q(bottom - 1).div_euclid(ONE) + 2).clamp(0, face.height as i64) as usize,
                     )
                 };
-                // Retain the reflected quarter, opacity-proof row, and both
+                // Retain the reflected quarter, both opacity-proof rows, and both
                 // bilinear taps for every body row outside the hidden span.
-                ranges[2] = source_range(column.top, column.bottom.saturating_add(1).min(top));
-                ranges[3] = source_range(column.top.max(bottom), column.bottom + 1);
+                ranges[3] = source_range(column.top, column.bottom.saturating_add(1).min(top));
+                ranges[4] = source_range(column.top.max(bottom), column.bottom + 1);
                 ranges.sort_unstable_by_key(|range| range.0);
-                for i in 1..4 {
+                for i in 1..ranges.len() {
                     if ranges[i - 1].1 >= ranges[i].0 && ranges[i - 1].0 < ranges[i - 1].1 {
                         ranges[i].0 = ranges[i - 1].0;
                         ranges[i].1 = ranges[i].1.max(ranges[i - 1].1);

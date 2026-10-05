@@ -115,6 +115,21 @@ static int fast_quantisation_parity(void) {
 }
 #endif
 int main(void) {
+  // A filtered column may retain opaque values at the old row-8 proof sites.
+  // Its selected row-24 bounds must reject the shortcut and preserve compositing.
+  {
+    uint32_t source[64];uint16_t actual[64],expected[64];
+    for(size_t i=0;i<64;++i) {
+      source[i]=0x80808080u;
+      actual[i]=0x1234;
+    }
+    source[8]=source[55]=0xffffffffu;
+    for(size_t i=0;i<64;++i)expected[i]=over_pixel(source[i],actual[i]);
+    magik_launcher_project_over_column(actual,1,source,64,64,0,65536,24,40);
+    if(memcmp(actual,expected,sizeof actual)) {
+      fputs("filtered non-dithered opacity bounds mismatch\n",stderr);return 24;
+    }
+  }
 #ifdef MAGIK_FAST_QUANTISATION
   if (fast_quantisation_parity()) return 1;
 #endif
