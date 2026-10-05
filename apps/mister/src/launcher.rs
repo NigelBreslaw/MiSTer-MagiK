@@ -45,31 +45,13 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const ROOT_HOME_CARDS: [(LauncherCardId, &str); 6] = [
-    (
-        LauncherCardId::Arcade,
-        root_home_card_identity(LauncherCardId::Arcade),
-    ),
-    (
-        LauncherCardId::Consoles,
-        root_home_card_identity(LauncherCardId::Consoles),
-    ),
-    (
-        LauncherCardId::Computers,
-        root_home_card_identity(LauncherCardId::Computers),
-    ),
-    (
-        LauncherCardId::Handhelds,
-        root_home_card_identity(LauncherCardId::Handhelds),
-    ),
-    (
-        LauncherCardId::Favourites,
-        root_home_card_identity(LauncherCardId::Favourites),
-    ),
-    (
-        LauncherCardId::Settings,
-        root_home_card_identity(LauncherCardId::Settings),
-    ),
+const ROOT_HOME_CARDS: [LauncherCardId; 6] = [
+    LauncherCardId::Arcade,
+    LauncherCardId::Consoles,
+    LauncherCardId::Computers,
+    LauncherCardId::Handhelds,
+    LauncherCardId::Favourites,
+    LauncherCardId::Settings,
 ];
 
 pub(crate) const fn root_home_card_identity(id: LauncherCardId) -> &'static str {
@@ -85,7 +67,7 @@ pub(crate) const fn root_home_card_identity(id: LauncherCardId) -> &'static str 
 
 const fn root_home_card_key(index: usize) -> &'static str {
     if index < ROOT_HOME_CARDS.len() {
-        ROOT_HOME_CARDS[index].1
+        root_home_card_identity(ROOT_HOME_CARDS[index])
     } else {
         ""
     }
@@ -2793,7 +2775,7 @@ impl LauncherNav {
                     if self.current_menu_id() == ROOT_MENU_ID {
                         ROOT_HOME_CARDS
                             .iter()
-                            .position(|(_, key)| *key == selected_id)
+                            .position(|&id| root_home_card_identity(id) == selected_id)
                     } else {
                         self.current_menu_items()
                             .iter()
@@ -3404,7 +3386,7 @@ impl LauncherNav {
         if self.current_menu_id() != ROOT_MENU_ID {
             return None;
         }
-        ROOT_HOME_CARDS.get(self.selected).map(|(id, _)| *id)
+        ROOT_HOME_CARDS.get(self.selected).copied()
     }
 
     fn update_card_scroll(&mut self, held: &PadState, frame_now: Instant, count: usize) {

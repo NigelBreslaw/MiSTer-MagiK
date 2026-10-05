@@ -470,8 +470,9 @@ for the entire readiness wait and gather/edge-on/deal sequence. The readiness
 wait settles that committed source rather than freezing an outgoing browse flip.
 Artwork lookup keys are separate from navigation IDs. Nested keys default to
 the navigation ID without storing another copy; independent overrides retain the
-root artwork namespace and allow appearance changes without changing identity. OpenMenu binds its source to the requested menu item, even if
-selection changes before application. `CardLevelHandoff` retains the first
+root artwork namespace and allow appearance changes without changing identity.
+OpenMenu binds its source to the requested menu item, even if selection changes
+before application. `CardLevelHandoff` retains the first
 unaccepted source and coalesces later commands into the final destination; an
 undrawn round trip cancels. The display acknowledges only after owning the trick
 or adopting the destination, so queue/retirement admission failures cannot lose

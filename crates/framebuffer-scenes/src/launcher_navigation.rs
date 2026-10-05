@@ -96,7 +96,8 @@ impl CardLevelHandoff {
         if pending.source_level == destination {
             self.replace(None);
         } else {
-            pending.destination_level = destination.to_owned();
+            pending.destination_level.clear();
+            pending.destination_level.push_str(destination);
         }
         true
     }

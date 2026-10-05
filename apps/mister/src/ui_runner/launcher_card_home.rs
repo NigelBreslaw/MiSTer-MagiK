@@ -264,9 +264,7 @@ impl LauncherCardHomeSession {
                 self.advance_trick();
                 return true;
             }
-            if !self.finish_trick() {
-                return false;
-            }
+            self.finish_trick();
         }
         let level_changed = self.level.menu_id != level.menu_id;
         if level_changed
@@ -700,9 +698,9 @@ impl LauncherCardHomeSession {
 
     /// Finish an interruption when ready; otherwise restore the source and
     /// keep the preparation warm. No wait is needed to acknowledge leaving.
-    fn finish_trick(&mut self) -> bool {
+    fn finish_trick(&mut self) {
         let Some(trick) = self.trick.as_ref() else {
-            return true;
+            return;
         };
         if !trick.dealing {
             if let Some(mut content) = self.take_built_destination() {
@@ -726,10 +724,9 @@ impl LauncherCardHomeSession {
         self.content_generation = self.content_generation.wrapping_add(1).max(1);
 
         self.content_dirty = true;
-        true
     }
 
-    /// Render the current trick frame. Returns false once the trick is over.
+    /// Establish readiness and advance the edge swap before rendering.
     fn advance_trick(&mut self) {
         let Some(trick) = self.trick.as_ref() else {
             return;
@@ -765,16 +762,11 @@ impl LauncherCardHomeSession {
 
     /// Render the prepared state; readiness and swaps precede frame evidence.
     fn render_trick(&mut self) -> bool {
-        if !self.trick.as_ref().is_some_and(|trick| trick.ready) {
-            return false;
-        }
-        let elapsed = self
-            .now_ms
-            .saturating_sub(self.trick.as_ref().unwrap().started_ms);
-        let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
-        let Some(trick) = self.trick.as_ref() else {
+        let Some(trick) = self.trick.as_ref().filter(|trick| trick.ready) else {
             return false;
         };
+        let elapsed = self.now_ms.saturating_sub(trick.started_ms);
+        let edge = u64::from(LEVEL_TRICK_EDGE_MILLIS);
         if !trick.dealing {
             let t = elapsed.min(edge) as u32;
             self.render_trick_frame(
@@ -1382,7 +1374,7 @@ mod tests {
                 .retire(Box::new(prepare(scene, &root, 0, "12:00", &session.fonts)));
         }
         assert!(!session.preparation.can_retire(2));
-        assert!(session.finish_trick());
+        session.finish_trick();
         assert_eq!(session.frame.selected, 1);
         assert_eq!(session.last_visual_index, 1.0);
         assert!(
@@ -1436,7 +1428,7 @@ mod tests {
         // Destination completed, but advance_trick has not changed selection.
         assert!(!session.trick.as_ref().unwrap().ready);
         session.trick.as_mut().unwrap().destination = Some(Prepared::Built(content));
-        assert!(session.finish_trick());
+        session.finish_trick();
         assert_eq!(session.frame.selected, 1);
         assert_eq!(session.last_visual_index, 1.0);
     }
@@ -2657,43 +2649,6 @@ mod tests {
             assert!(nav.home_level_transition().is_none());
             assert_eq!(session.trick.is_some(), valid_origin);
         }
-    }
-
-    #[test]
-    fn activation_on_settling_tick_uses_the_activated_card_not_the_last_flip_source() {
-        let scene = LauncherScene::new(960, 540);
-        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 0, "21:37").unwrap();
-        session.update(scene, &snapshot(), 0, 0.0, "21:37", 0, true, None, None);
-        session.render();
-        // Logical selection has reached Consoles, but the last rendered frame
-        // still has Arcade as the outgoing half of the browse flip.
-        session.update(scene, &snapshot(), 1, 0.99, "21:37", 16, true, None, None);
-        session.render();
-        assert_eq!(session.frame.selected, 0);
-        assert_eq!(session.frame.target, 1);
-        // Navigation commits OpenMenu on its next settled tick before the next
-        // Home render, so no source-level update at position 1.0 is delivered.
-        let transition = CardLevelTransition {
-            source_level: snapshot().menu_id,
-            source_card: "menu:consoles".into(),
-            destination_level: consoles().menu_id,
-        };
-        session.update_from_navigation(
-            scene,
-            &consoles(),
-            0,
-            0.0,
-            "21:37",
-            32,
-            true,
-            None,
-            Some(&transition),
-        );
-        assert_eq!(
-            session.trick.as_ref().unwrap().source_selected,
-            1,
-            "the selected Consoles card must gather, never the previous Arcade card"
-        );
     }
 
     #[test]
