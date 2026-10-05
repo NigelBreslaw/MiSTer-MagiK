@@ -227,6 +227,29 @@ void magik_launcher_filter_column(uint32_t *out, const uint32_t *a0,
   }
 }
 
+// Fused horizontal interpolation, horizontal mip blend, and vertical-level blend.
+// The scalar tail follows the exact same sequence of truncating RGBA blends.
+void magik_launcher_filter_column_axes(uint32_t *out,
+    const uint32_t *a0,const uint32_t *a1,const uint32_t *b0,const uint32_t *b1,
+    const uint32_t *c0,const uint32_t *c1,const uint32_t *d0,const uint32_t *d1,
+    size_t n,uint32_t wx,uint32_t wx2,uint32_t lod,uint32_t vertical) {
+  size_t i=0;
+  for(;i+4<=n;i+=4) {
+    uint32x4_t a=blend(vld1q_u32(a0+i),vld1q_u32(a1+i),wx);
+    uint32x4_t c=blend(vld1q_u32(c0+i),vld1q_u32(c1+i),wx);
+    if(lod) {
+      a=blend(a,blend(vld1q_u32(b0+i),vld1q_u32(b1+i),wx2),lod);
+      c=blend(c,blend(vld1q_u32(d0+i),vld1q_u32(d1+i),wx2),lod);
+    }
+    vst1q_u32(out+i,blend(a,c,vertical));
+  }
+  for(;i<n;++i) {
+    uint32_t a=scalar(a0[i],a1[i],wx),c=scalar(c0[i],c1[i],wx);
+    if(lod) {a=scalar(a,scalar(b0[i],b1[i],wx2),lod);c=scalar(c,scalar(d0[i],d1[i],wx2),lod);}
+    out[i]=scalar(a,c,vertical);
+  }
+}
+
 static uint16_t over_pixel(uint32_t p, uint16_t dst) {
   uint32_t alpha = p >> 24;
   if (!alpha)

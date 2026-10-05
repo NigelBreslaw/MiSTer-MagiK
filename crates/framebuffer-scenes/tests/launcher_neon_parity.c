@@ -55,6 +55,20 @@ void reference_project_dithered(uint16_t *out,size_t pitch,const uint32_t *src,
 static uint32_t seed=237;
 static uint32_t next(void) {seed=seed*1664525+1013904223;return seed;}
 int main(void) {
+  for(size_t trial=0;trial<4096;++trial) {
+    uint32_t src[8][69],a[69],b[69],fused[69];
+    for(size_t c=0;c<8;++c)for(size_t j=0;j<69;++j)src[c][j]=next();
+    for(size_t j=0;j<69;++j)a[j]=b[j]=fused[j]=0x9a7bc5d1u;
+    size_t n=trial%66,offset=trial%2;
+    uint32_t wx=next()%257,wx2=next()%257,lod=next()%257,v=next()%257;
+    magik_launcher_filter_column(a+2,src[0]+offset,src[1]+offset,src[2]+offset,src[3]+offset,n,wx,wx2,lod);
+    magik_launcher_filter_column(b+2,src[4]+offset,src[5]+offset,src[6]+offset,src[7]+offset,n,wx,wx2,lod);
+    magik_launcher_mix_rgba(a+2,b+2,n,v);
+    magik_launcher_filter_column_axes(fused+2,src[0]+offset,src[1]+offset,src[2]+offset,src[3]+offset,
+      src[4]+offset,src[5]+offset,src[6]+offset,src[7]+offset,n,wx,wx2,lod,v);
+    if(memcmp(a,fused,sizeof a)) {fprintf(stderr,"fused axes mismatch trial %zu\n",trial);return 20;}
+  }
+
   size_t opaque_cases=0,opaque_rows=0;
   for(size_t trial=0;trial<40000;++trial) {
     size_t height=1+next()%273,rows=next()%557,pitch=1+next()%17;

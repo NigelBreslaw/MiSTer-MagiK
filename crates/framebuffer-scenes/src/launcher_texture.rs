@@ -646,23 +646,106 @@ impl Texture {
         footprint_y: u32,
         start: usize,
         output: &mut [u32],
-        transition: &mut [u32],
     ) {
-        assert!(transition.len() >= output.len());
         let (level, weight) = self.vertical_choice(footprint_y);
         let texture = if level == 0 {
             self
         } else {
             &self.vertical[level - 1]
         };
-        texture.prepare_column_rows(filter, start, output);
-        if weight > 0 {
-            self.vertical[level].prepare_column_rows(
-                filter,
-                start,
-                &mut transition[..output.len()],
-            );
-            mix_rgba(output, &transition[..output.len()], weight);
+        if weight == 0 {
+            texture.prepare_column_rows(filter, start, output);
+        } else {
+            texture.prepare_column_rows_fused(&self.vertical[level], filter, start, output, weight);
+        }
+    }
+
+    #[cfg(feature = "card-axis-filter")]
+    fn prepare_column_rows_fused(
+        &self,
+        other: &Self,
+        filter: Filter,
+        start: usize,
+        output: &mut [u32],
+        weight: u32,
+    ) {
+        let x = ((i64::from(filter.x) + 32768) >> filter.level) - 32768;
+        let x2 = ((x + 32768) / 2 - 32768) as i32;
+        let end = start.checked_add(output.len()).expect("bounded row range");
+        fn columns(
+            texture: &Texture,
+            filter: Filter,
+            x: i64,
+            x2: i32,
+            start: usize,
+            end: usize,
+        ) -> [&[u32]; 4] {
+            let a = &texture.levels[filter.level];
+            let b = &texture.levels[(filter.level + 1).min(texture.levels.len() - 1)];
+            assert!(end <= a.height && end <= b.height);
+            [
+                &a.column((x >> 16) as i32)[start..end],
+                &a.column((x >> 16) as i32 + 1)[start..end],
+                &b.column(x2 >> 16)[start..end],
+                &b.column((x2 >> 16) + 1)[start..end],
+            ]
+        }
+        let a = columns(self, filter, x, x2, start, end);
+        let b = columns(other, filter, x, x2, start, end);
+        let wx = ((x & 65535) >> 8) as u32;
+        let wx2 = ((x2 & 65535) >> 8) as u32;
+        #[cfg(target_arch = "arm")]
+        {
+            unsafe extern "C" {
+                fn magik_launcher_filter_column_axes(
+                    out: *mut u32,
+                    a0: *const u32,
+                    a1: *const u32,
+                    b0: *const u32,
+                    b1: *const u32,
+                    c0: *const u32,
+                    c1: *const u32,
+                    d0: *const u32,
+                    d1: *const u32,
+                    n: usize,
+                    wx: u32,
+                    wx2: u32,
+                    lod: u32,
+                    vertical: u32,
+                );
+            }
+            // SAFETY: all eight slices contain exactly output.len() live texels;
+            // output is disjoint, weights are Q8, and the kernel handles vector tails.
+            unsafe {
+                magik_launcher_filter_column_axes(
+                    output.as_mut_ptr(),
+                    a[0].as_ptr(),
+                    a[1].as_ptr(),
+                    a[2].as_ptr(),
+                    a[3].as_ptr(),
+                    b[0].as_ptr(),
+                    b[1].as_ptr(),
+                    b[2].as_ptr(),
+                    b[3].as_ptr(),
+                    output.len(),
+                    wx,
+                    wx2,
+                    filter.mix,
+                    weight,
+                );
+            }
+        }
+        #[cfg(not(target_arch = "arm"))]
+        for (i, p) in output.iter_mut().enumerate() {
+            let horizontal = |c: [&[u32]; 4]| {
+                let first = mix(c[0][i], c[1][i], wx);
+                if filter.mix == 0 {
+                    first
+                } else {
+                    mix(first, mix(c[2][i], c[3][i], wx2), filter.mix)
+                }
+            };
+            *p = mix(horizontal(a), horizontal(b), weight);
         }
     }
 
@@ -1409,12 +1492,12 @@ mod axis_tests {
         let t = stripes();
         let mut a = vec![0; 64];
         let mut b = a.clone();
-        let mut scratch = a.clone();
+
         for footprint in [65536, 110000, 3 * 65536] {
             for x in [-32000, 8 * 65536 + 19000, 31 * 65536] {
                 let filter = t.filter(x, footprint);
                 t.prepare_column_rows(filter, 0, &mut a);
-                t.prepare_column_rows_axes(filter, 65536, 0, &mut b, &mut scratch);
+                t.prepare_column_rows_axes(filter, 65536, 0, &mut b);
                 assert_eq!(a, b);
             }
         }
@@ -1423,13 +1506,13 @@ mod axis_tests {
     fn cropped_axis_columns_equal_full_columns_and_remain_premultiplied() {
         let t = stripes();
         let mut full = vec![0; 64];
-        let mut scratch = full.clone();
+
         let filter = t.filter(8 * 65536 + 19000, 160000);
         for footprint in [65536, 124000, 4 * 65536, 490000, u32::MAX] {
-            t.prepare_column_rows_axes(filter, footprint, 0, &mut full, &mut scratch);
+            t.prepare_column_rows_axes(filter, footprint, 0, &mut full);
             let mut part = vec![0; 19];
-            let mut temp = part.clone();
-            t.prepare_column_rows_axes(filter, footprint, 7, &mut part, &mut temp);
+
+            t.prepare_column_rows_axes(filter, footprint, 7, &mut part);
             assert_eq!(part, full[7..26]);
             for &p in &full {
                 let alpha = p >> 24;
@@ -1444,17 +1527,11 @@ mod axis_tests {
         let source = vec![Rgb565Pixel(0xffff); 32 * 64];
         let t = Texture::new(&source, 32, 64);
         let mut column = vec![0; 64];
-        let mut scratch = column.clone();
+
         for footprint in [65536, 120000, 2 * 65536, 4 * 65536, 8 * 65536, 16 * 65536] {
             let margin = t.opaque_margin_axes(footprint);
             for x in [-16384, 0, 65536, 4 * 65536, 16 * 65536, 31 * 65536] {
-                t.prepare_column_rows_axes(
-                    t.filter(x, 100000),
-                    footprint,
-                    0,
-                    &mut column,
-                    &mut scratch,
-                );
+                t.prepare_column_rows_axes(t.filter(x, 100000), footprint, 0, &mut column);
                 if 2 * margin < 64
                     && column[margin] >> 24 == 255
                     && column[63 - margin] >> 24 == 255
@@ -1470,9 +1547,9 @@ mod axis_tests {
         let filter = t.filter(8 * 65536, 65536);
         let mut plain = vec![0; 64];
         let mut axis = plain.clone();
-        let mut temp = plain.clone();
+
         t.prepare_column_rows(filter, 0, &mut plain);
-        t.prepare_column_rows_axes(filter, 4 * 65536, 0, &mut axis, &mut temp);
+        t.prepare_column_rows_axes(filter, 4 * 65536, 0, &mut axis);
         let energy = |p: &[u32]| {
             p[8..56]
                 .iter()

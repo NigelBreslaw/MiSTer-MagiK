@@ -16,8 +16,6 @@ pub(super) struct Scratch {
     source_occlusion: Option<BodyOcclusion>,
     reflection_ready: bool,
     blend: Vec<u32>,
-    #[cfg(feature = "card-axis-filter")]
-    vertical_blend: Vec<u32>,
     reflection_pixels: Vec<u16>,
 }
 impl Scratch {
@@ -26,16 +24,6 @@ impl Scratch {
             + self.columns.capacity() * std::mem::size_of::<Column>()
             + self.blend.capacity() * 4
             + self.reflection_pixels.capacity() * 2
-            + {
-                #[cfg(feature = "card-axis-filter")]
-                {
-                    self.vertical_blend.capacity() * 4
-                }
-                #[cfg(not(feature = "card-axis-filter"))]
-                {
-                    0
-                }
-            }
     }
     #[cfg(test)]
     pub fn new() -> Self {
@@ -56,8 +44,6 @@ impl Scratch {
             source_occlusion: None,
             reflection_ready: false,
             blend: vec![0; column_height],
-            #[cfg(feature = "card-axis-filter")]
-            vertical_blend: vec![0; column_height],
             reflection_pixels: vec![0; width * 64],
         }
     }
@@ -624,7 +610,6 @@ fn render(
                     start,
                     &mut texels[(x - left) * scratch.column_height + start
                         ..(x - left) * scratch.column_height + end],
-                    &mut scratch.vertical_blend[start..end],
                 );
                 if let Some((other, weight)) = blend {
                     #[cfg(not(feature = "card-axis-filter"))]
@@ -639,7 +624,6 @@ fn render(
                         column.step as u32,
                         start,
                         &mut scratch.blend[start..end],
-                        &mut scratch.vertical_blend[start..end],
                     );
                     crate::launcher_texture::mix_rgba(
                         &mut texels[(x - left) * scratch.column_height + start
@@ -661,7 +645,6 @@ fn render(
                         column.step as u32,
                         start,
                         &mut scratch.blend[start..end],
-                        &mut scratch.vertical_blend[start..end],
                     );
                     crate::launcher_texture::mix_rgba(
                         &mut texels[(x - left) * scratch.column_height + start
