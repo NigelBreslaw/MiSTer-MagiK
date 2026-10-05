@@ -1,8 +1,10 @@
 # Production launcher artwork
 
-The runtime pack contains 42 text-free 360x504, eight-bit sRGB `.rgb888` files:
-six root cards, thirteen Nintendo/Sega console and maker cards, and twenty-three
-computer and maker cards. `index.json` maps stable taxonomy IDs to filenames and
+The runtime pack contains 36 360x504, eight-bit sRGB `.rgb888` files:
+six root cards, simple maker logos, and computer-system artwork. Nintendo and
+Sega system cards use the renderer's generic defaults until replacement artwork
+is approved; their rejected console renders are excluded from this pack.
+`index.json` maps stable taxonomy IDs to filenames and
 SHA-256 checksums. Missing systems retain generic faces. Rejected model trials
 are excluded. Source models and textures remain in the private assets repository.
 Model credits, licence links and modifications are in
@@ -46,7 +48,7 @@ Count/label refreshes and prefetch do not bypass that retry schedule. Requests
 and adoption wait for motion to settle; unsuccessful retries reuse fallback
 faces and do not invalidate the visible scene. Successful files are not polled.
 
-The 53 prepared entries add 8,120,232 bytes to the artwork distribution. They
+The 42 prepared entries add 5,597,633 bytes to the artwork distribution. They
 contain label-free RGB8, RGB565 face surfaces and premultiplied RGBA horizontal
 mips, bound to their renderer format version, category and colour. Current
 names/counts are applied on the worker; only changed mip rows are rebuilt.
@@ -91,7 +93,7 @@ that transition or treat the small card image as full-screen background art.
 
 ## Clean-background regeneration
 
-All 42 cards, including the six original launcher cards, are rendered without
+All artwork cards, including the six original launcher cards, are rendered without
 studio floor/sweep meshes, visible world backgrounds or compositor bloom.
 Hardware, cameras, materials and lights retain their scene settings. Arcade uses
 the current front-on `MAGIK_01_ARCADE_CABINET` scene and its card camera, saved in
