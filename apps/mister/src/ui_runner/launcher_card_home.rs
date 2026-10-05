@@ -1285,7 +1285,7 @@ mod tests {
         };
         assert!(target.with_data(1, "12:00", |data| content.chrome_matches(data)));
         assert!(
-            session.take_preparation_measurement().unwrap() > 0,
+            session.preparation_measurement.take().unwrap() > 0,
             "actual stale repaint must be timed"
         );
         session.now_ms = 1000;

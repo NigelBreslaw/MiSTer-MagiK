@@ -347,6 +347,7 @@ impl HomePreparation {
             self.shared.wake.notify_one();
         }
     }
+    #[cfg(test)]
     pub(super) fn quiescent(&self) -> bool {
         let state = self.lock_state();
         !state.busy
