@@ -292,17 +292,30 @@ static inline uint32x2_t interpolate2(const uint32_t *src, int32_t q0,
 }
 
 #ifdef MAGIK_FAST_QUANTISATION
-static inline uint32x4_t cabinet_mix4(uint32x4_t a,uint32x4_t b,uint32x4_t weight);
 // Four output rows share the cabinet's exact signed high-multiply identity:
 // a + floor((b-a)*w/256). Every per-channel difference fits signed 16 bits.
 static inline uint32x4_t interpolate4_highmul(const uint32_t *src,
     int32_t q0,int32_t q1,int32_t q2,int32_t q3) {
   uint32x2x2_t a=vtrn_u32(vld1_u32(src+(q0>>16)),vld1_u32(src+(q1>>16)));
   uint32x2x2_t b=vtrn_u32(vld1_u32(src+(q2>>16)),vld1_u32(src+(q3>>16)));
-  uint32x4_t weights={((uint32_t)q0&65535)>>8,((uint32_t)q1&65535)>>8,
-    ((uint32_t)q2&65535)>>8,((uint32_t)q3&65535)>>8};
-  return cabinet_mix4(vcombine_u32(a.val[0],b.val[0]),
-    vcombine_u32(a.val[1],b.val[1]),weights);
+  // Build two packed coefficient pairs in ARM registers, then transfer the
+  // pair directly to NEON. A four-lane C initializer spills weights to the
+  // stack on ARMv7. Q16 fractional bits 8..15 become Q15 coefficient bits 7..14.
+  uint32_t w01=(((uint32_t)q0&0xff00)>>1)|(((uint32_t)q1&0xff00)<<15);
+  uint32_t w23=(((uint32_t)q2&0xff00)>>1)|(((uint32_t)q3&0xff00)<<15);
+  int16x4_t four=vcreate_s16(((uint64_t)w23<<32)|w01);
+  int16x4x2_t pairs=vzip_s16(four,four);
+  int16x8_t coefficient=vcombine_s16(pairs.val[0],pairs.val[1]);
+  uint16x8_t aa=vreinterpretq_u16_u32(vcombine_u32(a.val[0],b.val[0]));
+  uint16x8_t bb=vreinterpretq_u16_u32(vcombine_u32(a.val[1],b.val[1]));
+  uint16x8_t mask=vdupq_n_u16(255);
+  int16x8_t al=vreinterpretq_s16_u16(vandq_u16(aa,mask));
+  int16x8_t bl=vreinterpretq_s16_u16(vandq_u16(bb,mask));
+  int16x8_t ah=vreinterpretq_s16_u16(vshrq_n_u16(aa,8));
+  int16x8_t bh=vreinterpretq_s16_u16(vshrq_n_u16(bb,8));
+  uint16x8_t lo=vreinterpretq_u16_s16(vaddq_s16(al,vqdmulhq_s16(vsubq_s16(bl,al),coefficient)));
+  uint16x8_t hi=vreinterpretq_u16_s16(vaddq_s16(ah,vqdmulhq_s16(vsubq_s16(bh,ah),coefficient)));
+  return vreinterpretq_u32_u16(vorrq_u16(lo,vshlq_n_u16(hi,8)));
 }
 #endif
 
