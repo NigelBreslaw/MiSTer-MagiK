@@ -439,6 +439,10 @@ fn unpremultiply(p: u32) -> Rgb565Pixel {
     Rgb565Pixel(((r >> 3) << 11 | (g >> 2) << 5 | b >> 3) as u16)
 }
 
+pub(super) fn mip_widths(width: usize) -> impl Iterator<Item = usize> {
+    std::iter::successors(Some(width), |&w| (w > 1).then(|| w.div_ceil(2)))
+}
+
 impl Texture {
     /// Patch labels in the final base and rebuild only affected horizontal rows.
     pub(super) fn apply_labels(
@@ -625,9 +629,8 @@ impl Texture {
             width,
             height,
         }];
-        while levels.last().unwrap().width > 1 {
+        for width in mip_widths(width).skip(1) {
             let old = levels.last().unwrap();
-            let width = old.width.div_ceil(2);
             let mut pixels = vec![0; (width + 2) * height];
             for x in 0..width {
                 for y in 0..height {

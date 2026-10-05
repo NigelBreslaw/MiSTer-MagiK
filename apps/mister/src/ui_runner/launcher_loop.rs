@@ -10304,6 +10304,13 @@ pub(super) fn run_launcher_loop(
                 || launcher_idle_sleep_duration(&pacer),
                 |lab| launcher_idle_sleep_duration(&pacer).min(lab),
             );
+            let idle_sleep = if launcher_card_home.as_ref().is_some_and(
+                super::launcher_card_home::LauncherCardHomeSession::waiting_for_destination,
+            ) {
+                idle_sleep.min(Duration::from_millis(16))
+            } else {
+                idle_sleep
+            };
             let idle_sleep = catalog_scan_blink
                 .time_until_toggle(animation_now)
                 .map_or(idle_sleep, |blink| idle_sleep.min(blink));

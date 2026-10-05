@@ -48,6 +48,33 @@ pub enum LauncherCardId {
     Settings,
 }
 
+/// Collection styling shared by runtime navigation and host artwork generation.
+#[derive(Clone, Copy)]
+pub struct LauncherCardStyle {
+    pub id: LauncherCardId,
+    pub colour: u16,
+}
+impl LauncherCardStyle {
+    pub const fn root(id: LauncherCardId) -> Self {
+        let colour = match id {
+            LauncherCardId::Arcade => 0xe1a5,
+            LauncherCardId::Consoles => 0x2a7f,
+            LauncherCardId::Computers => 0xedc6,
+            LauncherCardId::Handhelds => 0x2df2,
+            LauncherCardId::Favourites => 0xe12f,
+            LauncherCardId::Settings => 0x8b7f,
+        };
+        Self { id, colour }
+    }
+    pub fn section(section: &str) -> Self {
+        Self::root(match section {
+            "computers" => LauncherCardId::Computers,
+            "handhelds" => LauncherCardId::Handhelds,
+            _ => LauncherCardId::Consoles,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LauncherCard<'a> {
     pub id: LauncherCardId,
@@ -478,6 +505,7 @@ pub struct PreparedLauncher {
     /// Pristine static chrome. Level transitions fade between two levels'
     /// chrome without re-rendering text in motion.
     chrome: Vec<Rgb565Pixel>,
+    chrome_state: ChromeState,
     level_chrome_spans: Vec<level_trick::ChromeSpan>,
     level_chrome_alpha: Option<u32>,
     level_foreign_title: bool,
@@ -486,6 +514,64 @@ pub struct PreparedLauncher {
     retry_artwork: bool,
     faces: Arc<Vec<Arc<CardFaces>>>,
     flip_columns: Vec<crate::launcher_flip::Scratch>,
+}
+
+struct ChromeState {
+    cards: Vec<CardFaceKey>,
+    clock: String,
+    selected: usize,
+    totals: (u32, u32, u32),
+    nested: Option<OwnedNested>,
+}
+struct OwnedNested {
+    path: Vec<String>,
+    games: u32,
+    children: u32,
+    label: String,
+    detail: Option<(u32, String)>,
+    accent: u16,
+}
+impl ChromeState {
+    fn new(data: LauncherData<'_>) -> Self {
+        Self {
+            cards: data.cards.iter().map(CardFaceKey::from).collect(),
+            clock: data.clock.to_owned(),
+            selected: data.selected,
+            totals: (data.library_games, data.collections, data.favourites),
+            nested: match data.level {
+                LauncherLevel::Root => None,
+                LauncherLevel::Nested(n) => Some(OwnedNested {
+                    path: n.path.iter().map(|s| (*s).to_owned()).collect(),
+                    games: n.games,
+                    children: n.children,
+                    label: n.children_label.to_owned(),
+                    detail: n.detail.map(|(v, s)| (v, s.to_owned())),
+                    accent: n.accent,
+                }),
+            },
+        }
+    }
+    fn matches(&self, data: LauncherData<'_>) -> bool {
+        self.clock == data.clock
+            && self.selected == data.selected
+            && self.totals == (data.library_games, data.collections, data.favourites)
+            && self.cards.len() == data.cards.len()
+            && self.cards.iter().zip(data.cards).all(|(a, b)| {
+                a.id == b.id && a.name == b.name && a.games == b.games && a.colour == b.colour
+            })
+            && match (&self.nested, data.level) {
+                (None, LauncherLevel::Root) => true,
+                (Some(a), LauncherLevel::Nested(b)) => {
+                    a.path.iter().map(String::as_str).eq(b.path.iter().copied())
+                        && a.games == b.games
+                        && a.children == b.children
+                        && a.label == b.children_label
+                        && a.detail.as_ref().map(|(v, s)| (*v, s.as_str())) == b.detail
+                        && a.accent == b.accent
+                }
+                _ => false,
+            }
+    }
 }
 
 struct CardFaces {
@@ -671,6 +757,10 @@ struct PreparedCard<'a> {
 }
 
 impl PreparedLauncher {
+    /// Data identity only; callers retain an immutable typography context.
+    pub fn chrome_matches(&self, data: LauncherData<'_>) -> bool {
+        self.chrome_state.matches(data)
+    }
     pub fn slot_zero(&self) -> CardSlot {
         self.scene
             .slot_zero(self.faces.first().is_some_and(|face| face.slides))
@@ -700,6 +790,7 @@ impl PreparedLauncher {
         data: LauncherData<'_>,
         typography: Option<LauncherTypography<'_>>,
     ) {
+        self.chrome_state = ChromeState::new(data);
         if let Some(layout) = &self.responsive {
             layout.chrome(&mut self.logical, data, &layout.fonts(typography));
         } else {
@@ -858,13 +949,18 @@ impl PreparedLauncher {
 
                 let name = if loaded.as_ref().is_some_and(|source| {
                     source.contains_name
-                        && (source.prepared.is_some() || source.pixels.len() == 360 * 504 * 3)
+                        && ((source.prepared.is_some() && responsive.is_none())
+                            || source.pixels.len() == 360 * 504 * 3)
                 }) {
                     ""
                 } else {
                     card.name
                 };
-                let prepared_art = loaded.as_mut().and_then(|source| source.prepared.take());
+                let prepared_art = if responsive.is_none() {
+                    loaded.as_mut().and_then(|source| source.prepared.take())
+                } else {
+                    None
+                };
                 let card = PreparedCard {
                     id: card.id,
                     name,
@@ -954,6 +1050,7 @@ impl PreparedLauncher {
             scene,
             responsive,
             chrome: chrome.clone(),
+            chrome_state: ChromeState::new(data),
             level_chrome_spans: Vec::new(),
             level_chrome_alpha: None,
             level_foreign_title: false,

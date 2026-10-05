@@ -4,11 +4,14 @@
 //! Versioned native-landscape artwork, without fonts, labels or game counts.
 use super::*;
 use crate::launcher_flip::Face;
+#[cfg(feature = "prepared-artwork")]
 use crate::launcher_texture::{Level, Texture};
 
+#[cfg(feature = "prepared-artwork")]
 const MAGIC: &[u8; 8] = b"MGCART01";
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
 const W: usize = 180;
+#[cfg(feature = "prepared-artwork")]
 const H: usize = 252;
 
 pub struct PreparedArtwork {
@@ -17,6 +20,7 @@ pub struct PreparedArtwork {
     faces: [Face; 2],
 }
 
+#[cfg(feature = "prepared-artwork")]
 fn code(id: LauncherCardId) -> u32 {
     match id {
         LauncherCardId::Arcade => 0,
@@ -34,20 +38,24 @@ fn reference(rgb: &[[u8; 3]]) -> Vec<Rgb565Pixel> {
         })
         .collect()
 }
+#[cfg(feature = "prepared-artwork")]
 fn word(bytes: &mut &[u8]) -> Result<u32, String> {
     let head = bytes.get(..4).ok_or("truncated prepared artwork")?;
     let value = u32::from_le_bytes(head.try_into().unwrap());
     *bytes = &bytes[4..];
     Ok(value)
 }
+#[cfg(feature = "prepared-artwork")]
 fn put(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
+#[cfg(feature = "prepared-artwork")]
 fn compress(bytes: &mut Vec<u8>, raw: &[u8]) {
     let block = lz4::block::compress(raw, None, false).expect("bounded host artwork");
     put(bytes, block.len() as u32);
     bytes.extend(block);
 }
+#[cfg(feature = "prepared-artwork")]
 fn decode<T: Copy + Default>(bytes: &mut &[u8], count: usize) -> Result<Vec<T>, String> {
     let size = word(bytes)? as usize;
     let block = bytes.get(..size).ok_or("truncated artwork block")?;
@@ -66,6 +74,7 @@ fn decode<T: Copy + Default>(bytes: &mut &[u8], count: usize) -> Result<Vec<T>, 
 
 impl PreparedArtwork {
     /// Host-only generation. Published packs are little endian.
+    #[cfg(feature = "prepared-artwork")]
     pub fn encode(source: &[u8], id: LauncherCardId, colour: u16) -> Vec<u8> {
         let rgb = artwork::reduce_rgb888(source);
         let reference = reference(&rgb);
@@ -109,6 +118,7 @@ impl PreparedArtwork {
         }
         bytes
     }
+    #[cfg(feature = "prepared-artwork")]
     pub fn decode(payload: &[u8], id: LauncherCardId, colour: u16) -> Result<Self, String> {
         if !payload.starts_with(MAGIC) || payload.len() > MAX_BYTES {
             return Err("unsupported prepared artwork version/size".into());
@@ -128,8 +138,7 @@ impl PreparedArtwork {
                 pixel.0 = pixel.0.swap_bytes();
             }
             let mut levels = Vec::new();
-            let mut width = W;
-            for _ in 0..9 {
+            for width in crate::launcher_texture::mip_widths(W) {
                 #[allow(unused_mut)]
                 let mut pixels: Vec<u32> = decode(&mut bytes, (width + 2) * H)?;
                 #[cfg(target_endian = "big")]
@@ -141,7 +150,6 @@ impl PreparedArtwork {
                     width,
                     height: H,
                 });
-                width = width.div_ceil(2);
             }
             faces.push(Face {
                 #[cfg(test)]
@@ -188,9 +196,70 @@ impl PreparedArtwork {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "prepared-artwork"))]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_landscape_payload_does_not_override_responsive_faces() {
+        let source =
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/console-nes.rgb888");
+        let packed = PreparedArtwork::encode(source, LauncherCardId::Consoles, 0x2a7f);
+        let cards = [LauncherCard {
+            id: LauncherCardId::Consoles,
+            name: "NES",
+            games: Some(12),
+            colour: 0x2a7f,
+        }];
+        let data = LauncherData {
+            cards: &cards,
+            selected: 0,
+            library_games: 12,
+            collections: 1,
+            favourites: 0,
+            clock: "12:00",
+            level: LauncherLevel::Root,
+        };
+        for scene in [
+            LauncherScene::crt(320, 240),
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(960, 540),
+        ] {
+            let mut raw_cache = LauncherFaceCache::default();
+            let mut packed_cache = LauncherFaceCache::default();
+            let raw = scene
+                .prepare_initial_with_rgb888_loader_and_cache(
+                    data,
+                    &mut |_| LauncherArtwork {
+                        pixels: std::borrow::Cow::Borrowed(source),
+                        prepared: None,
+                        retry: false,
+                        contains_name: false,
+                    },
+                    None,
+                    &mut raw_cache,
+                    1,
+                )
+                .finish();
+            let actual = scene
+                .prepare_initial_with_rgb888_loader_and_cache(
+                    data,
+                    &mut |_| LauncherArtwork {
+                        pixels: std::borrow::Cow::Borrowed(source),
+                        prepared: Some(
+                            PreparedArtwork::decode(&packed, LauncherCardId::Consoles, 0x2a7f)
+                                .unwrap(),
+                        ),
+                        retry: false,
+                        contains_name: false,
+                    },
+                    None,
+                    &mut packed_cache,
+                    1,
+                )
+                .finish();
+            assert_eq!(actual.pixels(), raw.pixels());
+        }
+    }
     #[test]
     fn prepared_labels_and_every_mip_match_raw_faces() {
         let source =

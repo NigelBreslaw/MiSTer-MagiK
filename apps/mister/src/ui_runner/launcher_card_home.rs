@@ -247,6 +247,11 @@ impl LauncherCardHomeSession {
         self.preparation
             .allow_background(!self.is_animating() && self.trick.is_none());
         if self.trick.is_some() {
+            if self.clock != clock {
+                self.chrome_refresh_pending = true;
+            }
+            self.clock.clear();
+            self.clock.push_str(clock);
             if self.active && self.level.menu_id == level.menu_id && self.scene == scene && motion {
                 self.advance_trick();
                 return;
@@ -337,13 +342,10 @@ impl LauncherCardHomeSession {
         }
 
         if self.level != *level || self.clock != clock {
-            let preparation_started = self.measure_preparation.then(std::time::Instant::now);
             self.level = level.clone();
             self.clock.clear();
             self.clock.push_str(clock);
             self.chrome_refresh_pending = true;
-            self.preparation_measurement = preparation_started
-                .map(|start| start.elapsed().as_micros().try_into().unwrap_or(u64::MAX));
         }
         if self.chrome_refresh_pending && !self.is_animating() {
             self.refresh_chrome(self.frame.selected);
@@ -416,7 +418,33 @@ impl LauncherCardHomeSession {
         let typography = self.fonts.typography();
         let prepared = &mut self.prepared;
         self.level.with_data(selected, &self.clock, |data| {
-            prepared.refresh_chrome(data, Some(typography))
+            if !prepared.chrome_matches(data) {
+                let started = self.measure_preparation.then(std::time::Instant::now);
+                prepared.refresh_chrome(data, Some(typography));
+                if let Some(started) = started {
+                    self.preparation_measurement = Some(
+                        self.preparation_measurement
+                            .unwrap_or(0)
+                            .saturating_add(started.elapsed().as_micros() as u64),
+                    );
+                }
+            }
+        });
+    }
+
+    fn refresh_target_chrome(&mut self, target: &mut PreparedLauncher, selected: usize) {
+        self.level.with_data(selected, &self.clock, |data| {
+            if !target.chrome_matches(data) {
+                let started = self.measure_preparation.then(std::time::Instant::now);
+                target.refresh_chrome(data, Some(self.fonts.typography()));
+                if let Some(started) = started {
+                    self.preparation_measurement = Some(
+                        self.preparation_measurement
+                            .unwrap_or(0)
+                            .saturating_add(started.elapsed().as_micros() as u64),
+                    );
+                }
+            }
         });
     }
 
@@ -514,6 +542,19 @@ impl LauncherCardHomeSession {
         }) else {
             return;
         };
+        // Reserve source parking before motion; no retirement may block an edge swap.
+        if let Some(index) = self
+            .aside
+            .iter()
+            .position(|aside| aside.level.menu_id == self.level.menu_id)
+        {
+            let old = self.aside.remove(index);
+            self.retire(old.prepared);
+        }
+        if self.aside.len() >= ASIDE_LEVELS {
+            let old = self.aside.remove(0);
+            self.retire(old.prepared);
+        }
         self.preparation.allow_background(false);
         if let Prepared::Building(id) = &destination {
             self.preparation.prioritize(*id);
@@ -537,9 +578,6 @@ impl LauncherCardHomeSession {
 
     /// Taking a completed destination never joins or rebuilds on the UI.
     fn take_built_destination(&mut self) -> Option<PreparedContent> {
-        if !self.preparation.can_retire(2) {
-            return None;
-        }
         let trick = self.trick.as_mut()?;
         match trick.destination.take()? {
             Prepared::Built(content) => Some(content),
@@ -564,9 +602,15 @@ impl LauncherCardHomeSession {
         } else {
             self.retire(Prepared::Built(old));
         }
-        // The worker already prepared coherent chrome. Any stale clock/sidebar
-        // refresh is deferred to idle rather than repainting at the edge.
-        self.chrome_refresh_pending = true;
+        // Chrome was refreshed before motion. Only changes received during the
+        // animation need an idle refresh after the destination is installed.
+        let selected = self
+            .trick
+            .as_ref()
+            .map_or(self.frame.selected, |trick| trick.destination_selected);
+        self.chrome_refresh_pending = self.level.with_data(selected, &self.clock, |data| {
+            !self.prepared.chrome_matches(data)
+        });
     }
 
     /// Finish an interruption when ready; otherwise restore the source and
@@ -576,11 +620,12 @@ impl LauncherCardHomeSession {
             return true;
         };
         if !trick.dealing {
-            if !self.preparation.can_retire(2) {
-                return false;
-            }
-            if let Some(content) = self.take_built_destination() {
+            if let Some(mut content) = self.take_built_destination() {
+                let selected = self.trick.as_ref().unwrap().destination_selected;
+                self.refresh_target_chrome(&mut content, selected);
                 self.install_destination(content);
+                self.frame = settled_frame(selected);
+                self.last_visual_index = selected as f32;
             } else {
                 let mut trick = self.trick.take().unwrap();
                 let destination_level = std::mem::replace(&mut self.level, trick.source_level);
@@ -605,12 +650,11 @@ impl LauncherCardHomeSession {
             return;
         };
         if !trick.ready {
-            if !self.preparation.quiescent() {
-                return;
-            }
-            let Some(prepared) = self.take_built_destination() else {
+            let Some(mut prepared) = self.take_built_destination() else {
                 return;
             };
+            let selected = self.trick.as_ref().unwrap().destination_selected;
+            self.refresh_target_chrome(&mut prepared, selected);
             let trick = self.trick.as_mut().unwrap();
             trick.destination = Some(Prepared::Built(prepared));
             trick.ready = true;
@@ -647,8 +691,7 @@ impl LauncherCardHomeSession {
             return false;
         };
         if !trick.dealing {
-            debug_assert!(elapsed < edge, "edge state must advance before rendering");
-            let t = elapsed as u32;
+            let t = elapsed.min(edge) as u32;
             self.render_trick_frame(
                 trick.source_selected,
                 trick.change,
@@ -808,8 +851,12 @@ impl LauncherCardHomeSession {
                 || self.frame.phase != BrowsePhase::Settled)
     }
 
+    pub(super) fn waiting_for_destination(&self) -> bool {
+        self.active && self.trick.as_ref().is_some_and(|trick| !trick.ready)
+    }
+
     pub(super) fn needs_render(&self) -> bool {
-        self.active && (self.content_dirty || self.trick.is_some() || self.is_animating())
+        self.active && (self.content_dirty || self.is_animating())
     }
 
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
@@ -1184,6 +1231,129 @@ impl Drop for LauncherCardHomeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warm_destination_starts_during_unrelated_work_and_refreshes_only_stale_chrome() {
+        use std::sync::mpsc;
+        let scene = LauncherScene::new(960, 540);
+        let root = snapshot();
+        let target = consoles();
+        let mut session = LauncherCardHomeSession::new(scene, root.clone(), 3, "12:00").unwrap();
+        session.update(scene, &root, 3, 3.0, "12:00", 0, false, None);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        session.preparation = HomePreparation::start(
+            Arc::clone(&session.fonts),
+            root.menu_id.clone(),
+            CardFaceCache::default(),
+            move |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            },
+        )
+        .unwrap();
+        let mut unrelated = target.clone();
+        unrelated.menu_id = "unrelated".into();
+        session.spawn_prepare(&unrelated, 0).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        session.set_aside(
+            target.clone(),
+            Prepared::Built(Box::new(prepare(
+                scene,
+                &target,
+                1,
+                "11:59",
+                &session.fonts,
+            ))),
+        );
+        session.measure_preparation = true;
+        session.begin_trick(target.clone(), 1);
+        assert!(
+            session.trick.as_ref().unwrap().ready,
+            "warm destination cannot wait for unrelated work"
+        );
+        assert!(!session.preparation.quiescent());
+        let Prepared::Built(content) = session
+            .trick
+            .as_ref()
+            .unwrap()
+            .destination
+            .as_ref()
+            .unwrap()
+        else {
+            panic!("not ready")
+        };
+        assert!(target.with_data(1, "12:00", |data| content.chrome_matches(data)));
+        assert!(
+            session.take_preparation_measurement().unwrap() > 0,
+            "actual stale repaint must be timed"
+        );
+        session.now_ms = 1000;
+        // The interruption must complete despite retirement backpressure.
+        for _ in 0..ASIDE_LEVELS + 2 {
+            session
+                .preparation
+                .retire(Box::new(prepare(scene, &root, 0, "12:00", &session.fonts)));
+        }
+        assert!(!session.preparation.can_retire(2));
+        assert!(session.finish_trick());
+        assert_eq!(session.frame.selected, 1);
+        assert_eq!(session.last_visual_index, 1.0);
+        assert!(
+            !session.chrome_refresh_pending,
+            "current destination needs no settle repaint"
+        );
+        session.render();
+        release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn waiting_source_is_retained_and_completed_interruption_uses_destination_selection() {
+        use std::sync::mpsc;
+        let scene = LauncherScene::new(960, 540);
+        let root = snapshot();
+        let target = consoles();
+        let mut session = LauncherCardHomeSession::new(scene, root.clone(), 3, "12:00").unwrap();
+        session.update(scene, &root, 3, 3.0, "12:00", 0, false, None);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        session.preparation = HomePreparation::start(
+            Arc::clone(&session.fonts),
+            root.menu_id.clone(),
+            CardFaceCache::default(),
+            move |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            },
+        )
+        .unwrap();
+        session.begin_trick(target.clone(), 1);
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        session.render();
+        let generation = session.current_request().generation;
+        assert!(session.waiting_for_destination());
+        assert!(!session.needs_render());
+        for now in [16, 32, 1000] {
+            session.update(scene, &target, 1, 1.0, "12:00", now, true, None);
+            assert!(!session.needs_render());
+            assert_eq!(session.current_request().generation, generation);
+        }
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let content = loop {
+            if let Some(content) = session.take_built_destination() {
+                break content;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        // Destination completed, but advance_trick has not changed selection.
+        assert!(!session.trick.as_ref().unwrap().ready);
+        session.trick.as_mut().unwrap().destination = Some(Prepared::Built(content));
+        assert!(session.finish_trick());
+        assert_eq!(session.frame.selected, 1);
+        assert_eq!(session.last_visual_index, 1.0);
+    }
     use crate::launcher_home::{LauncherHomeCounts, LauncherHomeSnapshot, LevelCard, LevelSummary};
     use std::time::{Duration, Instant};
 

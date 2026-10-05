@@ -57,7 +57,7 @@ Other display geometries retain their existing native preparation path.
 Generate or verify deterministic prepared files on the host:
 
 ```sh
-scripts/cargo run --manifest-path crates/framebuffer-scenes/Cargo.toml --release \
+scripts/cargo run --manifest-path crates/framebuffer-scenes/Cargo.toml --release --features prepared-artwork \
   --example prepare_card_artwork -- apps/mister/assets/ui/launcher-cards
 # Append --check to verify the committed files and index without writing.
 ```
