@@ -3,117 +3,117 @@
     "acornatom": {
       "file": "computer-acornatom.rgb888",
       "prepared": {
-        "bytes": 218229,
+        "bytes": 220071,
         "file": "computer-acornatom.2-edc6.cardtex",
-        "sha256": "cf2af37533f53ef9b909753f618fe1aa998d4f8d972d00a0b41c2ba86062014b"
+        "sha256": "b9b7d0c55867f3a3de4fce3a5ff41b566ba386660c940fd117382abb5927f754"
       },
       "sha256": "6010539e1c4f80ca44564a654d9b1023c65e6980b0cab26bd4f1c7e71808fa5d"
     },
     "altair8800": {
       "file": "computer-altair8800.rgb888",
       "prepared": {
-        "bytes": 206640,
+        "bytes": 207368,
         "file": "computer-altair8800.2-edc6.cardtex",
-        "sha256": "f67e868176132549aa81e8e4a0cf05aab798b3a9d0318f1f414972b2054b355a"
+        "sha256": "d5b424bd28ec774531494f215cc719375daa763c2ff29f5711f827677a3185cb"
       },
       "sha256": "dd42bf3c96168de8c672c62f817dd0510c3dd1e803a073feece9fdcd16adbab8"
     },
     "amiga": {
       "file": "computer-amiga.rgb888",
       "prepared": {
-        "bytes": 222728,
+        "bytes": 224070,
         "file": "computer-amiga.2-edc6.cardtex",
-        "sha256": "fa858a68aec0c4b3147b323d8a24d65f62040d17b636e241e5d971e85bd8d4cc"
+        "sha256": "6ae1e97d503bef889f464f193cc995c213264517732c6aba9e69520d54311ddc"
       },
       "sha256": "2ca01a6080e36ea668dd117a1485dd6b42e16951aedb7212a2f5db73423b01d4"
     },
     "amigacd32": {
       "file": "computer-amigacd32.rgb888",
       "prepared": {
-        "bytes": 159304,
+        "bytes": 165632,
         "file": "computer-amigacd32.2-edc6.cardtex",
-        "sha256": "d9a02c95aac9563e090bb55746f07c6160d9f85ca7b87cf0dbb14b5b22ffe715"
+        "sha256": "a60fa9df64b4fc672a094028611c18c1a729788872b97c8a574b9b26ebf6a0a6"
       },
       "sha256": "e4efc2476dce1478ad5bb287c7fe661335b4a10410f1195353f7c5d80757c400"
     },
     "amstrad": {
       "file": "computer-amstrad.rgb888",
       "prepared": {
-        "bytes": 150909,
+        "bytes": 153635,
         "file": "computer-amstrad.2-edc6.cardtex",
-        "sha256": "d1e73badd5bb7d5ed456444f109c9cbbe10a2af13b2f40c25b948c86307c5801"
+        "sha256": "e37369d320af2899b99d1d4400064b05a5646e270c6adec8ddcfa539894701f9"
       },
       "sha256": "00be2546498e9802e409a6353e39b3f6c2a60f498e19cd1c3c767883699e6fbe"
     },
     "ao486": {
       "file": "computer-ao486.rgb888",
       "prepared": {
-        "bytes": 236898,
+        "bytes": 240070,
         "file": "computer-ao486.2-edc6.cardtex",
-        "sha256": "a9499d42f28812c02782063a086604e2a818ae5f33cf2ebf3185f4007654ddca"
+        "sha256": "c7a1a08eb53a7d7e5b615363f0e7f5ec2538032f0bb6caef808176cb32d79d30"
       },
       "sha256": "d86d7acb50b1e2c95d2551013d3ebd7e0d8efa6d58dedd1d0003ed77f8195c25"
     },
     "apple-ii": {
       "file": "computer-apple-ii.rgb888",
       "prepared": {
-        "bytes": 212852,
+        "bytes": 213992,
         "file": "computer-apple-ii.2-edc6.cardtex",
-        "sha256": "9b27ddd26325e9b68bd073c5471f0642ff4d0a6a310f28721d1556d5b8f10c0d"
+        "sha256": "f8ebb0c67bb50fd9eefa94242f204f134514c174d68434f192aecc14aa4b77ce"
       },
       "sha256": "1749ad59060a699b34bb537a085babf9af27d953fccd93ad04203f73957f99fc"
     },
     "c64": {
       "file": "computer-c64.rgb888",
       "prepared": {
-        "bytes": 204836,
+        "bytes": 206520,
         "file": "computer-c64.2-edc6.cardtex",
-        "sha256": "99a8aafc3857a9c1fd3147acbd0624c6e43e8a4dcbf524994a35dbe061179e94"
+        "sha256": "153dc79564c2ca40e868680c3581ebc701c847d09c8ec12931fca8a72d7577d8"
       },
       "sha256": "d0e0d890bfcad0f9b308c23cc6b8b6f2059db0b6848990fcc6af69ed7edc8bf1"
     },
     "dos": {
       "file": "computer-dos.rgb888",
       "prepared": {
-        "bytes": 199037,
+        "bytes": 201381,
         "file": "computer-dos.2-edc6.cardtex",
-        "sha256": "c5d1d192f21a8dacb0656d82021ef7225f2e97e1ed955590f1e33990819fbfc8"
+        "sha256": "1de482f642f6456ed3951435f0abc2c81ec95fe6dadbf2babc87546a1459df75"
       },
       "sha256": "1f30fb4ac62ae626eb75b1c1e0d58488d4d0a1f15b9543a7020dee6e814a94d9"
     },
     "fds": {
       "file": "console-fds.rgb888",
       "prepared": {
-        "bytes": 278121,
+        "bytes": 277739,
         "file": "console-fds.1-2a7f.cardtex",
-        "sha256": "101fbdaa44f210c30eeb943f1c782064b36213cb1a98994435c6b109985726b9"
+        "sha256": "4f2f343415e066253e64e539174103283b359389a8cef6ccee4ec884a02346ae"
       },
       "sha256": "a874d714e27001cab9143c5cc6cf3da83101d45360bb4ed31a393f8c6d7b7bf7"
     },
     "fmtowns": {
       "file": "computer-fmtowns.rgb888",
       "prepared": {
-        "bytes": 158938,
+        "bytes": 164766,
         "file": "computer-fmtowns.2-edc6.cardtex",
-        "sha256": "4910bcff63c8de08e8fb8538fafd255e0d3bd5d35301bfb7eba61b57e53ef94d"
+        "sha256": "f51dbbd429d753de351b7cf76d32a4025501ed5cf3701cbfec01527fff7abddf"
       },
       "sha256": "fbcd6030a385b3e69918622e01e3a9800a88092a4fbb6176b9c7177117169075"
     },
     "megacd": {
       "file": "console-megacd.rgb888",
       "prepared": {
-        "bytes": 224191,
+        "bytes": 224689,
         "file": "console-megacd.1-2a7f.cardtex",
-        "sha256": "f324c6c46dc5ba1a7828c570f6ca919f5d61fcd4a14d808dce3fbfdc396df16e"
+        "sha256": "2b55fbbcbbc051446ffdec02534c1ce8d94fc8bd468f33d16e364d5bcf6406d2"
       },
       "sha256": "96aa15d11f41c7a76093b9a6cf7ad5dd630c1272df73dac42b0e1634b51721ff"
     },
     "megadrive": {
       "file": "console-megadrive.rgb888",
       "prepared": {
-        "bytes": 219006,
+        "bytes": 218784,
         "file": "console-megadrive.1-2a7f.cardtex",
-        "sha256": "3a6d089bf757d538e1e175c03f2fe003f9c4ef7750b421484261fb0c6bdf1fc6"
+        "sha256": "e746ec0eba107c24586582558fdf50cbc9cfa17cd2691c6f8d1ab163d7884bbf"
       },
       "sha256": "73987000928a78a5c1551a22af40ee80af47772245e2a93082ac0cdf3bddb658"
     },
@@ -121,9 +121,9 @@
       "contains_name": true,
       "file": "brand-acorn.rgb888",
       "prepared": {
-        "bytes": 40049,
+        "bytes": 47467,
         "file": "brand-acorn.2-edc6.cardtex",
-        "sha256": "30376b0946ef15f03dd3273a4a18ccc989cc5afa7137e179a74187f301552295"
+        "sha256": "cab28546515568934839706ad83bd0a956178898874237bc42a1eac870040f02"
       },
       "sha256": "78fb04e7a6f62b8fe304f74589367cb7077c4a7bd1947debb1b1aede2b40fcf4"
     },
@@ -131,9 +131,9 @@
       "contains_name": false,
       "file": "brand-apple.rgb888",
       "prepared": {
-        "bytes": 49254,
+        "bytes": 49710,
         "file": "brand-apple.2-edc6.cardtex",
-        "sha256": "ab0644adcd5d89a65e88787a09e5fa7790895bccaa9b4bd96e510d72abed714f"
+        "sha256": "a328bdf95fedacb4184f781a3bc9cb7dda1c62da3ae2b0083f9f59b3b62e0398"
       },
       "sha256": "56d3fdcc2cb333b8aad1d2d51fccf6279023de11c5a3bac7419b3354cfda641a"
     },
@@ -141,9 +141,9 @@
       "contains_name": false,
       "file": "brand-atari.rgb888",
       "prepared": {
-        "bytes": 45400,
+        "bytes": 45746,
         "file": "brand-atari.2-edc6.cardtex",
-        "sha256": "0f1a7ceb018c214c375683438413339e6d76555da6193cdb28a75d88c353ae8d"
+        "sha256": "28fcc99e15fdbd0c33b09274185f2d2288150320378cc194a8589c18480754e1"
       },
       "sha256": "9fd6b15e7a7bd6802e355315f17dc48533ae802dd2fb2f8567a82ca7c1ceb894"
     },
@@ -151,9 +151,9 @@
       "contains_name": false,
       "file": "brand-commodore.rgb888",
       "prepared": {
-        "bytes": 49118,
+        "bytes": 52702,
         "file": "brand-commodore.2-edc6.cardtex",
-        "sha256": "16cd6ba2378c48898a433cd263ecf3651b3415e1b03c9e0bcd790c20621f6cf9"
+        "sha256": "bc27f14cf7c66bf23c019f5306a1f686d1d443db604f0642e6999e6fc65beda0"
       },
       "sha256": "62a01ea6544f3767d3e1f8e3f46b27e6b4fa2575a5a64ab0bc09257a735ebead"
     },
@@ -161,9 +161,9 @@
       "contains_name": false,
       "file": "brand-dos-pc.rgb888",
       "prepared": {
-        "bytes": 28064,
+        "bytes": 39368,
         "file": "brand-dos-pc.2-edc6.cardtex",
-        "sha256": "9c9efc52d007258cf509fe44c52cd41cd039fcc57314dddd8aa65621ee355665"
+        "sha256": "6e7e1066f7f6a43c381865d9c2f484a82174e46fbc9d5a2ab009a22ce0042b5e"
       },
       "sha256": "d21763afd8a23f4246b90614b78c995d620350ef2ddfe56fc990e231b63f4696"
     },
@@ -171,9 +171,9 @@
       "contains_name": false,
       "file": "brand-japanese.rgb888",
       "prepared": {
-        "bytes": 32708,
+        "bytes": 36644,
         "file": "brand-japanese.2-edc6.cardtex",
-        "sha256": "97b6578f0c2edf8ec109f6c6c136ca1f82bdc83f808b8bbd77b50db62063d9ee"
+        "sha256": "852775c7f657bf95b78a0f0edf7c50c890901ecdb9d54d91d8d0cfaeda357b03"
       },
       "sha256": "beb3d905813e5fca7e4cdfbc4c1ff8f8bcaaf9df2254d7e3b5c037d1df2b69dc"
     },
@@ -181,9 +181,9 @@
       "contains_name": false,
       "file": "brand-other.rgb888",
       "prepared": {
-        "bytes": 25714,
+        "bytes": 38136,
         "file": "brand-other.2-edc6.cardtex",
-        "sha256": "1707fb98bb2b1beb89554fe1e2e8bbe65286bf2c1835799f83914ca857a6e1f2"
+        "sha256": "88c7f14c150c56b8554352e5d901372c26aec176858e4c2c9cd2773508670029"
       },
       "sha256": "b6052caeee8234df63b115f09a0c908b6a47fe8262b4a63af9cfe294449ef7b4"
     },
@@ -191,9 +191,9 @@
       "contains_name": true,
       "file": "brand-sinclair.rgb888",
       "prepared": {
-        "bytes": 72192,
+        "bytes": 78482,
         "file": "brand-sinclair.2-edc6.cardtex",
-        "sha256": "070c63b1a5a3c407a5ecc15f7b68e9dd6f4a9458152f2014e09f9292d98ae76f"
+        "sha256": "00da492c33f97fb6e788ebc9747937f603e9eb638c78d9370ef648c36783ccf6"
       },
       "sha256": "225b468555287f184a71f5976371384e8d8f8e41ac56dddfdbaa5c955e6911ea"
     },
@@ -201,9 +201,9 @@
       "contains_name": true,
       "file": "brand-tandy.rgb888",
       "prepared": {
-        "bytes": 44391,
+        "bytes": 54441,
         "file": "brand-tandy.2-edc6.cardtex",
-        "sha256": "5f6767ed807668bf54d41a4e1a5c6d4de5e358010384835e1deb5e7faf88320f"
+        "sha256": "4db7e4277dfe6b0314890f0bf809d367c2d0b06f8a45d93c051a5282ab02f041"
       },
       "sha256": "f2d1ee1199740b8787f04bfac36987f1faf6e3069b951ea59de4134ed15958e4"
     },
@@ -211,9 +211,9 @@
       "contains_name": false,
       "file": "brand-atari.rgb888",
       "prepared": {
-        "bytes": 43884,
+        "bytes": 54152,
         "file": "brand-atari.1-2a7f.cardtex",
-        "sha256": "bde3abf2c405033bbb433c3d1a14a83b63dbd82bbbf0542429c39a44671167f8"
+        "sha256": "aad8787fb38e928935fe8bf57c135722596c0447069d0bd77fb781fda8417e9b"
       },
       "sha256": "9fd6b15e7a7bd6802e355315f17dc48533ae802dd2fb2f8567a82ca7c1ceb894"
     },
@@ -221,9 +221,9 @@
       "contains_name": true,
       "file": "brand-nec.rgb888",
       "prepared": {
-        "bytes": 49541,
+        "bytes": 58997,
         "file": "brand-nec.1-2a7f.cardtex",
-        "sha256": "cc696ec851ec39d8f1f6932d7e91083fc5cf289e103bbe9a399442d544795631"
+        "sha256": "b72288d25151b5fdb9522c80cb3ae1763a1cc857bbd971851614cde6d24b766e"
       },
       "sha256": "1b67ca2ed2667163159a7e0e30deb4151f8501d605f8534798aa257ed6badbff"
     },
@@ -231,9 +231,9 @@
       "contains_name": true,
       "file": "brand-nintendo.rgb888",
       "prepared": {
-        "bytes": 59435,
+        "bytes": 62919,
         "file": "brand-nintendo.1-2a7f.cardtex",
-        "sha256": "772824fe37a92f3531b785f757f152fc4724d2ce7f8c34342a5dd92753e3f8bf"
+        "sha256": "e96abb022639af825307a893755dd8e7078e0352e5daa9771559bf9eb97f072e"
       },
       "sha256": "b93403c70fdb5cfa7a363f161063e6dfb35702145c00557fa7ea24c8e4734541"
     },
@@ -241,9 +241,9 @@
       "contains_name": false,
       "file": "brand-other.rgb888",
       "prepared": {
-        "bytes": 25566,
+        "bytes": 37174,
         "file": "brand-other.1-2a7f.cardtex",
-        "sha256": "072b4d29eee473f3206cc0121ce7cbda079c3d16ea4810484b84fc935018a861"
+        "sha256": "f3d973be0681ea2d582b9573adb46e4577e26d77985606c12ec502136367f551"
       },
       "sha256": "b6052caeee8234df63b115f09a0c908b6a47fe8262b4a63af9cfe294449ef7b4"
     },
@@ -251,9 +251,9 @@
       "contains_name": true,
       "file": "brand-sega.rgb888",
       "prepared": {
-        "bytes": 66617,
+        "bytes": 71055,
         "file": "brand-sega.1-2a7f.cardtex",
-        "sha256": "a3dfbb3dc11ed32241283673e94812c3f9e9c19e26b312d056c867ef61115196"
+        "sha256": "5679e40b4202e709a9eb5745c08f77c4d9440a37ba0db66da263d57ddad1ba3a"
       },
       "sha256": "200a4b7275de81cc3bc28ed92aa7659d2f31718c57f70a6a4ebfefe08215aacb"
     },
@@ -261,9 +261,9 @@
       "contains_name": true,
       "file": "brand-sony.rgb888",
       "prepared": {
-        "bytes": 58607,
+        "bytes": 62293,
         "file": "brand-sony.1-2a7f.cardtex",
-        "sha256": "710b25f0c7a03f44fe9196c5eaef188a7595514188362e76b669c61f25f01b7d"
+        "sha256": "0200a3faf09d794928054ffc7865b85a682c570d00187434ad709252fb1ea461"
       },
       "sha256": "50a3c4f0a0b8f3ff473586f771dc24445d003074e1753912dd599ac0a5735514"
     },
@@ -271,9 +271,9 @@
       "contains_name": false,
       "file": "brand-atari.rgb888",
       "prepared": {
-        "bytes": 43806,
+        "bytes": 54978,
         "file": "brand-atari.3-2df2.cardtex",
-        "sha256": "f8dd891d1950b0ef1bde18a5b55b9c26975b01d7cd273161a20232adc0164d3c"
+        "sha256": "8365252229347b66c36a1c358d955f3e291172c2a59c348292b47c1317dba4d9"
       },
       "sha256": "9fd6b15e7a7bd6802e355315f17dc48533ae802dd2fb2f8567a82ca7c1ceb894"
     },
@@ -281,9 +281,9 @@
       "contains_name": true,
       "file": "brand-bandai.rgb888",
       "prepared": {
-        "bytes": 50821,
+        "bytes": 60787,
         "file": "brand-bandai.3-2df2.cardtex",
-        "sha256": "d16e44b6d29296eb6d41850afe04e3415928ae34f0a7c04cf7ebe669dbac604e"
+        "sha256": "1864716640cb0fea5a230ae4b65824f5bef6761fd2c623830912d7b4b95dadef"
       },
       "sha256": "3e195cc1d17c23b3decdfe39aacf92710a08d0e6270ba3b8b63ae76e2671c6c6"
     },
@@ -291,9 +291,9 @@
       "contains_name": true,
       "file": "brand-nintendo.rgb888",
       "prepared": {
-        "bytes": 59369,
+        "bytes": 67381,
         "file": "brand-nintendo.3-2df2.cardtex",
-        "sha256": "4bc524ed3e6458fd36015ff8484ff3d1ed86fc02421a43468fe4e3a291385314"
+        "sha256": "c3ec2341460942dffa541f409c68aa3da6a2824f4deca331d08354d9d4d9e175"
       },
       "sha256": "b93403c70fdb5cfa7a363f161063e6dfb35702145c00557fa7ea24c8e4734541"
     },
@@ -301,9 +301,9 @@
       "contains_name": false,
       "file": "brand-other.rgb888",
       "prepared": {
-        "bytes": 25652,
+        "bytes": 37374,
         "file": "brand-other.3-2df2.cardtex",
-        "sha256": "7dc2fac78ac9a19a74db4859a8d3dfc69bee8fe6df2b3e0a72bd9582be5d41da"
+        "sha256": "9f48d11e9e0c29a66580aa5d1dea227fb94256fa12adb24fd1fc6f49a5381e8c"
       },
       "sha256": "b6052caeee8234df63b115f09a0c908b6a47fe8262b4a63af9cfe294449ef7b4"
     },
@@ -311,9 +311,9 @@
       "contains_name": true,
       "file": "brand-sega.rgb888",
       "prepared": {
-        "bytes": 66647,
+        "bytes": 72251,
         "file": "brand-sega.3-2df2.cardtex",
-        "sha256": "5734248e9eb9ccd6575d1a1b3ae8deeb2072fd29429c4728a632e37ca394173b"
+        "sha256": "bdf69118ce7d8d8e2fcac93afebc9511f230edc2ebc08c240e09ed0c59284674"
       },
       "sha256": "200a4b7275de81cc3bc28ed92aa7659d2f31718c57f70a6a4ebfefe08215aacb"
     },
@@ -321,198 +321,198 @@
       "contains_name": true,
       "file": "brand-snk.rgb888",
       "prepared": {
-        "bytes": 39914,
+        "bytes": 51994,
         "file": "brand-snk.3-2df2.cardtex",
-        "sha256": "1f5653b6216e62714747373ca4fcbed5c8997fc2797305bea22b2397b2e10bfc"
+        "sha256": "b2bcacc1c872598e596870d4877fca0e71d25605a618848dde359182aa26ee31"
       },
       "sha256": "847a9422acb68a2d449853be36bde1ae7288da55c4acf8143e9a9b402430cd94"
     },
     "n64": {
       "file": "console-n64.rgb888",
       "prepared": {
-        "bytes": 246212,
+        "bytes": 248122,
         "file": "console-n64.1-2a7f.cardtex",
-        "sha256": "4b99802d50e64a5358eb08aad467388986334b9c8fb2bd463293c158e7633658"
+        "sha256": "fefb374f083482ee6128e04dcf70ae8f65ea064e1db1f8adf032bf5259cca6f7"
       },
       "sha256": "10e50def09018ee9dc8bb0b770d7adac0c98414443631c17374194a29b0278d1"
     },
     "nes": {
       "file": "console-nes.rgb888",
       "prepared": {
-        "bytes": 243078,
+        "bytes": 242644,
         "file": "console-nes.1-2a7f.cardtex",
-        "sha256": "e6ea73bbafdeddf4e73eab70ed4988eb703c82c222acc66e79da5f8925c1babe"
+        "sha256": "718cd559596fc3ea193791d534732a17d8fe88a72e8129c74e81ea833da4c66e"
       },
       "sha256": "c660004f45a08a6ff1606afd8c353438d0ff814a45d0ec77b3881d5ca8f7f7b4"
     },
     "pc98": {
       "file": "computer-pc98.rgb888",
       "prepared": {
-        "bytes": 227306,
+        "bytes": 229584,
         "file": "computer-pc98.2-edc6.cardtex",
-        "sha256": "44db9440671b7ba1ecabb17ccfec1f54b896d4ee2a742b73c967e0a49b8da643"
+        "sha256": "85b03a6f2d8ab491d79e0ef4fe674e5f4987b6854a6716396ad5dab683f7161e"
       },
       "sha256": "4fb9cd1c4eec41674143c24ba386c005ad510a7a84a99006a2abd46a1565c2f8"
     },
     "root:arcade": {
       "file": "01_arcade.rgb888",
       "prepared": {
-        "bytes": 299117,
+        "bytes": 284831,
         "file": "01_arcade.0-e1a5.cardtex",
-        "sha256": "90c799dd0b2d6ba9215ad042b8e7a7b46c03d6639b91383da199ce2e7d0aa916"
+        "sha256": "760fab064d58e67825e2375971946a8952a9f96d0d8fe0809ea5f9896d0c9586"
       },
       "sha256": "e944b412d6d059a905b41306db0060fb7b2fc9ff44814b42d565686a26e1e443"
     },
     "root:computers": {
       "file": "03_computers.rgb888",
       "prepared": {
-        "bytes": 379482,
+        "bytes": 371166,
         "file": "03_computers.2-edc6.cardtex",
-        "sha256": "0abf3a9ec2e9fe62da53839a6cda1cbd8a9b27b2e00620108178f8eef4d090f8"
+        "sha256": "d37c0a8154977516779fd5104504d650036c1f11e8b6edfdb882884801b7347e"
       },
       "sha256": "c15fb06d5cec36480fcd5330ee0a31b4546570ec4226242ae5f6ba4c4e252bd6"
     },
     "root:consoles": {
       "file": "02_consoles.rgb888",
       "prepared": {
-        "bytes": 262305,
+        "bytes": 262823,
         "file": "02_consoles.1-2a7f.cardtex",
-        "sha256": "6a62cb322083d1d93910bccded89cc377bb4bb7079a971c1cbfc538b8904ea70"
+        "sha256": "362ea86c48db2b56cecef1987e8a20c45707eb14ce12cd62daaa0e1cbfa37b57"
       },
       "sha256": "f2a0d9d5306ed822d0ab005b4998b2ff6617c05f62ed4fc782cc4dde52947ed4"
     },
     "root:favourites": {
       "file": "05_favourites.rgb888",
       "prepared": {
-        "bytes": 163676,
+        "bytes": 165612,
         "file": "05_favourites.4-e12f.cardtex",
-        "sha256": "215e8eefc0a238ba177e430aee64b65be34615d897191908da321f6389238ab0"
+        "sha256": "41c1e178815a1e87ddfb716d723e22803ad4eb1f46613684468706f74607693f"
       },
       "sha256": "9970ac672de8348ab2940c943eb99ea6060944889a8c5a57f15cba1f1f64869f"
     },
     "root:handhelds": {
       "file": "04_handhelds.rgb888",
       "prepared": {
-        "bytes": 282406,
+        "bytes": 281058,
         "file": "04_handhelds.3-2df2.cardtex",
-        "sha256": "480cf80d6185fc01149b11bdda3401709518ad2b2750fb5d0223461b558870ea"
+        "sha256": "ba133244ca84a828552a898ed2f3a3ce0865124784cddf29ec1f7008cb5dcad2"
       },
       "sha256": "555b3d3ad8738ffbcad2ced6ef7de69d84e59971c7fc344454c162794f11ff82"
     },
     "root:settings": {
       "file": "06_settings.rgb888",
       "prepared": {
-        "bytes": 198170,
+        "bytes": 197142,
         "file": "06_settings.5-8b7f.cardtex",
-        "sha256": "a3f65bd91ba81d678d086093cf10233acd6c8c011baea5e51587425649d3ab1f"
+        "sha256": "920462361157ad79b1fd63156e29770dc3ea95e275b3311a8b8a046abc8111bb"
       },
       "sha256": "b024d0ad846ffd0b96cd7b8a77e39f83e26d468fa1b20ff298d9c895a16a21dc"
     },
     "s32x": {
       "file": "console-s32x.rgb888",
       "prepared": {
-        "bytes": 249203,
+        "bytes": 249891,
         "file": "console-s32x.1-2a7f.cardtex",
-        "sha256": "19cb041c15342886088a81a8df0159aa7155c36301ce4047b67a6719f74909c2"
+        "sha256": "c100b2011bf30ff73d4466f3886b27895844611df37c645827f769061a94f271"
       },
       "sha256": "ac749c03e32c91120d1d7c051f23a91fdf48d31070e80ca55770883d68c1e216"
     },
     "satellaview": {
       "file": "console-satellaview.rgb888",
       "prepared": {
-        "bytes": 285471,
+        "bytes": 285339,
         "file": "console-satellaview.1-2a7f.cardtex",
-        "sha256": "df054fc5d8e32253a14eace05be19676e0b3cbb6322c256ba1e74258535ba639"
+        "sha256": "9287630b109306c42a76612c287ba6b0d51ae7f879a0ec8c1d8e712f713c35a2"
       },
       "sha256": "9becb0cc6ce1d2f1e135ea4dca6d1a7b82a857f9624118db475cd3f84601ea38"
     },
     "saturn": {
       "file": "console-saturn.rgb888",
       "prepared": {
-        "bytes": 247401,
+        "bytes": 247597,
         "file": "console-saturn.1-2a7f.cardtex",
-        "sha256": "82b839b7ae5e052960444c4f1a0fe5bc96bf83a7a8af62136eae1c4c4864acb7"
+        "sha256": "fbfb834064ebd8897a6810efac186cbfeb4a422943d043c6bd5043e20d0cd760"
       },
       "sha256": "b9b80d22f0907d93ed1ebd6cbd45e4c0767159acf3e4d5194bcccabf548e5f2b"
     },
     "sg1000": {
       "file": "console-sg1000.rgb888",
       "prepared": {
-        "bytes": 247395,
+        "bytes": 243957,
         "file": "console-sg1000.1-2a7f.cardtex",
-        "sha256": "4840558f691c5ab6d955064ae40dac2d5b051777865358dfe717d55124755dbe"
+        "sha256": "e8f5a56d7c76c22ea5b65c57c2f7816ea740ddc0ccd4b6a0ccf12b9588004ce8"
       },
       "sha256": "5e4c3a29e95b67136639f8ff898ab2face85178cc12e8106bf57af17b94a5f4a"
     },
     "sharp-x1": {
       "file": "computer-x1.rgb888",
       "prepared": {
-        "bytes": 196859,
+        "bytes": 205003,
         "file": "computer-x1.2-edc6.cardtex",
-        "sha256": "9fdbaa3ccc827b5b8c79c8f1b4492bac4e44bff83f70aec67b25f7ac6bc9212b"
+        "sha256": "4c988fc37701a4c642da613a23a7c723c2ebc1e12b57289db5deedc41e755ae1"
       },
       "sha256": "e924060533de5f5bf1de150ba681c5284a46778caea6a70d800ddd7ea9b24289"
     },
     "sms": {
       "file": "console-sms.rgb888",
       "prepared": {
-        "bytes": 234272,
+        "bytes": 232678,
         "file": "console-sms.1-2a7f.cardtex",
-        "sha256": "47498460f4151ca74b5fa68f6bfefd77c4705a94029f281aa93d39992dc54946"
+        "sha256": "f84f365b664b6293df325672d4dbf5fa8f3e2e72f680438d002ef8cfca57a2a1"
       },
       "sha256": "54b4f68f1f242813a10d3342953ff5849072be48b3b99c70fd4108f035b0d317"
     },
     "snes": {
       "file": "console-snes.rgb888",
       "prepared": {
-        "bytes": 231383,
+        "bytes": 233539,
         "file": "console-snes.1-2a7f.cardtex",
-        "sha256": "47d95adceca0b342ec375cc0a9e8b166b76dc4d188fc6424757fd74b353aa92c"
+        "sha256": "58f8eafb785db861c8f8a63375e667543bcad7950f32e38f0c57a2625e762e7f"
       },
       "sha256": "d942a5507ce9f06571b48b197ecb3fb2fef0cf60981d8661cd278800450e50e3"
     },
     "spectrum": {
       "file": "computer-zx-spectrum.rgb888",
       "prepared": {
-        "bytes": 145765,
+        "bytes": 149697,
         "file": "computer-zx-spectrum.2-edc6.cardtex",
-        "sha256": "dfa501656999a8ab0325b39e0d01ab827e8bc0965b213a5fcf45ffa35bf6eeaf"
+        "sha256": "f1c2a5e520f939732b56756d27978349e24340bded5a4d0ea2ca53a1c7ad4f20"
       },
       "sha256": "abb6919f6c9865fe793f52a968997257d103b7119baab8bdc616c42b0ec74123"
     },
     "trs-80": {
       "file": "computer-trs-80.rgb888",
       "prepared": {
-        "bytes": 178511,
+        "bytes": 180989,
         "file": "computer-trs-80.2-edc6.cardtex",
-        "sha256": "5eadfead294762b8387be1e396d13d13ccad5447f44fbb67a87261950a82e5ef"
+        "sha256": "dff59957de4b8488c4d3a84bfe604ffb946b84233bb7e648eb2ed35518bb49f4"
       },
       "sha256": "daedc69b713eaf43f6f69408a42fbbefa82c4451dffe4a6dcf2aa4779372d2fd"
     },
     "x1": {
       "file": "computer-x1.rgb888",
       "prepared": {
-        "bytes": 196859,
+        "bytes": 205003,
         "file": "computer-x1.2-edc6.cardtex",
-        "sha256": "9fdbaa3ccc827b5b8c79c8f1b4492bac4e44bff83f70aec67b25f7ac6bc9212b"
+        "sha256": "4c988fc37701a4c642da613a23a7c723c2ebc1e12b57289db5deedc41e755ae1"
       },
       "sha256": "e924060533de5f5bf1de150ba681c5284a46778caea6a70d800ddd7ea9b24289"
     },
     "x68000": {
       "file": "computer-x68000.rgb888",
       "prepared": {
-        "bytes": 133782,
+        "bytes": 138172,
         "file": "computer-x68000.2-edc6.cardtex",
-        "sha256": "fe0e6198038d4ef99103d463d2412e77d23efe1766374611fb440fbdd1b568b3"
+        "sha256": "b0d6485c0c81a530c8acc10f709ccabc190dca9664118fa8332587d347f31402"
       },
       "sha256": "0d5e6efec1576511434f6cc6f5581a8c4593dd1a2e2f7ce3726b9a3fa1249380"
     },
     "zx-spectrum": {
       "file": "computer-zx-spectrum.rgb888",
       "prepared": {
-        "bytes": 145765,
+        "bytes": 149697,
         "file": "computer-zx-spectrum.2-edc6.cardtex",
-        "sha256": "dfa501656999a8ab0325b39e0d01ab827e8bc0965b213a5fcf45ffa35bf6eeaf"
+        "sha256": "f1c2a5e520f939732b56756d27978349e24340bded5a4d0ea2ca53a1c7ad4f20"
       },
       "sha256": "abb6919f6c9865fe793f52a968997257d103b7119baab8bdc616c42b0ec74123"
     }
