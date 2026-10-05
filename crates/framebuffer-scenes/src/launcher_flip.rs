@@ -56,7 +56,7 @@ pub(super) struct Column {
     source_y: i32,
     step: i32,
     #[cfg(feature = "card-axis-filter")]
-    opaque_margin: usize,
+    vertical_filter: crate::launcher_texture::AxisFilter,
     top: usize,
     bottom: usize,
     reflection_y: i64,
@@ -516,7 +516,7 @@ fn render(
                 source_y: (zero + clip_top as i64 * step) as i32,
                 step: step as i32,
                 #[cfg(feature = "card-axis-filter")]
-                opaque_margin: face.texture.opaque_margin_axes(step as u32),
+                vertical_filter: face.texture.vertical_filter(step as u32),
                 top,
                 bottom,
                 // Inverse mapping uses pixel centres; convert the lower edge
@@ -545,7 +545,7 @@ fn render(
                         {
                             #[cfg(feature = "card-axis-filter")]
                             {
-                                column.opaque_margin.min(face.height)
+                                column.vertical_filter.opaque_margin().min(face.height)
                             }
                             #[cfg(not(feature = "card-axis-filter"))]
                             {
@@ -555,7 +555,7 @@ fn render(
                         {
                             #[cfg(feature = "card-axis-filter")]
                             {
-                                (column.opaque_margin + 1).min(face.height)
+                                (column.vertical_filter.opaque_margin() + 1).min(face.height)
                             }
                             #[cfg(not(feature = "card-axis-filter"))]
                             {
@@ -606,7 +606,7 @@ fn render(
                 #[cfg(feature = "card-axis-filter")]
                 face.texture.prepare_column_rows_axes(
                     column.filter,
-                    column.step as u32,
+                    column.vertical_filter,
                     start,
                     &mut texels[(x - left) * scratch.column_height + start
                         ..(x - left) * scratch.column_height + end],
@@ -621,7 +621,7 @@ fn render(
                     #[cfg(feature = "card-axis-filter")]
                     other.texture.prepare_column_rows_axes(
                         column.filter,
-                        column.step as u32,
+                        column.vertical_filter,
                         start,
                         &mut scratch.blend[start..end],
                     );
@@ -642,7 +642,7 @@ fn render(
                     #[cfg(feature = "card-axis-filter")]
                     face.texture.prepare_column_rows_axes(
                         face.texture.filter(4 * ONE as i32, ONE as u32),
-                        column.step as u32,
+                        column.vertical_filter,
                         start,
                         &mut scratch.blend[start..end],
                     );
@@ -738,7 +738,7 @@ fn render(
                             (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
                             face.dithered,
                             (x, top),
-                            c.opaque_margin,
+                            c.vertical_filter.opaque_margin(),
                         );
                     }
                 };
