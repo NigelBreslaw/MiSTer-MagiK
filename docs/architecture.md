@@ -466,7 +466,9 @@ Hierarchy transitions carry a navigation-owned `CardLevelTransition`: source
 menu ID, source card ID and destination menu ID. Navigation captures it before
 changing the menu, including queued activation, Back and Home. The card session
 resolves the source ID against its retained level once, then freezes that source
-for the entire gather/edge-on/deal sequence. Artwork lookup keys are separate from
+for the entire readiness wait and gather/edge-on/deal sequence. The readiness
+wait settles that committed source rather than freezing an outgoing browse flip.
+Artwork lookup keys are separate from
 navigation IDs. Missing or stale origins adopt the destination without inventing
 an animated source card.
 

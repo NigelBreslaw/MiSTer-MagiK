@@ -390,11 +390,14 @@ impl LauncherCardHomeSession {
         motion: bool,
         nested_frame: Option<BrowseFrame>,
     ) {
-        let transition = CardLevelTransition {
-            source_level: self.level.menu_id.clone(),
-            source_card: self.level.cards[self.frame.selected].navigation_id.clone(),
-            destination_level: level.menu_id.clone(),
-        };
+        let transition = (self.trick.is_none() && self.level.menu_id != level.menu_id)
+            .then(|| self.level.cards.get(self.frame.selected))
+            .flatten()
+            .map(|card| CardLevelTransition {
+                source_level: self.level.menu_id.clone(),
+                source_card: card.navigation_id.clone(),
+                destination_level: level.menu_id.clone(),
+            });
         self.update_from_navigation(
             scene,
             level,
@@ -404,7 +407,7 @@ impl LauncherCardHomeSession {
             now_ms,
             motion,
             nested_frame,
-            Some(&transition),
+            transition.as_ref(),
         );
     }
 
@@ -621,6 +624,10 @@ impl LauncherCardHomeSession {
             destination: Some(destination),
             dealing: false,
         });
+        // Navigation has settled the activation. Waiting for the destination
+        // must show that committed source, never the old outgoing browse half.
+        self.frame = settled_frame(source_selected);
+        self.last_visual_index = source_selected as f32;
         self.content_generation = self.content_generation.wrapping_add(1).max(1);
         self.content_dirty = true;
         self.advance_trick();
@@ -1317,7 +1324,7 @@ mod tests {
             ))),
         );
         session.measure_preparation = true;
-        session.begin_trick(target.clone(), 1);
+        session.begin_trick(target.clone(), 1, 3);
         assert!(
             session.trick.as_ref().unwrap().ready,
             "warm destination cannot wait for unrelated work"
@@ -1377,7 +1384,7 @@ mod tests {
             },
         )
         .unwrap();
-        session.begin_trick(target.clone(), 1);
+        session.begin_trick(target.clone(), 1, 3);
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         session.render();
         let generation = session.current_request().generation;
@@ -2505,6 +2512,26 @@ mod tests {
                         .trick
                         .as_ref()
                         .expect("navigation origin should start the trick");
+                    assert_eq!(trick.source_selected, activated);
+                    if !trick.ready {
+                        let mut waiting =
+                            prepare(scene, &source, activated, "21:37", &session.fonts);
+                        waiting.render_frame(settled_frame(activated));
+                        assert!(
+                            session.render() == waiting.pixels(),
+                            "preparation must retain the committed source card"
+                        );
+                        assert!(!session.is_animating());
+                    }
+                    wait_trick_ready(
+                        &mut session,
+                        scene,
+                        &current,
+                        nav.selected,
+                        "21:37",
+                        tick * 16,
+                    );
+                    let trick = session.trick.as_ref().unwrap();
                     assert_eq!(trick.source_selected, activated);
                     let mut expected = prepare(scene, &source, activated, "21:37", &session.fonts);
                     expected.render_level_gather_to(
