@@ -34,7 +34,7 @@ mod macos {
         NavigationTransitionState, Screen, settings_display_resolution_index,
         settings_display_resolutions,
     };
-    use mister_magik_fb::launcher_presentation::LauncherViewPresenters;
+    use mister_magik_fb::launcher_presentation::{LauncherViewPresenters, SlintOverlayOcclusion};
     use mister_magik_fb::launcher_runtime::catalog::{
         ShardedCatalogSeed, load_sharded_registry_seed_at,
     };
@@ -1895,7 +1895,11 @@ mod macos {
             // Production stops the Rust Arcade layers under modal and
             // full-screen Slint overlays; composing them here would paint
             // over the overlay and hide composition-order bugs.
-            if !slint_overlay_owns_frame(&self.launcher)
+            if !SlintOverlayOcclusion::read(
+                &self.launcher,
+                self.launcher.global::<SetupView>().get_phase() != ViewSetupPhase::None,
+            )
+            .any()
                 && matches!(
                     self.scenario,
                     Scenario::Arcade
@@ -4476,14 +4480,6 @@ mod macos {
             _ => {}
         }
         launcher.window().request_redraw();
-    }
-
-    fn slint_overlay_owns_frame(launcher: &Launcher) -> bool {
-        let overlay = launcher.global::<OverlayView>();
-        overlay.get_confirmation_kind() != ConfirmationKind::None
-            || overlay.get_loading_state() == LoadingState::Active
-            || launcher.global::<CatalogView>().get_activity() == CatalogActivity::Foreground
-            || launcher.global::<SetupView>().get_phase() != ViewSetupPhase::None
     }
 
     fn reset_transient_views(catalog: &CatalogView, media: &MediaView, overlay: &OverlayView) {

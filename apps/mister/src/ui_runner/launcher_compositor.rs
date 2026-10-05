@@ -1144,6 +1144,119 @@ mod tests {
         .unwrap();
     }
 
+    // Background activity pills are Slint content composed before the Rust
+    // Arcade list and preview layers, so they must stay in the header band:
+    // on screen, clear of the title and clock, and outside both layer rects.
+    #[test]
+    fn header_activity_clears_title_clock_and_arcade_layers() {
+        std::thread::spawn(|| {
+            use crate::arcade_list_renderer::ArcadeListGeometry;
+            use crate::visual_composition::hdmi_preview_rect;
+            use slint::{ModelRc, VecModel};
+            use slint_ui::launcher::{
+                CatalogActivity, CatalogView, Launcher, LauncherScreen, MediaPackRow,
+                MediaPackState, MediaView, MisterUi, NavigationView, ScreenOrientation,
+            };
+            let window = install_isolated_test_platform();
+            let app = Launcher::new().unwrap();
+            app.show().unwrap();
+            let catalog = app.global::<CatalogView>();
+            let media = app.global::<MediaView>();
+            let pack = |system: &str, state: MediaPackState, percent: i32| MediaPackRow {
+                system: system.into(),
+                image_size: "320px".into(),
+                state,
+                phase_label: "Downloading".into(),
+                percent,
+                bytes_label: "42 MB / 61 MB".into(),
+                pack_position: "1 of 2".into(),
+            };
+            for (width, height, orientation) in [
+                (960, 540, ScreenOrientation::Normal),
+                (540, 960, ScreenOrientation::MonitorClockwise),
+            ] {
+                let mister = app.global::<MisterUi>();
+                mister.set_window_width(width as i32);
+                mister.set_window_height(height as i32);
+                mister.set_screen_orientation(orientation);
+                window.set_size(PhysicalSize::new(width as u32, height as u32));
+                app.global::<NavigationView>()
+                    .set_screen(LauncherScreen::Settings);
+                let ui = UiDisplay::for_framebuffer(width, height);
+                let mut target =
+                    UiFrameTarget::cached(FramebufferTargetGeometry::new(width, height));
+
+                catalog.set_activity(CatalogActivity::Idle);
+                catalog.set_background_activity_visible(false);
+                media.set_rows(ModelRc::default());
+                window.request_redraw();
+                LayerTarget::new(&mut target, &ui).render_slint_full(&window);
+                let baseline = target.cached_565().to_vec();
+
+                // Both pills with long labels: the worst case for width.
+                catalog.set_activity(CatalogActivity::Background);
+                catalog.set_background_activity_visible(true);
+                catalog.set_title("Updating systems 120/300 Nintendo Entertainment System".into());
+                media.set_rows(ModelRc::new(VecModel::from(vec![
+                    pack("Neo Geo Pocket Color", MediaPackState::Downloading, 68),
+                    pack("Arcade", MediaPackState::Queued, 0),
+                ])));
+                window.request_redraw();
+                LayerTarget::new(&mut target, &ui).render_slint_full(&window);
+
+                let mut changed: Option<DirtyRect> = None;
+                for (index, (now, before)) in target.cached_565().iter().zip(&baseline).enumerate()
+                {
+                    if now != before {
+                        let (x, y) = (index % width, index / width);
+                        let pixel = DirtyRect {
+                            x0: x,
+                            y0: y,
+                            x1: x + 1,
+                            y1: y + 1,
+                        };
+                        changed = Some(changed.map_or(pixel, |rect| rect.union(pixel)));
+                    }
+                }
+                let pills = changed.expect("header activity rendered");
+                assert!(
+                    pills.x0 >= 26,
+                    "{width}x{height} pills leave the screen: {pills:?}"
+                );
+                for y in pills.y0..pills.y1 {
+                    for x in pills.x0..pills.x1 {
+                        assert_eq!(
+                            baseline[y * width + x].0,
+                            0,
+                            "{width}x{height} pills {pills:?} cover header content at {x},{y}"
+                        );
+                    }
+                }
+                let lists = if height > width {
+                    [false, true].map(|search| ArcadeListGeometry::portrait(width, height, search))
+                } else {
+                    [
+                        ArcadeListGeometry::NORMAL,
+                        ArcadeListGeometry::search_for_render_w(width),
+                    ]
+                };
+                for layer in lists
+                    .map(ArcadeListGeometry::dirty_rect)
+                    .into_iter()
+                    .chain([hdmi_preview_rect(width, height)])
+                {
+                    assert_eq!(
+                        pills.intersection(layer),
+                        None,
+                        "{width}x{height} pills {pills:?} overlap Rust layer {layer:?}"
+                    );
+                }
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
     #[test]
     fn native_device_matches_complete_hub_games_and_status_pages() {
         std::thread::spawn(|| {

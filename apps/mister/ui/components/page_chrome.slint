@@ -29,6 +29,32 @@ export global PageTheme {
     out property <color> danger: #e86c75;
 }
 
+// Outline button shared by Settings pickers and HDMI dialogs.
+export component OutlineButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> focused;
+    in property <bool> acknowledged;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
+
+    height: 28px;
+    border-width: 1px;
+    border-color: root.focused ? PageTheme.settings-accent
+        : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.button-border;
+    background: root.focused ? PageTheme.button-focus : transparent;
+
+    // Xerxes caps sit 5px below the origin and are 10px tall.
+    Xerxes10 {
+        y: (root.height - 14px) / 2;
+        width: parent.width;
+        text: root.label.to-uppercase();
+        horizontal-alignment: center;
+        color: root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+}
+
 // Library colour bar from Home's summary column, used as a quiet brand mark.
 export component LibraryStripe inherits Rectangle {
     in property <length> segment: 32px;

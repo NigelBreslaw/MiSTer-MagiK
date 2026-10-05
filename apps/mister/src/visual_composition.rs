@@ -614,31 +614,6 @@ mod tests {
         }
     }
 
-    // `HeaderActivity` in ui/variants/hdmi_overlays.slint is composed before
-    // the Rust Arcade list and preview layers, so its header band must stay
-    // clear of both or they paint over it.
-    #[test]
-    fn header_activity_band_clears_arcade_direct_layers() {
-        for (frame_width, frame_height, x1, y0, y1) in
-            [(960, 540, 857, 24, 42), (540, 960, 436, 38, 56)]
-        {
-            let band = DirtyRect { x0: 0, y0, x1, y1 };
-            let mut layers = vec![hdmi_preview_rect(frame_width, frame_height)];
-            for search in [false, true] {
-                layers.push(
-                    ArcadeVisualLayer::geometry(frame_width, frame_height, search).dirty_rect(),
-                );
-            }
-            for layer in layers {
-                assert_eq!(
-                    band.intersection(layer),
-                    None,
-                    "{frame_width}x{frame_height} header activity overlaps {layer:?}"
-                );
-            }
-        }
-    }
-
     #[test]
     fn preview_frame_scales_rgb565_to_requested_rect() {
         let source = [

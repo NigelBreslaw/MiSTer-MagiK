@@ -9572,13 +9572,10 @@ pub(super) fn run_launcher_loop(
             catalog_view.set_progress_dot_visible(dot_visible);
             request_launcher_redraw!();
         }
-        let confirm_visible =
-            overlay_view.get_confirmation_kind() != slint_ui::launcher::ConfirmationKind::None;
-        // Full-screen Slint overlays own every pixel. The Rust Arcade list and
-        // preview layers are composed after Slint, so they must stand down.
-        let fullscreen_overlay_visible = catalog_scan_visible
-            || overlay_view.get_loading_state() == slint_ui::launcher::LoadingState::Active
-            || setup.is_active();
+        let overlay_occlusion =
+            crate::launcher_presentation::SlintOverlayOcclusion::read(&app, setup.is_active());
+        let confirm_visible = overlay_occlusion.confirm;
+        let fullscreen_overlay_visible = overlay_occlusion.fullscreen;
         let confirm_selected =
             if overlay_view.get_selected_choice() == slint_ui::launcher::DialogChoice::Cancel {
                 0
@@ -9967,23 +9964,11 @@ pub(super) fn run_launcher_loop(
             && !layout.is_portrait()
             && !ui.output_route().is_crt()
             && (layout.logical_w(), layout.logical_h()) == (960, 540)
-            && !confirm_visible
-            && !catalog_scan_visible
-            && !catalog_background_scan_visible
-            && !setup.is_active()
+            && !overlay_occlusion.any()
             && !screensaver.active
             && !launching
-            && app
-                .global::<slint_ui::launcher::MediaView>()
-                .get_rows()
-                .row_count()
-                == 0
             && app.global::<slint_ui::launcher::SettingsView>().get_popup()
-                == slint_ui::launcher::SettingsPopup::None
-            && app
-                .global::<slint_ui::launcher::OverlayView>()
-                .get_loading_state()
-                != slint_ui::launcher::LoadingState::Active;
+                == slint_ui::launcher::SettingsPopup::None;
         if native_device_base && nav.is_system_hub() {
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             arcade_list_renderer.prepare_visible_rows(

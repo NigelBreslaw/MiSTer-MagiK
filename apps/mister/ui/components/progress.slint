@@ -31,6 +31,7 @@ export component MediaPackProgressRow inherits Rectangle {
     property <bool> active: pack.state == MediaPackState.downloading;
     property <bool> failed: pack.state == MediaPackState.failed;
     property <bool> complete: pack.state == MediaPackState.complete;
+    property <bool> show-bytes: root.active && root.pack.bytes-label != "";
 
     height: 26px;
     background: transparent;
@@ -48,17 +49,18 @@ export component MediaPackProgressRow inherits Rectangle {
             : root.complete ? PageTheme.cream : PageTheme.muted;
     }
 
-    if root.active && root.pack.bytes-label != "" : Xerxes10 {
+    bytes := Xerxes10 {
         x: status.x - 14px - self.preferred-width;
         y: 0px;
-        text: root.pack.bytes-label.to-uppercase();
+        visible: root.show-bytes;
+        text: root.show-bytes ? root.pack.bytes-label.to-uppercase() : "";
         color: PageTheme.muted;
     }
 
     Xerxes10 {
         x: 0px;
         y: 0px;
-        width: parent.width - status.preferred-width - 160px;
+        width: Math.max(0px, (root.show-bytes ? bytes.x : status.x) - 12px);
         text: root.pack.system.to-uppercase();
         color: root.active || root.complete ? PageTheme.cream : PageTheme.muted;
         overflow: elide;

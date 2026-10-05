@@ -10,6 +10,7 @@ import { Xerxes10 } from "../components/xerxes_10.slint";
 import {
     LandscapePageChrome,
     LibraryStripe,
+    OutlineButton,
     PageTheme,
     PortraitPageChrome,
 } from "../components/page_chrome.slint";
@@ -110,19 +111,22 @@ export component CatalogScanPopup inherits Rectangle {
     }
 }
 
-// Background activity lives in the page header, left of the clock: every
-// HDMI page keeps that strip clear, and the Rust Arcade list and preview
-// renderers never paint over it.
+// Background activity lives in the page header: every HDMI page keeps that
+// strip clear, and the Rust Arcade list and preview renderers never paint
+// over it.
 component HeaderPill inherits Rectangle {
     in property <string> label;
     in property <string> value;
     in property <color> value-color: PageTheme.settings-accent;
     in property <int> percent: -1;
     in property <color> accent: PageTheme.settings-accent;
-    property <length> label-width: Math.min(label-text.preferred-width, 300px);
+    // Width granted by HeaderActivity; the label elides to fit it.
+    in property <length> budget: 10000px;
+    property <length> value-part: root.value == "" ? 0px : 8px + value-text.preferred-width;
+    out property <length> natural-width: 28px + label-text.preferred-width + root.value-part;
+    property <length> label-width: Math.max(0px, root.width - 28px - root.value-part);
 
-    width: 19px + root.label-width
-        + (root.value == "" ? 0px : 8px + value-text.preferred-width) + 9px;
+    width: Math.min(root.natural-width, root.budget);
     height: 18px;
     background: PageTheme.panel-background;
     border-width: 1px;
@@ -154,33 +158,48 @@ component HeaderPill inherits Rectangle {
     }
 }
 
-export component MediaProgressPopup inherits HeaderPill {
-    // At most three rows are published; follow the first one downloading.
-    property <int> active-index: MediaView.rows[0].state == MediaPackState.downloading ? 0
-        : MediaView.rows[1].state == MediaPackState.downloading ? 1
-        : MediaView.rows[2].state == MediaPackState.downloading ? 2 : -1;
-    property <bool> failed: MediaView.rows[0].state == MediaPackState.failed
-        || MediaView.rows[1].state == MediaPackState.failed
-        || MediaView.rows[2].state == MediaPackState.failed;
+component MediaProgressPill inherits HeaderPill {
+    in property <bool> compact;
+    // At most three rows are published. Indexing past the end yields a
+    // default row, so absent rows are treated as complete.
+    property <MediaPackState> s0: MediaView.rows.length > 0 ? MediaView.rows[0].state : MediaPackState.complete;
+    property <MediaPackState> s1: MediaView.rows.length > 1 ? MediaView.rows[1].state : MediaPackState.complete;
+    property <MediaPackState> s2: MediaView.rows.length > 2 ? MediaView.rows[2].state : MediaPackState.complete;
+    property <int> active-index: root.s0 == MediaPackState.downloading ? 0
+        : root.s1 == MediaPackState.downloading ? 1
+        : root.s2 == MediaPackState.downloading ? 2 : -1;
+    property <bool> downloading: root.active-index >= 0;
+    property <bool> failed: root.s0 == MediaPackState.failed
+        || root.s1 == MediaPackState.failed
+        || root.s2 == MediaPackState.failed;
+    property <bool> queued: root.s0 == MediaPackState.queued
+        || root.s1 == MediaPackState.queued
+        || root.s2 == MediaPackState.queued;
+    property <int> pending: (root.s0 == MediaPackState.queued || root.s0 == MediaPackState.downloading ? 1 : 0)
+        + (root.s1 == MediaPackState.queued || root.s1 == MediaPackState.downloading ? 1 : 0)
+        + (root.s2 == MediaPackState.queued || root.s2 == MediaPackState.downloading ? 1 : 0);
+    // Packs still waiting behind the one shown.
+    property <int> others: root.pending - (root.downloading ? 1 : 0);
     property <MediaPackRow> active: MediaView.rows[Math.max(0, root.active-index)];
-    property <int> others: MediaView.rows.length - 1;
 
     accessible-role: progress-indicator;
     accessible-label: "Media download progress";
     accessible-description: MediaView.summary;
 
-    label: root.active-index >= 0
-        ? (root.active.system + " screenshots").to-uppercase() : "SCREENSHOTS";
-    value: root.active-index >= 0
-        ? root.active.percent + "%" + (root.others > 0 ? "  +" + root.others : "")
-        : root.failed ? "FAILED" : "QUEUED";
-    value-color: root.failed && root.active-index < 0 ? PageTheme.danger
-        : root.active-index >= 0 ? PageTheme.settings-accent : PageTheme.muted;
-    percent: root.active-index >= 0 ? root.active.percent : -1;
-    accent: root.failed && root.active-index < 0 ? PageTheme.danger : PageTheme.settings-accent;
+    label: !root.downloading ? "SCREENSHOTS"
+        : root.compact ? root.active.system.to-uppercase()
+        : (root.active.system + " screenshots").to-uppercase();
+    value: root.downloading
+        ? root.active.percent + "%" + (root.others > 0 && !root.compact ? "  +" + root.others : "")
+        : root.failed ? "FAILED" : root.queued ? "QUEUED" : "DONE";
+    value-color: root.downloading ? PageTheme.settings-accent
+        : root.failed ? PageTheme.danger
+        : root.queued ? PageTheme.muted : PageTheme.cream;
+    percent: root.downloading ? root.active.percent : -1;
+    accent: root.failed && !root.downloading ? PageTheme.danger : PageTheme.settings-accent;
 }
 
-export component BackgroundScanBadge inherits HeaderPill {
+component BackgroundScanPill inherits HeaderPill {
     accessible-role: progress-indicator;
     accessible-label: "Background scan";
     accessible-description: CatalogView.title;
@@ -188,47 +207,42 @@ export component BackgroundScanBadge inherits HeaderPill {
     label: (CatalogView.title == "" ? "Discovering systems" : CatalogView.title).to-uppercase();
 }
 
+// Right-aligned left of the clock and kept clear of the page title. Both
+// pills share the space between, shrinking the longer one first.
 export component HeaderActivity inherits Rectangle {
     in property <bool> media-progress-shown;
     in property <bool> background-scan-shown;
     property <bool> portrait: MisterUi.portrait-layout;
+    property <bool> both: root.media-progress-shown && root.background-scan-shown;
+    // The title ends near x=152 in both orientations.
+    property <length> title-clearance: 168px;
+    property <length> right-edge: root.portrait ? MisterUi.window-width * 1px - 104px : 857px;
+    property <length> available: root.right-edge - root.title-clearance - (root.both ? 8px : 0px);
+    property <length> media-width: !root.media-progress-shown ? 0px
+        : !root.both ? Math.min(media.natural-width, root.available)
+        : Math.min(media.natural-width, Math.max(root.available / 2, root.available - scan.natural-width));
+    property <length> scan-width: !root.background-scan-shown ? 0px
+        : Math.min(scan.natural-width, root.available - root.media-width);
 
-    width: strip.preferred-width;
+    width: root.media-width + root.scan-width + (root.both ? 8px : 0px);
     height: 18px;
-    // Keep within the band pinned by visual_composition's
-    // header_activity_band_clears_arcade_direct_layers: portrait Arcade
-    // search starts its Rust list at y=56.
-    x: (root.portrait ? MisterUi.window-width * 1px - 104px : 857px) - self.width;
+    x: root.right-edge - self.width;
+    // Pinned by header_activity_clears_title_clock_and_arcade_layers:
+    // portrait Arcade search starts its Rust list at y=56.
     y: root.portrait ? 38px : 24px;
 
-    strip := HorizontalLayout {
-        spacing: 8px;
-        if root.media-progress-shown : MediaProgressPopup { }
-        if root.background-scan-shown : BackgroundScanBadge { }
+    media := MediaProgressPill {
+        x: 0px;
+        y: 0px;
+        visible: root.media-progress-shown;
+        compact: root.portrait;
+        budget: root.media-width;
     }
-}
-
-component DialogButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> focused;
-    in property <bool> acknowledged;
-    accessible-role: button;
-    accessible-label: root.label;
-    accessible-item-selected: root.focused;
-    accessible-enabled: true;
-
-    height: 28px;
-    border-width: 1px;
-    border-color: root.focused ? PageTheme.settings-accent
-        : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.button-border;
-    background: root.focused ? PageTheme.button-focus : transparent;
-
-    Xerxes10 {
-        y: 7px;
-        width: parent.width;
-        text: root.label.to-uppercase();
-        horizontal-alignment: center;
-        color: root.focused ? PageTheme.cream : PageTheme.muted;
+    scan := BackgroundScanPill {
+        x: root.width - self.width;
+        y: 0px;
+        visible: root.background-scan-shown;
+        budget: root.scan-width;
     }
 }
 
@@ -238,7 +252,9 @@ export component ConfirmDialog inherits Rectangle {
     accessible-description: OverlayView.confirmation-message;
     background: PageTheme.panel-scrim;
 
-    OverlayPanel {
+    panel := OverlayPanel {
+        // Two buttons share the row inside 20px side padding and an 8px gap.
+        property <length> button-width: Math.min(124px, (self.width - 48px) / 2);
         width: Math.min(440px, root.width - 32px);
         height: content.preferred-height;
         x: (root.width - self.width) / 2;
@@ -268,15 +284,15 @@ export component ConfirmDialog inherits Rectangle {
                 spacing: 8px;
                 alignment: end;
 
-                if OverlayView.cancel-label != "" : DialogButton {
-                    width: 124px;
+                if OverlayView.cancel-label != "" : OutlineButton {
+                    width: panel.button-width;
                     label: OverlayView.cancel-label;
                     focused: OverlayView.selected-choice == DialogChoice.cancel;
                     acknowledged: FeedbackView.acknowledged("", "left", FeedbackView.revision);
                 }
 
-                if OverlayView.confirm-label != "" : DialogButton {
-                    width: 124px;
+                if OverlayView.confirm-label != "" : OutlineButton {
+                    width: panel.button-width;
                     label: OverlayView.confirm-label;
                     focused: OverlayView.selected-choice == DialogChoice.confirm;
                     acknowledged: FeedbackView.acknowledged("", "right", FeedbackView.revision);
