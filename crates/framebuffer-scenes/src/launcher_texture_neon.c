@@ -291,6 +291,21 @@ static inline uint32x2_t interpolate2(const uint32_t *src, int32_t q0,
       vmlaq_u16(vmulq_u16(a, vsubq_u16(vdupq_n_u16(256), w)), b, w), 8));
 }
 
+#ifdef MAGIK_FAST_QUANTISATION
+static inline uint32x4_t cabinet_mix4(uint32x4_t a,uint32x4_t b,uint32x4_t weight);
+// Four output rows share the cabinet's exact signed high-multiply identity:
+// a + floor((b-a)*w/256). Every per-channel difference fits signed 16 bits.
+static inline uint32x4_t interpolate4_highmul(const uint32_t *src,
+    int32_t q0,int32_t q1,int32_t q2,int32_t q3) {
+  uint32x2x2_t a=vtrn_u32(vld1_u32(src+(q0>>16)),vld1_u32(src+(q1>>16)));
+  uint32x2x2_t b=vtrn_u32(vld1_u32(src+(q2>>16)),vld1_u32(src+(q3>>16)));
+  uint32x4_t weights={((uint32_t)q0&65535)>>8,((uint32_t)q1&65535)>>8,
+    ((uint32_t)q2&65535)>>8,((uint32_t)q3&65535)>>8};
+  return cabinet_mix4(vcombine_u32(a.val[0],b.val[0]),
+    vcombine_u32(a.val[1],b.val[1]),weights);
+}
+#endif
+
 // Exact two-row perspective interpolation composed directly to RGB565.
 // Avoids writing and then rereading a projected RGBA image for each card.
 void magik_launcher_project_over_column(uint16_t *out, size_t pitch,
@@ -888,7 +903,7 @@ void magik_launcher_project_dithered_fast(uint16_t *out,size_t pitch,const uint3
     int32_t q1=q+step,q2=q1+step,q3=q2+step;
     int32_t r=q>>16,r3=q3>>16;
     if(r>=0 && (size_t)(r3+1)<height) {
-      uint32x4_t p=vcombine_u32(interpolate2(src,q,q1),interpolate2(src,q2,q3));
+      uint32x4_t p=interpolate4_highmul(src,q,q1,q2,q3);
       uint32x4_t alpha=vshrq_n_u32(p,24);
       uint32x2_t minimum=vmin_u32(vget_low_u32(alpha),vget_high_u32(alpha));
       if(vget_lane_u32(minimum,0)==255 && vget_lane_u32(minimum,1)==255) {
@@ -965,7 +980,7 @@ void magik_launcher_project_dithered_fast_opaque(uint16_t *out,size_t pitch,
   size_t y=first;
   for(;y+3<end;y+=4) {
     int32_t q1=sample+step,q2=q1+step,q3=q2+step;
-    uint32x4_t p=vcombine_u32(interpolate2(src,sample,q1),interpolate2(src,q2,q3));
+    uint32x4_t p=interpolate4_highmul(src,sample,q1,q2,q3);
     uint16x4_t packed=pack_fast16(p,phase);
     out[y*pitch]=vget_lane_u16(packed,0);
     out[(y+1)*pitch]=vget_lane_u16(packed,1);
