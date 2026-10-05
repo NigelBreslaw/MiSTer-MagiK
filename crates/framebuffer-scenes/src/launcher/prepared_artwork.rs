@@ -196,6 +196,30 @@ mod tests {
         let source =
             include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/console-nes.rgb888");
         let bytes = PreparedArtwork::encode(source, LauncherCardId::Consoles, 0x2a7f);
+        use crate::bitmap_text::{BitmapFont, BitmapGlyph};
+        let font = BitmapFont {
+            ascent: 7,
+            descent: 0,
+            glyphs: (32..127)
+                .map(|c| BitmapGlyph {
+                    code_point: char::from_u32(c).unwrap(),
+                    left: 0,
+                    top: 7,
+                    width: 5,
+                    height: 7,
+                    advance: 6,
+                    alpha: (0..35)
+                        .map(|i| if (i + c).is_multiple_of(3) { 128 } else { 255 })
+                        .collect(),
+                })
+                .collect(),
+        };
+        let fonts = LauncherTypography {
+            heading: &font,
+            number: &font,
+            metadata: &font,
+            fallback: &font,
+        };
         for name in ["NES", "LONG 日本語 NAME", ""] {
             for games in [None, Some(0), Some(123), Some(u32::MAX)] {
                 let card = PreparedCard {
@@ -208,16 +232,18 @@ mod tests {
                     artwork: None,
                     rgb888: Some(source),
                 };
-                let raw = artwork::faces_rgb888(&card, None);
-                let packed = PreparedArtwork::decode(&bytes, card.id, card.colour)
-                    .unwrap()
-                    .faces(&card, None);
-                for (raw, packed) in raw.iter().zip(&packed) {
-                    assert_eq!(raw.pixels, packed.pixels);
-                    assert!(
-                        raw.texture == packed.texture,
-                        "all mip rows must match exactly"
-                    );
+                for typography in [None, Some(fonts)] {
+                    let raw = artwork::faces_rgb888(&card, typography);
+                    let packed = PreparedArtwork::decode(&bytes, card.id, card.colour)
+                        .unwrap()
+                        .faces(&card, typography);
+                    for (raw, packed) in raw.iter().zip(&packed) {
+                        assert_eq!(raw.pixels, packed.pixels);
+                        assert!(
+                            raw.texture == packed.texture,
+                            "all mip rows must match exactly"
+                        );
+                    }
                 }
             }
         }

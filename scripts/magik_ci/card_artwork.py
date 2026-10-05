@@ -16,6 +16,7 @@ _contract = runpy.run_path(
 )
 files_for = _contract["files_for"]
 SOURCE_BYTES = _contract["SOURCE_BYTES"]
+ROOT_KEYS = _contract["ROOT_KEYS"]
 
 
 def validate(root: Path) -> set[str]:
