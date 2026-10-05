@@ -15,6 +15,8 @@ from .common import github_output, repository_root
 def parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="magik-ci")
     sub = parser.add_subparsers(dest="group", required=True)
+    parity = sub.add_parser("neon-parity")
+    parity.add_argument("--cc", default="cc")
     dependencies = sub.add_parser("dependencies").add_subparsers(
         dest="command", required=True
     )
@@ -267,7 +269,11 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     root = repository_root()
-    if args.group == "guidance":
+    if args.group == "neon-parity":
+        from . import neon_parity
+
+        neon_parity.run(root, args.cc)
+    elif args.group == "guidance":
         from . import guidance
 
         record = guidance.report(root, args.path)

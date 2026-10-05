@@ -98,6 +98,8 @@ mister-magik-catalog = { path = "../../crates/catalog", features = ["io-test-met
 swash = { version = "0.2.7", features = ["scale", "render"] }
 
 [features]
+card-axis-filter = ["mister-magik-framebuffer-scenes/card-axis-filter"]
+card-fast-quantisation = ["mister-magik-framebuffer-scenes/card-fast-quantisation"]
 default = []
 asset-tools = ["dep:swash"]
 profile = ["dep:pprof"]

@@ -55,9 +55,37 @@ pub(super) struct Column {
     filter: crate::launcher_texture::Filter,
     source_y: i32,
     step: i32,
+    #[cfg(feature = "card-axis-filter")]
+    vertical_filter: crate::launcher_texture::AxisFilter,
     top: usize,
     bottom: usize,
     reflection_y: i64,
+}
+
+impl Column {
+    fn opaque_margin(&self) -> usize {
+        #[cfg(feature = "card-axis-filter")]
+        {
+            self.vertical_filter.opaque_margin()
+        }
+        #[cfg(not(feature = "card-axis-filter"))]
+        {
+            8
+        }
+    }
+
+    fn prepare_rows(
+        &self,
+        texture: &crate::launcher_texture::Texture,
+        filter: crate::launcher_texture::Filter,
+        start: usize,
+        output: &mut [u32],
+    ) {
+        #[cfg(feature = "card-axis-filter")]
+        texture.prepare_column_rows_axes(filter, self.vertical_filter, start, output);
+        #[cfg(not(feature = "card-axis-filter"))]
+        texture.prepare_column_rows(filter, start, output);
+    }
 }
 
 pub(super) struct Face {
@@ -89,6 +117,19 @@ impl Face {
 
     pub fn new(pixels: Vec<Rgb565Pixel>, width: usize, height: usize) -> Self {
         let texture = crate::launcher_texture::Texture::new(&pixels, width, height);
+        Self {
+            #[cfg(test)]
+            pixels,
+            width,
+            height,
+            reflection_fade_rows: 64,
+            texture,
+            dithered: false,
+        }
+    }
+    #[cfg(feature = "card-axis-filter")]
+    pub fn new_before_rgb8(pixels: Vec<Rgb565Pixel>, width: usize, height: usize) -> Self {
+        let texture = crate::launcher_texture::Texture::new_before_rgb8(&pixels, width, height);
         Self {
             #[cfg(test)]
             pixels,
@@ -513,6 +554,8 @@ fn render(
                 filter: face.texture.filter(sxq as i32, footprint),
                 source_y: (zero + clip_top as i64 * step) as i32,
                 step: step as i32,
+                #[cfg(feature = "card-axis-filter")]
+                vertical_filter: face.texture.vertical_filter(step as u32),
                 top,
                 bottom,
                 // Inverse mapping uses pixel centres; convert the lower edge
@@ -531,13 +574,20 @@ fn render(
             } else {
                 0
             };
-            let mut ranges = [(start, face.height), (0, 0), (0, 0), (0, 0)];
+            let mut ranges = [(start, face.height), (0, 0), (0, 0), (0, 0), (0, 0)];
             if let Some((top, bottom)) = prepare_coverage.and_then(|covered| covered.span(x))
                 && start == 0
             {
                 ranges = [
                     (face.height - face.height / 4, face.height),
-                    (8.min(face.height), 9.min(face.height)),
+                    (
+                        column.opaque_margin().min(face.height),
+                        (column.opaque_margin() + 1).min(face.height),
+                    ),
+                    (
+                        face.height.saturating_sub(column.opaque_margin() + 1),
+                        face.height.saturating_sub(column.opaque_margin()),
+                    ),
                     (0, 0),
                     (0, 0),
                 ];
@@ -554,12 +604,12 @@ fn render(
                         (q(bottom - 1).div_euclid(ONE) + 2).clamp(0, face.height as i64) as usize,
                     )
                 };
-                // Retain the reflected quarter, opacity-proof row, and both
+                // Retain the reflected quarter, both opacity-proof rows, and both
                 // bilinear taps for every body row outside the hidden span.
-                ranges[2] = source_range(column.top, column.bottom.saturating_add(1).min(top));
-                ranges[3] = source_range(column.top.max(bottom), column.bottom + 1);
+                ranges[3] = source_range(column.top, column.bottom.saturating_add(1).min(top));
+                ranges[4] = source_range(column.top.max(bottom), column.bottom + 1);
                 ranges.sort_unstable_by_key(|range| range.0);
-                for i in 1..4 {
+                for i in 1..ranges.len() {
                     if ranges[i - 1].1 >= ranges[i].0 && ranges[i - 1].0 < ranges[i - 1].1 {
                         ranges[i].0 = ranges[i - 1].0;
                         ranges[i].1 = ranges[i].1.max(ranges[i - 1].1);
@@ -571,14 +621,16 @@ fn render(
                 if start >= end {
                     continue;
                 }
-                face.texture.prepare_column_rows(
+                column.prepare_rows(
+                    &face.texture,
                     column.filter,
                     start,
                     &mut texels[(x - left) * scratch.column_height + start
                         ..(x - left) * scratch.column_height + end],
                 );
                 if let Some((other, weight)) = blend {
-                    other.texture.prepare_column_rows(
+                    column.prepare_rows(
+                        &other.texture,
                         column.filter,
                         start,
                         &mut scratch.blend[start..end],
@@ -591,7 +643,8 @@ fn render(
                     );
                 }
                 if spine_weight > 0 {
-                    face.texture.prepare_column_rows(
+                    column.prepare_rows(
+                        &face.texture,
                         face.texture.filter(4 * ONE as i32, ONE as u32),
                         start,
                         &mut scratch.blend[start..end],
@@ -677,6 +730,7 @@ fn render(
                             (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
                             face.dithered,
                             (x, top),
+                            c.opaque_margin(),
                         );
                     }
                 };

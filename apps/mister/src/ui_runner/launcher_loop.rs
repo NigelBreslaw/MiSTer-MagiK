@@ -6371,6 +6371,8 @@ pub(super) fn run_launcher_loop(
             "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
             "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
             "animation_clock": {"mode":"vsync-locked-v1", "period_ns":frame_clock.period().as_nanos()},
+            "card_sampler": if cfg!(feature = "card-axis-filter") { "independent-vertical-prefilter" } else { "current" },
+            "card_quantiser": if cfg!(feature = "card-fast-quantisation") { "centred-bayer-shifts" } else { "existing-bayer" },
             "native_device_plane": if !layout.is_portrait() && !ui.output_route().is_crt()
                 && (layout.logical_w(), layout.logical_h()) == (960, 540)
                 { "exposed-hdmi-v1" } else { "disabled" },

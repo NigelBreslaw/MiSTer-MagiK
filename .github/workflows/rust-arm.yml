@@ -20,6 +20,15 @@ env:
   MISTER_CARGO_TIMINGS: "0"
 
 jobs:
+  launcher-neon-parity:
+    name: launcher-neon-parity
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check current and fast NEON kernels
+        run: scripts/magik-ci neon-parity
+
   host-dev-group:
     name: host-dev (${{ matrix.group }})
     strategy:

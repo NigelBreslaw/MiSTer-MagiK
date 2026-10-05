@@ -54,7 +54,99 @@ void reference_project_dithered(uint16_t *out,size_t pitch,const uint32_t *src,
 
 static uint32_t seed=237;
 static uint32_t next(void) {seed=seed*1664525+1013904223;return seed;}
+#ifdef MAGIK_FAST_QUANTISATION
+static int fast_quantisation_parity(void) {
+  // Exercise the all-black shortcut explicitly; independently varied random
+  // destination lanes almost never make an entire four-pixel group black.
+  for(uint32_t alpha=0;alpha<256;++alpha)for(uint32_t value=0;value<256;++value)
+    for(size_t phase=0;phase<16;++phase)for(size_t vertical=0;vertical<2;++vertical) {
+      uint32_t p[4];uint16_t offsets[4],actual[4];size_t x=phase&3,y=phase>>2;
+      for(size_t j=0;j<4;++j) {
+        uint32_t a=(alpha+j*63)&255;
+        p[j]=value|((value*7+j*17)&255)<<8|((value*13+j*53)&255)<<16|a<<24;
+        offsets[j]=(uint16_t)(256-image_threshold[(y+(vertical?j:0))&3][(x+(vertical?0:j))&3]);
+      }
+      vst1_u16(actual,fast_over4(vld1q_u32(p),vdup_n_u16(0),vld1_u16(offsets)));
+      for(size_t j=0;j<4;++j) {
+        uint16_t expected=fast_dither_pixel(p[j],0,x+(vertical?0:j),y+(vertical?j:0));
+        if(actual[j]!=expected){fprintf(stderr,"black-background mismatch %u %u %zu\n",alpha,value,j);return 23;}
+      }
+    }
+  puts("2097152 all-black alpha/colour/phase groups match scalar compositing");
+  for(size_t trial=0;trial<4096;++trial) {
+    size_t h=17+next()%128,rows=1+next()%127,pitch=1+next()%7,x=next()%960,y0=next()%540;
+    uint32_t src[160];uint16_t a[1000],b[1000];
+    for(size_t j=0;j<h;++j) {
+      uint32_t alpha=trial%2?(j>=8 && j<h-8?255:next()%256):next()%256;
+      src[j]=next()%(alpha+1)|(next()%(alpha+1))<<8|(next()%(alpha+1))<<16|alpha<<24;
+    }
+    for(size_t j=0;j<1000;++j)a[j]=b[j]=(uint16_t)next();
+    int32_t q=(int32_t)(next()%196609)-131072,step=1+next()%196608;
+    for(size_t j=0;j<rows;++j) {
+      int32_t qq=q+(int32_t)j*step,r=qq>>16;
+      uint32_t p=r>=0&&(size_t)r<h?src[r]:0,z=r+1>=0&&(size_t)(r+1)<h?src[r+1]:0;
+      a[3+j*pitch]=fast_dither_pixel(scalar(p,z,((uint32_t)qq&65535)>>8),a[3+j*pitch],x,y0+j);
+    }
+    magik_launcher_project_dithered_fast_opaque(b+3,pitch,src,h,rows,q,step,x,y0,trial%2?8:0,trial%2?h-8:0);
+    if(memcmp(a,b,sizeof(a))) {fprintf(stderr,"fast projection mismatch %zu\n",trial);return 1;}
+  }
+  // Flat-card gathers, mixed alpha, odd widths and independent output guards.
+  for(size_t trial=0;trial<1024;++trial) {
+    size_t height=1+next()%63,width=1+next()%17,rows=1+next()%31,pitch=width+3;
+    uint32_t source[17*63];uint16_t a[700],b[700];
+    for(size_t j=0;j<width*height;++j)source[j]=next();
+    for(size_t j=0;j<700;++j)a[j]=b[j]=(uint16_t)next();
+    int32_t q=(int32_t)(next()%196609)-131072,step=1+next()%196608;
+    size_t x=next()%960,y0=next()%540;
+    for(size_t y=0;y<rows;++y) {
+      int32_t yy=q+(int32_t)y*step,r=yy>>16;uint32_t w=((uint32_t)yy&65535)>>8;
+      for(size_t xx=0;xx<width;++xx) {
+        uint32_t p=r>=0&&(size_t)r<height?source[xx*height+r]:0;
+        uint32_t z=r+1>=0&&(size_t)(r+1)<height?source[xx*height+r+1]:0;
+        size_t at=3+y*pitch+xx;a[at]=fast_dither_pixel(scalar(p,z,w),a[at],x+xx,y0+y);
+      }
+    }
+    magik_launcher_flat_dithered_fast(b+3,pitch,source,height,height,width,rows,q,step,x,y0);
+    if(memcmp(a,b,sizeof(a))) {fprintf(stderr,"fast flat mismatch %zu\n",trial);return 22;}
+  }
+  puts("1024 flat-card alpha, bounds, odd-width and guard cases match scalar");
+  puts("Fast dither: 4096 projection cases including alpha, bounds, stride and tails passed");
+  return 0;
+}
+#endif
 int main(void) {
+  // A filtered column may retain opaque values at the old row-8 proof sites.
+  // Its selected row-24 bounds must reject the shortcut and preserve compositing.
+  {
+    uint32_t source[64];uint16_t actual[64],expected[64];
+    for(size_t i=0;i<64;++i) {
+      source[i]=0x80808080u;
+      actual[i]=0x1234;
+    }
+    source[8]=source[55]=0xffffffffu;
+    for(size_t i=0;i<64;++i)expected[i]=over_pixel(source[i],actual[i]);
+    magik_launcher_project_over_column(actual,1,source,64,64,0,65536,24,40);
+    if(memcmp(actual,expected,sizeof actual)) {
+      fputs("filtered non-dithered opacity bounds mismatch\n",stderr);return 24;
+    }
+  }
+#ifdef MAGIK_FAST_QUANTISATION
+  if (fast_quantisation_parity()) return 1;
+#endif
+  for(size_t trial=0;trial<4096;++trial) {
+    uint32_t src[8][69],a[69],b[69],fused[69];
+    for(size_t c=0;c<8;++c)for(size_t j=0;j<69;++j)src[c][j]=next();
+    for(size_t j=0;j<69;++j)a[j]=b[j]=fused[j]=0x9a7bc5d1u;
+    size_t n=trial%66,offset=trial%2;
+    uint32_t wx=next()%257,wx2=next()%257,lod=next()%257,v=next()%257;
+    magik_launcher_filter_column(a+2,src[0]+offset,src[1]+offset,src[2]+offset,src[3]+offset,n,wx,wx2,lod);
+    magik_launcher_filter_column(b+2,src[4]+offset,src[5]+offset,src[6]+offset,src[7]+offset,n,wx,wx2,lod);
+    magik_launcher_mix_rgba(a+2,b+2,n,v);
+    magik_launcher_filter_column_axes(fused+2,src[0]+offset,src[1]+offset,src[2]+offset,src[3]+offset,
+      src[4]+offset,src[5]+offset,src[6]+offset,src[7]+offset,n,wx,wx2,lod,v);
+    if(memcmp(a,fused,sizeof a)) {fprintf(stderr,"fused axes mismatch trial %zu\n",trial);return 20;}
+  }
+
   size_t opaque_cases=0,opaque_rows=0;
   for(size_t trial=0;trial<40000;++trial) {
     size_t height=1+next()%273,rows=next()%557,pitch=1+next()%17;
@@ -121,6 +213,10 @@ int main(void) {
   }
   vst1_u16(actual,dither_over4(vld1q_u32(p),vld1_u16(dest),vld1_u16(offset)));
   for(size_t j=0;j<4;++j)if(actual[j]!=dither_pixel(p[j],dest[j],x+j,y)) {fprintf(stderr,"over mismatch %u %u %zu\n",bg,alpha,j);return 1;}
+#ifdef MAGIK_FAST_QUANTISATION
+  vst1_u16(actual,fast_over4(vld1q_u32(p),vld1_u16(dest),vld1_u16(offset)));
+  for(size_t j=0;j<4;++j)if(actual[j]!=fast_dither_pixel(p[j],dest[j],x+j,y)) {fprintf(stderr,"fast over mismatch %u %u %zu\n",bg,alpha,j);return 21;}
+#endif
  }
   if(opaque_cases<1000) {fputs("insufficient opaque fast-path coverage\n",stderr);return 7;}
   printf("%zu opaque vector-loop cases covering %zu interior rows\n",opaque_cases,opaque_rows);

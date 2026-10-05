@@ -64,10 +64,10 @@ def _ensure_arm_package(
         ),
         None,
     )
-    if app and app.name == "mini-magik":
+    if app:
         from .apps import application
 
-        app = application("mini-magik")
+        app = application(app.name)
     profile = app.profile if app else "release"
     binary = (
         app.binary
@@ -196,6 +196,12 @@ def ensure_arm_application(
 ) -> BuildResult:
     prebuilt = os.environ.get("MISTER_MAGIK2_PREBUILT_ARTIFACT")
     if prebuilt:
+        # Validate selectors even though a prebuilt binary cannot be reconfigured.
+        # The scenario session verifies the running binary's Analytics context.
+        if probe_root.name == "mister":
+            from .apps import application
+
+            application("magik")
         artifact = Path(prebuilt).expanduser().resolve()
         if not artifact.is_file():
             raise RuntimeError("MagiK prebuilt application artifact is unavailable")

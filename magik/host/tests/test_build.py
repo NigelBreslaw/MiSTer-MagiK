@@ -121,3 +121,77 @@ def test_prebuilt_artifact_bypasses_compilation(monkeypatch, tmp_path):
     result = ensure_arm_application(tmp_path / "probe")
     assert result.artifact == artifact
     assert result.prebuilt and not result.rebuilt
+
+
+def test_real_launcher_sampler_feature_is_explicit_and_mini_is_unchanged(monkeypatch):
+    from magik.apps import application
+
+    monkeypatch.delenv("MAGIK_CARD_SAMPLER_AB", raising=False)
+    baseline = application("magik")
+    assert "card-axis-filter" not in baseline.features
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "axis")
+    candidate = application("magik")
+    assert candidate.features == (*baseline.features, "card-axis-filter")
+    assert candidate.profile == baseline.profile
+    assert candidate.agent_capabilities == baseline.agent_capabilities
+    assert "card-axis-filter" not in application("mini-magik").features
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "invalid")
+    with pytest.raises(ValueError, match="current or axis"):
+        application("magik")
+
+
+def test_quantiser_and_sampler_features_are_independent(monkeypatch):
+    from magik.apps import application
+
+    monkeypatch.delenv("MAGIK_CARD_SAMPLER_AB", raising=False)
+    monkeypatch.setenv("MAGIK_CARD_QUANTISER", "fast")
+    quantiser_only = application("magik")
+    assert "card-fast-quantisation" in quantiser_only.features
+    assert "card-axis-filter" not in quantiser_only.features
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "axis")
+    candidate = application("magik")
+    assert "card-axis-filter" in candidate.features
+    assert "card-fast-quantisation" in candidate.features
+    assert "card-fast-quantisation" not in application("mini-magik").features
+    monkeypatch.setenv("MAGIK_CARD_QUANTISER", "invalid")
+    with pytest.raises(ValueError, match="current or fast"):
+        application("magik")
+
+
+@pytest.mark.parametrize("sampler", ["current", "axis"])
+@pytest.mark.parametrize("quantiser", ["current", "fast"])
+def test_renderer_context_requires_actual_compiled_features(
+    monkeypatch, sampler, quantiser
+):
+    from magik.apps import validate_renderer_context
+
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", sampler)
+    monkeypatch.setenv("MAGIK_CARD_QUANTISER", quantiser)
+    context = {
+        "card_sampler": "independent-vertical-prefilter"
+        if sampler == "axis"
+        else "current",
+        "card_quantiser": "centred-bayer-shifts"
+        if quantiser == "fast"
+        else "existing-bayer",
+    }
+    validate_renderer_context(context)
+    for field in context:
+        with pytest.raises(AssertionError, match="does not match"):
+            validate_renderer_context({**context, field: "wrong"})
+    with pytest.raises(AssertionError, match="does not match"):
+        validate_renderer_context({})
+
+
+def test_unset_renderer_selectors_require_baseline_evidence(monkeypatch):
+    from magik.apps import validate_renderer_context
+
+    monkeypatch.delenv("MAGIK_CARD_SAMPLER_AB", raising=False)
+    monkeypatch.delenv("MAGIK_CARD_QUANTISER", raising=False)
+    validate_renderer_context(
+        {"card_sampler": "current", "card_quantiser": "existing-bayer"}
+    )
+    with pytest.raises(AssertionError, match="does not match"):
+        validate_renderer_context(
+            {"card_sampler": "current", "card_quantiser": "centred-bayer-shifts"}
+        )

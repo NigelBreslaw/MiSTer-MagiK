@@ -144,7 +144,13 @@ def test_screensaver(application_session):
 
 def test_motion_held(application_session):
     app, agent, run, _ = application_session
-    result = launcher_motion(app, agent, held_direction=True)
+    result = launcher_motion(
+        app,
+        agent,
+        held_direction=True,
+        starting_card="Arcade",
+        raw_metrics_path=run / "motion-held-metrics.json",
+    )
     append_event(run, {"phase": "motion", "outcome": "measured", **result})
 
 

@@ -9,6 +9,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/rgb565_neon.c");
     println!("cargo:rerun-if-changed=src/orientation_neon.c");
     println!("cargo:rerun-if-changed=src/launcher_texture_neon.c");
+    println!("cargo:rerun-if-changed=src/launcher_projection_kernels.h");
     println!("cargo:rerun-if-changed=../../mister/platform/runtime/c_build_support.rs");
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("arm") {
         return;
@@ -27,6 +28,9 @@ fn main() {
         .flag("-ffp-contract=off");
     if c_build_support::force_frame_pointers_requested() {
         build.force_frame_pointer(true);
+    }
+    if std::env::var_os("CARGO_FEATURE_CARD_FAST_QUANTISATION").is_some() {
+        build.define("MAGIK_FAST_QUANTISATION", None);
     }
     build.compile("mister_magik_rgb565_neon");
 }
