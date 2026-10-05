@@ -2178,7 +2178,7 @@ mod tests {
             LauncherScene::crt(240, 640),
         ];
         let mut actual = Vec::new();
-        for scene in scenes {
+        for (route_index, scene) in scenes.into_iter().enumerate() {
             let mut prepared =
                 PreparedLauncher::new(scene, data(), Some(Artwork::Rgb888(&faces)), None);
             for direction in [BrowseDirection::Right, BrowseDirection::Left] {
@@ -2201,6 +2201,30 @@ mod tests {
                         progress_millis,
                         duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
                     });
+                    if let Ok(root) = std::env::var("MAGIK_SAMPLER_AB_RENDER_DIR") {
+                        let (w, h) = [(960, 540), (540, 960), (640, 240), (240, 640)][route_index];
+                        let directory = std::path::Path::new(&root);
+                        std::fs::create_dir_all(directory).unwrap();
+                        let mut image = format!("P6\n{w} {h}\n255\n").into_bytes();
+                        for pixel in prepared.pixels() {
+                            let v = pixel.0;
+                            let r = (v >> 11) as u8;
+                            let g = ((v >> 5) & 63) as u8;
+                            let b = (v & 31) as u8;
+                            image.extend_from_slice(&[
+                                (r << 3) | (r >> 2),
+                                (g << 2) | (g >> 4),
+                                (b << 3) | (b >> 2),
+                            ]);
+                        }
+                        std::fs::write(
+                            directory.join(format!(
+                                "route-{route_index}-{direction:?}-{progress_millis}.ppm"
+                            )),
+                            image,
+                        )
+                        .unwrap();
+                    }
                     let hash = prepared
                         .pixels()
                         .iter()
@@ -2212,52 +2236,108 @@ mod tests {
                 }
             }
         }
-        assert_eq!(
-            actual,
-            vec![
+        let current_reference = vec![
+            0xb7d05ec03d5f89b9,
+            0x77814849ce2491b6,
+            0x461ab1a515ab0047,
+            0x1f377fbd60e3e963,
+            0x7b990e8fa6105067,
+            0x7b990e8fa6105067,
+            0x0a80401ccb33b174,
+            0xf5e99fe41d46d2aa,
+            0x3589d5f37a302895,
+            0xb7d05ec03d5f89b9,
+            0x734cab854f8d82d4,
+            0x5e2d0263f980d5bd,
+            0x3cb3a96dba51f21c,
+            0x9824930e826253e4,
+            0x2b7cae7e4a80295e,
+            0x2b7cae7e4a80295e,
+            0xbfd92d8c7906931a,
+            0xbc21bb43022a4795,
+            0xa304c3685f846e76,
+            0x734cab854f8d82d4,
+            0x2d01092c43eed720,
+            0xd2ebd4a19856a7c2,
+            0x9c891e42ce5a376e,
+            0x59adbd16480a503d,
+            0x1bbf2e1638fc6489,
+            0x1bbf2e1638fc6489,
+            0xc3276f0bd76eba21,
+            0x1214ef126cc5f787,
+            0x736dda9986bdd0b9,
+            0x2d01092c43eed720,
+            0x71694b62d8689866,
+            0x530c036d612aa116,
+            0x96940db597cae337,
+            0xcd8cef22ef794122,
+            0xbd26278330e2eba6,
+            0xbd26278330e2eba6,
+            0xe1ca2a329da0bd66,
+            0x2dc144e19b8994b7,
+            0x4046bec30e69fe2b,
+            0x71694b62d8689866,
+        ];
+        #[cfg(not(feature = "card-axis-filter"))]
+        assert_eq!(actual, current_reference, "Root baseline: {actual:x?}");
+        #[cfg(feature = "card-axis-filter")]
+        {
+            // Retain the current contract at settled and exactly edge-on poses.
+            for route in 0..4 {
+                for frame in [0, 4, 5, 9] {
+                    assert_eq!(
+                        actual[route * 10 + frame],
+                        current_reference[route * 10 + frame]
+                    );
+                }
+            }
+            let axis_reference = vec![
                 0xb7d05ec03d5f89b9,
-                0x77814849ce2491b6,
-                0x461ab1a515ab0047,
-                0x1f377fbd60e3e963,
+                0xd030190f718b2f40,
+                0x6018222ec96755ad,
+                0x39f1bd0e704da502,
                 0x7b990e8fa6105067,
                 0x7b990e8fa6105067,
-                0x0a80401ccb33b174,
-                0xf5e99fe41d46d2aa,
-                0x3589d5f37a302895,
+                0x9972d4a4e464fe12,
+                0xace8683d50071a0c,
+                0xf03cdce91532ab97,
                 0xb7d05ec03d5f89b9,
                 0x734cab854f8d82d4,
-                0x5e2d0263f980d5bd,
-                0x3cb3a96dba51f21c,
-                0x9824930e826253e4,
+                0x73209380492c9b4f,
+                0xdb2711df74e0ced4,
+                0xe255c6aafc94b362,
                 0x2b7cae7e4a80295e,
                 0x2b7cae7e4a80295e,
-                0xbfd92d8c7906931a,
-                0xbc21bb43022a4795,
-                0xa304c3685f846e76,
+                0x22398107082b9f44,
+                0x13e9f5af688e2d25,
+                0x9066c1ba1326020,
                 0x734cab854f8d82d4,
                 0x2d01092c43eed720,
-                0xd2ebd4a19856a7c2,
-                0x9c891e42ce5a376e,
-                0x59adbd16480a503d,
+                0x2c5a69bd13c03698,
+                0xaf10041374e5764c,
+                0x62e1ba6281af5d9f,
                 0x1bbf2e1638fc6489,
                 0x1bbf2e1638fc6489,
-                0xc3276f0bd76eba21,
-                0x1214ef126cc5f787,
-                0x736dda9986bdd0b9,
+                0x6897f2664e9d1b3b,
+                0xca35ccd87e77e631,
+                0xfc91d48ed9d79aa5,
                 0x2d01092c43eed720,
                 0x71694b62d8689866,
-                0x530c036d612aa116,
-                0x96940db597cae337,
-                0xcd8cef22ef794122,
+                0x8e1b1bd94443b8e1,
+                0x5a9288a891ddce9c,
+                0xc0fde5f5a218a384,
                 0xbd26278330e2eba6,
                 0xbd26278330e2eba6,
-                0xe1ca2a329da0bd66,
-                0x2dc144e19b8994b7,
-                0x4046bec30e69fe2b,
+                0x8c0b9f77ea43f428,
+                0x98cd79c985209b00,
+                0x176848b4235c1ad8,
                 0x71694b62d8689866,
-            ],
-            "Root baseline: {actual:x?}"
-        );
+            ];
+            assert_eq!(
+                actual, axis_reference,
+                "Experimental axis reference: {actual:x?}"
+            );
+        }
     }
 
     fn settled_frame(selected: usize) -> BrowseFrame {

@@ -121,3 +121,20 @@ def test_prebuilt_artifact_bypasses_compilation(monkeypatch, tmp_path):
     result = ensure_arm_application(tmp_path / "probe")
     assert result.artifact == artifact
     assert result.prebuilt and not result.rebuilt
+
+
+def test_real_launcher_sampler_feature_is_explicit_and_mini_is_unchanged(monkeypatch):
+    from magik.apps import application
+
+    monkeypatch.delenv("MAGIK_CARD_SAMPLER_AB", raising=False)
+    baseline = application("magik")
+    assert "card-axis-filter" not in baseline.features
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "axis")
+    candidate = application("magik")
+    assert candidate.features == (*baseline.features, "card-axis-filter")
+    assert candidate.profile == baseline.profile
+    assert candidate.agent_capabilities == baseline.agent_capabilities
+    assert "card-axis-filter" not in application("mini-magik").features
+    monkeypatch.setenv("MAGIK_CARD_SAMPLER_AB", "invalid")
+    with pytest.raises(ValueError, match="current or axis"):
+        application("magik")

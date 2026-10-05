@@ -8,6 +8,8 @@ use crate::Rgb565Pixel;
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct Texture {
     levels: Vec<Level>,
+    #[cfg(feature = "card-axis-filter")]
+    vertical: Vec<Texture>,
 }
 #[cfg_attr(test, derive(PartialEq, Eq))]
 struct Level {
@@ -440,7 +442,14 @@ fn unpremultiply(p: u32) -> Rgb565Pixel {
 
 impl Texture {
     pub fn storage_bytes(&self) -> usize {
-        self.levels.iter().map(|l| l.pixels.capacity() * 4).sum()
+        let base = self
+            .levels
+            .iter()
+            .map(|l| l.pixels.capacity() * 4)
+            .sum::<usize>();
+        #[cfg(feature = "card-axis-filter")]
+        let base = base + self.vertical.iter().map(Self::storage_bytes).sum::<usize>();
+        base
     }
     pub fn new(pixels: &[Rgb565Pixel], width: usize, height: usize) -> Self {
         #[cfg(feature = "launcher-profile")]
@@ -527,7 +536,123 @@ impl Texture {
                 height,
             });
         }
-        Self { levels }
+        #[cfg(feature = "card-axis-filter")]
+        let vertical = Self::vertical_family(&levels[0]);
+        Self {
+            levels,
+            #[cfg(feature = "card-axis-filter")]
+            vertical,
+        }
+    }
+
+    #[cfg(feature = "card-axis-filter")]
+    fn vertical_family(source: &Level) -> Vec<Self> {
+        // Filter premultiplied RGBA so the existing rounded silhouettes stay safe.
+        // Reconstruct each low-pass image at the original height: geometry, cropped
+        // preparation ranges, reflections and native projection coordinates stay shared.
+        let (width, height) = (source.width, source.height);
+        let mut reduced = source.pixels.clone();
+        let mut reduced_height = height;
+        let mut family = Vec::with_capacity(4);
+        for _ in 0..4 {
+            if reduced_height == 1 {
+                break;
+            }
+            let next_height = reduced_height.div_ceil(2);
+            let mut next = vec![0; (width + 2) * next_height];
+            for x in 0..width + 2 {
+                for y in 0..next_height {
+                    next[x * next_height + y] = mix(
+                        reduced[x * reduced_height + y * 2],
+                        reduced[x * reduced_height + (y * 2 + 1).min(reduced_height - 1)],
+                        128,
+                    );
+                }
+            }
+            reduced = next;
+            reduced_height = next_height;
+            let mut base = vec![0; (width + 2) * height];
+            for y in 0..height {
+                let q = (((2 * y + 1) as u64 * reduced_height as u64 * 65536) / (2 * height) as u64)
+                    as i64
+                    - 32768;
+                let a = q.div_euclid(65536).clamp(0, reduced_height as i64 - 1) as usize;
+                let b = (q.div_euclid(65536) + 1).clamp(0, reduced_height as i64 - 1) as usize;
+                let w = (q.rem_euclid(65536) >> 8) as u32;
+                for x in 0..width + 2 {
+                    base[x * height + y] = mix(
+                        reduced[x * reduced_height + a],
+                        reduced[x * reduced_height + b],
+                        w,
+                    );
+                }
+            }
+            let mut levels = vec![Level {
+                pixels: base,
+                width,
+                height,
+            }];
+            while levels.last().unwrap().width > 1 {
+                let old = levels.last().unwrap();
+                let w = old.width.div_ceil(2);
+                let mut pixels = vec![0; (w + 2) * height];
+                for x in 0..w {
+                    for y in 0..height {
+                        pixels[(x + 1) * height + y] = mix(
+                            old.pixel((x * 2) as i32, y as i32),
+                            old.pixel((x * 2 + 1).min(old.width - 1) as i32, y as i32),
+                            128,
+                        );
+                    }
+                }
+                levels.push(Level {
+                    pixels,
+                    width: w,
+                    height,
+                });
+            }
+            family.push(Self {
+                levels,
+                vertical: Vec::new(),
+            });
+        }
+        family
+    }
+
+    #[cfg(feature = "card-axis-filter")]
+    pub fn prepare_column_rows_axes(
+        &self,
+        filter: Filter,
+        footprint_y: u32,
+        start: usize,
+        output: &mut [u32],
+        transition: &mut [u32],
+    ) {
+        assert!(transition.len() >= output.len());
+        let footprint = footprint_y.max(65536);
+        let level =
+            ((31 - footprint.leading_zeros()).saturating_sub(16) as usize).min(self.vertical.len());
+        let texture = if level == 0 {
+            self
+        } else {
+            &self.vertical[level - 1]
+        };
+        texture.prepare_column_rows(filter, start, output);
+        if level < self.vertical.len() {
+            // Last quarter of an octave, with integer smoothstep and no per-column log.
+            let scale = footprint >> level;
+            let t = (scale.saturating_sub(110218) * 256 / 20854).min(256);
+            let weight = (t * t * (768 - 2 * t) + 32768) >> 16;
+            if weight > 0 {
+                self.vertical[level].prepare_column_rows(
+                    filter,
+                    start,
+                    &mut transition[..output.len()],
+                );
+                // Uses the existing ARM NEON RGBA blend before final dither/quantization.
+                mix_rgba(output, &transition[..output.len()], weight);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -1229,5 +1354,68 @@ mod tests {
         assert_eq!(over(0, Rgb565Pixel(0xffff)), Rgb565Pixel(0xffff));
         let p = rgba(Rgb565Pixel(0xffff), 128);
         assert_eq!(over(p, Rgb565Pixel(0xffff)), Rgb565Pixel(0xffff));
+    }
+}
+
+#[cfg(all(test, feature = "card-axis-filter"))]
+mod axis_tests {
+    use super::*;
+    fn stripes() -> Texture {
+        let pixels: Vec<_> = (0..32 * 64)
+            .map(|i| Rgb565Pixel(if i / 32 % 2 == 0 { 0xffff } else { 0 }))
+            .collect();
+        Texture::with_alpha(&pixels, &vec![255; pixels.len()], 32, 64)
+    }
+    #[test]
+    fn natural_height_preserves_current_columns_exactly() {
+        let t = stripes();
+        let mut a = vec![0; 64];
+        let mut b = a.clone();
+        let mut scratch = a.clone();
+        for footprint in [65536, 110000, 3 * 65536] {
+            for x in [-32000, 8 * 65536 + 19000, 31 * 65536] {
+                let filter = t.filter(x, footprint);
+                t.prepare_column_rows(filter, 0, &mut a);
+                t.prepare_column_rows_axes(filter, 65536, 0, &mut b, &mut scratch);
+                assert_eq!(a, b);
+            }
+        }
+    }
+    #[test]
+    fn cropped_axis_columns_equal_full_columns_and_remain_premultiplied() {
+        let t = stripes();
+        let mut full = vec![0; 64];
+        let mut scratch = full.clone();
+        let filter = t.filter(8 * 65536 + 19000, 160000);
+        for footprint in [65536, 124000, 4 * 65536, 490000, u32::MAX] {
+            t.prepare_column_rows_axes(filter, footprint, 0, &mut full, &mut scratch);
+            let mut part = vec![0; 19];
+            let mut temp = part.clone();
+            t.prepare_column_rows_axes(filter, footprint, 7, &mut part, &mut temp);
+            assert_eq!(part, full[7..26]);
+            for &p in &full {
+                let alpha = p >> 24;
+                for shift in [0, 8, 16] {
+                    assert!(((p >> shift) & 255) <= alpha);
+                }
+            }
+        }
+    }
+    #[test]
+    fn prefilter_suppresses_unresolved_vertical_detail() {
+        let t = stripes();
+        let filter = t.filter(8 * 65536, 65536);
+        let mut plain = vec![0; 64];
+        let mut axis = plain.clone();
+        let mut temp = plain.clone();
+        t.prepare_column_rows(filter, 0, &mut plain);
+        t.prepare_column_rows_axes(filter, 4 * 65536, 0, &mut axis, &mut temp);
+        let energy = |p: &[u32]| {
+            p[8..56]
+                .iter()
+                .map(|v| ((v & 255) as f64 - 127.5).powi(2))
+                .sum::<f64>()
+        };
+        assert!(energy(&axis) < energy(&plain) / 100.);
     }
 }

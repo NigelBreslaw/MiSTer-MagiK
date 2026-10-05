@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from magik.measurement_contract import has_native_card_helpers, measurement_metrics
 from collections.abc import Callable, Mapping
@@ -346,6 +347,8 @@ def launcher_motion(
     force_fallback: bool = False,
     held_direction: bool = False,
     taps_then_hold: bool = False,
+    starting_card: str | None = None,
+    raw_metrics_path: Path | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ):
     """Measure continuous card-carousel navigation on the real launcher."""
@@ -359,6 +362,11 @@ def launcher_motion(
     if held_direction or taps_then_hold:
         # Home preserves an in-progress card spring. A new press can be rejected
         # until it settles; keep this pause outside the measured hold window.
+        sleep(1)
+    if starting_card is not None:
+        from magik.animation_benchmark import _focus
+
+        _focus(application, "^" + re.escape(starting_card) + "$")
         sleep(1)
     previous = measurement_metrics(agent).get("window")
     request = {
@@ -409,6 +417,8 @@ def launcher_motion(
             sleep(interval_seconds)
         metrics = _completed_window_metrics(agent, sleep)
 
+    if raw_metrics_path is not None:
+        raw_metrics_path.write_text(json.dumps(metrics, indent=2) + "\n")
     if metrics.get("sha256") != agent.expected_sha256:
         raise AssertionError("metrics belong to another application")
     window = metrics.get("window")
@@ -490,6 +500,7 @@ def launcher_motion(
         ),
         "launcher_sequence": TAPS_THEN_HOLD if taps_then_hold else None,
         "held_direction": "right" if held_direction else None,
+        "starting_card": starting_card,
         "held_measurement_ms": seconds * 1000 if held_direction else 0,
     }
 

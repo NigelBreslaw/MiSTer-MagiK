@@ -37,6 +37,12 @@ def application(name: str = "mini-magik") -> Application:
     app = APPLICATIONS[name]
     if name == "mini-magik" and os.environ.get("MAGIK_MINI_PRODUCTION_BUILD") == "1":
         return replace(app, profile="release-device")
+    if name == "magik":
+        sampler = os.environ.get("MAGIK_CARD_SAMPLER_AB", "current")
+        if sampler not in {"current", "axis"}:
+            raise ValueError("MAGIK_CARD_SAMPLER_AB must be current or axis")
+        if sampler == "axis":
+            return replace(app, features=(*app.features, "card-axis-filter"))
     return app
 
 
