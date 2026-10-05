@@ -9,6 +9,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/rgb565_neon.c");
     println!("cargo:rerun-if-changed=src/orientation_neon.c");
     println!("cargo:rerun-if-changed=src/launcher_texture_neon.c");
+    println!("cargo:rerun-if-changed=src/launcher_projection_kernels.h");
     println!("cargo:rerun-if-changed=../../mister/platform/runtime/c_build_support.rs");
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("arm") {
         return;

@@ -62,6 +62,32 @@ pub(super) struct Column {
     reflection_y: i64,
 }
 
+impl Column {
+    fn opaque_margin(&self) -> usize {
+        #[cfg(feature = "card-axis-filter")]
+        {
+            self.vertical_filter.opaque_margin()
+        }
+        #[cfg(not(feature = "card-axis-filter"))]
+        {
+            8
+        }
+    }
+
+    fn prepare_rows(
+        &self,
+        texture: &crate::launcher_texture::Texture,
+        filter: crate::launcher_texture::Filter,
+        start: usize,
+        output: &mut [u32],
+    ) {
+        #[cfg(feature = "card-axis-filter")]
+        texture.prepare_column_rows_axes(filter, self.vertical_filter, start, output);
+        #[cfg(not(feature = "card-axis-filter"))]
+        texture.prepare_column_rows(filter, start, output);
+    }
+}
+
 pub(super) struct Face {
     #[cfg(test)]
     pub pixels: Vec<Rgb565Pixel>,
@@ -555,26 +581,8 @@ fn render(
                 ranges = [
                     (face.height - face.height / 4, face.height),
                     (
-                        {
-                            #[cfg(feature = "card-axis-filter")]
-                            {
-                                column.vertical_filter.opaque_margin().min(face.height)
-                            }
-                            #[cfg(not(feature = "card-axis-filter"))]
-                            {
-                                8.min(face.height)
-                            }
-                        },
-                        {
-                            #[cfg(feature = "card-axis-filter")]
-                            {
-                                (column.vertical_filter.opaque_margin() + 1).min(face.height)
-                            }
-                            #[cfg(not(feature = "card-axis-filter"))]
-                            {
-                                9.min(face.height)
-                            }
-                        },
+                        column.opaque_margin().min(face.height),
+                        (column.opaque_margin() + 1).min(face.height),
                     ),
                     (0, 0),
                     (0, 0),
@@ -609,32 +617,17 @@ fn render(
                 if start >= end {
                     continue;
                 }
-                #[cfg(not(feature = "card-axis-filter"))]
-                face.texture.prepare_column_rows(
+                column.prepare_rows(
+                    &face.texture,
                     column.filter,
-                    start,
-                    &mut texels[(x - left) * scratch.column_height + start
-                        ..(x - left) * scratch.column_height + end],
-                );
-                #[cfg(feature = "card-axis-filter")]
-                face.texture.prepare_column_rows_axes(
-                    column.filter,
-                    column.vertical_filter,
                     start,
                     &mut texels[(x - left) * scratch.column_height + start
                         ..(x - left) * scratch.column_height + end],
                 );
                 if let Some((other, weight)) = blend {
-                    #[cfg(not(feature = "card-axis-filter"))]
-                    other.texture.prepare_column_rows(
+                    column.prepare_rows(
+                        &other.texture,
                         column.filter,
-                        start,
-                        &mut scratch.blend[start..end],
-                    );
-                    #[cfg(feature = "card-axis-filter")]
-                    other.texture.prepare_column_rows_axes(
-                        column.filter,
-                        column.vertical_filter,
                         start,
                         &mut scratch.blend[start..end],
                     );
@@ -646,16 +639,9 @@ fn render(
                     );
                 }
                 if spine_weight > 0 {
-                    #[cfg(not(feature = "card-axis-filter"))]
-                    face.texture.prepare_column_rows(
+                    column.prepare_rows(
+                        &face.texture,
                         face.texture.filter(4 * ONE as i32, ONE as u32),
-                        start,
-                        &mut scratch.blend[start..end],
-                    );
-                    #[cfg(feature = "card-axis-filter")]
-                    face.texture.prepare_column_rows_axes(
-                        face.texture.filter(4 * ONE as i32, ONE as u32),
-                        column.vertical_filter,
                         start,
                         &mut scratch.blend[start..end],
                     );
@@ -732,7 +718,6 @@ fn render(
                 let mut project = |top: usize, bottom: usize| {
                     if top < bottom {
                         let index = target.index(x, top);
-                        #[cfg(not(feature = "card-axis-filter"))]
                         crate::launcher_texture::project_card_over_column_quality(
                             source,
                             &mut target.pixels[index..],
@@ -741,17 +726,7 @@ fn render(
                             (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
                             face.dithered,
                             (x, top),
-                        );
-                        #[cfg(feature = "card-axis-filter")]
-                        crate::launcher_texture::project_card_over_column_quality_margin(
-                            source,
-                            &mut target.pixels[index..],
-                            target.pitch,
-                            bottom - top,
-                            (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
-                            face.dithered,
-                            (x, top),
-                            c.vertical_filter.opaque_margin(),
+                            c.opaque_margin(),
                         );
                     }
                 };

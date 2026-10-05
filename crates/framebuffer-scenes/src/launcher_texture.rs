@@ -540,9 +540,7 @@ impl Texture {
         *self = Self::from_base(base, first.width, first.height);
     }
 
-    fn from_base(base: Vec<u32>, width: usize, height: usize) -> Self {
-        #[cfg(feature = "launcher-profile")]
-        let _mips = crate::launcher_profile::span("prepare.texture_mips");
+    fn horizontal_levels(base: Vec<u32>, width: usize, height: usize) -> Vec<Level> {
         let mut levels = vec![Level {
             pixels: base,
             width,
@@ -567,6 +565,13 @@ impl Texture {
                 height,
             });
         }
+        levels
+    }
+
+    fn from_base(base: Vec<u32>, width: usize, height: usize) -> Self {
+        #[cfg(feature = "launcher-profile")]
+        let _mips = crate::launcher_profile::span("prepare.texture_mips");
+        let levels = Self::horizontal_levels(base, width, height);
         #[cfg(feature = "card-axis-filter")]
         let vertical = Self::vertical_family(&levels[0]);
         Self {
@@ -618,30 +623,7 @@ impl Texture {
                     );
                 }
             }
-            let mut levels = vec![Level {
-                pixels: base,
-                width,
-                height,
-            }];
-            while levels.last().unwrap().width > 1 {
-                let old = levels.last().unwrap();
-                let w = old.width.div_ceil(2);
-                let mut pixels = vec![0; (w + 2) * height];
-                for x in 0..w {
-                    for y in 0..height {
-                        pixels[(x + 1) * height + y] = mix(
-                            old.pixel((x * 2) as i32, y as i32),
-                            old.pixel((x * 2 + 1).min(old.width - 1) as i32, y as i32),
-                            128,
-                        );
-                    }
-                }
-                levels.push(Level {
-                    pixels,
-                    width: w,
-                    height,
-                });
-            }
+            let levels = Self::horizontal_levels(base, width, height);
             family.push(Self {
                 levels,
                 vertical: Vec::new(),
@@ -947,30 +929,8 @@ pub(super) fn over(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)) as u16)
 }
 
-#[cfg(any(not(feature = "card-axis-filter"), not(target_arch = "arm"), test))]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_card_over_column_quality(
-    source: &[u32],
-    destination: &mut [Rgb565Pixel],
-    pitch: usize,
-    rows: usize,
-    sample: (i32, i32),
-    dithered: bool,
-    origin: (usize, usize),
-) {
-    project_card_over_column_quality_margin(
-        source,
-        destination,
-        pitch,
-        rows,
-        sample,
-        dithered,
-        origin,
-        8,
-    );
-}
-#[allow(clippy::too_many_arguments)]
-pub(super) fn project_card_over_column_quality_margin(
     source: &[u32],
     destination: &mut [Rgb565Pixel],
     pitch: usize,
@@ -1147,6 +1107,7 @@ pub(super) fn project_flat_quality(
             sample,
             true,
             (origin.0 + x, origin.1),
+            8,
         );
     }
 }
