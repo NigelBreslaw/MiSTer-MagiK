@@ -980,6 +980,26 @@ rebuild the faces and invalidate the previous compositor generation. The
 persistent helper renders the second band of the current pose; complete frames
 are copied to the hidden slot before publication. Mini uses the same engine.
 
+Level changes are prepared before their gather animation starts. A cached
+ready destination can start immediately; a cold destination keeps the current
+level visible while its foreground job finishes. Background preparation is
+paused through the turn so it cannot compete with the tile helper. Once motion
+starts, the FrameClock advances through gather, edge swap and deal without an
+edge-wait state or delay offset. Helper work is predicted across both the swap
+and final landing, and stale clock/sidebar chrome is refreshed after settling.
+
+Native landscape artwork can be installed as versioned `.cardtex` entries. Their
+immutable art/coverage/mips are prepared on the host; current labels and counts
+patch only affected horizontal mip rows on the preparation worker. The existing
+RGB888 path remains the fallback and serves other display geometries. Neither
+fonts nor catalog counts are baked into the distribution.
+
+Explicit profiled runs attach `card_preparation` records to the native metrics
+window. Each record separates queue delay, worker wall/CPU/run-delay time and
+inclusive rendering-stage spans. Normal runs do not sample those clocks. The
+`level-preparing` evidence phase identifies cold preparation before any moving
+pose, rather than misclassifying it as a paused gather.
+
 For an offline review using production artwork and fonts, run
 `scripts/cargo run --manifest-path apps/mister/Cargo.toml --example launcher_layout_review -- /tmp/launcher-review`.
 It emits PPM frames for settled selections and motion at HDMI portrait,

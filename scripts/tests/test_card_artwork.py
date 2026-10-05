@@ -17,10 +17,15 @@ class CardArtworkTests(unittest.TestCase):
         root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
         files = card_artwork.validate(root)
         self.assertEqual(
-            len(files), 48
+            len(files), 101
         )  # 32 unchanged root/system images + 15 shared family images + index
         self.assertEqual(
-            files, {p.name for p in root.iterdir() if p.suffix in (".rgb888", ".json")}
+            files,
+            {
+                p.name
+                for p in root.iterdir()
+                if p.suffix in (".rgb888", ".cardtex", ".json")
+            },
         )
         index = json.loads((root / "index.json").read_text())["cards"]
         taxonomy = json.loads(
@@ -47,7 +52,16 @@ class CardArtworkTests(unittest.TestCase):
         root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
         index = json.loads((root / "index.json").read_text())["cards"]
         self.assertEqual(
-            index["menu:consoles:nintendo"], index["menu:handhelds:nintendo"]
+            {
+                k: v
+                for k, v in index["menu:consoles:nintendo"].items()
+                if k != "prepared"
+            },
+            {
+                k: v
+                for k, v in index["menu:handhelds:nintendo"].items()
+                if k != "prepared"
+            },
         )
         self.assertTrue(index["menu:consoles:nintendo"]["contains_name"])
         self.assertFalse(index["menu:computers:commodore"]["contains_name"])

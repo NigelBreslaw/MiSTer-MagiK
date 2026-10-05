@@ -7,15 +7,15 @@ use crate::Rgb565Pixel;
 
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct Texture {
-    levels: Vec<Level>,
+    pub(super) levels: Vec<Level>,
     #[cfg(feature = "card-axis-filter")]
     vertical: Vec<Texture>,
 }
 #[cfg_attr(test, derive(PartialEq, Eq))]
-struct Level {
-    pixels: Vec<u32>,
-    width: usize,
-    height: usize,
+pub(super) struct Level {
+    pub(super) pixels: Vec<u32>,
+    pub(super) width: usize,
+    pub(super) height: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -439,7 +439,72 @@ fn unpremultiply(p: u32) -> Rgb565Pixel {
     Rgb565Pixel(((r >> 3) << 11 | (g >> 2) << 5 | b >> 3) as u16)
 }
 
+pub(super) fn mip_widths(width: usize) -> impl Iterator<Item = usize> {
+    std::iter::successors(Some(width), |&w| (w > 1).then(|| w.div_ceil(2)))
+}
+
 impl Texture {
+    /// Patch labels in the final base and rebuild only affected horizontal rows.
+    pub(super) fn apply_labels(
+        &mut self,
+        before: &[Rgb565Pixel],
+        after: &[Rgb565Pixel],
+        rgb8: &[[u8; 3]],
+        reference: &[Rgb565Pixel],
+    ) {
+        let width = self.levels[0].width;
+        let height = self.levels[0].height;
+        let mut dirty = vec![false; height];
+        for x in 0..width {
+            for (y, dirty_row) in dirty.iter_mut().enumerate() {
+                let i = y * width + x;
+                let p = (x + 1) * height + y;
+                let alpha = self.levels[0].pixels[p] >> 24;
+                let mut source_x = x;
+                while alpha > 0 && !crate::launcher::rounded_contains(source_x, y, width, height) {
+                    source_x = if source_x < width / 2 {
+                        source_x + 1
+                    } else {
+                        source_x - 1
+                    };
+                }
+                let source = y * width + source_x;
+                if after[i] == before[i] && after[source] == before[source] {
+                    continue;
+                }
+                let pixel = if alpha == 255 && after[source] == reference[i] {
+                    let [r, g, b] = rgb8[i];
+                    u32::from_le_bytes([r, g, b, 255])
+                } else {
+                    rgba(after[source], alpha)
+                };
+                if pixel != self.levels[0].pixels[p] {
+                    self.levels[0].pixels[p] = pixel;
+                    *dirty_row = true;
+                }
+            }
+        }
+        for mip in 1..self.levels.len() {
+            let (previous, following) = self.levels.split_at_mut(mip);
+            let previous = previous.last().unwrap();
+            let current = &mut following[0];
+            for x in 0..current.width {
+                for (y, &dirty) in dirty.iter().enumerate() {
+                    if dirty {
+                        current.pixels[(x + 1) * height + y] = mix(
+                            previous.pixel((x * 2) as i32, y as i32),
+                            previous.pixel((x * 2 + 1).min(previous.width - 1) as i32, y as i32),
+                            128,
+                        );
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "card-axis-filter")]
+        if dirty.iter().any(|&row| row) {
+            self.vertical = Self::vertical_family(&self.levels[0]);
+        }
+    }
     pub fn storage_bytes(&self) -> usize {
         let base = self
             .levels
@@ -476,16 +541,44 @@ impl Texture {
         }
         base
     }
-    #[cfg(feature = "card-axis-filter")]
-    pub fn new_before_rgb8(pixels: &[Rgb565Pixel], width: usize, height: usize) -> Self {
-        Self {
-            levels: vec![Level {
-                pixels: Self::base_pixels(pixels, width, height),
-                width,
-                height,
-            }],
-            vertical: Vec::new(),
+
+    /// Apply RGB8 artwork before building the mip chain, preserving the exact
+    /// opaque-pixel replacement policy of new() followed by retain_rgb8().
+    pub(super) fn with_rgb8(
+        pixels: &[Rgb565Pixel],
+        rgb8: &[[u8; 3]],
+        reference: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Self {
+        #[cfg(feature = "launcher-profile")]
+        let _texture = crate::launcher_profile::span("prepare.texture_rgb8_and_mips");
+        assert_eq!(pixels.len(), width * height);
+        assert_eq!(rgb8.len(), pixels.len());
+        assert_eq!(reference.len(), pixels.len());
+        let mut base = vec![0; (width + 2) * height];
+        for x in 0..width {
+            for y in 0..height {
+                let alpha = coverage(x, y, width, height);
+                let mut source_x = x;
+                while alpha > 0 && !crate::launcher::rounded_contains(source_x, y, width, height) {
+                    source_x = if source_x < width / 2 {
+                        source_x + 1
+                    } else {
+                        source_x - 1
+                    };
+                }
+                let i = y * width + x;
+                let source = pixels[y * width + source_x];
+                base[(x + 1) * height + y] = if alpha == 255 && source == reference[i] {
+                    let [r, g, b] = rgb8[i];
+                    u32::from_le_bytes([r, g, b, 255])
+                } else {
+                    rgba(source, alpha)
+                };
+            }
         }
+        Self::from_base(base, width, height)
     }
 
     pub fn with_alpha(pixels: &[Rgb565Pixel], alpha: &[u8], width: usize, height: usize) -> Self {
@@ -501,6 +594,7 @@ impl Texture {
         Self::from_base(base, width, height)
     }
 
+    #[cfg(test)]
     pub(super) fn retain_rgb8(&mut self, rgb8: &[[u8; 3]], reference: &[Rgb565Pixel]) {
         #[cfg(feature = "launcher-profile")]
         let _retain = crate::launcher_profile::span("prepare.texture_retain_rgb8");
@@ -528,9 +622,8 @@ impl Texture {
             width,
             height,
         }];
-        while levels.last().unwrap().width > 1 {
+        for width in mip_widths(width).skip(1) {
             let old = levels.last().unwrap();
-            let width = old.width.div_ceil(2);
             let mut pixels = vec![0; (width + 2) * height];
             for x in 0..width {
                 for y in 0..height {
@@ -553,7 +646,10 @@ impl Texture {
     fn from_base(base: Vec<u32>, width: usize, height: usize) -> Self {
         #[cfg(feature = "launcher-profile")]
         let _mips = crate::launcher_profile::span("prepare.texture_mips");
-        let levels = Self::horizontal_levels(base, width, height);
+        Self::from_levels(Self::horizontal_levels(base, width, height))
+    }
+
+    pub(super) fn from_levels(levels: Vec<Level>) -> Self {
         #[cfg(feature = "card-axis-filter")]
         let vertical = Self::vertical_family(&levels[0]);
         Self {

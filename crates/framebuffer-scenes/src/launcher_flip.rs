@@ -93,7 +93,7 @@ pub(super) struct Face {
     pub pixels: Vec<Rgb565Pixel>,
     pub width: usize,
     pub height: usize,
-    reflection_fade_rows: usize,
+    pub(super) reflection_fade_rows: usize,
     pub(super) dithered: bool,
     pub(super) texture: crate::launcher_texture::Texture,
 }
@@ -115,8 +115,15 @@ impl Face {
         }
     }
 
-    pub fn new(pixels: Vec<Rgb565Pixel>, width: usize, height: usize) -> Self {
-        let texture = crate::launcher_texture::Texture::new(&pixels, width, height);
+    pub(super) fn with_rgb8(
+        pixels: Vec<Rgb565Pixel>,
+        rgb8: &[[u8; 3]],
+        reference: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Self {
+        let texture =
+            crate::launcher_texture::Texture::with_rgb8(&pixels, rgb8, reference, width, height);
         Self {
             #[cfg(test)]
             pixels,
@@ -127,9 +134,9 @@ impl Face {
             dithered: false,
         }
     }
-    #[cfg(feature = "card-axis-filter")]
-    pub fn new_before_rgb8(pixels: Vec<Rgb565Pixel>, width: usize, height: usize) -> Self {
-        let texture = crate::launcher_texture::Texture::new_before_rgb8(&pixels, width, height);
+
+    pub fn new(pixels: Vec<Rgb565Pixel>, width: usize, height: usize) -> Self {
+        let texture = crate::launcher_texture::Texture::new(&pixels, width, height);
         Self {
             #[cfg(test)]
             pixels,

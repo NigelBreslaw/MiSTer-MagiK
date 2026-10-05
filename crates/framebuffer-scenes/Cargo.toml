@@ -15,14 +15,24 @@ cc = "1.4.2"
 [features]
 card-axis-filter = []
 card-fast-quantisation = []
+prepared-artwork = ["dep:lz4"]
 launcher-profile = ["dep:mister-magik-perf-events", "dep:serde"]
 
 [dependencies]
+lz4 = { version = "1.28.1", optional = true }
 mister-magik-perf-events = { path = "../perf-events", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+sha2 = "0.11"
 
 [lints.rust]
 warnings = "deny"
 
 [lints.clippy]
 all = "deny"
+
+[[example]]
+name = "prepare_card_artwork"
+required-features = ["prepared-artwork"]

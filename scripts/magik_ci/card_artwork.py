@@ -4,24 +4,19 @@
 """Validate the runtime card pack shared by ZIP and Downloader installs."""
 
 import json
-import re
+import runpy
 from pathlib import Path
 
 from .common import sha256_file
 
 RELATIVE_PATH = "assets/ui/launcher-cards"
-SOURCE_BYTES = 360 * 504 * 3
-ROOT_KEYS = {
-    f"root:{name}"
-    for name in (
-        "arcade",
-        "consoles",
-        "computers",
-        "handhelds",
-        "favourites",
-        "settings",
-    )
-}
+# Load the pure host contract without depending on either Python package path.
+_contract = runpy.run_path(
+    str(Path(__file__).resolve().parents[2] / "magik/host/magik/artwork_manifest.py")
+)
+files_for = _contract["files_for"]
+SOURCE_BYTES = _contract["SOURCE_BYTES"]
+ROOT_KEYS = _contract["ROOT_KEYS"]
 
 
 def validate(root: Path) -> set[str]:
@@ -29,35 +24,10 @@ def validate(root: Path) -> set[str]:
     if len(payload) > 128 * 1024:
         raise ValueError("oversized card artwork index")
     index = json.loads(payload)
-    if (
-        index.get("schema"),
-        index.get("width"),
-        index.get("height"),
-        index.get("format"),
-    ) != (1, 360, 504, "RGB888"):
-        raise ValueError("unsupported card artwork index")
-    cards = index.get("cards")
-    if not isinstance(cards, dict) or not ROOT_KEYS <= cards.keys():
-        raise ValueError("card artwork index is missing root cards")
-    files = {}
-    for source in cards.values():
-        name, digest = source["file"], source["sha256"]
-        if not isinstance(source.get("contains_name", False), bool):
-            raise ValueError("invalid card artwork name policy")
-        if not re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9_.-]*\.rgb888", name
-        ) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise ValueError("invalid card artwork source")
-        if name in files and files[name] != digest:
-            raise ValueError("conflicting card artwork checksums")
-        files[name] = digest
-    for name, digest in files.items():
+    files = files_for(index)
+    for name, (digest, size) in files.items():
         path = root / name
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or path.stat().st_size != SOURCE_BYTES
-        ):
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
             raise ValueError(f"invalid card artwork file: {name}")
         if sha256_file(path) != digest:
             raise ValueError(f"card artwork checksum mismatch: {name}")

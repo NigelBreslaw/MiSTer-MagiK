@@ -198,6 +198,7 @@ impl Agent {
             "input-probe-passive-v1",
             "catalog-operations-v1",
             "card-artwork-v1",
+            "card-artwork-v2",
             "publication-v1",
             "platform-publication-v1",
             "publication-state-v1",

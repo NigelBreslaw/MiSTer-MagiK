@@ -36,6 +36,14 @@ struct Source {
     sha256: String,
     #[serde(default)]
     contains_name: bool,
+    #[serde(default)]
+    prepared: Option<Prepared>,
+}
+#[derive(Deserialize)]
+struct Prepared {
+    file: String,
+    sha256: String,
+    bytes: usize,
 }
 #[derive(Serialize, Deserialize)]
 struct Stamp {
@@ -55,7 +63,42 @@ fn digest(bytes: &[u8]) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
-fn files(index: &[u8]) -> Result<BTreeMap<String, String>, String> {
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+fn add_file(
+    files: &mut BTreeMap<String, (String, usize)>,
+    name: &str,
+    digest: &str,
+    size: usize,
+    extension: &str,
+) -> Result<(), String> {
+    if !name.ends_with(extension)
+        || !name
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+        || !valid_digest(digest)
+        || !(17..=2 * 1024 * 1024).contains(&size)
+    {
+        return Err("invalid card artwork entry".into());
+    }
+    let entry = (digest.to_owned(), size);
+    if files
+        .insert(name.to_owned(), entry.clone())
+        .is_some_and(|old| old != entry)
+    {
+        return Err("conflicting card artwork declarations".into());
+    }
+    Ok(())
+}
+fn files(index: &[u8]) -> Result<BTreeMap<String, (String, usize)>, String> {
     let index: Index = serde_json::from_slice(index).map_err(|e| e.to_string())?;
     if index.schema != 1
         || index.width != 360
@@ -69,30 +112,23 @@ fn files(index: &[u8]) -> Result<BTreeMap<String, String>, String> {
     }
     let mut files = BTreeMap::new();
     for source in index.cards.values() {
-        // Deserializing also validates optional presentation metadata.
+        // Deserialization validates optional presentation metadata too.
         let _ = source.contains_name;
-        if !source.file.ends_with(".rgb888")
-            || !source
-                .file
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphanumeric)
-            || !source
-                .file
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-            || source.sha256.len() != 64
-            || !source
-                .sha256
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        {
-            return Err("invalid card artwork filename or checksum".into());
-        }
-        if let Some(previous) = files.insert(source.file.clone(), source.sha256.clone())
-            && previous != source.sha256
-        {
-            return Err("conflicting card artwork checksums".into());
+        add_file(
+            &mut files,
+            &source.file,
+            &source.sha256,
+            SOURCE_BYTES,
+            ".rgb888",
+        )?;
+        if let Some(prepared) = &source.prepared {
+            add_file(
+                &mut files,
+                &prepared.file,
+                &prepared.sha256,
+                prepared.bytes,
+                ".cardtex",
+            )?;
         }
     }
     if files.is_empty() || files.len() > MAX_FILES {
@@ -128,9 +164,9 @@ pub fn state(parent: &Path) -> Option<String> {
     if stamp.index_sha256 != digest(&raw) {
         return None;
     }
-    for name in files(&raw).ok()?.keys() {
+    for (name, (_, size)) in files(&raw).ok()? {
         let metadata = fs::symlink_metadata(current.join(name)).ok()?;
-        if !metadata.is_file() || metadata.len() != SOURCE_BYTES as u64 {
+        if !metadata.is_file() || metadata.len() != size as u64 {
             return None;
         }
     }
@@ -153,8 +189,8 @@ pub fn install(parent: &Path, reader: &mut impl Read, hash: &str) -> Result<usiz
     let sources = files(&raw)?;
     let next = Staging(parent.join(".launcher-cards.next"));
     fs::create_dir(&next.0).map_err(|e| e.to_string())?;
-    for (name, expected) in &sources {
-        let mut bytes = vec![0; SOURCE_BYTES];
+    for (name, (expected, size)) in &sources {
+        let mut bytes = vec![0; *size];
         reader.read_exact(&mut bytes).map_err(|e| e.to_string())?;
         if digest(&bytes) != *expected {
             return Err(format!("card artwork checksum mismatch: {name}"));
@@ -227,6 +263,35 @@ mod tests {
         body.extend(index);
         body.extend(pixels);
         body
+    }
+    #[test]
+    fn prepared_entries_are_installed_atomically_and_have_exact_lengths() {
+        let raw = bundle();
+        let length = u32::from_be_bytes(raw[..4].try_into().unwrap()) as usize;
+        let mut index: serde_json::Value = serde_json::from_slice(&raw[4..4 + length]).unwrap();
+        let prepared = b"MGCART01 bounded prepared fixture";
+        for source in index["cards"].as_object_mut().unwrap().values_mut() {
+            source["prepared"] = serde_json::json!({"file":"fixture.cardtex", "bytes":prepared.len(), "sha256":digest(prepared)});
+        }
+        let index = serde_json::to_vec(&index).unwrap();
+        let mut body = (index.len() as u32).to_be_bytes().to_vec();
+        body.extend(index);
+        body.extend(prepared);
+        body.extend(&raw[4 + length..]);
+        let root =
+            std::env::temp_dir().join(format!("magik-prepared-installer-{}", std::process::id()));
+        let hash = digest(&body);
+        assert_eq!(install(&root, &mut body.as_slice(), &hash).unwrap(), 2);
+        assert_eq!(
+            fs::read(root.join("launcher-cards/fixture.cardtex")).unwrap(),
+            prepared
+        );
+        assert_eq!(state(&root), Some(hash.clone()));
+        assert!(install(&root, &mut &body[..body.len() - 1], &hash).is_err());
+        assert_eq!(state(&root), Some(hash));
+        fs::write(root.join("launcher-cards/fixture.cardtex"), b"short").unwrap();
+        assert!(state(&root).is_none());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn valid_pack_installs_and_failed_replacement_keeps_previous_pack() {

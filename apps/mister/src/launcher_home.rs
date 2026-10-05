@@ -64,33 +64,56 @@ impl LauncherHomeSnapshot {
                     LauncherCardId::Arcade,
                     "ARCADE",
                     Some(counts.arcade),
-                    0xe1a5,
+                    mister_magik_framebuffer_scenes::launcher::LauncherCardStyle::root(
+                        LauncherCardId::Arcade,
+                    )
+                    .colour,
                 ),
                 card(
                     LauncherCardId::Consoles,
                     "CONSOLES",
                     Some(counts.consoles),
-                    0x2a7f,
+                    mister_magik_framebuffer_scenes::launcher::LauncherCardStyle::root(
+                        LauncherCardId::Consoles,
+                    )
+                    .colour,
                 ),
                 card(
                     LauncherCardId::Computers,
                     "COMPUTERS",
                     Some(counts.computers),
-                    0xedc6,
+                    mister_magik_framebuffer_scenes::launcher::LauncherCardStyle::root(
+                        LauncherCardId::Computers,
+                    )
+                    .colour,
                 ),
                 card(
                     LauncherCardId::Handhelds,
                     "HANDHELDS",
                     Some(counts.handhelds),
-                    0x2df2,
+                    mister_magik_framebuffer_scenes::launcher::LauncherCardStyle::root(
+                        LauncherCardId::Handhelds,
+                    )
+                    .colour,
                 ),
                 card(
                     LauncherCardId::Favourites,
                     "FAVOURITES",
                     Some(counts.favourites),
-                    0xe12f,
+                    mister_magik_framebuffer_scenes::launcher::LauncherCardStyle::root(
+                        LauncherCardId::Favourites,
+                    )
+                    .colour,
                 ),
-                card(LauncherCardId::Settings, "SETTINGS", None, 0x8b7f),
+                card(
+                    LauncherCardId::Settings,
+                    "SETTINGS",
+                    None,
+                    mister_magik_framebuffer_scenes::launcher::LauncherCardStyle::root(
+                        LauncherCardId::Settings,
+                    )
+                    .colour,
+                ),
             ],
             library_games: counts
                 .arcade
@@ -102,11 +125,6 @@ impl LauncherHomeSnapshot {
         }
     }
 }
-
-/// Root collection colours, shared by every card below each root card.
-const CONSOLES_COLOUR: u16 = 0x2a7f;
-const COMPUTERS_COLOUR: u16 = 0xedc6;
-const HANDHELDS_COLOUR: u16 = 0x2df2;
 
 /// One carousel level with owned labels and stable artwork identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -157,11 +175,10 @@ impl CardLevelSnapshot {
             return Self::root(&LauncherHomeSnapshot::from_runtime(nav, catalog));
         }
         let path = nav.menu_path_to(menu_id).unwrap_or_default();
-        let (id, accent) = match path.get(1).map(String::as_str) {
-            Some(COMPUTERS_MENU_ID) => (LauncherCardId::Computers, COMPUTERS_COLOUR),
-            Some(HANDHELDS_MENU_ID) => (LauncherCardId::Handhelds, HANDHELDS_COLOUR),
-            _ => (LauncherCardId::Consoles, CONSOLES_COLOUR),
-        };
+        let style = mister_magik_framebuffer_scenes::launcher::LauncherCardStyle::section(
+            path.get(1).map_or("", String::as_str),
+        );
+        let (id, accent) = (style.id, style.colour);
         let items = nav.menu_items_of(menu_id);
         let cards: Vec<_> = items
             .iter()
