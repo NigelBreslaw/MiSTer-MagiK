@@ -53,44 +53,109 @@
       "sha256": "73987000928a78a5c1551a22af40ee80af47772245e2a93082ac0cdf3bddb658"
     },
     "menu:computers:acorn": {
-      "file": "computer-family-acorn.rgb888",
-      "sha256": "cf004942c0afc0315b2558ecf4fa738ab4b0e67cc4852ed4105082c1b33831ed"
+      "contains_name": true,
+      "file": "brand-acorn.rgb888",
+      "sha256": "78fb04e7a6f62b8fe304f74589367cb7077c4a7bd1947debb1b1aede2b40fcf4"
     },
     "menu:computers:apple": {
-      "file": "computer-family-apple.rgb888",
-      "sha256": "b372e6216c7768d7a14934488f44d29a5fa631dff8eb4536ac985dad4a2f4dff"
+      "contains_name": false,
+      "file": "brand-apple.rgb888",
+      "sha256": "56d3fdcc2cb333b8aad1d2d51fccf6279023de11c5a3bac7419b3354cfda641a"
+    },
+    "menu:computers:atari": {
+      "contains_name": false,
+      "file": "brand-atari.rgb888",
+      "sha256": "9fd6b15e7a7bd6802e355315f17dc48533ae802dd2fb2f8567a82ca7c1ceb894"
     },
     "menu:computers:commodore": {
-      "file": "computer-family-commodore.rgb888",
-      "sha256": "0e232427441ad6afed9bc61542d0c5b3e71b5b48012dfaed560bb07b33a225c5"
+      "contains_name": false,
+      "file": "brand-commodore.rgb888",
+      "sha256": "62a01ea6544f3767d3e1f8e3f46b27e6b4fa2575a5a64ab0bc09257a735ebead"
     },
     "menu:computers:dos-pc": {
-      "file": "computer-family-dos-pc.rgb888",
-      "sha256": "8f31453edfd10232bf1e8a019e1e5ad84d69c8795eb2d1a79c3f0e959907259c"
+      "contains_name": false,
+      "file": "brand-dos-pc.rgb888",
+      "sha256": "d21763afd8a23f4246b90614b78c995d620350ef2ddfe56fc990e231b63f4696"
     },
     "menu:computers:japanese": {
-      "file": "computer-family-japanese.rgb888",
-      "sha256": "160f1002b286aa693f02aa3ed7f7dfcb1cb00fa981c2885dba67a7cb6440caf5"
+      "contains_name": false,
+      "file": "brand-japanese.rgb888",
+      "sha256": "beb3d905813e5fca7e4cdfbc4c1ff8f8bcaaf9df2254d7e3b5c037d1df2b69dc"
     },
     "menu:computers:other": {
-      "file": "computer-family-other.rgb888",
-      "sha256": "398e526a527abeec93c08fef80fdb987764f4957e1e8d8d66ab9d56213c2a0bc"
+      "contains_name": false,
+      "file": "brand-other.rgb888",
+      "sha256": "b6052caeee8234df63b115f09a0c908b6a47fe8262b4a63af9cfe294449ef7b4"
     },
     "menu:computers:sinclair": {
-      "file": "computer-family-sinclair.rgb888",
-      "sha256": "e062b49a33d89a78c032de161edfc1dd35ea08b81d4996a6c7cce2158db458ca"
+      "contains_name": true,
+      "file": "brand-sinclair.rgb888",
+      "sha256": "225b468555287f184a71f5976371384e8d8f8e41ac56dddfdbaa5c955e6911ea"
     },
     "menu:computers:tandy": {
-      "file": "computer-family-tandy.rgb888",
-      "sha256": "94353745a907f625972e90229cae1771364bd125d02541f394e7d0651587be17"
+      "contains_name": true,
+      "file": "brand-tandy.rgb888",
+      "sha256": "f2d1ee1199740b8787f04bfac36987f1faf6e3069b951ea59de4134ed15958e4"
+    },
+    "menu:consoles:atari": {
+      "contains_name": false,
+      "file": "brand-atari.rgb888",
+      "sha256": "9fd6b15e7a7bd6802e355315f17dc48533ae802dd2fb2f8567a82ca7c1ceb894"
+    },
+    "menu:consoles:nec": {
+      "contains_name": true,
+      "file": "brand-nec.rgb888",
+      "sha256": "1b67ca2ed2667163159a7e0e30deb4151f8501d605f8534798aa257ed6badbff"
     },
     "menu:consoles:nintendo": {
-      "file": "console-nintendo.rgb888",
-      "sha256": "6de108de5b650b54b07b409b8f645a1a0d1f535101e1289acca0ea3496376159"
+      "contains_name": true,
+      "file": "brand-nintendo.rgb888",
+      "sha256": "b93403c70fdb5cfa7a363f161063e6dfb35702145c00557fa7ea24c8e4734541"
+    },
+    "menu:consoles:other": {
+      "contains_name": false,
+      "file": "brand-other.rgb888",
+      "sha256": "b6052caeee8234df63b115f09a0c908b6a47fe8262b4a63af9cfe294449ef7b4"
     },
     "menu:consoles:sega": {
-      "file": "console-sega.rgb888",
-      "sha256": "d222dafa168f2d42f5fdeb553cf298ad987b9279ab727cd5c1f3dca4dbe3bc4c"
+      "contains_name": true,
+      "file": "brand-sega.rgb888",
+      "sha256": "200a4b7275de81cc3bc28ed92aa7659d2f31718c57f70a6a4ebfefe08215aacb"
+    },
+    "menu:consoles:sony": {
+      "contains_name": true,
+      "file": "brand-sony.rgb888",
+      "sha256": "50a3c4f0a0b8f3ff473586f771dc24445d003074e1753912dd599ac0a5735514"
+    },
+    "menu:handhelds:atari": {
+      "contains_name": false,
+      "file": "brand-atari.rgb888",
+      "sha256": "9fd6b15e7a7bd6802e355315f17dc48533ae802dd2fb2f8567a82ca7c1ceb894"
+    },
+    "menu:handhelds:bandai": {
+      "contains_name": true,
+      "file": "brand-bandai.rgb888",
+      "sha256": "3e195cc1d17c23b3decdfe39aacf92710a08d0e6270ba3b8b63ae76e2671c6c6"
+    },
+    "menu:handhelds:nintendo": {
+      "contains_name": true,
+      "file": "brand-nintendo.rgb888",
+      "sha256": "b93403c70fdb5cfa7a363f161063e6dfb35702145c00557fa7ea24c8e4734541"
+    },
+    "menu:handhelds:other": {
+      "contains_name": false,
+      "file": "brand-other.rgb888",
+      "sha256": "b6052caeee8234df63b115f09a0c908b6a47fe8262b4a63af9cfe294449ef7b4"
+    },
+    "menu:handhelds:sega": {
+      "contains_name": true,
+      "file": "brand-sega.rgb888",
+      "sha256": "200a4b7275de81cc3bc28ed92aa7659d2f31718c57f70a6a4ebfefe08215aacb"
+    },
+    "menu:handhelds:snk": {
+      "contains_name": true,
+      "file": "brand-snk.rgb888",
+      "sha256": "847a9422acb68a2d449853be36bde1ae7288da55c4acf8143e9a9b402430cd94"
     },
     "n64": {
       "file": "console-n64.rgb888",

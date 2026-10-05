@@ -32,6 +32,26 @@ explicit. `device catalog purge --confirm` is Dev-only, suspends the launcher,
 checks the production completion marker and restores Main; no automatic reboot.
 Raw reports and failures are retained in the command's result directory.
 
+## Card artwork on Dev installs
+
+Real MagiK deploy/check/watch preparation installs `apps/mister/assets/ui/launcher-cards`
+into `/media/fat/mister-magik-dev/assets/ui/launcher-cards` before starting the GUI.
+The native `card-artwork-v1` capability is upgraded automatically when missing.
+Mini does not install this pack. The destination is fixed to Dev; the operation
+cannot write an arbitrary path or replace public artwork.
+
+The host and installer validate schema, filenames, exact lengths and per-image
+checksums. A bounded streamed upload stages the pack; publication keeps the
+previous directory until the replacement is fully verified and synced. An
+interrupted directory swap restores the previous pack at the next state/install
+request. A lost install receipt is reconciled once by reading installed state,
+without repeating the mutation. An unchanged pack needs no transfer, and an
+artwork-only change restarts the launcher to discard old prepared faces.
+
+The installed receipt checks the small index and file lengths during subsequent
+state requests. Full pixel hashing stays at packaging/install time. This includes
+all system renders and maker cards; raw 3D models are never deployed.
+
 ## Independent platform entrypoint
 
 ### Update published releases in one command

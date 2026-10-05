@@ -13,7 +13,10 @@ Model credits, licence links and modifications are in
 The ZIP and Downloader packages install the index and pixels under
 `/media/fat/mister-magik/assets/ui/launcher-cards/`. Development builds resolve
 `/media/fat/mister-magik-dev/assets/ui/launcher-cards/` through the existing
-`DevicePaths` layout contract. `magik deploy` still transfers only the binary.
+`DevicePaths` layout contract. `magik deploy` now validates and installs the complete indexed pack through
+the native Dev artwork installer before starting the app. Unchanged packs are
+not uploaded again; an artwork change restarts an otherwise-current launcher
+so cached generic faces are replaced.
 The six root renders are also built into the binary as a fallback, so a Dev
 installation without the artwork directory retains the canonical root workload.
 Installed root artwork takes precedence when readable. Nested artwork still
@@ -121,3 +124,16 @@ output geometry and keep native bitmap text and silhouette coverage.
 
 Scanout stays RGB565. The superseded 180x252 RGB565 source copies and quality
 switches have been removed. No animation poses or angle atlases are stored.
+
+## Company and family artwork
+
+`brand-*.rgb888` replaces the former controller piles and 3D family text with
+flat logo-led graphics. The 15 identities are shared by 21 maker/family entries;
+the six root images and individual system images are unchanged. Source vectors,
+credits and regeneration instructions are in `tools/brand-cards/`.
+
+`contains_name` is optional and defaults to false. A valid image with a company
+wordmark suppresses the duplicate native title; icon-only logos keep the name,
+and all failed loads restore the generic title. Game counts remain native.
+The installed set uses corporate colour fields; dark alternatives are review
+outputs only, without adding another runtime image cache or focus policy.

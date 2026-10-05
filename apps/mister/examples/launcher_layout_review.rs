@@ -165,13 +165,21 @@ fn review_level_trick(
     let prepare_started = std::time::Instant::now();
     let keys = ["atari", "sega", "sony", "nintendo", "nec", "snk"]
         .map(|maker| format!("menu:consoles:{maker}"));
-    let artwork = mister_magik_fb::launcher_artwork::load_cards(
+    let mut artwork: Vec<_> = mister_magik_fb::launcher_artwork::load_artwork(
         &mister_magik_fb::launcher_artwork::asset_root(),
         &keys,
-    );
-    let sources: Vec<_> = artwork.iter().map(|pixels| pixels.as_ref()).collect();
+    )
+    .into_iter()
+    .map(Some)
+    .collect();
     let mut consoles = scene
-        .prepare_initial_with_rgb888_artwork_and_typography(data, &sources, fonts)
+        .prepare_initial_with_rgb888_loader_and_cache(
+            data,
+            &mut |index| artwork[index].take().unwrap(),
+            Some(fonts),
+            &mut mister_magik_framebuffer_scenes::launcher::LauncherFaceCache::default(),
+            1,
+        )
         .finish();
     eprintln!(
         "{name}: nested level prepared in {:?}",

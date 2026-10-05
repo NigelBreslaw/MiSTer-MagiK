@@ -315,6 +315,8 @@ enum Artwork<'a> {
 pub struct LauncherArtwork {
     pub pixels: std::borrow::Cow<'static, [u8]>,
     pub retry: bool,
+    /// The validated image contains its own wordmark; omit the duplicate title.
+    pub contains_name: bool,
 }
 
 /// Face cache for an immutable artwork/font context. Advance `asset_generation`
@@ -851,12 +853,19 @@ impl PreparedLauncher {
                     return Arc::clone(&cache.faces[index]);
                 }
 
+                let name = if loaded.as_ref().is_some_and(|source| {
+                    source.contains_name && source.pixels.len() == 360 * 504 * 3
+                }) {
+                    ""
+                } else {
+                    card.name
+                };
                 let card = PreparedCard {
                     id: card.id,
-                    name: card.name,
+                    name,
                     games: card.games,
                     colour: card.colour,
-                    name_mask: text_mask(card.name),
+                    name_mask: text_mask(name),
                     games_mask: card
                         .games
                         .map_or_else(Vec::new, |games| text_mask(&format_games(games))),
@@ -2033,6 +2042,56 @@ mod tests {
     }
 
     #[test]
+    fn embedded_wordmark_omits_title_without_losing_game_count() {
+        use std::borrow::Cow;
+        let scene = LauncherScene::new(960, 540);
+        let mut cache = LauncherFaceCache::default();
+        let mut actual = scene
+            .prepare_initial_with_rgb888_loader_and_cache(
+                data(),
+                &mut |_| LauncherArtwork {
+                    pixels: Cow::Owned(vec![80; 360 * 504 * 3]),
+                    retry: false,
+                    contains_name: true,
+                },
+                None,
+                &mut cache,
+                1,
+            )
+            .finish();
+        let mut cards = CARDS;
+        for card in &mut cards {
+            card.name = "";
+        }
+        let mut expected_data = data();
+        expected_data.cards = &cards;
+        let mut expected = scene
+            .prepare_initial_with_rgb888_loader_and_cache(
+                expected_data,
+                &mut |_| LauncherArtwork {
+                    pixels: Cow::Owned(vec![80; 360 * 504 * 3]),
+                    retry: false,
+                    contains_name: false,
+                },
+                None,
+                &mut LauncherFaceCache::default(),
+                1,
+            )
+            .finish();
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 0,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+        };
+        actual.render_frame(frame);
+        expected.render_frame(frame);
+        assert_eq!(actual.pixels(), expected.pixels());
+    }
+
+    #[test]
     fn lazy_artwork_loads_only_misses_retries_failures_and_uses_generation() {
         use std::{borrow::Cow, cell::RefCell};
         let calls = RefCell::new(vec![0; CARDS.len()]);
@@ -2046,6 +2105,7 @@ mod tests {
                     Cow::Owned(vec![80 + i as u8; 360 * 504 * 3])
                 },
                 retry: i == 1 && failing.get(),
+                contains_name: false,
             }
         };
         let scene = LauncherScene::new(960, 540);

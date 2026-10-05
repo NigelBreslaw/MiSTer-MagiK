@@ -32,6 +32,8 @@ struct Index {
 #[derive(Deserialize)]
 struct Source {
     file: String,
+    #[serde(default)]
+    contains_name: bool,
 }
 
 pub fn asset_root() -> PathBuf {
@@ -115,6 +117,7 @@ impl<'a> Loader<'a> {
         let fallback = |retry| LauncherArtwork {
             pixels: Cow::Borrowed(builtin.unwrap_or(&[])),
             retry,
+            contains_name: false,
         };
         let index = self.index.get_or_insert_with(|| {
             let result = index(self.root);
@@ -148,6 +151,7 @@ impl<'a> Loader<'a> {
             Ok(bytes) => LauncherArtwork {
                 pixels: Cow::Owned(bytes),
                 retry: false,
+                contains_name: entry.contains_name,
             },
             Err(error) => {
                 eprintln!("card artwork {key}: {error}; using fallback artwork");
@@ -159,9 +163,16 @@ impl<'a> Loader<'a> {
 
 /// Review/export convenience. Runtime uses the lazy callback below so it never
 /// retains a level's full-resolution source images alongside prepared faces.
-pub fn load_cards(root: &Path, keys: &[String]) -> Vec<Cow<'static, [u8]>> {
+pub fn load_artwork(root: &Path, keys: &[String]) -> Vec<LauncherArtwork> {
     let mut loader = Loader::new(root);
-    keys.iter().map(|key| loader.load(key).pixels).collect()
+    keys.iter().map(|key| loader.load(key)).collect()
+}
+
+pub fn load_cards(root: &Path, keys: &[String]) -> Vec<Cow<'static, [u8]>> {
+    load_artwork(root, keys)
+        .into_iter()
+        .map(|source| source.pixels)
+        .collect()
 }
 
 #[cfg(any(feature = "ui", feature = "ui-preview", test))]
@@ -220,6 +231,7 @@ impl CardFaceCache {
                             return LauncherArtwork {
                                 pixels: Cow::Borrowed(built_in(&normalized).unwrap_or(&[])),
                                 retry,
+                                contains_name: false,
                             };
                         }
                         let result = loader.load(key);
@@ -318,6 +330,32 @@ mod tests {
         let recovered = Loader::new(&f.0).load("root:arcade");
         assert!(!recovered.retry);
         assert_eq!(recovered.pixels.as_ref(), vec![80; SOURCE_BYTES]);
+    }
+
+    #[test]
+    fn wordmark_policy_only_applies_to_valid_installed_pixels() {
+        let f = Fixture::new();
+        let manifest = serde_json::json!({"schema":1,"width":360,"height":504,"format":"RGB888","cards":{
+            "menu:consoles:nintendo":{"file":"logo.rgb888","contains_name":true}
+        }});
+        std::fs::write(f.0.join("index.json"), manifest.to_string()).unwrap();
+        assert!(
+            !Loader::new(&f.0)
+                .load("menu:consoles:nintendo")
+                .contains_name
+        );
+        std::fs::write(f.0.join("logo.rgb888"), vec![123; SOURCE_BYTES]).unwrap();
+        assert!(
+            Loader::new(&f.0)
+                .load("menu:consoles:nintendo")
+                .contains_name
+        );
+        std::fs::write(f.0.join("logo.rgb888"), b"truncated").unwrap();
+        assert!(
+            !Loader::new(&f.0)
+                .load("menu:consoles:nintendo")
+                .contains_name
+        );
     }
 
     #[test]

@@ -277,6 +277,7 @@ def test_queued_deploy_starts_idle_application(deploy_case, tmp_path, monkeypatc
     monkeypatch.setattr(
         cli, "ensure_arm_application", lambda *_: BuildResult(artifact, False, 0)
     )
+    monkeypatch.setattr(cli, "ensure_artwork", lambda *_: False)
     monkeypatch.setattr(cli, "retain_diagnostics", lambda *_: None)
     assert (
         cli.deploy(

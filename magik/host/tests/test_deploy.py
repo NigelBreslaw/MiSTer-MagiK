@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import Mock
 from magik import cli, updates
 from magik.build import BuildResult
@@ -48,6 +49,7 @@ def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_
         return BuildResult(artifact, False, 0)
 
     monkeypatch.setattr(cli, "ensure_arm_application", build)
+    monkeypatch.setattr(cli, "ensure_artwork", lambda *args: False)
     agent = Mock()
     status = AgentStatus(
         "future-branch", frozenset(), {"running": False, "artifacts": {}}
@@ -83,10 +85,14 @@ def test_real_deploy_requires_input_proxy_but_mini_does_not(monkeypatch, tmp_pat
     assert "main-managed-magik" not in application("mini-magik").agent_capabilities
 
 
-def test_unchanged_ready_artifact_skips_upload_and_restart(monkeypatch, tmp_path):
+@pytest.mark.parametrize("artwork_changed", [False, True])
+def test_unchanged_binary_restarts_only_when_artwork_changed(
+    monkeypatch, tmp_path, artwork_changed
+):
     artifact = tmp_path / "application"
     artifact.write_bytes(b"same binary")
     digest = sha256_hex(artifact.read_bytes())
+    monkeypatch.setattr(cli, "ensure_artwork", lambda *args: artwork_changed)
     build = Mock(return_value=BuildResult(artifact, False, 0))
     monkeypatch.setattr(cli, "ensure_arm_application", build)
     agent = Mock()
@@ -103,7 +109,10 @@ def test_unchanged_ready_artifact_skips_upload_and_restart(monkeypatch, tmp_path
     )
     assert cli.ensure_application(
         agent, status, create_run(tmp_path, "deploy", {}), "magik"
-    )
+    ) is (not artwork_changed)
     build.assert_called_once()
     agent.upload.assert_not_called()
-    agent.start.assert_not_called()
+    if artwork_changed:
+        agent.start.assert_called_once_with(expected_sha256=digest, restart=True)
+    else:
+        agent.start.assert_not_called()

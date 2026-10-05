@@ -17,8 +17,8 @@ class CardArtworkTests(unittest.TestCase):
         root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
         files = card_artwork.validate(root)
         self.assertEqual(
-            len(files), 43
-        )  # six root + thirteen console + 23 computer, plus index
+            len(files), 48
+        )  # 32 unchanged root/system images + 15 shared family images + index
         self.assertEqual(
             files, {p.name for p in root.iterdir() if p.suffix in (".rgb888", ".json")}
         )
@@ -42,6 +42,23 @@ class CardArtworkTests(unittest.TestCase):
             "menu:computers:japanese",
         ):
             self.assertIn(key, index)
+
+    def test_wordmark_metadata_is_boolean_and_family_sources_are_shared(self):
+        root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
+        index = json.loads((root / "index.json").read_text())["cards"]
+        self.assertEqual(
+            index["menu:consoles:nintendo"], index["menu:handhelds:nintendo"]
+        )
+        self.assertTrue(index["menu:consoles:nintendo"]["contains_name"])
+        self.assertFalse(index["menu:computers:commodore"]["contains_name"])
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = CandidateFixture(Path(temp))
+            staged = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+            manifest = json.loads((staged / "index.json").read_text())
+            manifest["cards"]["root:arcade"]["contains_name"] = "true"
+            (staged / "index.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "name policy"):
+                card_artwork.validate(staged)
 
     def test_missing_truncated_tampered_and_traversing_sources_fail_packaging(self):
         for damage in ("missing", "truncated", "checksum", "traversal"):

@@ -42,6 +42,8 @@ def validate(root: Path) -> set[str]:
     files = {}
     for source in cards.values():
         name, digest = source["file"], source["sha256"]
+        if not isinstance(source.get("contains_name", False), bool):
+            raise ValueError("invalid card artwork name policy")
         if not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9_.-]*\.rgb888", name
         ) or not re.fullmatch(r"[0-9a-f]{64}", digest):

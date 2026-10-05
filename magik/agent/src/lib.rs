@@ -3,6 +3,7 @@ mod mini_display;
 
 mod benchmark;
 mod capture;
+mod card_artwork;
 mod catalog_operations;
 mod desktop;
 mod device;
@@ -196,6 +197,7 @@ impl Agent {
             "input-probe-runtime-v1",
             "input-probe-passive-v1",
             "catalog-operations-v1",
+            "card-artwork-v1",
             "publication-v1",
             "platform-publication-v1",
             "publication-state-v1",
@@ -358,6 +360,49 @@ impl Agent {
                     &request.id,
                     "error",
                     serde_json::json!({"code":"service-boot-failed","detail":error.to_string()}),
+                ),
+            };
+            return write_frame(stream, &reply, &[]);
+        }
+        if matches!(
+            request.op.as_str(),
+            "card-artwork-state" | "card-artwork-install"
+        ) {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            let parent =
+                mister_magik_catalog::device_layout::DeviceLayout::Dev.app_path("assets/ui");
+            let result = if request.op == "card-artwork-state" {
+                if body_length != 0 || !request.fields.is_empty() {
+                    Err("artwork state takes no fields or body".into())
+                } else {
+                    Ok(serde_json::json!({"sha256":card_artwork::state(&parent)}))
+                }
+            } else if request.fields.len() != 1 {
+                Err("artwork install requires only sha256".into())
+            } else {
+                let hash = request
+                    .fields
+                    .get("sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let deadline = Instant::now() + Duration::from_secs(180);
+                upload::receive(
+                    &mut wire::DeadlineReader { stream, deadline },
+                    &self.install_root,
+                    "publication",
+                    hash,
+                    body_length,
+                    &request.id,
+                )
+                .and_then(|staged| card_artwork::install(&parent, &mut staged.open()?, hash))
+                .map(|files| serde_json::json!({"sha256":hash,"files":files}))
+            };
+            let reply = match result {
+                Ok(fields) => response(&request.id, "card-artwork-ready", fields),
+                Err(error) => response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"card-artwork-failed","detail":error}),
                 ),
             };
             return write_frame(stream, &reply, &[]);
