@@ -16,9 +16,7 @@ class CardArtworkTests(unittest.TestCase):
     def test_shipped_pack_has_all_approved_sources_and_taxonomy_keys(self):
         root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
         files = card_artwork.validate(root)
-        self.assertEqual(
-            len(files), 79
-        )  # 36 sources + 42 prepared faces + index
+        self.assertEqual(len(files), 79)  # 36 sources + 42 prepared faces + index
         self.assertEqual(
             files,
             {
