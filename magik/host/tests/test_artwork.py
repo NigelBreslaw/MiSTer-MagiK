@@ -99,7 +99,7 @@ def test_bad_source_fails_before_any_device_request(tmp_path):
     agent._request.assert_not_called()
 
 
-def test_repository_bundle_includes_every_3d_system_and_family_image():
+def test_repository_bundle_keeps_approved_artwork_and_generic_console_defaults():
     root = repository() / "apps/mister/assets/ui/launcher-cards"
     payload, count = artwork.bundle(root)
     index = json.loads((root / "index.json").read_text())
@@ -113,10 +113,6 @@ def test_repository_bundle_includes_every_3d_system_and_family_image():
     assert all(
         key in index["cards"]
         for key in [
-            "nes",
-            "snes",
-            "n64",
-            "saturn",
             "amiga",
             "c64",
             "x68000",
@@ -124,3 +120,5 @@ def test_repository_bundle_includes_every_3d_system_and_family_image():
             "menu:consoles:nintendo",
         ]
     )
+
+    assert not any(name.startswith("console-") for name in names)

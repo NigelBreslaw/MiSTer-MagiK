@@ -81,15 +81,6 @@
       },
       "sha256": "1f30fb4ac62ae626eb75b1c1e0d58488d4d0a1f15b9543a7020dee6e814a94d9"
     },
-    "fds": {
-      "file": "console-fds.rgb888",
-      "prepared": {
-        "bytes": 277739,
-        "file": "console-fds.1-2a7f.cardtex",
-        "sha256": "4f2f343415e066253e64e539174103283b359389a8cef6ccee4ec884a02346ae"
-      },
-      "sha256": "a874d714e27001cab9143c5cc6cf3da83101d45360bb4ed31a393f8c6d7b7bf7"
-    },
     "fmtowns": {
       "file": "computer-fmtowns.rgb888",
       "prepared": {
@@ -98,24 +89,6 @@
         "sha256": "f51dbbd429d753de351b7cf76d32a4025501ed5cf3701cbfec01527fff7abddf"
       },
       "sha256": "fbcd6030a385b3e69918622e01e3a9800a88092a4fbb6176b9c7177117169075"
-    },
-    "megacd": {
-      "file": "console-megacd.rgb888",
-      "prepared": {
-        "bytes": 224689,
-        "file": "console-megacd.1-2a7f.cardtex",
-        "sha256": "2b55fbbcbbc051446ffdec02534c1ce8d94fc8bd468f33d16e364d5bcf6406d2"
-      },
-      "sha256": "96aa15d11f41c7a76093b9a6cf7ad5dd630c1272df73dac42b0e1634b51721ff"
-    },
-    "megadrive": {
-      "file": "console-megadrive.rgb888",
-      "prepared": {
-        "bytes": 218784,
-        "file": "console-megadrive.1-2a7f.cardtex",
-        "sha256": "e746ec0eba107c24586582558fdf50cbc9cfa17cd2691c6f8d1ab163d7884bbf"
-      },
-      "sha256": "73987000928a78a5c1551a22af40ee80af47772245e2a93082ac0cdf3bddb658"
     },
     "menu:computers:acorn": {
       "contains_name": true,
@@ -327,24 +300,6 @@
       },
       "sha256": "847a9422acb68a2d449853be36bde1ae7288da55c4acf8143e9a9b402430cd94"
     },
-    "n64": {
-      "file": "console-n64.rgb888",
-      "prepared": {
-        "bytes": 248122,
-        "file": "console-n64.1-2a7f.cardtex",
-        "sha256": "fefb374f083482ee6128e04dcf70ae8f65ea064e1db1f8adf032bf5259cca6f7"
-      },
-      "sha256": "10e50def09018ee9dc8bb0b770d7adac0c98414443631c17374194a29b0278d1"
-    },
-    "nes": {
-      "file": "console-nes.rgb888",
-      "prepared": {
-        "bytes": 242644,
-        "file": "console-nes.1-2a7f.cardtex",
-        "sha256": "718cd559596fc3ea193791d534732a17d8fe88a72e8129c74e81ea833da4c66e"
-      },
-      "sha256": "c660004f45a08a6ff1606afd8c353438d0ff814a45d0ec77b3881d5ca8f7f7b4"
-    },
     "pc98": {
       "file": "computer-pc98.rgb888",
       "prepared": {
@@ -408,42 +363,6 @@
       },
       "sha256": "b024d0ad846ffd0b96cd7b8a77e39f83e26d468fa1b20ff298d9c895a16a21dc"
     },
-    "s32x": {
-      "file": "console-s32x.rgb888",
-      "prepared": {
-        "bytes": 249891,
-        "file": "console-s32x.1-2a7f.cardtex",
-        "sha256": "c100b2011bf30ff73d4466f3886b27895844611df37c645827f769061a94f271"
-      },
-      "sha256": "ac749c03e32c91120d1d7c051f23a91fdf48d31070e80ca55770883d68c1e216"
-    },
-    "satellaview": {
-      "file": "console-satellaview.rgb888",
-      "prepared": {
-        "bytes": 285339,
-        "file": "console-satellaview.1-2a7f.cardtex",
-        "sha256": "9287630b109306c42a76612c287ba6b0d51ae7f879a0ec8c1d8e712f713c35a2"
-      },
-      "sha256": "9becb0cc6ce1d2f1e135ea4dca6d1a7b82a857f9624118db475cd3f84601ea38"
-    },
-    "saturn": {
-      "file": "console-saturn.rgb888",
-      "prepared": {
-        "bytes": 247597,
-        "file": "console-saturn.1-2a7f.cardtex",
-        "sha256": "fbfb834064ebd8897a6810efac186cbfeb4a422943d043c6bd5043e20d0cd760"
-      },
-      "sha256": "b9b80d22f0907d93ed1ebd6cbd45e4c0767159acf3e4d5194bcccabf548e5f2b"
-    },
-    "sg1000": {
-      "file": "console-sg1000.rgb888",
-      "prepared": {
-        "bytes": 243957,
-        "file": "console-sg1000.1-2a7f.cardtex",
-        "sha256": "e8f5a56d7c76c22ea5b65c57c2f7816ea740ddc0ccd4b6a0ccf12b9588004ce8"
-      },
-      "sha256": "5e4c3a29e95b67136639f8ff898ab2face85178cc12e8106bf57af17b94a5f4a"
-    },
     "sharp-x1": {
       "file": "computer-x1.rgb888",
       "prepared": {
@@ -452,24 +371,6 @@
         "sha256": "4c988fc37701a4c642da613a23a7c723c2ebc1e12b57289db5deedc41e755ae1"
       },
       "sha256": "e924060533de5f5bf1de150ba681c5284a46778caea6a70d800ddd7ea9b24289"
-    },
-    "sms": {
-      "file": "console-sms.rgb888",
-      "prepared": {
-        "bytes": 232678,
-        "file": "console-sms.1-2a7f.cardtex",
-        "sha256": "f84f365b664b6293df325672d4dbf5fa8f3e2e72f680438d002ef8cfca57a2a1"
-      },
-      "sha256": "54b4f68f1f242813a10d3342953ff5849072be48b3b99c70fd4108f035b0d317"
-    },
-    "snes": {
-      "file": "console-snes.rgb888",
-      "prepared": {
-        "bytes": 233539,
-        "file": "console-snes.1-2a7f.cardtex",
-        "sha256": "58f8eafb785db861c8f8a63375e667543bcad7950f32e38f0c57a2625e762e7f"
-      },
-      "sha256": "d942a5507ce9f06571b48b197ecb3fb2fef0cf60981d8661cd278800450e50e3"
     },
     "spectrum": {
       "file": "computer-zx-spectrum.rgb888",
