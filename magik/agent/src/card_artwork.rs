@@ -69,6 +69,35 @@ fn valid_digest(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
+fn add_file(
+    files: &mut BTreeMap<String, (String, usize)>,
+    name: &str,
+    digest: &str,
+    size: usize,
+    extension: &str,
+) -> Result<(), String> {
+    if !name.ends_with(extension)
+        || !name
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+        || !valid_digest(digest)
+        || !(17..=2 * 1024 * 1024).contains(&size)
+    {
+        return Err("invalid card artwork entry".into());
+    }
+    let entry = (digest.to_owned(), size);
+    if files
+        .insert(name.to_owned(), entry.clone())
+        .is_some_and(|old| old != entry)
+    {
+        return Err("conflicting card artwork declarations".into());
+    }
+    Ok(())
+}
 fn files(index: &[u8]) -> Result<BTreeMap<String, (String, usize)>, String> {
     let index: Index = serde_json::from_slice(index).map_err(|e| e.to_string())?;
     if index.schema != 1
@@ -83,53 +112,23 @@ fn files(index: &[u8]) -> Result<BTreeMap<String, (String, usize)>, String> {
     }
     let mut files = BTreeMap::new();
     for source in index.cards.values() {
-        // Deserializing also validates optional presentation metadata.
+        // Deserialization validates optional presentation metadata too.
         let _ = source.contains_name;
-        if !source.file.ends_with(".rgb888")
-            || !source
-                .file
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphanumeric)
-            || !source
-                .file
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-            || source.sha256.len() != 64
-            || !source
-                .sha256
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        {
-            return Err("invalid card artwork filename or checksum".into());
-        }
-        if let Some(previous) =
-            files.insert(source.file.clone(), (source.sha256.clone(), SOURCE_BYTES))
-            && previous != (source.sha256.clone(), SOURCE_BYTES)
-        {
-            return Err("conflicting card artwork checksums".into());
-        }
-    }
-    for source in index.cards.values() {
+        add_file(
+            &mut files,
+            &source.file,
+            &source.sha256,
+            SOURCE_BYTES,
+            ".rgb888",
+        )?;
         if let Some(prepared) = &source.prepared {
-            if !prepared.file.ends_with(".cardtex")
-                || prepared.file.starts_with('.')
-                || !prepared
-                    .file
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-                || !valid_digest(&prepared.sha256)
-                || !(17..=2 * 1024 * 1024).contains(&prepared.bytes)
-            {
-                return Err("invalid prepared card artwork".into());
-            }
-            let entry = (prepared.sha256.clone(), prepared.bytes);
-            if files
-                .insert(prepared.file.clone(), entry.clone())
-                .is_some_and(|previous| previous != entry)
-            {
-                return Err("conflicting prepared artwork declarations".into());
-            }
+            add_file(
+                &mut files,
+                &prepared.file,
+                &prepared.sha256,
+                prepared.bytes,
+                ".cardtex",
+            )?;
         }
     }
     if files.is_empty() || files.len() > MAX_FILES {

@@ -172,6 +172,9 @@ impl PreparedArtwork {
         let mut surfaces = self.surfaces;
         let mut faces = self.faces;
         for (index, (surface, face)) in surfaces.iter_mut().zip(&mut faces).enumerate() {
+            if card.name.is_empty() && (index == 0 || card.games.is_none()) {
+                continue;
+            }
             let before = surface.clone();
             artwork::draw_face_labels(surface, card, W, index == 1, fonts);
             face.texture
