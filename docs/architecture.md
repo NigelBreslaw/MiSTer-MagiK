@@ -462,6 +462,22 @@ matrix selects for Slint, presenter, layout, preview, composition, scene, and
 baseline changes. It is host-rendered semantic and RGB565 composition evidence;
 physical HDMI or CRT visibility remains an attended device claim.
 
+Hierarchy transitions carry a navigation-owned `CardLevelTransition`: source
+menu ID, source card ID and destination menu ID. Navigation captures it before
+changing the menu, including queued activation, Back and Home. The card session
+resolves the source ID against its retained level once, then freezes that source
+for the entire gather/edge-on/deal sequence. Artwork lookup keys are separate from
+navigation IDs. Missing or stale origins adopt the destination without inventing
+an animated source card.
+
+A `BrowseFrame.selected` identifies the outgoing half of a carousel flip; it is
+never an activation source. Navigation can settle and commit a queued activation
+before the next render. Sampling the previous render in that interval used to
+turn a different card. Regression coverage runs the real navigation commit into
+the session and compares the first gather frame with the activated card's pixels,
+including movement in both directions; identity tests cover reordering, removed
+cards and navigation-state restoration.
+
 The native Home card image is the background of Slint's overlay composition.
 A transparent Slint Window still clears dirty RGB565 pixels to black, so Home
 renders overlay lines with premultiplied alpha and blends them over the native

@@ -20,7 +20,7 @@ use mister_magik_framebuffer_scenes::launcher::{
     LauncherTypography, LevelChange, PreparedLauncher,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
-    BrowseDirection, BrowseFrame, BrowsePhase, SPRING_POSITION_UNITS,
+    BrowseDirection, BrowseFrame, BrowsePhase, CardLevelTransition, SPRING_POSITION_UNITS,
 };
 use mister_magik_framebuffer_scenes::launcher_parallel::{
     ParallelFrameTiming, ParallelLauncherRenderer,
@@ -230,7 +230,7 @@ impl LauncherCardHomeSession {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn update(
+    pub(super) fn update_from_navigation(
         &mut self,
         scene: LauncherScene,
         level: &CardLevelSnapshot,
@@ -240,6 +240,7 @@ impl LauncherCardHomeSession {
         now_ms: u64,
         motion: bool,
         nested_frame: Option<BrowseFrame>,
+        transition: Option<&CardLevelTransition>,
     ) {
         let count = level.cards.len().max(1);
         let selected = selected.min(count - 1);
@@ -261,10 +262,26 @@ impl LauncherCardHomeSession {
             }
         }
         let level_changed = self.level.menu_id != level.menu_id;
-        if level_changed && self.active && self.scene == scene && motion {
-            self.begin_trick(level.clone(), selected);
+        if level_changed
+            && self.active
+            && self.scene == scene
+            && motion
+            && let Some(source_selected) = transition.and_then(|origin| {
+                origin.source_index(
+                    &self.level.menu_id,
+                    &level.menu_id,
+                    self.level
+                        .cards
+                        .iter()
+                        .map(|card| card.navigation_id.as_str()),
+                )
+            })
+        {
+            self.begin_trick(level.clone(), selected, source_selected);
             return;
         }
+        // An absent/mismatched origin cannot invent a source card. Adopt the
+        // destination normally, retaining coherent source pixels until ready.
         let faces_changed = self.scene != scene || self.level.cards != level.cards || level_changed;
         if faces_changed {
             self.cancel_artwork_retry();
@@ -356,6 +373,39 @@ impl LauncherCardHomeSession {
         self.preparation
             .allow_background(!self.is_animating() && self.trick.is_none());
         self.poll_artwork_retry();
+    }
+
+    /// Rendering-only fixtures construct an explicit source identity. Runtime
+    /// callers must supply the navigation commit through update_from_navigation.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn update(
+        &mut self,
+        scene: LauncherScene,
+        level: &CardLevelSnapshot,
+        selected: usize,
+        visual_index: f32,
+        clock: &str,
+        now_ms: u64,
+        motion: bool,
+        nested_frame: Option<BrowseFrame>,
+    ) {
+        let transition = CardLevelTransition {
+            source_level: self.level.menu_id.clone(),
+            source_card: self.level.cards[self.frame.selected].navigation_id.clone(),
+            destination_level: level.menu_id.clone(),
+        };
+        self.update_from_navigation(
+            scene,
+            level,
+            selected,
+            visual_index,
+            clock,
+            now_ms,
+            motion,
+            nested_frame,
+            Some(&transition),
+        );
     }
 
     fn cancel_artwork_retry(&mut self) {
@@ -522,7 +572,7 @@ impl LauncherCardHomeSession {
 
     /// Start the level-change trick toward `level`. The destination is the one
     /// set aside for it if there is one, else it is built on a worker.
-    fn begin_trick(&mut self, level: CardLevelSnapshot, selected: usize) {
+    fn begin_trick(&mut self, level: CardLevelSnapshot, selected: usize, source_selected: usize) {
         self.cancel_artwork_retry();
         if !self.preparation.can_retire(2) {
             return;
@@ -565,7 +615,7 @@ impl LauncherCardHomeSession {
             destination_slot: self.scene.slot_zero(!level.is_root()),
             ready: false,
             source_level: std::mem::replace(&mut self.level, level),
-            source_selected: self.frame.selected,
+            source_selected,
             destination_selected: selected,
             started_ms: self.now_ms,
             destination: Some(destination),
@@ -1375,6 +1425,7 @@ mod tests {
             cards: ["ATARI", "SEGA", "NINTENDO"]
                 .into_iter()
                 .map(|name| LevelCard {
+                    navigation_id: name.to_owned(),
                     artwork_key: name.to_ascii_lowercase(),
                     id: mister_magik_framebuffer_scenes::launcher::LauncherCardId::Consoles,
                     name: name.into(),
@@ -2324,6 +2375,212 @@ mod tests {
         }
         assert!(session.trick.is_none());
         assert!(session.preparation.quiescent());
+    }
+
+    #[test]
+    fn activation_on_settling_tick_uses_the_activated_card_not_the_last_flip_source() {
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 0, "21:37").unwrap();
+        session.update(scene, &snapshot(), 0, 0.0, "21:37", 0, true, None);
+        session.render();
+        // Logical selection has reached Consoles, but the last rendered frame
+        // still has Arcade as the outgoing half of the browse flip.
+        session.update(scene, &snapshot(), 1, 0.99, "21:37", 16, true, None);
+        session.render();
+        assert_eq!(session.frame.selected, 0);
+        assert_eq!(session.frame.target, 1);
+        // Navigation commits OpenMenu on its next settled tick before the next
+        // Home render, so no source-level update at position 1.0 is delivered.
+        let transition = CardLevelTransition {
+            source_level: snapshot().menu_id,
+            source_card: "menu:consoles".into(),
+            destination_level: consoles().menu_id,
+        };
+        session.update_from_navigation(
+            scene,
+            &consoles(),
+            0,
+            0.0,
+            "21:37",
+            32,
+            true,
+            None,
+            Some(&transition),
+        );
+        assert_eq!(
+            session.trick.as_ref().unwrap().source_selected,
+            1,
+            "the selected Consoles card must gather, never the previous Arcade card"
+        );
+    }
+
+    #[test]
+    fn queued_activation_keeps_the_correct_pixels_across_the_navigation_commit() {
+        use crate::input_state::PadState;
+        use crate::launcher::{LauncherAction, LauncherNav};
+        use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Mario").system_id("nes").build(),
+                arcade_game("Agony").system_id("amiga").build(),
+            ],
+            vec![arcade_system("nes", 1), arcade_system("amiga", 1)],
+        );
+        for (initial, right, activated) in [(0, true, 1), (1, true, 2), (3, false, 2)] {
+            let scene = LauncherScene::new(960, 540);
+            let mut nav = LauncherNav::new();
+            nav.sync_launcher_taxonomy(&catalog);
+            nav.selected = initial;
+            nav.restore_pending_home_view(nav.home_view_state());
+            let start = Instant::now();
+            nav.handle_input_with_navigation_intents(&PadState::default(), start, &catalog);
+            let source = CardLevelSnapshot::from_runtime(&nav, &catalog);
+            let mut session =
+                LauncherCardHomeSession::new(scene, source.clone(), initial, "21:37").unwrap();
+            session.update_from_navigation(
+                scene,
+                &source,
+                initial,
+                initial as f32,
+                "21:37",
+                0,
+                true,
+                None,
+                None,
+            );
+            session.render();
+            let direction = PadState {
+                dpad_right: right,
+                dpad_left: !right,
+                ..Default::default()
+            };
+            nav.handle_input_with_navigation_intents(
+                &direction,
+                start + Duration::from_millis(16),
+                &catalog,
+            );
+            nav.handle_input_with_navigation_intents(
+                &PadState::default(),
+                start + Duration::from_millis(32),
+                &catalog,
+            );
+            nav.handle_input_with_navigation_intents(
+                &PadState {
+                    btn_a: true,
+                    ..Default::default()
+                },
+                start + Duration::from_millis(48),
+                &catalog,
+            );
+            let mut committed = false;
+            for tick in 4..180 {
+                let now = start + Duration::from_millis(tick * 16);
+                let event =
+                    nav.handle_input_with_navigation_intents(&PadState::default(), now, &catalog);
+                let previous = session.frame;
+                if let Some(event) = event {
+                    assert_eq!(event.action, LauncherAction::OpenMenu);
+                    assert_eq!(nav.selected, activated);
+                    assert_ne!(
+                        previous.selected, activated,
+                        "must reproduce a stale outgoing frame"
+                    );
+                    assert!(nav.commit_navigation_intent(&event, &catalog));
+                    committed = true;
+                }
+                let current = CardLevelSnapshot::from_runtime(&nav, &catalog);
+                session.update_from_navigation(
+                    scene,
+                    &current,
+                    nav.selected,
+                    nav.home_card_visual_index(),
+                    "21:37",
+                    tick * 16,
+                    true,
+                    nav.home_card_browse_prediction(now),
+                    nav.home_level_transition(),
+                );
+                if committed {
+                    let trick = session
+                        .trick
+                        .as_ref()
+                        .expect("navigation origin should start the trick");
+                    assert_eq!(trick.source_selected, activated);
+                    let mut expected = prepare(scene, &source, activated, "21:37", &session.fonts);
+                    expected.render_level_gather_to(
+                        activated,
+                        LevelChange::Descend,
+                        0,
+                        trick.destination_slot,
+                    );
+                    assert!(
+                        session.render() == expected.pixels(),
+                        "wrong source card pixels at activation"
+                    );
+                    break;
+                }
+                session.render();
+            }
+            assert!(
+                committed,
+                "queued activation never committed: initial={initial} selected={} position={}",
+                nav.selected,
+                nav.home_card_visual_index()
+            );
+        }
+    }
+
+    #[test]
+    fn missing_or_stale_origin_cannot_animate_an_unrelated_source_card() {
+        let scene = LauncherScene::new(960, 540);
+        for origin in [
+            None,
+            Some(CardLevelTransition {
+                source_level: "unrelated-level".into(),
+                source_card: "menu:consoles".into(),
+                destination_level: consoles().menu_id,
+            }),
+            Some(CardLevelTransition {
+                source_level: snapshot().menu_id,
+                source_card: "removed-card".into(),
+                destination_level: consoles().menu_id,
+            }),
+        ] {
+            let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
+            session.update_from_navigation(
+                scene,
+                &snapshot(),
+                1,
+                1.0,
+                "21:37",
+                0,
+                true,
+                None,
+                None,
+            );
+            let pixels = session.render().to_vec();
+            session.update_from_navigation(
+                scene,
+                &consoles(),
+                0,
+                0.0,
+                "21:37",
+                16,
+                true,
+                None,
+                origin.as_ref(),
+            );
+            assert!(session.trick.is_none());
+            if session.level.is_root() {
+                assert!(
+                    session.render() == pixels,
+                    "waiting must preserve coherent source pixels"
+                );
+            }
+            wait_content(&mut session, scene, &consoles(), 0, "21:37");
+            assert!(session.trick.is_none());
+            assert_eq!(session.frame.selected, 0);
+        }
     }
 
     #[test]

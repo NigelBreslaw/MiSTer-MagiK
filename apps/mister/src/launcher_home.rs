@@ -139,7 +139,9 @@ pub struct CardLevelSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LevelCard {
-    /// Taxonomy item ID; independent of translated labels and carousel position.
+    /// Stable navigation identity. Artwork lookup keys have a separate namespace.
+    pub navigation_id: String,
+    /// Asset lookup key; root artwork and navigation use distinct namespaces.
     pub artwork_key: String,
     pub id: LauncherCardId,
     pub name: String,
@@ -183,6 +185,7 @@ impl CardLevelSnapshot {
         let cards: Vec<_> = items
             .iter()
             .map(|item| LevelCard {
+                navigation_id: item.id.clone(),
                 artwork_key: item.id.clone(),
                 id,
                 name: item.title.to_uppercase(),
@@ -221,6 +224,7 @@ impl CardLevelSnapshot {
                 .cards
                 .iter()
                 .map(|card| LevelCard {
+                    navigation_id: crate::launcher::root_home_card_identity(card.id).to_owned(),
                     id: card.id,
                     artwork_key: match card.id {
                         LauncherCardId::Arcade => "root:arcade",

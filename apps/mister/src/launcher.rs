@@ -29,6 +29,7 @@ use mister_magik_core::launcher_effects::{
     StructuredLaunchSelection as EffectStructuredLaunchSelection,
 };
 use mister_magik_framebuffer_scenes::launcher::LauncherCardId;
+use mister_magik_framebuffer_scenes::launcher_navigation::CardLevelTransition;
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
 use mister_magik_mister_runtime::runtime_state::SystemRuntimeState;
@@ -52,6 +53,14 @@ const ROOT_HOME_CARDS: [(LauncherCardId, &str); 6] = [
     (LauncherCardId::Favourites, "__favourites"),
     (LauncherCardId::Settings, "__settings"),
 ];
+
+pub(crate) fn root_home_card_identity(id: LauncherCardId) -> &'static str {
+    ROOT_HOME_CARDS
+        .iter()
+        .find(|(card, _)| *card == id)
+        .expect("known root card")
+        .1
+}
 
 const fn root_home_card_key(index: usize) -> &'static str {
     if index < ROOT_HOME_CARDS.len() {
@@ -1210,6 +1219,7 @@ pub struct LauncherNav {
     active_collection_source: Option<HomeViewState>,
     arcade_exit_locked: bool,
     home_card_scroll: ArcadeNav,
+    home_level_transition: Option<CardLevelTransition>,
     #[cfg(test)]
     test_repeat: RepeatNav,
     #[cfg(test)]
@@ -1307,6 +1317,7 @@ pub struct NavigationTransitionState {
     active_collection_source: Option<HomeViewState>,
     arcade_exit_locked: bool,
     home_card_scroll: ArcadeNav,
+    home_level_transition: Option<CardLevelTransition>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1744,6 +1755,7 @@ impl LauncherNav {
             active_collection_source: None,
             arcade_exit_locked: false,
             home_card_scroll: ArcadeNav::new_cyclic(),
+            home_level_transition: None,
             #[cfg(test)]
             test_repeat: RepeatNav::default(),
             #[cfg(test)]
@@ -2398,10 +2410,27 @@ impl LauncherNav {
         }
     }
 
+    pub fn home_level_transition(&self) -> Option<&CardLevelTransition> {
+        self.home_level_transition.as_ref()
+    }
+
+    fn capture_home_level_transition(&self, destination: &str) -> Option<CardLevelTransition> {
+        let source_card = self.current_menu_selected_item_id();
+        (self.screen == Screen::Home
+            && self.current_menu_id() != destination
+            && !source_card.is_empty())
+        .then(|| CardLevelTransition {
+            source_level: self.current_menu_id().to_owned(),
+            source_card: source_card.to_owned(),
+            destination_level: destination.to_owned(),
+        })
+    }
+
     pub fn open_menu(&mut self, menu_id: &str) -> bool {
         let Some(path) = self.taxonomy.path_to_menu(menu_id) else {
             return false;
         };
+        self.home_level_transition = self.capture_home_level_transition(menu_id);
         if self.screen == Screen::Home {
             self.remember_current_menu_view();
         }
@@ -2423,6 +2452,7 @@ impl LauncherNav {
     }
 
     pub fn go_root(&mut self) {
+        self.home_level_transition = self.capture_home_level_transition(ROOT_MENU_ID);
         if self.screen == Screen::Home {
             self.remember_current_menu_view();
         }
@@ -2640,6 +2670,7 @@ impl LauncherNav {
             active_collection_source: self.active_collection_source.clone(),
             arcade_exit_locked: self.arcade_exit_locked,
             home_card_scroll: self.home_card_scroll.clone(),
+            home_level_transition: self.home_level_transition.clone(),
         }
     }
 
@@ -2693,6 +2724,7 @@ impl LauncherNav {
         self.active_collection_source = state.active_collection_source;
         self.arcade_exit_locked = state.arcade_exit_locked;
         self.home_card_scroll = state.home_card_scroll;
+        self.home_level_transition = state.home_level_transition;
     }
 
     fn restore_home_view_state(&mut self, source: HomeViewState) {
@@ -2743,6 +2775,8 @@ impl LauncherNav {
         if self.menu_path.len() <= 1 {
             return false;
         }
+        self.home_level_transition =
+            self.capture_home_level_transition(&self.menu_path[self.menu_path.len() - 2]);
         self.remember_current_menu_view();
         self.menu_path.pop();
         self.active_collection_id = None;
@@ -7238,6 +7272,46 @@ mod tests {
         assert_eq!(nav.home_card_visual_index(), current_visual);
         assert!(predicted_visual > current_visual);
         assert_eq!(predicted_selected, 1);
+    }
+
+    #[test]
+    fn home_level_navigation_captures_ids_and_restores_them_with_navigation_state() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.selected = 2;
+        let before = nav.navigation_transition_state();
+        assert!(nav.open_menu(COMPUTERS_MENU_ID));
+        let origin = nav.home_level_transition().unwrap();
+        assert_eq!(origin.source_level, ROOT_MENU_ID);
+        assert_eq!(origin.source_card, COMPUTERS_MENU_ID);
+        assert_eq!(origin.destination_level, COMPUTERS_MENU_ID);
+        let opened = nav.navigation_transition_state();
+        nav.restore_navigation_transition_state(before);
+        assert!(nav.home_level_transition().is_none());
+        nav.restore_navigation_transition_state(opened);
+        assert_eq!(
+            nav.home_level_transition().unwrap().source_card,
+            COMPUTERS_MENU_ID
+        );
+        let selected_key = nav.current_menu_selected_item_id().to_owned();
+        assert!(nav.pop_menu());
+        let origin = nav.home_level_transition().unwrap();
+        assert_eq!(origin.source_level, COMPUTERS_MENU_ID);
+        assert_eq!(origin.source_card, selected_key);
+        assert_eq!(origin.destination_level, ROOT_MENU_ID);
+        assert_eq!(nav.selected, 2);
+        assert!(nav.open_menu(CONSOLES_MENU_ID));
+        let selected_key = nav.current_menu_selected_item_id().to_owned();
+        nav.go_root();
+        assert_eq!(
+            nav.home_level_transition().unwrap().source_card,
+            selected_key
+        );
+        assert_eq!(
+            nav.home_level_transition().unwrap().destination_level,
+            ROOT_MENU_ID
+        );
     }
 
     #[test]
