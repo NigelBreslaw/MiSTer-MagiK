@@ -15,6 +15,7 @@ pub mod orientation_transition_bench;
 pub mod settings;
 pub mod settings_navigation_bench;
 pub mod startup_intro;
+pub mod transition_lifecycle;
 pub mod transition_plan;
 #[cfg(test)]
 mod transition_scenarios;

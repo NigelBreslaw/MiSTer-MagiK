@@ -1175,30 +1175,6 @@ fn set_launcher_present_mode_label(app: &slint_ui::launcher::Launcher, value: &s
         .set_present_mode_label(value);
 }
 
-fn begin_full_screen_transition(
-    chart: &mut FullScreenTransitionStateChart,
-    owner: FullScreenTransitionOwner,
-) -> bool {
-    match chart.begin(owner) {
-        Ok(_) => true,
-        Err(error) => {
-            crate::ui_errln!("{owner:?} full-screen transition begin rejected: {error:?}");
-            false
-        }
-    }
-}
-
-fn release_full_screen_transition(
-    chart: &mut FullScreenTransitionStateChart,
-    owner: FullScreenTransitionOwner,
-) {
-    if let Some(generation) = chart.generation_for(owner)
-        && let Err(error) = chart.release(generation)
-    {
-        crate::ui_errln!("{owner:?} full-screen transition release rejected: {error:?}");
-    }
-}
-
 fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) -> bool {
     catalog.system_game_count(collection_id) > 0
 }
@@ -8255,8 +8231,7 @@ pub(super) fn run_launcher_loop(
                                     full_bridge_dirty = true;
                                     request_launcher_redraw!();
                                 } else if started {
-                                    navigation_transition.settle_at_destination();
-                                    let _ = navigation_transition.complete();
+                                    unwind_navigation_transition(&mut navigation_transition);
                                 }
                             }
                             if let Some(event) = event {
@@ -8362,8 +8337,9 @@ pub(super) fn run_launcher_loop(
                                             full_bridge_dirty = true;
                                             request_launcher_redraw!();
                                         } else if navigation_runtime_started {
-                                            navigation_transition.settle_at_destination();
-                                            let _ = navigation_transition.complete();
+                                            unwind_navigation_transition(
+                                                &mut navigation_transition,
+                                            );
                                         } else if (collection_id.is_none()
                                             || collection_id.as_deref().is_some_and(
                                                 |collection_id| {
@@ -9514,13 +9490,10 @@ pub(super) fn run_launcher_loop(
             } else {
                 navigation_transition.cancel_for_exclusive_view()
             };
-            let completion = navigation_transition.complete();
-            if completion.is_some() {
-                release_full_screen_transition(
-                    &mut full_screen_transition,
-                    FullScreenTransitionOwner::Navigation,
-                );
-            }
+            let _ = finish_navigation_transition(
+                &mut navigation_transition,
+                &mut full_screen_transition,
+            );
             if endpoint == Some(NavigationTransitionEndpoint::Source)
                 && let Some(entry) = pending_collection_entry.take()
             {
@@ -11432,25 +11405,17 @@ pub(super) fn run_launcher_loop(
                     // The first Slint destination raster can be expensive, but
                     // animation time only moves per produced frame, so cold
                     // preparation is never spent as motion.
-                    if navigation_transition
-                        .capture_destination(
-                            if navigation_transition.settings_physical_space() {
-                                layer_target.presentation_frame_view().pixels()
-                            } else {
-                                layer_target.cached_frame_view().pixels()
-                            },
-                            animation_us,
-                        )
-                        .is_err()
-                        || full_screen_transition
-                            .generation_for(FullScreenTransitionOwner::Navigation)
-                            .is_some_and(|generation| {
-                                full_screen_transition
-                                    .capture_completed(generation)
-                                    .is_err()
-                            })
-                    {
-                        navigation_transition.settle_at_destination();
+                    let destination = if navigation_transition.settings_physical_space() {
+                        layer_target.presentation_frame_view().pixels()
+                    } else {
+                        layer_target.cached_frame_view().pixels()
+                    };
+                    if !capture_navigation_destination(
+                        &mut navigation_transition,
+                        &mut full_screen_transition,
+                        destination,
+                        animation_us,
+                    ) {
                         render_transition_frame = false;
                     }
                     navigation_transition.tick(animation_us);
@@ -11600,17 +11565,14 @@ pub(super) fn run_launcher_loop(
                     navigation_transition.request(),
                     navigation_transition.frame().endpoint,
                 );
-                let completion = navigation_transition.complete();
+                let completion = finish_navigation_transition(
+                    &mut navigation_transition,
+                    &mut full_screen_transition,
+                );
                 #[cfg(feature = "tooling")]
                 {
                     navigation_endpoint_rendered =
                         navigation_frame_rendered && completion.is_some();
-                }
-                if completion.is_some() {
-                    release_full_screen_transition(
-                        &mut full_screen_transition,
-                        FullScreenTransitionOwner::Navigation,
-                    );
                 }
                 full_screen_transition_live_endpoint_rendered =
                     endpoint_is_live && completion.is_some();
