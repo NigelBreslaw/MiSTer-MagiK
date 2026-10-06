@@ -229,6 +229,10 @@ mod launcher_screensaver_pipeline;
 mod launcher_settings_pipeline;
 mod launcher_startup_intro;
 mod launcher_transition_start;
+#[cfg(feature = "ui-preview")]
+pub use launcher_transition_start::{
+    TransitionInputs, TransitionSource, start_navigation_transition,
+};
 #[allow(dead_code)]
 mod launcher_worker_intents;
 mod preview_compositor;

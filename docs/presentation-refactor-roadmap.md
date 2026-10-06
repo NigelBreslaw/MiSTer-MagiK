@@ -267,9 +267,19 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   host tests with a real card-home session.
 - One behaviour change, preview only: `configure_preview`'s duration override now also stretches the
   system-panel slide, which used to ignore it.
-- Still to do in Phase 2: fold the macOS preview's own start path into the shared functions (it wraps a
-  different card-session type), and give `FullScreenTransitionStateChart` the lifecycle that
+- Still to do in Phase 2: give `FullScreenTransitionStateChart` the lifecycle that
   `NavigationTransitionController` still keeps (phases Capture to Settled).
+
+**PR 6 (in progress): the macOS preview starts transitions through the shared function.**
+
+- `launcher_transition_start::start_navigation_transition` holds the start rules (system panel, card
+  reveal, physical portrait, logical super-scaler, CRT reverse image). The device wrapper
+  `begin_navigation_transition` only picks the card-home rectangle and source pixels from its session;
+  the preview passes its own rectangle and pixels in a `TransitionSource`. The preview's copy of the
+  rules is deleted.
+- `TransitionSource::physical` records which raster the source is in: the preview composes logically, so
+  its portrait transitions stay logical; the device composes physically.
+- Preview CRT geometry now comes from the layout's content rect, as on the device.
 
 ## Phased plan
 

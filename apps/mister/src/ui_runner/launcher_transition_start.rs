@@ -13,7 +13,7 @@ use mister_magik_framebuffer_scenes::device_card::RevealImage;
 use mister_magik_framebuffer_scenes::settings_cog;
 
 /// Everything a reveal needs to begin, besides the runtime and the card session.
-pub(super) struct TransitionInputs<'a> {
+pub struct TransitionInputs<'a> {
     pub edge: NavigationTransitionEdge,
     pub direction: NavigationTransitionDirection,
     pub nav: &'a LauncherNav,
@@ -22,10 +22,21 @@ pub(super) struct TransitionInputs<'a> {
     pub layout: UiLayoutGeometry,
     pub crt_layout: bool,
     pub crt_metrics: &'a CrtUiMetrics,
-    /// The composed RGB565 cache: the visible frame whenever card-home is not.
-    pub composed: &'a [Rgb565Pixel],
     pub crt_backdrop: &'a [Rgb565Pixel],
     pub now_us: u64,
+}
+
+/// What `start_navigation_transition` needs beyond the shared inputs: the pixels
+/// the reveal begins from and where the selected Home card sits.
+pub struct TransitionSource<'a> {
+    /// The pixels the user is looking at.
+    pub pixels: &'a [Rgb565Pixel],
+    /// The selected card's rectangle when a card-home frame is shown; it selects
+    /// the device-card reveal.
+    pub card_home_rect: Option<NavigationTransitionRect>,
+    /// Whether `pixels` are in the physical composition raster. Portrait
+    /// transitions run in that raster only when this holds.
+    pub physical: bool,
 }
 
 /// Begin the full-screen transition for `inputs.edge`. Returns whether it started.
@@ -37,7 +48,43 @@ pub(super) struct TransitionInputs<'a> {
 pub(super) fn begin_navigation_transition(
     runtime: &mut NavigationTransitionRuntime,
     cards: Option<&mut LauncherCardHomeSession>,
+    composed: &[Rgb565Pixel],
     inputs: &TransitionInputs<'_>,
+    reveal_image: impl FnOnce() -> Option<RevealImage>,
+) -> bool {
+    let portrait = inputs.layout.is_portrait();
+    let card_edge = is_card_edge(inputs.edge) && !portrait;
+    let card_home_rect = cards
+        .as_deref()
+        .filter(|_| card_edge)
+        .map(LauncherCardHomeSession::selected_card_rect);
+    let pixels: &[Rgb565Pixel] = match cards {
+        Some(cards)
+            if !portrait
+                && card_home_owns_source(inputs.nav.screen, cards.owns_visible_frame()) =>
+        {
+            card_pixels_as_slint(cards.render())
+        }
+        _ => composed,
+    };
+    start_navigation_transition(
+        runtime,
+        inputs,
+        &TransitionSource {
+            pixels,
+            card_home_rect,
+            physical: true,
+        },
+        reveal_image,
+    )
+}
+
+/// The start rules shared by the device loop and the macOS preview, which differ
+/// only in where the card-home rectangle and the source pixels come from.
+pub fn start_navigation_transition(
+    runtime: &mut NavigationTransitionRuntime,
+    inputs: &TransitionInputs<'_>,
+    source: &TransitionSource<'_>,
     reveal_image: impl FnOnce() -> Option<RevealImage>,
 ) -> bool {
     let TransitionInputs {
@@ -48,10 +95,14 @@ pub(super) fn begin_navigation_transition(
         layout,
         crt_layout,
         crt_metrics,
-        composed,
         crt_backdrop,
         now_us,
     } = *inputs;
+    let TransitionSource {
+        pixels,
+        card_home_rect,
+        physical,
+    } = *source;
     let portrait = layout.is_portrait();
     if edge == NavigationTransitionEdge::SystemPanel {
         // The system hub/list slide has no portrait form.
@@ -60,7 +111,7 @@ pub(super) fn begin_navigation_transition(
                 .begin(TransitionStart::system_panel(
                     crt_layout,
                     nav.is_system_hub(),
-                    composed,
+                    pixels,
                     crt_backdrop,
                     now_us,
                 ))
@@ -73,23 +124,11 @@ pub(super) fn begin_navigation_transition(
             frame_width: layout.logical_w(),
             frame_height: layout.logical_h(),
             crt: crt_layout.then(|| crt_navigation_layout(layout.content_rect(), crt_metrics)),
-            card_home_rect: cards
-                .as_deref()
-                .filter(|_| card_edge)
-                .map(LauncherCardHomeSession::selected_card_rect),
+            card_home_rect: card_home_rect.filter(|_| card_edge),
         },
         edge,
     );
-    let use_card_reveal = card_edge && cards.is_some();
-    let source: &[Rgb565Pixel] = match cards {
-        Some(cards)
-            if !portrait && card_home_owns_source(nav.screen, cards.owns_visible_frame()) =>
-        {
-            card_pixels_as_slint(cards.render())
-        }
-        _ => composed,
-    };
-    let started = if use_card_reveal {
+    let started = if card_edge && card_home_rect.is_some() {
         let kind = match collection_id {
             Some(id) => nav.device_kind_for_collection(id),
             None => nav.device_kind(),
@@ -100,24 +139,24 @@ pub(super) fn begin_navigation_transition(
             direction,
             geometry,
             crate::launcher_presentation::device_reveal_spec(kind, crt_layout, hub),
-            source,
+            pixels,
             crate::launcher_presentation::system_device_rgb565(kind),
             crt_backdrop,
             now_us,
         ))
-    } else if portrait {
+    } else if portrait && physical {
         runtime.begin(TransitionStart::super_scaler_physical(
             edge,
             direction,
             navigation_geometry_to_composition(layout, geometry),
             layout.composition_w(),
             layout.composition_h(),
-            source,
+            pixels,
             now_us,
         ))
     } else {
         runtime.begin(TransitionStart::super_scaler(
-            edge, direction, geometry, source, now_us,
+            edge, direction, geometry, pixels, now_us,
         ))
     };
     if started.as_ref().is_ok_and(|started| *started)
@@ -314,7 +353,6 @@ mod tests {
                 layout: self.layout,
                 crt_layout: false,
                 crt_metrics: &self.metrics,
-                composed: &self.composed,
                 crt_backdrop: &self.composed,
                 now_us: 0,
             }
@@ -339,6 +377,7 @@ mod tests {
         assert!(begin_navigation_transition(
             &mut runtime,
             Some(&mut cards),
+            &fixture.composed,
             &inputs,
             || None
         ));
@@ -359,10 +398,70 @@ mod tests {
         assert!(begin_navigation_transition(
             &mut runtime,
             None,
+            &fixture.composed,
             &inputs,
             || { None }
         ));
         assert!(runtime.render().unwrap() == fixture.composed);
+    }
+
+    #[test]
+    fn the_shared_start_begins_from_the_pixels_it_is_given_without_a_card_session() {
+        let fixture = Fixture::new(ScreenOrientation::Normal);
+        let nav = home_nav();
+        let shown = vec![Rgb565Pixel(0x2222); fixture.composed.len()];
+        let rect = LauncherScene::new(960, 540).slot_zero(false).rect();
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        let inputs = fixture.inputs(
+            &nav,
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            None,
+        );
+        assert!(start_navigation_transition(
+            &mut runtime,
+            &inputs,
+            &TransitionSource {
+                pixels: &shown,
+                card_home_rect: Some(rect),
+                physical: false,
+            },
+            || None
+        ));
+        assert!(runtime.render().unwrap() == shown);
+    }
+
+    #[test]
+    fn a_portrait_start_runs_in_the_raster_its_source_is_in() {
+        let fixture = Fixture::new(ScreenOrientation::MonitorClockwise);
+        assert!(fixture.layout.is_portrait());
+        let nav = home_nav();
+        let logical = vec![COMPOSED; fixture.layout.logical_w() * fixture.layout.logical_h()];
+        let inputs = fixture.inputs(
+            &nav,
+            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionDirection::Forward,
+            Some(MENU_ARCADE_SYSTEM_ID),
+        );
+        let physical_space = |pixels: &[Rgb565Pixel], physical| {
+            let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+            assert!(start_navigation_transition(
+                &mut runtime,
+                &inputs,
+                &TransitionSource {
+                    pixels,
+                    card_home_rect: None,
+                    physical,
+                },
+                || None,
+            ));
+            runtime.settings_physical_space()
+        };
+        assert!(
+            !physical_space(&logical, false),
+            "a logical source plays logically"
+        );
+        assert!(physical_space(&fixture.composed, true));
     }
 
     #[test]
@@ -390,7 +489,13 @@ mod tests {
                 Some(MENU_ARCADE_SYSTEM_ID),
             );
             assert!(
-                begin_navigation_transition(&mut runtime, Some(&mut cards), &inputs, || None),
+                begin_navigation_transition(
+                    &mut runtime,
+                    Some(&mut cards),
+                    &fixture.composed,
+                    &inputs,
+                    || None
+                ),
                 "{edge:?}"
             );
             assert!(runtime.render().unwrap() == fixture.composed, "{edge:?}");
@@ -425,6 +530,7 @@ mod tests {
             assert!(begin_navigation_transition(
                 &mut runtime,
                 None,
+                &fixture.composed,
                 &inputs,
                 || {
                     calls.set(calls.get() + 1);
@@ -459,6 +565,7 @@ mod tests {
         assert!(begin_navigation_transition(
             &mut runtime,
             Some(&mut cards),
+            &fixture.composed,
             &inputs,
             || None
         ));
@@ -485,7 +592,9 @@ mod tests {
                 None,
             );
             assert_eq!(
-                begin_navigation_transition(&mut runtime, None, &inputs, || None),
+                begin_navigation_transition(&mut runtime, None, &fixture.composed, &inputs, || {
+                    None
+                }),
                 starts,
                 "{orientation:?}"
             );
