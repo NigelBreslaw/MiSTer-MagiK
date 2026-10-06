@@ -997,7 +997,10 @@ route, not inferred from a monitor aspect ratio.
 
 `launcher/responsive.rs` prepares artwork at the selected card's native raster
 size from the 360×504 RGB888 preparation assets, filtering in linear light and
-quantising once with fixed spatial RGB565 dithering. One destination-space
+quantising once with fixed spatial RGB565 dithering. Rotated (moving and
+receding) poses are dithered again at projection, exactly as on HDMI landscape;
+the face-on resting pose is copied without resampling so labels and the selected
+card stay pixel-exact. One destination-space
 rounded outline supplies both border colour and alpha. Reflection fading spans
 the actual native reflection height and ends at black. The renderer then adds
 the existing Spleen 6×12 bitmap labels. Native 240p/288p output

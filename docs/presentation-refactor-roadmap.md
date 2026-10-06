@@ -209,7 +209,7 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   forward geometry, with and without the carousel's card rectangle.
 - A review found that portrait transitions could begin from the logical card-home frame; fixed.
 
-**PR 2 (in progress): the transition start path runs from a test.**
+**PR 2 (merged, #236): the transition start path runs from a test.**
 
 - `ui_runner/launcher_transition_start.rs` holds `begin_navigation_transition`, extracted from
   `run_launcher_loop` with no behaviour change. It takes plain inputs (navigation state, layout, the
@@ -222,6 +222,22 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 - Still to do in Phase 1: screensaver, modal and orientation scenarios; damage soundness
   (incremental result equals a forced full raster). The preview still has its own start path, since
   it wraps a different card-session type; folding it in is a Phase 2 task.
+
+**PR 3 (in progress): dither parity for CRT and portrait cards (Phase 3b step 1).**
+
+- Responsive faces now dither their rotated poses at projection, as HDMI landscape does. The
+  face-on resting pose stays exact, because those faces are already dithered once when baked and
+  the resting labels must reach the output without resampling.
+- `Face.dithered: bool` becomes `Face.dither: Dither { Off, MovingPoses, Always }`.
+- Evidence: a resting selected card is pixel-identical before and after; receding and moving cards
+  now show the same fine dither texture as HDMI landscape instead of flat, banded surfaces. All 21
+  HDMI landscape review frames are byte-identical. The approved raster hashes for the portrait and
+  CRT scenes are refreshed in all four feature combinations.
+- Not measured: projection cost on the device. The dithered kernels already run at HDMI landscape's
+  raster size; the CRT and portrait rasters are no larger, but a CRT or portrait device run of
+  `scripts/magik check motion` is still owed.
+- `examples/launcher_layout_review.rs` no longer compiled on `main`; it is fixed so the review
+  renders can be reproduced.
 
 ## Phased plan
 
@@ -277,7 +293,7 @@ Today there are two card pipelines, selected by `LauncherScene::uses_responsive_
 | Stage | HDMI landscape (960x540) | CRT and portrait (`launcher/responsive.rs`) |
 | --- | --- | --- |
 | Artwork | `.cardtex` or 360x504 art, kept high precision | `native_surface`: filtered to the native card size, reduced to RGB565 once |
-| Face dithering | `dithered = true`: ordered dither at projection | `dithered = false`: no dither when projecting moving cards |
+| Face dithering | `Dither::Always`: ordered dither at projection | `Dither::MovingPoses` (since PR 3): dithered when rotated, exact when face-on |
 | Layout and text | fixed canvas, role fonts | native raster, `Fonts::Uniform` / `Roles`, bitmap labels baked at output size |
 
 The newer performance work (cardtex, fast quantisation, dithered projection kernels) lives on the
