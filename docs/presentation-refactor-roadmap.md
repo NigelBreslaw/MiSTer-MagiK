@@ -484,6 +484,35 @@ renders; (2) native-size `.cardtex`; (3) route HDMI landscape through `Layout`; 
 fixed-canvas path. Each step is gated by `scripts/magik check motion` and card fixtures, since the
 projection kernels are on the 60 fps budget.
 
+**Measured before step 3 (so the plan follows the numbers):**
+
+- `responsive::Layout::for_scene` returns `None` for non-CRT landscape on purpose. Forcing it to
+  accept 960x540 (a scratch experiment, not committed) and rendering the same data both ways changes
+  **172,681 of 518,400 pixels (33%)**, so "route HDMI landscape through `Layout`" is not a switch. The
+  two paths are different designs, not two implementations of one: the fixed canvas has its own
+  library sidebar, breadcrumb and group sidebar (`render_logical`), fixed 180x252 cards and a fixed
+  top inset, while `Layout` derives card size, inset, library row and bottom from the scene.
+- `.cardtex` is produced by `examples/prepare_card_artwork.rs` from the 360x504 RGB888 sources into
+  one 180x252 landscape encoding (`PreparedArtwork::encode`); the runtime ignores it for responsive
+  faces (`prepared_landscape_payload_does_not_override_responsive_faces`). The encoded files live in
+  the separate private assets repository, so native-size artwork means an encoder change, regeneration
+  and a commit there, then a device motion run, not a change in this repository alone.
+
+**Revised order, from those numbers:**
+
+1. Separate card geometry from chrome. Faces and projection need only a card rectangle set (card
+   width and height, row centre, pitch); chrome (sidebars, breadcrumb, labels) does not. Give the
+   fixed canvas and `Layout` one `CardGeometry` each, consumed by the same face bake and projection,
+   with the fixed canvas's constants as the first instance. Pixel parity is then testable on the card
+   row alone, which is where the performance work lives.
+2. Make `Layout` able to express the fixed canvas's card geometry (180x252, its centre and pitch) and
+   assert the card row is pixel-identical to the fixed canvas's. Only then can the face and projection
+   code be shared for HDMI landscape without a visual change.
+3. Native-size `.cardtex` (encoder, regeneration in the assets repo, motion benchmark on the device).
+4. Unify chrome last, or keep `render_logical` as the HDMI landscape chrome indefinitely: it is not
+   on the motion path, and it is the part where the two designs genuinely differ.
+5. Delete the fixed-canvas face path once nothing selects it.
+
 ### Phase 4: PresentationDirector and loop extraction
 
 - Merge `UiCompositionController`, the transition chart, and direct-layer
