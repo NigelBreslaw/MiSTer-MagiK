@@ -539,14 +539,8 @@ pub fn settings_cog_backdrop_rgb565() -> &'static [Rgb565Pixel] {
     &prepared_cog().1
 }
 
-fn prepared_cabinet() -> &'static (
-    mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
-    Vec<Rgb565Pixel>,
-) {
-    static CABINET: std::sync::OnceLock<(
-        mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
-        Vec<Rgb565Pixel>,
-    )> = std::sync::OnceLock::new();
+fn prepared_cabinet() -> &'static [Rgb565Pixel] {
+    static CABINET: std::sync::OnceLock<Vec<Rgb565Pixel>> = std::sync::OnceLock::new();
     CABINET.get_or_init(|| {
         // All texture/cache computation stays off the UI thread. Production
         // warms this while the first launcher faces are being prepared.
@@ -562,7 +556,7 @@ fn prepared_cabinet() -> &'static (
                         include_bytes!("../assets/ui/arcade/cabinet-483x519.rgb888"),
                     )
                     .expect("embedded cabinet geometry");
-                (texture.artwork(), texture.destination_pixels())
+                texture.destination_pixels()
             })
             .expect("start cabinet preparation")
             .join()
@@ -579,14 +573,9 @@ pub fn warm_arcade_cabinet() -> std::thread::JoinHandle<()> {
         .expect("warm cabinet artwork")
 }
 
-pub fn arcade_cabinet_artwork()
--> &'static mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork {
-    &prepared_cabinet().0
-}
-
 /// Resting artwork uses the moving cabinet's destination-space quantisation.
 pub fn arcade_cabinet_rgb565() -> &'static [Rgb565Pixel] {
-    &prepared_cabinet().1
+    prepared_cabinet()
 }
 
 pub fn system_device_rgb565(kind: Option<crate::device_art::DeviceKind>) -> &'static [Rgb565Pixel] {

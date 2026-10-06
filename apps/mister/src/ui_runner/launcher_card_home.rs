@@ -171,6 +171,11 @@ impl LauncherCardHomeSession {
         self.prepared.slot_zero().rect()
     }
 
+    /// True while card-home, not the generic composed cache, owns the visible Home frame.
+    pub(super) fn owns_visible_frame(&self) -> bool {
+        self.active
+    }
+
     pub(super) fn new(
         scene: LauncherScene,
         level: CardLevelSnapshot,

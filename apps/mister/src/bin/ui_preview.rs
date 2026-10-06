@@ -1498,15 +1498,17 @@ mod macos {
             else {
                 return false;
             };
+            let (tile_selected, tile_scroll_x) = self.launcher_nav.menu_tile_view();
             let selected_label = self
                 .launcher_nav
                 .current_menu_items()
-                .get(self.launcher_nav.selected)
+                .get(tile_selected)
                 .map(|item| item.title.as_str())
                 .unwrap_or("")
                 .to_owned();
             let mut geometry = match direction {
-                NavigationTransitionDirection::Forward => {
+                // Both directions derive from the committed navigation state.
+                NavigationTransitionDirection::Forward | NavigationTransitionDirection::Reverse => {
                     let root_menu = self.launcher_nav.current_menu_id() == ROOT_MENU_ID;
                     if self.display_profile.is_crt() {
                         let display = self.display_profile.display();
@@ -1530,7 +1532,7 @@ mod macos {
                                     as usize,
                                 game_row_height: metrics.game_row_height.max(1) as usize,
                             },
-                            self.launcher_nav.selected,
+                            tile_selected,
                             self.launcher_nav.current_menu_items().len(),
                             root_menu,
                             edge,
@@ -1540,20 +1542,13 @@ mod macos {
                         hdmi_navigation_geometry(
                             self.frame_width,
                             self.frame_height,
-                            self.launcher_nav.selected,
-                            self.launcher_nav.scroll_x,
+                            tile_selected,
+                            tile_scroll_x,
                             root_menu,
                             edge,
                             &selected_label,
                         )
                     }
-                }
-                NavigationTransitionDirection::Reverse => {
-                    let Some(geometry) = self.navigation_transition.geometry_for_reverse(edge)
-                    else {
-                        return false;
-                    };
-                    geometry
                 }
             };
             if matches!(
@@ -1561,27 +1556,25 @@ mod macos {
                 NavigationTransitionEdge::HomeToArcade | NavigationTransitionEdge::ConsolesToSystem
             ) && !self.orientation.is_portrait()
             {
-                if direction == NavigationTransitionDirection::Forward {
-                    let scene = if self.display_profile.is_crt() {
-                        mister_magik_framebuffer_scenes::launcher::LauncherScene::crt(
-                            self.frame_width,
-                            self.frame_height,
-                        )
-                    } else {
-                        mister_magik_framebuffer_scenes::launcher::LauncherScene::new(
-                            self.frame_width,
-                            self.frame_height,
-                        )
-                    };
-                    geometry.source_card = self.native_cards.as_ref().map_or_else(
-                        || {
-                            scene
-                                .slot_zero(self.launcher_nav.current_menu_id() != ROOT_MENU_ID)
-                                .rect()
-                        },
-                        |cards| cards.selected_card_rect(),
-                    );
-                }
+                let scene = if self.display_profile.is_crt() {
+                    mister_magik_framebuffer_scenes::launcher::LauncherScene::crt(
+                        self.frame_width,
+                        self.frame_height,
+                    )
+                } else {
+                    mister_magik_framebuffer_scenes::launcher::LauncherScene::new(
+                        self.frame_width,
+                        self.frame_height,
+                    )
+                };
+                geometry.source_card = self.native_cards.as_ref().map_or_else(
+                    || {
+                        scene
+                            .slot_zero(self.launcher_nav.current_menu_id() != ROOT_MENU_ID)
+                            .rect()
+                    },
+                    |cards| cards.selected_card_rect(),
+                );
                 let kind = event
                     .path
                     .as_deref()
@@ -1748,15 +1741,6 @@ mod macos {
             }
             if self.navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
                 let completion = self.navigation_transition.complete();
-                if completion.is_some_and(|completion| {
-                    completion.endpoint == NavigationTransitionEndpoint::Destination
-                }) && self
-                    .pending_navigation_event
-                    .as_ref()
-                    .is_some_and(|event| event.action == LauncherAction::NavigateHome)
-                {
-                    self.navigation_transition.clear_geometry_history();
-                }
                 if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) && let Some(source_state) = self.pending_navigation_source_state.take()

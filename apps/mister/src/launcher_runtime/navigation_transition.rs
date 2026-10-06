@@ -482,7 +482,6 @@ pub struct NavigationTransitionRuntime {
     logical_width: usize,
     logical_height: usize,
     settings_physical_space: bool,
-    geometry_history: Vec<(NavigationTransitionEdge, NavigationTransitionGeometry)>,
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
     route: Option<NavigationTransitionRoute>,
@@ -508,7 +507,6 @@ impl NavigationTransitionRuntime {
             logical_width: buffer_width,
             logical_height: buffer_height,
             settings_physical_space: false,
-            geometry_history: Vec::new(),
             last_render_stats: NavigationTransitionRenderStats::default(),
             last_frame_work_us: 0,
             route: None,
@@ -535,7 +533,6 @@ impl NavigationTransitionRuntime {
         self.enabled = enabled;
         self.deferred_request = None;
         self.controller = NavigationTransitionController::default();
-        self.geometry_history.clear();
         self.route = None;
         self.settings_physical_space = false;
         if enabled {
@@ -562,9 +559,6 @@ impl NavigationTransitionRuntime {
         if started {
             self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
         }
-        if started && direction == NavigationTransitionDirection::Forward {
-            self.geometry_history.push((edge, geometry));
-        }
         Ok(started)
     }
 
@@ -574,7 +568,6 @@ impl NavigationTransitionRuntime {
         edge: NavigationTransitionEdge,
         direction: NavigationTransitionDirection,
         geometry: NavigationTransitionGeometry,
-        history_geometry: NavigationTransitionGeometry,
         width: usize,
         height: usize,
         source: &[Rgb565Pixel],
@@ -597,9 +590,6 @@ impl NavigationTransitionRuntime {
         if started {
             self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
             self.settings_physical_space = true;
-            if direction == NavigationTransitionDirection::Forward {
-                self.geometry_history.push((edge, history_geometry));
-            }
         } else if self.enabled && !self.is_active() {
             self.buffers.resize(self.logical_width, self.logical_height);
         }
@@ -634,9 +624,6 @@ impl NavigationTransitionRuntime {
         let started = self.begin_request(request, source, now_us, false)?;
         if started {
             self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
-            if direction == NavigationTransitionDirection::Forward {
-                self.geometry_history.push((edge, geometry));
-            }
         }
         Ok(started)
     }
@@ -677,41 +664,6 @@ impl NavigationTransitionRuntime {
         )?;
         if started {
             self.route = Some(NavigationTransitionRoute::SystemPanel);
-        }
-        Ok(started)
-    }
-
-    /// Home <-> Arcade launcher-card reveal in the current logical raster.
-    pub fn begin_arcade_card(
-        &mut self,
-        direction: NavigationTransitionDirection,
-        geometry: NavigationTransitionGeometry,
-        source: &[Rgb565Pixel],
-        cabinet: &mister_magik_framebuffer_scenes::arcade_card::CabinetArtwork,
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if !self.enabled || self.is_active() {
-            return Ok(false);
-        }
-        fn configure_arcade_worker() {
-            use mister_magik_catalog::runtime_thread::{
-                RuntimeThreadRole, apply_runtime_thread_policy,
-            };
-            apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
-        }
-        self.buffers
-            .set_arcade_cabinet_asset(cabinet, Some(configure_arcade_worker));
-        let mut request = NavigationTransitionRequest::arcade_card(direction, geometry);
-        if let Some(duration_us) = self.duration_override_us {
-            request.duration_us = duration_us;
-        }
-        let started = self.begin_request(request, source, now_us, true)?;
-        if started {
-            self.route = Some(NavigationTransitionRoute::HomeToArcade);
-            if direction == NavigationTransitionDirection::Forward {
-                self.geometry_history
-                    .push((NavigationTransitionEdge::HomeToArcade, geometry));
-            }
         }
         Ok(started)
     }
@@ -865,16 +817,6 @@ impl NavigationTransitionRuntime {
         Ok(true)
     }
 
-    pub fn geometry_for_reverse(
-        &self,
-        edge: NavigationTransitionEdge,
-    ) -> Option<NavigationTransitionGeometry> {
-        self.geometry_history
-            .last()
-            .filter(|(history_edge, _)| *history_edge == edge)
-            .map(|(_, geometry)| *geometry)
-    }
-
     pub fn capture_destination(
         &mut self,
         destination: &[Rgb565Pixel],
@@ -1011,33 +953,12 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
-        let request = self.request();
         let completion = self.controller.complete()?;
-        self.buffers.retire_arcade_renderer();
-        if request.is_some_and(|request| {
-            request.is_super_scaler()
-                && matches!(
-                    (request.direction, completion.endpoint),
-                    (
-                        NavigationTransitionDirection::Forward,
-                        NavigationTransitionEndpoint::Source
-                    ) | (
-                        NavigationTransitionDirection::Reverse,
-                        NavigationTransitionEndpoint::Destination
-                    )
-                )
-        }) {
-            self.geometry_history.pop();
-        }
         if self.settings_physical_space {
             self.settings_physical_space = false;
             self.buffers.resize(self.logical_width, self.logical_height);
         }
         Some(completion)
-    }
-
-    pub fn clear_geometry_history(&mut self) {
-        self.geometry_history.clear();
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
@@ -1198,80 +1119,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn live_arcade_reveal_preserves_reversal_cancellation_and_new_snapshots() {
-        use mister_magik_framebuffer_scenes::arcade_card::{
-            CABINET_HEIGHT, CABINET_WIDTH, CabinetTexture,
-        };
-        let texture =
-            CabinetTexture::from_rgb888(&vec![100; CABINET_WIDTH * CABINET_HEIGHT * 3]).unwrap();
-        let artwork = texture.artwork();
-        let home = vec![Rgb565Pixel(0x1234); 960 * 540];
-        let mut arcade = vec![SharedRgb565Pixel(0x5a6d); 960 * 540];
-        texture.prepare_destination(&mut arcade);
-        let arcade = shared_rgb565_as_slint(&arcade);
-        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
-        assert!(
-            runtime
-                .begin_arcade_card(
-                    NavigationTransitionDirection::Forward,
-                    NavigationTransitionGeometry::default(),
-                    &home,
-                    &artwork,
-                    0
-                )
-                .unwrap()
-        );
-        assert_eq!(runtime.render().unwrap(), home);
-        runtime.capture_destination(arcade, 1).unwrap();
-        runtime.tick(500_001);
-        runtime.render().unwrap();
-        assert!(runtime.request_reverse(500_002));
-        runtime.tick(1_100_003);
-        runtime.render().unwrap();
-        assert_eq!(
-            runtime.complete().unwrap().endpoint,
-            NavigationTransitionEndpoint::Source
-        );
-        assert!(
-            runtime
-                .begin_arcade_card(
-                    NavigationTransitionDirection::Reverse,
-                    NavigationTransitionGeometry::default(),
-                    arcade,
-                    &artwork,
-                    2_000_000
-                )
-                .unwrap()
-        );
-        assert_eq!(runtime.render().unwrap(), arcade);
-        runtime.capture_destination(&home, 2_000_001).unwrap();
-        runtime.tick(2_700_001);
-        runtime.render().unwrap();
-        runtime.cancel_for_exclusive_view();
-        assert!(runtime.complete().is_some());
-        let updated_home = vec![Rgb565Pixel(0x6be7); 960 * 540];
-        assert!(
-            runtime
-                .begin_arcade_card(
-                    NavigationTransitionDirection::Forward,
-                    NavigationTransitionGeometry::default(),
-                    &updated_home,
-                    &artwork,
-                    3_000_000
-                )
-                .unwrap()
-        );
-        assert_eq!(runtime.render().unwrap(), updated_home);
-        runtime.capture_destination(arcade, 3_000_001).unwrap();
-        runtime.tick(4_100_001);
-        assert_eq!(runtime.render().unwrap(), arcade);
-        assert_eq!(
-            runtime.complete().unwrap().endpoint,
-            NavigationTransitionEndpoint::Destination
-        );
-    }
-
-    #[test]
     fn crt_navigation_geometry_stays_inside_every_supported_frame_shape() {
         for (frame_width, frame_height, content_x, content_y, content_width, content_height) in [
             (640, 480, 0, 0, 640, 480),
@@ -1323,76 +1170,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn cancelled_settings_push_does_not_consume_super_scaler_geometry_history() {
-        let width = 16;
-        let height = 8;
-        let snapshot = vec![Rgb565Pixel(0); width * height];
-        let geometry = NavigationTransitionGeometry {
-            source_card: NavigationTransitionRect {
-                x: 1,
-                y: 1,
-                width: 4,
-                height: 4,
-            },
-            ..NavigationTransitionGeometry::default()
-        };
-        let mut transition = NavigationTransitionRuntime::new(width, height, true);
-        assert!(
-            transition
-                .begin(
-                    NavigationTransitionEdge::HomeToConsoles,
-                    NavigationTransitionDirection::Forward,
-                    geometry,
-                    &snapshot,
-                    0,
-                )
-                .unwrap()
-        );
-        transition.capture_destination(&snapshot, 0).unwrap();
-        transition.settle_at_destination();
-        transition.complete();
-
-        assert!(
-            transition
-                .begin_settings_page(
-                    NavigationTransitionRoute::HomeToSettings,
-                    NavigationTransitionDirection::Forward,
-                    &snapshot,
-                    1,
-                )
-                .unwrap()
-        );
-        assert_eq!(
-            transition.cancel_for_exclusive_view(),
-            Some(NavigationTransitionEndpoint::Source)
-        );
-        transition.complete();
-        assert_eq!(
-            transition.geometry_for_reverse(NavigationTransitionEdge::HomeToConsoles),
-            Some(geometry)
-        );
-
-        assert!(
-            transition
-                .begin(
-                    NavigationTransitionEdge::HomeToConsoles,
-                    NavigationTransitionDirection::Reverse,
-                    geometry,
-                    &snapshot,
-                    2,
-                )
-                .unwrap()
-        );
-        transition.capture_destination(&snapshot, 2).unwrap();
-        transition.settle_at_destination();
-        transition.complete();
-        assert_eq!(
-            transition.geometry_for_reverse(NavigationTransitionEdge::HomeToConsoles),
-            None
-        );
     }
 
     fn geometry() -> NavigationTransitionGeometry {
@@ -2228,7 +2005,6 @@ mod tests {
             .begin_physical(
                 NavigationTransitionEdge::HomeToConsoles,
                 NavigationTransitionDirection::Forward,
-                NavigationTransitionGeometry::default(),
                 NavigationTransitionGeometry::default(),
                 12,
                 16,

@@ -86,6 +86,9 @@ use mister_magik_fb::launcher_runtime::settings::{
     ConfirmedOrientationStore, FileSettingsStore, SettingsStore,
 };
 use mister_magik_fb::launcher_runtime::settings_navigation_bench::*;
+use mister_magik_fb::launcher_runtime::transition_plan::{
+    NavigationGeometryContext, card_home_owns_source, derive_navigation_geometry,
+};
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
 
