@@ -119,7 +119,7 @@ fn main() {
     window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, 960);
     });
-    let mut ppm = format!("P6\n960 540\n255\n").into_bytes();
+    let mut ppm = b"P6\n960 540\n255\n".to_vec();
     for pixel in pixels {
         let value = pixel.0;
         let red = ((value >> 11) & 0x1f) as u8;
