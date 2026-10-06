@@ -404,10 +404,7 @@ impl Layout {
         cyclic: bool,
         scratch: &mut [crate::launcher_flip::Scratch],
     ) {
-        let clip = (self.margin_x, self.width - self.margin_x);
-        for y in self.top..self.bottom {
-            pixels[y * self.width + clip.0..y * self.width + clip.1].fill(Rgb565Pixel(BACKGROUND));
-        }
+        self.clear_carousel(pixels);
         if faces.is_empty() {
             return;
         }
@@ -422,10 +419,12 @@ impl Layout {
 
     /// Carousel rows owned by the card renderer: cleared before every frame.
     pub fn clear_carousel(&self, pixels: &mut [Rgb565Pixel]) {
-        let clip = (self.margin_x, self.width - self.margin_x);
-        for y in self.top..self.bottom {
-            pixels[y * self.width + clip.0..y * self.width + clip.1].fill(Rgb565Pixel(BACKGROUND));
-        }
+        clear_card_rows(
+            pixels,
+            self.width,
+            (self.top, self.bottom),
+            (self.margin_x, self.width - self.margin_x),
+        );
     }
 
     /// Map landscape-logical poses to this route's card geometry. Reuse the
@@ -482,17 +481,13 @@ impl Layout {
         plan: &CarouselPlan<'_>,
         scratch: &mut [crate::launcher_flip::Scratch],
     ) {
-        let clip = (self.margin_x, self.width - self.margin_x);
-        for left in (clip.0..clip.1).step_by(crate::launcher_flip::STRIP_WIDTH) {
-            draw_carousel_plan(
-                pixels,
-                self.width,
-                (0, 0),
-                plan,
-                scratch,
-                (left, (left + crate::launcher_flip::STRIP_WIDTH).min(clip.1)),
-            );
-        }
+        draw_card_strips(
+            pixels,
+            self.width,
+            (self.margin_x, self.width - self.margin_x),
+            plan,
+            scratch,
+        );
     }
 
     /// Chrome rows that differ between hierarchy levels: the header with the

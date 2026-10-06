@@ -414,6 +414,18 @@ effect.**
   `Releasing`, and the intent lives exactly while the effect plays. The walk asserts exactly that. The
   effect's `destination_ready` flag is left stale after it ends; nothing reads it then.
 
+**PR 16 (in progress): the card row is composed by one pair of functions, and its raster is pinned.**
+
+- `clear_card_rows` and `draw_card_strips` replace four hand-written copies (the HDMI landscape tile
+  renderer, the whole-frame renderer, `Layout::render` and `Layout::draw_plan`/`clear_carousel`, which
+  the level trick also uses). No pixel changes.
+- Guard: `card_row_raster_hashes_are_pinned` renders six output sizes (960x540, 1280x720 fitted, HDMI
+  portrait, CRT 640x480, 640x288 and portrait) at two levels (root, nested) in five frames each, 60
+  hashes taken from the code before the change; `tile_rendering_matches_frame_rendering_in_the_card_row`
+  checks the production tile renderer against the frame renderer for every frame and three ways of
+  splitting the carousel into tiles. The pinned test is off under the pixel-changing experiment
+  features (`card-axis-filter`, `card-fast-quantisation`), which have their own output.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
@@ -501,10 +513,15 @@ projection kernels are on the 60 fps budget.
 **Revised order, from those numbers:**
 
 1. Separate card geometry from chrome. Faces and projection need only a card rectangle set (card
-   width and height, row centre, pitch); chrome (sidebars, breadcrumb, labels) does not. Give the
-   fixed canvas and `Layout` one `CardGeometry` each, consumed by the same face bake and projection,
-   with the fixed canvas's constants as the first instance. Pixel parity is then testable on the card
-   row alone, which is where the performance work lives.
+   width and height, row centre, pitch); chrome (sidebars, breadcrumb, labels) does not. **Done in
+   part (see PR 16):** the carousel plan and the projection kernels were already shared, and the
+   responsive layout only maps the landscape poses (`Layout::map_pose`); what was duplicated was the
+   clear-the-rows and draw-in-strips composition, four copies. They are now `clear_card_rows` and
+   `draw_card_strips`, used by the HDMI landscape tile renderer, the whole-frame renderer, the
+   responsive layout and the level trick, with 60 pinned raster hashes and a tile-versus-frame
+   equivalence test as the guard. Still to do: give both paths one geometry value (card size, row
+   centre, pitch, clip, rows) instead of constants spread over `slot_geometry`, `Layout::map_pose`
+   and the tile renderer's `120..495`.
 2. Make `Layout` able to express the fixed canvas's card geometry (180x252, its centre and pitch) and
    assert the card row is pixel-identical to the fixed canvas's. Only then can the face and projection
    code be shared for HDMI landscape without a visual change.
