@@ -9265,7 +9265,7 @@ pub(super) fn run_launcher_loop(
             frame_accounting.status_write_due() && status_write_deferral.allows(loop_start);
         let status_snapshot_due = status_write_due
             && !navigation_transition.is_active()
-            && !!full_screen_transition.is_live();
+            && full_screen_transition.is_live();
         let status_string_copy_start = (status_snapshot_due
             && frame_accounting.preview_scroll_trace_enabled())
         .then(Instant::now);
