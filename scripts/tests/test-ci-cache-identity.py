@@ -208,6 +208,29 @@ def main() -> int:
             assert current["host_build_cache"] != previous["host_build_cache"], relative
             previous = current
 
+        for relative in (
+            "magik/agent/src/lib.rs",
+            "magik/probe/src/main.rs",
+        ):
+            source = fixture / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("// source edits must reuse the dependency baseline\n")
+            current = MODULE.identities(fixture)
+            assert current["tooling_build_cache"] == previous["tooling_build_cache"]
+
+        for relative in (
+            "magik/agent/Cargo.lock",
+            "magik/probe/Cargo.toml",
+            ".github/workflows/magik.yml",
+        ):
+            source = fixture / relative
+            source.write_bytes(source.read_bytes() + b"\n")
+            current = MODULE.identities(fixture)
+            assert current["tooling_build_cache"] != previous["tooling_build_cache"], (
+                relative
+            )
+            previous = current
+
     print("cache identity tests ok")
     return 0
 
