@@ -42,6 +42,10 @@ jobs:
           - group: tools
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      # Cargo revalidates local sources after checkout. Retain the app's
+      # incremental state so rustc can reuse unchanged code across CI runs.
+      CARGO_INCREMENTAL: ${{ matrix.group == 'app' && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -85,8 +89,39 @@ jobs:
           restore-keys: |
             cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
+      - name: Optimize rendering tests
+        if: matrix.group == 'domain' || matrix.group == 'app'
+        # Keep debug assertions and overflow checks. Optimize only the raster
+        # crate, avoiding the cold-build cost of optimizing all Slint dependencies.
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [profile.test.package.mister-magik-framebuffer-scenes]
+          opt-level = 1
+          EOF
+
+      - name: Cache host build outputs
+        if: matrix.group == 'domain' || matrix.group == 'app'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ matrix.group == 'domain' && 'target/ci-host-domain/debug' || 'apps/mister/target/debug' }}
+          # Cache a dependency baseline, as for ARM. Cargo revalidates checked-out
+          # sources; exact-only keys bound storage instead of rolling per commit.
+          key: target-host-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.group }}-test-scenes-opt1${{ matrix.group == 'app' && '-incremental' || '' }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_build_cache }}
+
       - name: Full host validation (${{ matrix.group }})
         run: scripts/magik-ci ci host-assurance --group ${{ matrix.group }}
+
+      - name: Report host cache footprint
+        if: always() && (matrix.group == 'domain' || matrix.group == 'app')
+        env:
+          HOST_TARGET: ${{ matrix.group == 'domain' && 'target/ci-host-domain/debug' || 'apps/mister/target/debug' }}
+        run: |
+          if [ -d "$HOST_TARGET" ]; then
+            kib="$(du -sk "$HOST_TARGET" | awk '{print $1}')"
+            printf 'Host build cache (%s): %s MiB\n' '${{ matrix.group }}' "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   host-dev:
     name: host-dev
@@ -331,6 +366,9 @@ jobs:
     name: arm-library-check
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -384,5 +422,25 @@ jobs:
       - name: Pull cross image
         run: docker pull "${{ steps.cache-id.outputs.cross_image }}"
 
+      - name: Cache ARM library check outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            apps/mister/target/debug
+            !apps/mister/target/debug/incremental
+            apps/mister/target/armv7-unknown-linux-gnueabihf/debug
+            !apps/mister/target/armv7-unknown-linux-gnueabihf/debug/incremental
+          key: target-arm-library-v1-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-check-debug0-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_build_cache }}-${{ hashFiles('scripts/magik_ci/build.py') }}
+
       - name: Check ARM no-default library
         run: MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build runtime-library-ci
+
+      - name: Report ARM library cache footprint
+        if: always()
+        run: |
+          for path in apps/mister/target/debug apps/mister/target/armv7-unknown-linux-gnueabihf/debug; do
+            if [ -d "$path" ]; then
+              kib="$(du -sk "$path" | awk '{print $1}')"
+              printf 'ARM library cache (%s): %s MiB\n' "$path" "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done

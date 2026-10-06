@@ -54,6 +54,7 @@ def main() -> int:
         assert changed_ui["host_target"] != initial["host_target"]
         assert changed_ui["arm_target"] != initial["arm_target"]
         assert changed_ui["arm_build_cache"] == initial["arm_build_cache"]
+        assert changed_ui["host_build_cache"] == initial["host_build_cache"]
 
         cross = fixture / "apps/mister/Cross.toml"
         cross.write_text(
@@ -74,6 +75,7 @@ def main() -> int:
         changed_arm_lock = MODULE.identities(fixture)
         assert changed_arm_lock["arm_build_cache"] != changed_cross["arm_build_cache"]
         assert changed_arm_lock["cargo_arm"] != changed_cross["cargo_arm"]
+        assert changed_arm_lock["host_build_cache"] != changed_cross["host_build_cache"]
 
         lock = fixture / "crates/catalog/Cargo.lock"
         lock.write_text(
@@ -83,6 +85,7 @@ def main() -> int:
         changed_lock = MODULE.identities(fixture)
         assert changed_lock["arm_build_cache"] == changed_arm_lock["arm_build_cache"]
         assert changed_lock["cargo_host"] != changed_arm_lock["cargo_host"]
+        assert changed_lock["host_build_cache"] != changed_arm_lock["host_build_cache"]
         assert changed_lock["host_target"] != changed_arm_lock["host_target"]
 
         toolchain = fixture / "apps/mister/rust-toolchain.toml"
@@ -167,6 +170,7 @@ def main() -> int:
             for group in changed_groups:
                 assert current[group] != previous[group], (pattern, group)
             assert current["arm_build_cache"] == previous_arm_build_cache, pattern
+            assert current["host_build_cache"] == previous["host_build_cache"], pattern
             previous = current
 
         compiled_input_expectations = (
@@ -186,6 +190,45 @@ def main() -> int:
             for group in changed_groups:
                 assert current[group] != previous[group], (pattern, group)
             assert current["arm_build_cache"] == previous_arm_build_cache, pattern
+            assert current["host_build_cache"] == previous["host_build_cache"], pattern
+            previous = current
+
+        # Dependency/profile changes replace the immutable host baseline; source
+        # edits above leave it reusable and are revalidated by Cargo itself.
+        for relative in (
+            "crates/particles/Cargo.lock",
+            "crates/framebuffer-scenes/Cargo.toml",
+            "mister/platform/contracts/scanout/Cargo.toml",
+            "apps/mister/.cargo/config.toml",
+            "scripts/magik_ci/host.py",
+        ):
+            source = fixture / relative
+            source.write_bytes(source.read_bytes() + b"\n")
+            current = MODULE.identities(fixture)
+            assert current["host_build_cache"] != previous["host_build_cache"], relative
+            previous = current
+
+        for relative in (
+            "magik/agent/src/lib.rs",
+            "magik/probe/src/main.rs",
+        ):
+            source = fixture / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("// source edits must reuse the dependency baseline\n")
+            current = MODULE.identities(fixture)
+            assert current["tooling_build_cache"] == previous["tooling_build_cache"]
+
+        for relative in (
+            "magik/agent/Cargo.lock",
+            "magik/probe/Cargo.toml",
+            ".github/workflows/magik.yml",
+        ):
+            source = fixture / relative
+            source.write_bytes(source.read_bytes() + b"\n")
+            current = MODULE.identities(fixture)
+            assert current["tooling_build_cache"] != previous["tooling_build_cache"], (
+                relative
+            )
             previous = current
 
     print("cache identity tests ok")
