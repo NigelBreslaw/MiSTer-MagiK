@@ -52,8 +52,7 @@ mod macos {
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_runtime::startup_intro::StartupIntroPlayback;
     use mister_magik_fb::launcher_runtime::transition_plan::{
-        NavigationDisplay, crt_navigation_layout, is_card_edge, navigation_geometry,
-        navigation_transition_for_intent,
+        is_card_edge, navigation_transition_for_intent,
     };
     use mister_magik_fb::launcher_runtime::transition_spec::TransitionStart;
     use mister_magik_fb::launcher_taxonomy::{
@@ -74,6 +73,9 @@ mod macos {
         UiDisplayPlan, UiFramebufferSizePolicy, UiLayoutGeometry, UiPixelSize,
     };
     use mister_magik_fb::ui_preview_fixtures::{FixtureScreenshot, UiPreviewFixtures};
+    use mister_magik_fb::ui_runner::{
+        TransitionInputs, TransitionSource, start_navigation_transition,
+    };
     use mister_magik_fb::visual_composition::{
         ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, hdmi_preview_rect,
     };
@@ -1479,112 +1481,74 @@ mod macos {
         }
 
         fn begin_navigation_transition(&mut self, event: LauncherEvent, now_us: u64) -> bool {
-            if matches!(
+            let Some((edge, direction)) = (if matches!(
                 event.action,
                 LauncherAction::ToggleSystemPage | LauncherAction::OpenSystemSection
             ) {
-                if self.orientation.is_portrait() {
-                    return false;
-                }
-                return self
-                    .navigation_transition
-                    .begin(TransitionStart::system_panel(
-                        self.display_profile.is_crt(),
-                        self.launcher_nav.is_system_hub(),
-                        self.frame_target.cached_565(),
-                        self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
-                        now_us,
-                    ))
-                    .unwrap_or(false);
-            }
-            let Some((edge, direction)) =
+                Some((
+                    NavigationTransitionEdge::SystemPanel,
+                    NavigationTransitionDirection::Forward,
+                ))
+            } else {
                 navigation_transition_for_intent(&self.launcher_nav, &event, false)
-            else {
+            }) else {
                 return false;
             };
-            let card_edge = is_card_edge(edge) && !self.orientation.is_portrait();
-            let card_home_rect = card_edge.then(|| {
-                let scene = if self.display_profile.is_crt() {
-                    mister_magik_framebuffer_scenes::launcher::LauncherScene::crt(
-                        self.frame_width,
-                        self.frame_height,
+            let crt = self.display_profile.is_crt();
+            let display = self.display_profile.display();
+            let layout = UiLayoutGeometry::for_display(&display, self.orientation);
+            let crt_metrics = CrtUiMetrics::for_display(&display);
+            let card_home_rect =
+                (is_card_edge(edge) && !self.orientation.is_portrait()).then(|| {
+                    self.native_cards.as_ref().map_or_else(
+                        || {
+                            let scene = if crt {
+                                mister_magik_framebuffer_scenes::launcher::LauncherScene::crt(
+                                    self.frame_width,
+                                    self.frame_height,
+                                )
+                            } else {
+                                mister_magik_framebuffer_scenes::launcher::LauncherScene::new(
+                                    self.frame_width,
+                                    self.frame_height,
+                                )
+                            };
+                            scene
+                                .slot_zero(self.launcher_nav.current_menu_id() != ROOT_MENU_ID)
+                                .rect()
+                        },
+                        |cards| cards.selected_card_rect(),
                     )
-                } else {
-                    mister_magik_framebuffer_scenes::launcher::LauncherScene::new(
-                        self.frame_width,
-                        self.frame_height,
-                    )
-                };
-                self.native_cards.as_ref().map_or_else(
-                    || {
-                        scene
-                            .slot_zero(self.launcher_nav.current_menu_id() != ROOT_MENU_ID)
-                            .rect()
-                    },
-                    |cards| cards.selected_card_rect(),
-                )
-            });
-            let geometry = navigation_geometry(
-                &self.launcher_nav,
-                &NavigationDisplay {
-                    frame_width: self.frame_width,
-                    frame_height: self.frame_height,
-                    crt: self.display_profile.is_crt().then(|| {
-                        let display = self.display_profile.display();
-                        crt_navigation_layout(
-                            display.content_rect(),
-                            &CrtUiMetrics::for_display(&display),
-                        )
-                    }),
-                    card_home_rect,
+                });
+            let collection_id = event
+                .path
+                .as_deref()
+                .filter(|_| event.action == LauncherAction::OpenCollection);
+            let reveal_image = (crt && direction == NavigationTransitionDirection::Reverse)
+                .then(|| self.selected_reveal_image())
+                .flatten();
+            let composed = self.frame_target.cached_565();
+            let crt_backdrop = self.crt_backdrop.as_ref().map_or(&[][..], |b| b.pixels());
+            start_navigation_transition(
+                &mut self.navigation_transition,
+                &TransitionInputs {
+                    edge,
+                    direction,
+                    nav: &self.launcher_nav,
+                    collection_id,
+                    layout,
+                    crt_layout: crt,
+                    crt_metrics: &crt_metrics,
+                    crt_backdrop,
+                    now_us,
                 },
-                edge,
-            );
-            if card_edge {
-                let kind = event
-                    .path
-                    .as_deref()
-                    .filter(|_| event.action == LauncherAction::OpenCollection)
-                    .and_then(|id| self.launcher_nav.device_kind_for_collection(id))
-                    .or_else(|| self.launcher_nav.device_kind());
-                let hub = direction == NavigationTransitionDirection::Forward
-                    || self.launcher_nav.is_system_hub();
-                let started = self
-                    .navigation_transition
-                    .begin(TransitionStart::device_card(
-                        edge,
-                        direction,
-                        geometry,
-                        mister_magik_fb::launcher_presentation::device_reveal_spec(
-                            kind,
-                            self.display_profile.is_crt(),
-                            hub,
-                        ),
-                        self.frame_target.cached_565(),
-                        mister_magik_fb::launcher_presentation::system_device_rgb565(kind),
-                        self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
-                        now_us,
-                    ))
-                    .unwrap_or(false);
-                if started
-                    && self.display_profile.is_crt()
-                    && direction == NavigationTransitionDirection::Reverse
-                {
-                    self.navigation_transition
-                        .update_device_reveal_image(self.selected_reveal_image());
-                }
-                started
-            } else {
-                self.navigation_transition
-                    .begin(TransitionStart::super_scaler(
-                        edge,
-                        direction,
-                        geometry,
-                        self.frame_target.cached_565(),
-                        now_us,
-                    ))
-                    .unwrap_or(false)
-            }
+                &TransitionSource {
+                    pixels: composed,
+                    card_home_rect,
+                    physical: false,
+                },
+                || reveal_image,
+            )
         }
 
         fn finish_navigation_tick(&mut self) {

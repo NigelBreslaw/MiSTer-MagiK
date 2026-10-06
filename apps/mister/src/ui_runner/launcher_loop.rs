@@ -8318,6 +8318,7 @@ pub(super) fn run_launcher_loop(
                                                 begin_navigation_transition(
                                                     &mut navigation_transition,
                                                     launcher_card_home.as_mut(),
+                                                    target.cached_565(),
                                                     &TransitionInputs {
                                                         edge,
                                                         direction,
@@ -8326,7 +8327,6 @@ pub(super) fn run_launcher_loop(
                                                         layout,
                                                         crt_layout,
                                                         crt_metrics: &crt_metrics,
-                                                        composed: target.cached_565(),
                                                         crt_backdrop: crt_backdrop
                                                             .as_ref()
                                                             .map_or(&[], |b| b.pixels()),
