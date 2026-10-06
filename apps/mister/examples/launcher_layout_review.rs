@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root_keys: Vec<_> = CardLevelSnapshot::root(&snapshot)
         .cards
         .iter()
-        .map(|card| card.artwork_key.clone())
+        .map(|card| card.artwork_key().to_owned())
         .collect();
     let rgb_assets = mister_magik_fb::launcher_artwork::load_cards(
         &mister_magik_fb::launcher_artwork::asset_root(),

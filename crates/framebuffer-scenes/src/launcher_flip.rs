@@ -88,13 +88,26 @@ impl Column {
     }
 }
 
+/// How a face quantises filtered samples to RGB565.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Dither {
+    /// Truncate.
+    Off,
+    /// Ordered dither for rotated poses; face-on poses (angle 0) project
+    /// undithered. Native faces are dithered once when baked, so a resting card
+    /// must reach the output without being resampled again.
+    MovingPoses,
+    /// Ordered dither for every projection.
+    Always,
+}
+
 pub(super) struct Face {
     #[cfg(test)]
     pub pixels: Vec<Rgb565Pixel>,
     pub width: usize,
     pub height: usize,
     pub(super) reflection_fade_rows: usize,
-    pub(super) dithered: bool,
+    pub(super) dither: Dither,
     pub(super) texture: crate::launcher_texture::Texture,
 }
 
@@ -111,7 +124,7 @@ impl Face {
             height,
             reflection_fade_rows: (height / 4).clamp(2, 64),
             texture,
-            dithered: false,
+            dither: Dither::Off,
         }
     }
 
@@ -131,7 +144,7 @@ impl Face {
             height,
             reflection_fade_rows: 64,
             texture,
-            dithered: false,
+            dither: Dither::Off,
         }
     }
 
@@ -144,7 +157,7 @@ impl Face {
             height,
             reflection_fade_rows: 64,
             texture,
-            dithered: false,
+            dither: Dither::Off,
         }
     }
 }
@@ -711,7 +724,7 @@ fn render(
                     (flat_zero + active_top as i64 * flat_step) as i32,
                     flat_step as i32,
                 ),
-                face.dithered,
+                face.dither == Dither::Always,
                 (active_left, active_top),
             );
         } else {
@@ -735,7 +748,7 @@ fn render(
                             target.pitch,
                             bottom - top,
                             (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
-                            face.dithered,
+                            face.dither != Dither::Off,
                             (x, top),
                             c.opaque_margin(),
                         );
