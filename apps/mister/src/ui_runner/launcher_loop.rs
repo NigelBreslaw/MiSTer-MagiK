@@ -246,30 +246,6 @@ fn system_entry_benchmark_settled(elapsed_ms: u64, input_enabled_ms: u64) -> boo
     elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_SETTLE_MS
 }
 
-fn navigation_capture_source_carrier_required(
-    policy: FullScreenTransitionPolicy,
-    owner: Option<FullScreenTransitionOwner>,
-    phase: NavigationTransitionPhase,
-    settings_physical_space: bool,
-) -> bool {
-    policy.controlled_capture
-        && owner == Some(FullScreenTransitionOwner::Navigation)
-        && phase == NavigationTransitionPhase::Capture
-        && settings_physical_space
-}
-
-fn orientation_capture_source_carrier_required(
-    policy: FullScreenTransitionPolicy,
-    owner: Option<FullScreenTransitionOwner>,
-    transition_active: bool,
-    destination_ready: bool,
-) -> bool {
-    policy.controlled_capture
-        && owner == Some(FullScreenTransitionOwner::Orientation)
-        && transition_active
-        && !destination_ready
-}
-
 fn settings_navigation_status_drain_complete(elapsed: Duration, status_current: bool) -> bool {
     elapsed >= SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT
         || (elapsed >= SETTINGS_NAVIGATION_STATUS_DRAIN_MIN && status_current)
@@ -4971,14 +4947,13 @@ fn begin_orientation_transition(
     layout: &mut UiLayoutGeometry,
     layout_epoch: &mut u64,
     director: &mut PresentationDirector,
-    orientation_transition_intent: &mut Option<OrientationTransitionIntent>,
     orientation_preparation_trace: &mut OrientationPreparationTrace,
-    intent: OrientationTransitionIntent,
+    intent: OrientationIntent,
 ) -> bool {
     let begin_started = Instant::now();
     let source_snapshot_started = Instant::now();
     let Some(animated) =
-        director.begin_orientation(from, to, target.cached_565(), now, reduce_motion)
+        director.begin_orientation(from, to, target.cached_565(), now, reduce_motion, intent)
     else {
         return false;
     };
@@ -5000,20 +4975,10 @@ fn begin_orientation_transition(
         layout_us: layout_started.elapsed().as_micros(),
         source_snapshot_bytes: target.cached_565().len().saturating_mul(2) as u64,
     };
-    if animated {
-        *orientation_transition_intent = Some(intent);
-    } else {
-        *orientation_transition_intent = None;
+    if !animated {
         director.end_orientation();
     }
     animated
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OrientationTransitionIntent {
-    Confirm,
-    Rollback,
-    Benchmark,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -5319,7 +5284,6 @@ pub(super) fn run_launcher_loop(
     let mut display_confirmation = DisplayConfirmation::new();
     let mut orientation_confirmation = OrientationConfirmation::new(orientation_store);
     let mut orientation_full_redraw_pending = layout.is_portrait();
-    let mut orientation_transition_intent = None;
     let mut orientation_preparation_trace = OrientationPreparationTrace::default();
     // Main owns the active display mode; the launcher only mirrors its reported state.
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some()
@@ -6490,9 +6454,8 @@ pub(super) fn run_launcher_loop(
                 &mut layout,
                 &mut layout_epoch,
                 &mut director,
-                &mut orientation_transition_intent,
                 &mut orientation_preparation_trace,
-                OrientationTransitionIntent::Benchmark,
+                OrientationIntent::Benchmark,
             );
             if animated {
                 if leg.index == 0 {
@@ -6537,9 +6500,8 @@ pub(super) fn run_launcher_loop(
                     &mut layout,
                     &mut layout_epoch,
                     &mut director,
-                    &mut orientation_transition_intent,
                     &mut orientation_preparation_trace,
-                    OrientationTransitionIntent::Rollback,
+                    OrientationIntent::Rollback,
                 );
             }
             orientation_full_redraw_pending = true;
@@ -8607,12 +8569,10 @@ pub(super) fn run_launcher_loop(
                                                 &mut layout,
                                                 &mut layout_epoch,
                                                 &mut director,
-                                                &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
-                                                OrientationTransitionIntent::Confirm,
+                                                OrientationIntent::Confirm,
                                             );
                                             if !animated {
-                                                let _ = director.orientation.take_completion();
                                                 orientation_confirmation
                                                     .start_countdown(Instant::now());
                                             }
@@ -8641,9 +8601,8 @@ pub(super) fn run_launcher_loop(
                                                 &mut layout,
                                                 &mut layout_epoch,
                                                 &mut director,
-                                                &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
-                                                OrientationTransitionIntent::Rollback,
+                                                OrientationIntent::Rollback,
                                             );
                                         }
                                         orientation_full_redraw_pending = true;
@@ -10301,12 +10260,7 @@ pub(super) fn run_launcher_loop(
             && launcher_card_home
                 .as_ref()
                 .is_some_and(super::launcher_card_home::LauncherCardHomeSession::compositor_stale);
-        if navigation_capture_source_carrier_required(
-            full_screen_transition_policy_before_render,
-            director.chart.owner(),
-            director.navigation.frame().phase,
-            director.navigation.settings_physical_space(),
-        ) {
+        if director.navigation_needs_source_carrier(full_screen_transition_policy_before_render) {
             let mut direct_render_timing = None;
             match launcher_presenter.try_render_direct_hidden_frame(
                 f,
@@ -10338,12 +10292,7 @@ pub(super) fn run_launcher_loop(
                 Err(failure) => launcher_presenter.fail_latch_completion(failure),
             }
         }
-        if orientation_capture_source_carrier_required(
-            full_screen_transition_policy_before_render,
-            director.chart.owner(),
-            director.orientation.is_active(),
-            director.orientation.destination_ready(),
-        ) {
+        if director.orientation_needs_source_carrier(full_screen_transition_policy_before_render) {
             let mut direct_render_timing = None;
             match launcher_presenter.try_render_direct_hidden_frame(
                 f,
@@ -10840,13 +10789,7 @@ pub(super) fn run_launcher_loop(
                     .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1)),
             );
         }
-        if director.chart.owner() == Some(FullScreenTransitionOwner::Orientation)
-            && director.chart.state() == FullScreenTransitionState::CapturePending
-            && !director.chart.policy().controlled_capture
-            && !full_screen_controlled_capture_rendered
-        {
-            director.abort_orientation();
-        }
+        director.abort_stalled_orientation_capture(full_screen_controlled_capture_rendered);
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
             print_startup_event(
@@ -11930,9 +11873,9 @@ pub(super) fn run_launcher_loop(
                         transition_to,
                         OrientationPmuPhase::Destination,
                     ));
-                let captured = director
-                    .orientation
-                    .capture_destination(layer_target.presentation_frame_view().pixels());
+                director.capture_orientation_destination(
+                    layer_target.presentation_frame_view().pixels(),
+                );
                 drop(destination_pmu);
                 custom_draw_trace.orientation_transition_destination_capture_us =
                     capture_started.elapsed().as_micros();
@@ -11942,18 +11885,6 @@ pub(super) fn run_launcher_loop(
                     .len()
                     .saturating_mul(2)
                     as u64;
-                if captured {
-                    if let Some(generation) = director
-                        .chart
-                        .generation_for(FullScreenTransitionOwner::Orientation)
-                        && let Err(error) = director.chart.capture_completed(generation)
-                    {
-                        crate::ui_errln!("orientation snapshot lock rejected: {error:?}");
-                        director.abort_orientation();
-                    }
-                } else {
-                    director.abort_orientation();
-                }
             }
             let gui_orientation_pmu =
                 gui_profiling.phase_span(gui_custom_selection.orientation_transition_raster);
@@ -11982,15 +11913,14 @@ pub(super) fn run_launcher_loop(
                     damage_build_started.elapsed().as_micros();
                 custom_draw_trace.orientation_damage_rects_after = cached_damage.len() as u32;
                 if done {
-                    director.end_orientation();
-                    match orientation_transition_intent.take() {
-                        Some(OrientationTransitionIntent::Confirm) => {
+                    match director.end_orientation() {
+                        Some(OrientationIntent::Confirm) => {
                             orientation_confirmation.start_countdown(Instant::now());
                         }
-                        Some(OrientationTransitionIntent::Benchmark) => {
+                        Some(OrientationIntent::Benchmark) => {
                             orientation_benchmark.note_rendered_endpoint(frames);
                         }
-                        Some(OrientationTransitionIntent::Rollback) | None => {}
+                        Some(OrientationIntent::Rollback) | None => {}
                     }
                 } else {
                     window.request_redraw();
@@ -18523,77 +18453,6 @@ mod tests {
             launcher_startup_orientation(persisted, None, false, true),
             ScreenOrientation::Normal
         );
-    }
-
-    #[test]
-    pub(super) fn settings_capture_uses_one_source_carrier_only_while_capture_is_pending() {
-        let mut transition = FullScreenTransitionStateChart::default();
-        let generation = transition
-            .begin(FullScreenTransitionOwner::Navigation)
-            .unwrap();
-        let capture_policy = transition.policy();
-
-        assert!(navigation_capture_source_carrier_required(
-            capture_policy,
-            transition.owner(),
-            NavigationTransitionPhase::Capture,
-            true,
-        ));
-        assert!(!navigation_capture_source_carrier_required(
-            capture_policy,
-            transition.owner(),
-            NavigationTransitionPhase::Expand,
-            true,
-        ));
-        assert!(!navigation_capture_source_carrier_required(
-            capture_policy,
-            transition.owner(),
-            NavigationTransitionPhase::Capture,
-            false,
-        ));
-
-        assert!(transition.take_controlled_capture(generation).unwrap());
-        assert!(!navigation_capture_source_carrier_required(
-            transition.policy(),
-            transition.owner(),
-            NavigationTransitionPhase::Capture,
-            true,
-        ));
-    }
-
-    #[test]
-    pub(super) fn orientation_capture_uses_source_carrier_until_destination_is_ready() {
-        let mut transition = FullScreenTransitionStateChart::default();
-        let generation = transition
-            .begin(FullScreenTransitionOwner::Orientation)
-            .unwrap();
-        let capture_policy = transition.policy();
-
-        assert!(orientation_capture_source_carrier_required(
-            capture_policy,
-            transition.owner(),
-            true,
-            false,
-        ));
-        assert!(!orientation_capture_source_carrier_required(
-            capture_policy,
-            transition.owner(),
-            false,
-            false,
-        ));
-        assert!(!orientation_capture_source_carrier_required(
-            capture_policy,
-            transition.owner(),
-            true,
-            true,
-        ));
-        assert!(transition.take_controlled_capture(generation).unwrap());
-        assert!(!orientation_capture_source_carrier_required(
-            transition.policy(),
-            transition.owner(),
-            true,
-            false,
-        ));
     }
 
     #[test]

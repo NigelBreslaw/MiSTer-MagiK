@@ -16,9 +16,13 @@ use super::composition::{
     DirectLayerPresentationReceipt, UiCompositionController, UiCompositionDecision,
     UiCompositionInput,
 };
-use super::full_screen_transition::{FullScreenTransitionOwner, FullScreenTransitionStateChart};
+use super::full_screen_transition::{
+    FullScreenTransitionOwner, FullScreenTransitionPolicy, FullScreenTransitionState,
+    FullScreenTransitionStateChart,
+};
 use super::navigation_transition::{
-    NavigationTransitionCompletion, NavigationTransitionEndpoint, NavigationTransitionRuntime,
+    NavigationTransitionCompletion, NavigationTransitionEndpoint, NavigationTransitionPhase,
+    NavigationTransitionRuntime,
 };
 use super::orientation_transition::OrientationTransitionRuntime;
 use crate::launcher::{LauncherEvent, NavigationTransitionState, Screen};
@@ -84,6 +88,14 @@ pub struct PendingNavigation {
     pub status_quiesce_started_at: Option<Instant>,
 }
 
+/// Why an orientation transition was started, and so what to do when it ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrientationIntent {
+    Confirm,
+    Rollback,
+    Benchmark,
+}
+
 /// What the presenter acknowledged for the frame composition decided.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentationOutcome {
@@ -128,6 +140,8 @@ pub struct PresentationDirector {
     pub composition: UiCompositionController,
     /// Set exactly while a navigation transition the director adopted plays.
     pub pending: Option<PendingNavigation>,
+    /// Set exactly while an orientation transition the director started plays.
+    pub orientation_intent: Option<OrientationIntent>,
 }
 
 impl PresentationDirector {
@@ -141,6 +155,7 @@ impl PresentationDirector {
             chart: FullScreenTransitionStateChart::default(),
             composition: UiCompositionController::new(),
             pending: None,
+            orientation_intent: None,
         }
     }
 
@@ -181,9 +196,10 @@ impl PresentationDirector {
     }
 
     /// Start the orientation effect: the chart holds the frame, then the effect
-    /// takes its source snapshot. `None` when the chart refuses; otherwise
-    /// whether the effect animates. A transition that does not animate must be
-    /// ended with `end_orientation` once the layout has changed.
+    /// takes its source snapshot and the director remembers `intent`. `None`
+    /// when the chart refuses; otherwise whether the effect animates. A
+    /// transition that does not animate must be ended with `end_orientation` once
+    /// the layout has changed.
     pub fn begin_orientation(
         &mut self,
         from: ScreenOrientation,
@@ -191,24 +207,85 @@ impl PresentationDirector {
         source: &[Rgb565Pixel],
         now: Instant,
         reduce_motion: bool,
+        intent: OrientationIntent,
     ) -> Option<bool> {
         if !begin_full_screen_transition(&mut self.chart, FullScreenTransitionOwner::Orientation) {
             return None;
         }
-        Some(self.orientation.start(from, to, source, now, reduce_motion))
+        let animated = self.orientation.start(from, to, source, now, reduce_motion);
+        self.orientation_intent = animated.then_some(intent);
+        Some(animated)
     }
 
-    /// The orientation effect ended without an endpoint to confirm: drop its
-    /// completion and let the chart force the live frame.
-    pub fn end_orientation(&mut self) {
+    /// Hand the orientation effect the captured destination and lock the
+    /// chart's snapshot. If either refuses, the transition is aborted. Returns
+    /// whether the capture took.
+    pub fn capture_orientation_destination(&mut self, destination: &[Rgb565Pixel]) -> bool {
+        let captured = self.orientation.capture_destination(destination)
+            && match self
+                .chart
+                .generation_for(FullScreenTransitionOwner::Orientation)
+            {
+                Some(generation) => match self.chart.capture_completed(generation) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        crate::ui_errln!("orientation snapshot lock rejected: {error:?}");
+                        false
+                    }
+                },
+                None => true,
+            };
+        if !captured {
+            self.abort_orientation();
+        }
+        captured
+    }
+
+    /// A Settings transition in the physical raster is waiting for its first
+    /// controlled capture: the frame that takes the capture must also carry the
+    /// source, so the hidden frame is rendered from the transition's snapshot.
+    pub fn navigation_needs_source_carrier(&self, policy: FullScreenTransitionPolicy) -> bool {
+        policy.controlled_capture
+            && self.chart.owner() == Some(FullScreenTransitionOwner::Navigation)
+            && self.navigation.frame().phase == NavigationTransitionPhase::Capture
+            && self.navigation.settings_physical_space()
+    }
+
+    /// The orientation effect is waiting for its destination: until it has one,
+    /// the controlled-capture frame carries the effect's source.
+    pub fn orientation_needs_source_carrier(&self, policy: FullScreenTransitionPolicy) -> bool {
+        policy.controlled_capture
+            && self.chart.owner() == Some(FullScreenTransitionOwner::Orientation)
+            && self.orientation.is_active()
+            && !self.orientation.destination_ready()
+    }
+
+    /// The orientation effect is waiting for a controlled capture the frame did
+    /// not take: abort it. Returns whether it aborted.
+    pub fn abort_stalled_orientation_capture(&mut self, controlled_capture_rendered: bool) -> bool {
+        let stalled = self.chart.owner() == Some(FullScreenTransitionOwner::Orientation)
+            && self.chart.state() == FullScreenTransitionState::CapturePending
+            && !self.chart.policy().controlled_capture
+            && !controlled_capture_rendered;
+        if stalled {
+            self.abort_orientation();
+        }
+        stalled
+    }
+
+    /// The orientation effect ended: drop its completion, let the chart force
+    /// the live frame, and hand back why it was started.
+    pub fn end_orientation(&mut self) -> Option<OrientationIntent> {
         let _ = self.orientation.take_completion();
         release_full_screen_transition(&mut self.chart, FullScreenTransitionOwner::Orientation);
+        self.orientation_intent.take()
     }
 
     /// The orientation effect cannot play (no capture, no snapshot lock): cancel
-    /// it and let the chart force the live frame.
+    /// it, forget why it was started, and let the chart force the live frame.
     pub fn abort_orientation(&mut self) {
         self.orientation.cancel();
+        self.orientation_intent = None;
         release_full_screen_transition(&mut self.chart, FullScreenTransitionOwner::Orientation);
     }
 
@@ -336,6 +413,7 @@ mod tests {
     use super::*;
     use crate::launcher::{LauncherAction, LauncherNav};
     use std::collections::BTreeSet;
+    use std::time::Duration;
 
     const WALKS: usize = 300;
     const STEPS: usize = 80;
@@ -560,6 +638,203 @@ mod tests {
         }
     }
 
+    /// The orientation effect and the chart agree on who is playing, whether the
+    /// destination is captured and why the transition was started.
+    fn check_orientation(d: &PresentationDirector, seen: &mut BTreeSet<String>, at: &str) {
+        use FullScreenTransitionState::*;
+        let (effect, chart) = (&d.orientation, &d.chart);
+        // The destination flag is only meaningful while the effect plays; it is
+        // left stale after one ends, which nothing reads.
+        seen.insert(format!(
+            "{:?}/{:?} + {}",
+            chart.owner(),
+            chart.state(),
+            match (effect.is_active(), effect.destination_ready()) {
+                (false, _) => "idle",
+                (true, false) => "playing, awaiting its destination",
+                (true, true) => "playing, destination captured",
+            }
+        ));
+        assert_eq!(
+            effect.is_active(),
+            d.orientation_intent.is_some(),
+            "{at}: the intent lives exactly while the effect plays"
+        );
+        if effect.is_active() {
+            assert_eq!(
+                chart.owner(),
+                Some(FullScreenTransitionOwner::Orientation),
+                "{at}"
+            );
+            assert!(
+                matches!(chart.state(), CapturePending | SnapshotLocked),
+                "{at}: {:?} while playing",
+                chart.state()
+            );
+            assert_eq!(
+                effect.destination_ready(),
+                chart.state() == SnapshotLocked,
+                "{at}: the destination is captured exactly when the snapshot is locked"
+            );
+        } else if chart.owner() == Some(FullScreenTransitionOwner::Orientation) {
+            assert_eq!(
+                chart.state(),
+                Releasing,
+                "{at}: nothing plays but the chart waits"
+            );
+        }
+    }
+
+    #[test]
+    fn random_walks_keep_the_orientation_effect_and_the_chart_in_step() {
+        // A small effect keeps the walk quick; the contract does not depend on size.
+        const W: usize = 64;
+        const H: usize = 36;
+        let navigation_source = frame(0x1111);
+        let source = vec![Rgb565Pixel(0x3333); W * H];
+        let destination = vec![Rgb565Pixel(0x4444); W * H];
+        let short = vec![Rgb565Pixel(0x5555); 16];
+        let mut rng = Rng(0x0DD5_B16B_00B5_C0DE);
+        let mut seen = BTreeSet::new();
+        let (mut finished, mut aborted, mut refused) = (0, 0, 0);
+        for walk in 0..WALKS {
+            let mut d = director();
+            d.orientation = OrientationTransitionRuntime::new(W, H);
+            let mut now = Instant::now();
+            for step in 0..STEPS {
+                let at = format!("walk {walk} step {step}");
+                now += [
+                    Duration::ZERO,
+                    Duration::from_millis(40),
+                    Duration::from_secs(10),
+                ][rng.below(3)];
+                match rng.below(9) {
+                    0 | 1 => {
+                        let chart_was_free = d.chart.is_live();
+                        let intent = [
+                            OrientationIntent::Confirm,
+                            OrientationIntent::Rollback,
+                            OrientationIntent::Benchmark,
+                        ][rng.below(3)];
+                        let began = d.begin_orientation(
+                            ScreenOrientation::Normal,
+                            ScreenOrientation::MonitorClockwise,
+                            &source,
+                            now,
+                            rng.chance(20),
+                            intent,
+                        );
+                        match began {
+                            None => {
+                                assert!(!chart_was_free, "{at}: refused a free chart");
+                                refused += 1;
+                            }
+                            Some(animated) => {
+                                assert!(chart_was_free, "{at}: began over an owner");
+                                // The loop ends a transition that does not animate
+                                // once the layout has changed.
+                                if !animated {
+                                    assert!(
+                                        d.orientation_intent.is_none(),
+                                        "{at}: a transition that does not animate has no intent"
+                                    );
+                                    d.end_orientation();
+                                }
+                            }
+                        }
+                    }
+                    2 => {
+                        if let Some(generation) = d
+                            .chart
+                            .generation_for(FullScreenTransitionOwner::Orientation)
+                            && d.chart.state() == FullScreenTransitionState::CapturePending
+                        {
+                            d.chart.take_controlled_capture(generation).unwrap();
+                        }
+                    }
+                    3 | 4 => {
+                        let pixels = if rng.chance(15) { &short } else { &destination };
+                        let was_active = d.orientation.is_active();
+                        let took = d.capture_orientation_destination(pixels);
+                        if was_active && !took {
+                            aborted += 1;
+                        }
+                    }
+                    5 => {
+                        let rendered = rng.chance(50);
+                        let stalled = d.abort_stalled_orientation_capture(rendered);
+                        assert!(
+                            !(stalled && rendered),
+                            "{at}: a rendered capture is not stalled"
+                        );
+                        if stalled {
+                            aborted += 1;
+                            assert!(
+                                !d.orientation.is_active(),
+                                "{at}: a stalled capture stops the effect"
+                            );
+                        }
+                    }
+                    6 => {
+                        let mut output = vec![Rgb565Pixel(0); W * H];
+                        if let Some((true, ..)) = d.orientation.render_into(&mut output, now) {
+                            assert!(
+                                d.end_orientation().is_some(),
+                                "{at}: done without an intent"
+                            );
+                            finished += 1;
+                        }
+                    }
+                    7 => {
+                        if let Some(generation) = d.chart.generation()
+                            && d.chart.state() == FullScreenTransitionState::Releasing
+                        {
+                            d.chart.live_frame_presented(generation).unwrap();
+                        }
+                    }
+                    _ => {
+                        // A navigation transition cannot begin over an owner.
+                        let owner_held = !d.chart.is_live();
+                        let started = start(
+                            &mut d,
+                            NavigationTransitionEdge::HomeToConsoles,
+                            NavigationTransitionDirection::Forward,
+                            &navigation_source,
+                            0,
+                        );
+                        assert!(
+                            !(started && owner_held),
+                            "{at}: navigation began over an owner"
+                        );
+                        if started {
+                            // Keep the walk about orientation: end it as a cover does.
+                            d.cover_navigation();
+                            let generation = d.chart.generation().unwrap();
+                            d.chart.live_frame_presented(generation).unwrap();
+                        }
+                    }
+                }
+                check_orientation(&d, &mut seen, &at);
+            }
+        }
+        assert!(finished > 20, "finished {finished}");
+        assert!(aborted > 20, "aborted {aborted}");
+        assert!(refused > 20, "refused {refused}");
+        // Unlike navigation, the orientation effect maps one-to-one onto the
+        // chart: awaiting the destination is `CapturePending`, a captured one is
+        // `SnapshotLocked`, and an ended effect leaves the chart `Releasing`.
+        let expected: BTreeSet<String> = [
+            "None/Live + idle",
+            "Some(Orientation)/CapturePending + playing, awaiting its destination",
+            "Some(Orientation)/SnapshotLocked + playing, destination captured",
+            "Some(Orientation)/Releasing + idle",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(seen, expected);
+    }
+
     fn started_orientation() -> PresentationDirector {
         let mut d = director();
         let frame = vec![Rgb565Pixel(0x1111); WIDTH * HEIGHT];
@@ -570,10 +845,162 @@ mod tests {
                 &frame,
                 Instant::now(),
                 false,
+                OrientationIntent::Confirm,
             ),
             Some(true)
         );
         d
+    }
+
+    #[test]
+    fn a_physical_settings_capture_uses_one_source_carrier_only_while_capture_is_pending() {
+        use super::super::navigation_transition::NavigationTransitionRoute;
+        use super::super::transition_spec::TransitionStart;
+        use mister_magik_framebuffer_scenes::navigation::SettingsPageTransitionAxis;
+        let source = frame(0x1111);
+        let mut d = director();
+        let policy_before = d.chart.policy();
+        assert!(
+            !d.navigation_needs_source_carrier(policy_before),
+            "nothing plays"
+        );
+
+        assert!(
+            d.navigation
+                .begin(TransitionStart::settings_page_physical(
+                    NavigationTransitionRoute::HomeToSettings,
+                    NavigationTransitionDirection::Forward,
+                    SettingsPageTransitionAxis::Horizontal,
+                    WIDTH,
+                    HEIGHT,
+                    &source,
+                    0,
+                ))
+                .unwrap()
+        );
+        assert!(begin_full_screen_transition(
+            &mut d.chart,
+            FullScreenTransitionOwner::Navigation
+        ));
+        let capture_policy = d.chart.policy();
+        assert!(d.navigation_needs_source_carrier(capture_policy));
+        assert!(
+            !d.orientation_needs_source_carrier(capture_policy),
+            "navigation owns the frame, not orientation"
+        );
+        // The policy a caller holds is what decides; a stale one without the
+        // capture authorization asks for nothing.
+        assert!(!d.navigation_needs_source_carrier(policy_before));
+
+        // The frame must belong to navigation: the same runtime state under
+        // another owner needs no navigation carrier.
+        let mut other = director();
+        assert!(
+            other
+                .navigation
+                .begin(TransitionStart::settings_page_physical(
+                    NavigationTransitionRoute::HomeToSettings,
+                    NavigationTransitionDirection::Forward,
+                    SettingsPageTransitionAxis::Horizontal,
+                    WIDTH,
+                    HEIGHT,
+                    &source,
+                    0,
+                ))
+                .unwrap()
+        );
+        assert!(begin_full_screen_transition(
+            &mut other.chart,
+            FullScreenTransitionOwner::Orientation
+        ));
+        assert!(!other.navigation_needs_source_carrier(other.chart.policy()));
+
+        // Only the physical raster needs it: a logical Settings slide does not.
+        let mut logical = director();
+        assert!(
+            logical
+                .navigation
+                .begin(TransitionStart::settings_page(
+                    NavigationTransitionRoute::HomeToSettings,
+                    NavigationTransitionDirection::Forward,
+                    &source,
+                    0,
+                ))
+                .unwrap()
+        );
+        assert!(begin_full_screen_transition(
+            &mut logical.chart,
+            FullScreenTransitionOwner::Navigation
+        ));
+        assert!(!logical.navigation_needs_source_carrier(logical.chart.policy()));
+
+        let generation = d
+            .chart
+            .generation_for(FullScreenTransitionOwner::Navigation)
+            .unwrap();
+        assert!(d.chart.take_controlled_capture(generation).unwrap());
+        assert!(
+            !d.navigation_needs_source_carrier(d.chart.policy()),
+            "once the capture is taken the carrier is no longer needed"
+        );
+    }
+
+    #[test]
+    fn an_orientation_capture_uses_the_source_carrier_until_its_destination_is_ready() {
+        let mut d = started_orientation();
+        let capture_policy = d.chart.policy();
+        assert!(d.orientation_needs_source_carrier(capture_policy));
+        assert!(
+            !d.navigation_needs_source_carrier(capture_policy),
+            "orientation owns the frame, not navigation"
+        );
+        let generation = d
+            .chart
+            .generation_for(FullScreenTransitionOwner::Orientation)
+            .unwrap();
+        assert!(d.chart.take_controlled_capture(generation).unwrap());
+        assert!(
+            !d.orientation_needs_source_carrier(d.chart.policy()),
+            "the capture is taken"
+        );
+        // The effect must be playing and the frame must be orientation's.
+        let mut idle = director();
+        assert_eq!(
+            idle.begin_orientation(
+                ScreenOrientation::Normal,
+                ScreenOrientation::MonitorClockwise,
+                &vec![Rgb565Pixel(0x1111); WIDTH * HEIGHT],
+                Instant::now(),
+                true, // reduce motion: the effect does not play
+                OrientationIntent::Confirm,
+            ),
+            Some(false)
+        );
+        assert!(!idle.orientation_needs_source_carrier(idle.chart.policy()));
+        let mut foreign = director();
+        assert!(foreign.orientation.start(
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise,
+            &vec![Rgb565Pixel(0x1111); WIDTH * HEIGHT],
+            Instant::now(),
+            false,
+        ));
+        assert!(begin_full_screen_transition(
+            &mut foreign.chart,
+            FullScreenTransitionOwner::Navigation
+        ));
+        assert!(!foreign.orientation_needs_source_carrier(foreign.chart.policy()));
+
+        // Deferred: the capture comes back and the carrier with it, until the
+        // destination is in.
+        d.chart.capture_deferred(generation).unwrap();
+        assert!(d.orientation_needs_source_carrier(d.chart.policy()));
+        assert!(d.chart.take_controlled_capture(generation).unwrap());
+        assert!(d.capture_orientation_destination(&vec![Rgb565Pixel(0x4444); WIDTH * HEIGHT]));
+        assert!(
+            !d.orientation_needs_source_carrier(capture_policy),
+            "with its destination ready the effect needs no carrier"
+        );
     }
 
     #[test]
@@ -637,6 +1064,7 @@ mod tests {
                 &source,
                 Instant::now(),
                 false,
+                OrientationIntent::Confirm,
             ),
             None
         );
