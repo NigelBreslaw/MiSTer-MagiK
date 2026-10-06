@@ -382,20 +382,15 @@ impl PreparedLauncher {
             layout.draw_plan(&mut self.logical, &plan, &mut self.flip_columns);
             return;
         }
-        for y in 120..495 {
-            self.logical[y * LOGICAL_WIDTH + 268..y * LOGICAL_WIDTH + 934]
-                .fill(Rgb565Pixel(BACKGROUND));
-        }
-        for left in (268..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
-            draw_carousel_plan(
-                &mut self.logical,
-                LOGICAL_WIDTH,
-                (0, 0),
-                &plan,
-                &mut self.flip_columns,
-                (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
-            );
-        }
+        let row = CardRow::canvas(true);
+        clear_card_rows(&mut self.logical, LOGICAL_WIDTH, row);
+        draw_card_strips(
+            &mut self.logical,
+            LOGICAL_WIDTH,
+            row,
+            &plan,
+            &mut self.flip_columns,
+        );
         self.fit_output();
     }
     fn level_chrome_regions(&self) -> [((usize, usize, usize, usize), bool); 3] {

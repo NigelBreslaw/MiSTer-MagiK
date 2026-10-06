@@ -419,12 +419,15 @@ impl Layout {
 
     /// Carousel rows owned by the card renderer: cleared before every frame.
     pub fn clear_carousel(&self, pixels: &mut [Rgb565Pixel]) {
-        clear_card_rows(
-            pixels,
-            self.width,
-            (self.top, self.bottom),
-            (self.margin_x, self.width - self.margin_x),
-        );
+        clear_card_rows(pixels, self.width, self.card_row());
+    }
+
+    /// The rows between the header and the library, across the margins.
+    pub fn card_row(&self) -> CardRow {
+        CardRow {
+            rows: (self.top, self.bottom),
+            clip: (self.margin_x, self.width - self.margin_x),
+        }
     }
 
     /// Map landscape-logical poses to this route's card geometry. Reuse the
@@ -481,13 +484,7 @@ impl Layout {
         plan: &CarouselPlan<'_>,
         scratch: &mut [crate::launcher_flip::Scratch],
     ) {
-        draw_card_strips(
-            pixels,
-            self.width,
-            (self.margin_x, self.width - self.margin_x),
-            plan,
-            scratch,
-        );
+        draw_card_strips(pixels, self.width, self.card_row(), plan, scratch);
     }
 
     /// Chrome rows that differ between hierarchy levels: the header with the
