@@ -21,25 +21,25 @@ use super::transition_spec::TransitionStart;
 use crate::launcher_presentation::{device_reveal_spec, system_device_rgb565};
 use slint::platform::software_renderer::Rgb565Pixel;
 
-const WIDTH: usize = 960;
-const HEIGHT: usize = 540;
-const EDGES: [NavigationTransitionEdge; 3] = [
+pub(super) const WIDTH: usize = 960;
+pub(super) const HEIGHT: usize = 540;
+pub(super) const EDGES: [NavigationTransitionEdge; 3] = [
     NavigationTransitionEdge::HomeToConsoles,
     NavigationTransitionEdge::HomeToArcade,
     NavigationTransitionEdge::ConsolesToSystem,
 ];
-const DIRECTIONS: [NavigationTransitionDirection; 2] = [
+pub(super) const DIRECTIONS: [NavigationTransitionDirection; 2] = [
     NavigationTransitionDirection::Forward,
     NavigationTransitionDirection::Reverse,
 ];
 /// Far beyond any transition's duration, so one tick reaches its endpoint.
 const SETTLE_US: u64 = 10_000_000;
 
-fn frame(value: u16) -> Vec<Rgb565Pixel> {
+pub(super) fn frame(value: u16) -> Vec<Rgb565Pixel> {
     vec![Rgb565Pixel(value); WIDTH * HEIGHT]
 }
 
-fn begin(
+pub(super) fn begin(
     runtime: &mut NavigationTransitionRuntime,
     edge: NavigationTransitionEdge,
     direction: NavigationTransitionDirection,

@@ -311,6 +311,26 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   `end_orientation_transition` hold the two pairings. Host tests check each leaves the effect and the
   chart in step.
 
+**PR 10 (in progress): the navigation timeline and the chart move together through one module, and the
+mapping between them is measured.**
+
+- `launcher_runtime/transition_lifecycle.rs` holds the operations that pair the navigation runtime with
+  the chart: `begin_full_screen_transition`, `release_full_screen_transition`,
+  `capture_navigation_destination`, `finish_navigation_transition` and
+  `unwind_navigation_transition`. The loop calls them instead of pairing the two by hand (five sites).
+- A seeded walk drives the real runtime and chart through those operations, including a chart that
+  refuses a transition the runtime already started. It found that **the chart's state is not a function
+  of the timeline's phase**: an immediate start plays Expand through Settled while the chart is still
+  `CapturePending` (the destination is prepared while the source already moves), and a locked snapshot
+  spans every phase from Expand on. The only fixed relations are that nothing playing means `Live` or
+  `Releasing`, playing means `CapturePending` or `SnapshotLocked`, and a destination is never revealed
+  before the snapshot is locked. The walk asserts exactly that set of pairs.
+- Consequence for the plan: the chart's states answer "who may render", the timeline's phases answer
+  "how far has the motion got", and they are independent axes. Nesting the timeline in the chart
+  (Phase 4) therefore means a chart state **and** a motion phase, not replacing one by the other.
+  Dropping the chart's `CapturePending`/`SnapshotLocked` in favour of the phase would change the render
+  policy during an immediate start.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
