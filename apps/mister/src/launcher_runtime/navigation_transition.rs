@@ -3,6 +3,7 @@
 
 //! Host-neutral navigation-transition state and RGB565 frame ownership.
 
+use super::transition_spec::{RasterSpace, StartPolicy, TransitionAssets, TransitionStart};
 use crate::launcher::Screen;
 use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedRgb565Pixel;
 pub use mister_magik_framebuffer_scenes::navigation::{
@@ -40,9 +41,6 @@ pub enum NavigationTransitionRoute {
     LicensesToLicenseText,
     NestedToHome,
 }
-
-const HDMI_ABOUT_CONTENT_X: u16 = 266;
-const HDMI_SETTINGS_CONTENT_X: u16 = 400;
 
 impl NavigationTransitionRoute {
     pub const fn uses_segmented_settings_motion(self) -> bool {
@@ -117,18 +115,6 @@ pub fn settings_page_transition(
             NavigationTransitionDirection::Reverse
         },
     ))
-}
-
-const fn segmented_destination_content_x(
-    route: NavigationTransitionRoute,
-    direction: NavigationTransitionDirection,
-) -> u16 {
-    match (route, direction) {
-        (NavigationTransitionRoute::SettingsToAbout, NavigationTransitionDirection::Reverse) => {
-            HDMI_SETTINGS_CONTENT_X
-        }
-        _ => HDMI_ABOUT_CONTENT_X,
-    }
 }
 
 const fn settings_page_depth(screen: Screen) -> Option<u8> {
@@ -542,90 +528,60 @@ impl NavigationTransitionRuntime {
         }
     }
 
+    /// Start a transition. One path for every kind: the [`TransitionStart`] names
+    /// the raster space, clock policy, assets and route, and this applies them.
+    /// Returns whether it started; a disabled runtime or one already playing
+    /// starts nothing and touches nothing.
     pub fn begin(
         &mut self,
-        edge: NavigationTransitionEdge,
-        direction: NavigationTransitionDirection,
-        geometry: NavigationTransitionGeometry,
-        source: &[Rgb565Pixel],
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
-        if let Some(duration_us) = self.duration_override_us {
-            request.duration_us = duration_us;
-        }
-        let started = self.begin_request(request, source, now_us, true)?;
-        if started {
-            self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
-        }
-        Ok(started)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_physical(
-        &mut self,
-        edge: NavigationTransitionEdge,
-        direction: NavigationTransitionDirection,
-        geometry: NavigationTransitionGeometry,
-        width: usize,
-        height: usize,
-        source: &[Rgb565Pixel],
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if self.enabled && !self.is_active() {
-            self.buffers.resize(width, height);
-        }
-        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
-        if let Some(duration_us) = self.duration_override_us {
-            request.duration_us = duration_us;
-        }
-        let started = match self.begin_request(request, source, now_us, true) {
-            Ok(started) => started,
-            Err(failure) => {
-                self.buffers.resize(self.logical_width, self.logical_height);
-                return Err(failure);
-            }
-        };
-        if started {
-            self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
-            self.settings_physical_space = true;
-        } else if self.enabled && !self.is_active() {
-            self.buffers.resize(self.logical_width, self.logical_height);
-        }
-        Ok(started)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_device_card(
-        &mut self,
-        edge: NavigationTransitionEdge,
-        direction: NavigationTransitionDirection,
-        geometry: NavigationTransitionGeometry,
-        spec: mister_magik_framebuffer_scenes::device_card::DeviceCardReveal,
-        source: &[Rgb565Pixel],
-        device: &'static [SharedRgb565Pixel],
-        backdrop: &[Rgb565Pixel],
-        now_us: u64,
+        start: TransitionStart<'_>,
     ) -> Result<bool, NavigationTransitionFailure> {
         if !self.enabled || self.is_active() {
             return Ok(false);
         }
-        self.buffers.set_reveal_image(None);
-        self.buffers.set_device_asset(device);
-        self.buffers
-            .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
-        let mut request = NavigationTransitionRequest::device_card(direction, edge, geometry, spec);
+        let TransitionStart {
+            mut request,
+            route,
+            space,
+            start: policy,
+            assets,
+            source,
+            now_us,
+        } = start;
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
         }
-        // Start the reveal clock only after the composed destination and its
-        // artwork are ready, as with the Settings card capture contract.
-        let started = self.begin_request(request, source, now_us, false)?;
-        if started {
-            self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
+        if let RasterSpace::Physical { width, height } = space {
+            self.buffers.resize(width, height);
         }
-        Ok(started)
+        match assets {
+            TransitionAssets::None => {}
+            TransitionAssets::DeviceCard { asset, backdrop } => {
+                self.buffers.set_reveal_image(None);
+                self.buffers.set_device_asset(asset);
+                self.buffers
+                    .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
+            }
+            TransitionAssets::SystemPanel { backdrop } => {
+                self.buffers
+                    .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
+            }
+            TransitionAssets::SettingsCog(cog) => self.buffers.set_settings_cog_asset(cog),
+        }
+        let physical = matches!(space, RasterSpace::Physical { .. });
+        if let Err(failure) =
+            self.begin_request(request, source, now_us, policy == StartPolicy::Immediate)
+        {
+            if physical {
+                self.buffers.resize(self.logical_width, self.logical_height);
+            }
+            return Err(failure);
+        }
+        self.route = Some(route);
+        self.settings_physical_space = physical;
+        Ok(true)
     }
+
     pub fn update_device_reveal_image(
         &mut self,
         image: Option<mister_magik_framebuffer_scenes::device_card::RevealImage>,
@@ -642,169 +598,24 @@ impl NavigationTransitionRuntime {
         }
     }
 
-    pub fn begin_system_panel(
-        &mut self,
-        crt: bool,
-        to_list: bool,
-        source: &[Rgb565Pixel],
-        backdrop: &[Rgb565Pixel],
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if !self.enabled || self.is_active() {
-            return Ok(false);
-        }
-        self.buffers
-            .capture_panel_backdrop(slint_rgb565_as_shared(backdrop));
-        let started = self.begin_request(
-            NavigationTransitionRequest::system_panel(crt, to_list),
-            source,
-            now_us,
-            true,
-        )?;
-        if started {
-            self.route = Some(NavigationTransitionRoute::SystemPanel);
-        }
-        Ok(started)
-    }
-
-    pub fn begin_settings_page(
-        &mut self,
-        route: NavigationTransitionRoute,
-        direction: NavigationTransitionDirection,
-        source: &[Rgb565Pixel],
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if !route.is_settings_page() {
-            return Ok(false);
-        }
-        let request = if route.uses_segmented_settings_motion() {
-            NavigationTransitionRequest::settings_page_segmented_with_content_x(
-                direction,
-                segmented_destination_content_x(route, direction),
-            )
-        } else {
-            NavigationTransitionRequest::settings_page(direction)
-        };
-        let started = self.begin_settings_page_request(request, source, now_us)?;
-        if started {
-            self.route = Some(route);
-        }
-        Ok(started)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_settings_page_physical(
-        &mut self,
-        route: NavigationTransitionRoute,
-        direction: NavigationTransitionDirection,
-        axis: SettingsPageTransitionAxis,
-        width: usize,
-        height: usize,
-        source: &[Rgb565Pixel],
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if !route.is_settings_page() {
-            return Ok(false);
-        }
-        let mut request = if route.uses_segmented_settings_motion() {
-            NavigationTransitionRequest::settings_page_segmented_on_axis_with_content_x(
-                direction,
-                axis,
-                segmented_destination_content_x(route, direction),
-            )
-        } else {
-            NavigationTransitionRequest::settings_page_on_axis(direction, axis)
-        };
-        if mister_magik_framebuffer_scenes::settings_cog::supports_dimensions(width, height)
-            && (width, height) != (960, 540)
-        {
-            request.duration_us = 520_000;
-        }
-        self.begin_settings_physical(route, request, width, height, source, now_us)
-    }
-
-    /// Home <-> Settings card zoom in physical HDMI or native CRT space.
-    pub fn begin_settings_cog_physical(
-        &mut self,
-        direction: NavigationTransitionDirection,
-        width: usize,
-        height: usize,
-        source: &[Rgb565Pixel],
-        cog: &'static mister_magik_framebuffer_scenes::settings_cog::CogArtwork,
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        self.buffers.set_settings_cog_asset(cog);
-        let mut request = NavigationTransitionRequest::settings_cog(direction);
-        if mister_magik_framebuffer_scenes::settings_cog::supports_dimensions(width, height)
-            && (width, height) != (960, 540)
-        {
-            request.duration_us = 800_000;
-        }
-        let route = NavigationTransitionRoute::HomeToSettings;
-        self.begin_settings_physical(route, request, width, height, source, now_us)
-    }
-
-    fn begin_settings_physical(
-        &mut self,
-        route: NavigationTransitionRoute,
-        request: NavigationTransitionRequest,
-        width: usize,
-        height: usize,
-        source: &[Rgb565Pixel],
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if self.enabled && !self.is_active() {
-            self.buffers.resize(width, height);
-        }
-        let started = match self.begin_settings_page_request(request, source, now_us) {
-            Ok(started) => started,
-            Err(failure) => {
-                self.buffers.resize(self.logical_width, self.logical_height);
-                return Err(failure);
-            }
-        };
-        if started {
-            self.route = Some(route);
-            self.settings_physical_space = true;
-        } else if self.enabled && !self.is_active() {
-            self.buffers.resize(self.logical_width, self.logical_height);
-        }
-        Ok(started)
-    }
-
-    fn begin_settings_page_request(
-        &mut self,
-        mut request: NavigationTransitionRequest,
-        source: &[Rgb565Pixel],
-        now_us: u64,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if let Some(duration_us) = self.duration_override_us {
-            request.duration_us = duration_us;
-        }
-        self.begin_request(request, source, now_us, false)
-    }
-
+    /// Capture the source and either start the clock or defer it. Only called
+    /// from `begin`, which has already refused a disabled or playing runtime.
     fn begin_request(
         &mut self,
         request: NavigationTransitionRequest,
         source: &[Rgb565Pixel],
         now_us: u64,
         start_immediately: bool,
-    ) -> Result<bool, NavigationTransitionFailure> {
-        if !self.enabled || self.is_active() {
-            return Ok(false);
-        }
+    ) -> Result<(), NavigationTransitionFailure> {
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers
             .capture_source(slint_rgb565_as_shared(source))?;
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         if start_immediately {
-            if !self.controller.begin(request, now_us)
-                || !self.controller.captured(now_us, capture_us)
-            {
-                return Ok(false);
-            }
+            let began = self.controller.begin(request, now_us);
+            let captured = self.controller.captured(now_us, capture_us);
+            debug_assert!(began && captured, "an idle controller always begins");
         } else {
             self.deferred_request = Some(request);
             self.deferred_capture_us = capture_us;
@@ -813,7 +624,7 @@ impl NavigationTransitionRuntime {
         self.pending_prepare_started = Some(Instant::now());
         self.pending_status_quiesce_us = 0;
         self.pending_status_quiesce_timeout = false;
-        Ok(true)
+        Ok(())
     }
 
     pub fn capture_destination(
@@ -1223,7 +1034,7 @@ mod tests {
         };
         assert!(
             runtime
-                .begin_device_card(
+                .begin(TransitionStart::device_card(
                     NavigationTransitionEdge::ConsolesToSystem,
                     NavigationTransitionDirection::Forward,
                     geometry,
@@ -1232,7 +1043,7 @@ mod tests {
                     &[],
                     &[],
                     0
-                )
+                ))
                 .unwrap()
         );
         assert_eq!(
@@ -1288,28 +1099,30 @@ mod tests {
     }
 
     #[test]
-    fn reverse_about_to_settings_marks_only_the_settings_list_as_moving_content() {
+    fn a_failed_physical_start_restores_the_logical_raster_and_leaves_nothing_playing() {
+        use super::super::transition_spec::TransitionStart;
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let wrong_size = vec![Rgb565Pixel(0); 5];
+        let result = runtime.begin(TransitionStart::super_scaler_physical(
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionGeometry::default(),
+            12,
+            16,
+            &wrong_size,
+            0,
+        ));
         assert_eq!(
-            segmented_destination_content_x(
-                NavigationTransitionRoute::SettingsToAbout,
-                NavigationTransitionDirection::Reverse,
-            ),
-            HDMI_SETTINGS_CONTENT_X
+            result,
+            Err(NavigationTransitionFailure::SnapshotSizeMismatch)
         );
         assert_eq!(
-            segmented_destination_content_x(
-                NavigationTransitionRoute::SettingsToAbout,
-                NavigationTransitionDirection::Forward,
-            ),
-            HDMI_ABOUT_CONTENT_X
+            (runtime.buffers.width(), runtime.buffers.height()),
+            (16, 12)
         );
-        assert_eq!(
-            segmented_destination_content_x(
-                NavigationTransitionRoute::AboutToLicenses,
-                NavigationTransitionDirection::Reverse,
-            ),
-            HDMI_ABOUT_CONTENT_X
-        );
+        assert!(!runtime.is_active());
+        assert!(!runtime.settings_physical_space());
+        assert_eq!(runtime.route(), None);
     }
 
     #[test]
@@ -1779,13 +1592,13 @@ mod tests {
             },
             ..NavigationTransitionGeometry::default()
         };
-        poc.begin(
+        poc.begin(TransitionStart::super_scaler(
             NavigationTransitionEdge::HomeToConsoles,
             NavigationTransitionDirection::Forward,
             geometry,
             &source,
             0,
-        )
+        ))
         .unwrap();
         assert_eq!(poc.render().unwrap(), source);
         poc.capture_destination(&destination, 20_000).unwrap();
@@ -1794,13 +1607,13 @@ mod tests {
 
         let mut reverse = NavigationTransitionRuntime::new(16, 12, true);
         reverse
-            .begin(
+            .begin(TransitionStart::super_scaler(
                 NavigationTransitionEdge::HomeToConsoles,
                 NavigationTransitionDirection::Reverse,
                 geometry,
                 &destination,
                 0,
-            )
+            ))
             .unwrap();
         assert_eq!(reverse.render().unwrap(), destination);
         reverse.capture_destination(&source, 20_000).unwrap();
@@ -1809,13 +1622,13 @@ mod tests {
 
         let mut cancelled = NavigationTransitionRuntime::new(16, 12, true);
         cancelled
-            .begin(
+            .begin(TransitionStart::super_scaler(
                 NavigationTransitionEdge::HomeToConsoles,
                 NavigationTransitionDirection::Forward,
                 geometry,
                 &source,
                 0,
-            )
+            ))
             .unwrap();
         cancelled.tick(100_000);
         assert!(cancelled.request_reverse(100_000));
@@ -1834,7 +1647,13 @@ mod tests {
             let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
             assert!(
                 runtime
-                    .begin_system_panel(false, to_list, &source, &[], 0)
+                    .begin(TransitionStart::system_panel(
+                        false,
+                        to_list,
+                        &source,
+                        &[],
+                        0
+                    ))
                     .unwrap()
             );
             assert_eq!(
@@ -1866,13 +1685,13 @@ mod tests {
             },
             ..NavigationTransitionGeometry::default()
         };
-        poc.begin(
+        poc.begin(TransitionStart::super_scaler(
             NavigationTransitionEdge::HomeToConsoles,
             NavigationTransitionDirection::Forward,
             geometry,
             &source,
             10_000,
-        )
+        ))
         .unwrap();
 
         let expanding = poc.tick(100_000);
@@ -1895,13 +1714,13 @@ mod tests {
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
         runtime
-            .begin(
+            .begin(TransitionStart::super_scaler(
                 NavigationTransitionEdge::HomeToConsoles,
                 NavigationTransitionDirection::Forward,
                 NavigationTransitionGeometry::default(),
                 &source,
                 0,
-            )
+            ))
             .unwrap();
         let request = runtime.request().expect("active request");
         let cover_us =
@@ -1931,7 +1750,7 @@ mod tests {
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
         runtime
-            .begin_settings_page_physical(
+            .begin(TransitionStart::settings_page_physical(
                 NavigationTransitionRoute::HomeToSettings,
                 NavigationTransitionDirection::Forward,
                 SettingsPageTransitionAxis::Vertical,
@@ -1939,7 +1758,7 @@ mod tests {
                 16,
                 &source,
                 0,
-            )
+            ))
             .unwrap();
         assert!(runtime.settings_physical_space());
         assert_eq!(
@@ -1965,7 +1784,7 @@ mod tests {
         let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
         let frame = vec![Rgb565Pixel(0); 640 * 240];
         runtime
-            .begin_settings_page_physical(
+            .begin(TransitionStart::settings_page_physical(
                 NavigationTransitionRoute::SettingsToAbout,
                 NavigationTransitionDirection::Forward,
                 SettingsPageTransitionAxis::Horizontal,
@@ -1973,7 +1792,7 @@ mod tests {
                 240,
                 &frame,
                 0,
-            )
+            ))
             .unwrap();
         assert_eq!(runtime.request().unwrap().duration_us, 520_000);
 
@@ -1986,14 +1805,14 @@ mod tests {
                 .unwrap(),
             ));
         runtime
-            .begin_settings_cog_physical(
+            .begin(TransitionStart::settings_cog(
                 NavigationTransitionDirection::Forward,
                 640,
                 240,
                 &frame,
                 cog,
                 0,
-            )
+            ))
             .unwrap();
         assert_eq!(runtime.request().unwrap().duration_us, 800_000);
     }
@@ -2004,7 +1823,7 @@ mod tests {
         let source = vec![Rgb565Pixel(0x1111); 12 * 16];
         let destination = vec![Rgb565Pixel(0x2222); 12 * 16];
         runtime
-            .begin_physical(
+            .begin(TransitionStart::super_scaler_physical(
                 NavigationTransitionEdge::HomeToConsoles,
                 NavigationTransitionDirection::Forward,
                 NavigationTransitionGeometry::default(),
@@ -2012,7 +1831,7 @@ mod tests {
                 16,
                 &source,
                 0,
-            )
+            ))
             .unwrap();
         assert!(runtime.settings_physical_space());
         assert_eq!(
@@ -2043,14 +1862,14 @@ mod tests {
         for (requested_at, ready_at) in [(0, 1_500_000), (4_000_000, 4_010_000)] {
             assert!(
                 runtime
-                    .begin_settings_cog_physical(
+                    .begin(TransitionStart::settings_cog(
                         NavigationTransitionDirection::Forward,
                         960,
                         540,
                         &source,
                         cog,
                         requested_at
-                    )
+                    ))
                     .unwrap()
             );
             assert_eq!(
@@ -2079,12 +1898,12 @@ mod tests {
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
         runtime
-            .begin_settings_page(
+            .begin(TransitionStart::settings_page(
                 NavigationTransitionRoute::HomeToSettings,
                 NavigationTransitionDirection::Forward,
                 &source,
                 0,
-            )
+            ))
             .unwrap();
 
         assert_eq!(
@@ -2122,13 +1941,13 @@ mod tests {
                 for runtime in [&mut cached, &mut legacy] {
                     assert!(
                         runtime
-                            .begin(
+                            .begin(TransitionStart::super_scaler(
                                 edge,
                                 direction,
                                 NavigationTransitionGeometry::default(),
                                 &source,
                                 0
-                            )
+                            ))
                             .unwrap()
                     );
                     assert!(runtime.request().unwrap().is_super_scaler());
@@ -2177,7 +1996,7 @@ mod tests {
         let destination = vec![Rgb565Pixel(0x2222); width * height];
         let mut runtime = NavigationTransitionRuntime::new(width, height, true);
         runtime
-            .begin_settings_page_physical(
+            .begin(TransitionStart::settings_page_physical(
                 NavigationTransitionRoute::HomeToSettings,
                 NavigationTransitionDirection::Forward,
                 SettingsPageTransitionAxis::Vertical,
@@ -2185,7 +2004,7 @@ mod tests {
                 height,
                 &source,
                 0,
-            )
+            ))
             .unwrap();
         runtime.capture_destination(&destination, 1).unwrap();
         let mut output = vec![Rgb565Pixel(0); width * height];
@@ -2236,7 +2055,7 @@ mod tests {
         let source = vec![Rgb565Pixel(0x1111); 8 * 6];
         let destination = vec![Rgb565Pixel(0x2222); 8 * 6];
         runtime
-            .begin_settings_page_physical(
+            .begin(TransitionStart::settings_page_physical(
                 NavigationTransitionRoute::HomeToSettings,
                 NavigationTransitionDirection::Forward,
                 SettingsPageTransitionAxis::Vertical,
@@ -2244,7 +2063,7 @@ mod tests {
                 6,
                 &source,
                 0,
-            )
+            ))
             .unwrap();
         runtime.capture_destination(&destination, 1).unwrap();
         runtime.tick(160_001);
@@ -2273,7 +2092,9 @@ mod tests {
         ] {
             let mut runtime = NavigationTransitionRuntime::new(width, height, true);
             runtime
-                .begin_settings_cog_physical(direction, width, height, &source, cog, 0)
+                .begin(TransitionStart::settings_cog(
+                    direction, width, height, &source, cog, 0,
+                ))
                 .unwrap();
             // Deferred preparation must preserve the exact source as well.
             let mut output = vec![Rgb565Pixel(0); width * height];
@@ -2317,14 +2138,14 @@ mod tests {
 
         assert!(
             runtime
-                .begin_settings_cog_physical(
+                .begin(TransitionStart::settings_cog(
                     NavigationTransitionDirection::Reverse,
                     8,
                     6,
                     &live_settings,
                     cog,
                     0,
-                )
+                ))
                 .unwrap()
         );
         runtime.capture_destination(&launcher, 1).unwrap();

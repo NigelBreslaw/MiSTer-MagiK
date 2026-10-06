@@ -17,6 +17,7 @@ use super::navigation_transition::{
     NavigationTransitionPhase, NavigationTransitionRuntime,
 };
 use super::transition_plan::{NavigationDisplay, TileView, derive_navigation_geometry};
+use super::transition_spec::TransitionStart;
 use crate::launcher_presentation::{device_reveal_spec, system_device_rgb565};
 use slint::platform::software_renderer::Rgb565Pixel;
 
@@ -63,7 +64,7 @@ fn begin(
     );
     match edge {
         NavigationTransitionEdge::HomeToArcade | NavigationTransitionEdge::ConsolesToSystem => {
-            runtime.begin_device_card(
+            runtime.begin(TransitionStart::device_card(
                 edge,
                 direction,
                 geometry,
@@ -73,9 +74,11 @@ fn begin(
                 // The reveal composites over a frame-sized backdrop capture.
                 source,
                 now_us,
-            )
+            ))
         }
-        _ => runtime.begin(edge, direction, geometry, source, now_us),
+        _ => runtime.begin(TransitionStart::super_scaler(
+            edge, direction, geometry, source, now_us,
+        )),
     }
     .unwrap()
 }

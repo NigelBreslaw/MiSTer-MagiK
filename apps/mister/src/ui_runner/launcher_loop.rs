@@ -18,7 +18,9 @@ use super::launcher_pacing::{
 };
 use super::launcher_screensaver::{ScreensaverRenderTrace, ScreensaverStartupTimeline};
 use super::launcher_settings_pipeline::{SettingsCogSession, SettingsFrameRequest};
-use super::launcher_transition_start::{TransitionInputs, begin_navigation_transition};
+use super::launcher_transition_start::{
+    SettingsInputs, TransitionInputs, begin_navigation_transition, begin_settings_transition,
+};
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -26,7 +28,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
-use crate::launcher_presentation::{SelectionFeedbackTarget, settings_cog_artwork};
+use crate::launcher_presentation::SelectionFeedbackTarget;
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
@@ -1019,22 +1021,6 @@ fn configure_arcade_list_renderer_geometry(
         nav.favourite_launch_refs_revision(),
         nav.favourite_launch_refs(),
     );
-}
-
-fn settings_cog_transition_eligible(
-    route: NavigationTransitionRoute,
-    card_home_settled: bool,
-    render_width: usize,
-    render_height: usize,
-    reduce_motion: bool,
-) -> bool {
-    route == NavigationTransitionRoute::HomeToSettings
-        && card_home_settled
-        && mister_magik_framebuffer_scenes::settings_cog::supports_dimensions(
-            render_width,
-            render_height,
-        )
-        && !reduce_motion
 }
 
 fn navigation_home_endpoint_is_live(
@@ -8220,72 +8206,20 @@ pub(super) fn run_launcher_loop(
                                 && let Some((route, direction)) =
                                     settings_page_transition(source_screen, nav.screen)
                             {
-                                let axis = match nav.settings.screen_orientation {
-                                    ScreenOrientation::Normal => {
-                                        SettingsPageTransitionAxis::Horizontal
-                                    }
-                                    ScreenOrientation::MonitorCounterclockwise => {
-                                        SettingsPageTransitionAxis::Vertical
-                                    }
-                                    ScreenOrientation::MonitorClockwise => {
-                                        SettingsPageTransitionAxis::VerticalReversed
-                                    }
-                                };
-                                // The card zoom runs in the physical raster for
-                                // HDMI landscape and native CRT modes in either
-                                // orientation. Reduce motion keeps the slide.
-                                let card_home_settled = launcher_card_home
-                                    .as_ref()
-                                    .is_some_and(|session| !session.is_animating());
-                                let card_zoom = settings_cog_transition_eligible(
-                                    route,
-                                    card_home_settled,
-                                    ui.render_w(),
-                                    ui.render_h(),
-                                    nav.settings.reduce_motion,
-                                );
-                                let started = if card_zoom {
-                                    let cog = settings_cog_artwork();
-                                    let source = match direction {
-                                        NavigationTransitionDirection::Forward => {
-                                            // Card motion presents directly into scanout slots,
-                                            // so the generic cache may still contain a neighbour.
-                                            // Render the settled Settings card as the exact source.
-                                            card_pixels_as_slint(
-                                                launcher_card_home
-                                                    .as_mut()
-                                                    .expect(
-                                                        "card zoom eligibility requires a card session",
-                                                    )
-                                                    .render(),
-                                            )
-                                        }
-                                        NavigationTransitionDirection::Reverse => {
-                                            // Reverse starts from the live Settings page. Home is
-                                            // rendered later and captured as the destination.
-                                            target.cached_565()
-                                        }
-                                    };
-                                    navigation_transition.begin_settings_cog_physical(
-                                        direction,
-                                        ui.render_w(),
-                                        ui.render_h(),
-                                        source,
-                                        cog,
-                                        animation_us,
-                                    )
-                                } else {
-                                    navigation_transition.begin_settings_page_physical(
+                                let started = begin_settings_transition(
+                                    &mut navigation_transition,
+                                    launcher_card_home.as_mut(),
+                                    &SettingsInputs {
                                         route,
                                         direction,
-                                        axis,
-                                        ui.render_w(),
-                                        ui.render_h(),
-                                        target.cached_565(),
-                                        animation_us,
-                                    )
-                                };
-                                let started = started.unwrap_or(false);
+                                        orientation: nav.settings.screen_orientation,
+                                        render_w: ui.render_w(),
+                                        render_h: ui.render_h(),
+                                        reduce_motion: nav.settings.reduce_motion,
+                                        composed: target.cached_565(),
+                                        now_us: animation_us,
+                                    },
+                                );
                                 if started
                                     && begin_navigation_full_screen_transition(
                                         &mut full_screen_transition,
@@ -15666,38 +15600,6 @@ mod tests {
         assert!(retained_redraw);
         assert!(!(retained_redraw && !live_endpoint));
         assert_eq!(transition.state(), FullScreenTransitionState::Live);
-    }
-
-    #[test]
-    fn settings_cog_zoom_requires_a_settled_native_card() {
-        assert!(settings_cog_transition_eligible(
-            NavigationTransitionRoute::HomeToSettings,
-            true,
-            960,
-            540,
-            false,
-        ));
-        assert!(!settings_cog_transition_eligible(
-            NavigationTransitionRoute::HomeToSettings,
-            false,
-            960,
-            540,
-            false,
-        ));
-        assert!(settings_cog_transition_eligible(
-            NavigationTransitionRoute::HomeToSettings,
-            true,
-            240,
-            640,
-            false,
-        ));
-        assert!(!settings_cog_transition_eligible(
-            NavigationTransitionRoute::HomeToSettings,
-            true,
-            800,
-            600,
-            false,
-        ));
     }
 
     fn eligible_card_direct_input() -> CardDirectEligibility {
