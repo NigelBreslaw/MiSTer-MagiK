@@ -549,6 +549,9 @@ fn composition_invariant(
 }
 
 #[cfg(test)]
+mod scenarios;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use mister_magik_framebuffer_scenes::{

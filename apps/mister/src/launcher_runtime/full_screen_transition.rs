@@ -70,7 +70,8 @@ impl FullScreenTransitionStateChart {
         &mut self,
         owner: FullScreenTransitionOwner,
     ) -> Result<FullScreenTransitionGeneration, FullScreenTransitionError> {
-        if self.active.is_some() || self.state != FullScreenTransitionState::Live {
+        // `active` is set exactly while the state is not `Live`.
+        if self.state != FullScreenTransitionState::Live {
             return Err(FullScreenTransitionError::OwnerActive);
         }
         let generation = FullScreenTransitionGeneration(self.next_generation);
@@ -249,6 +250,9 @@ impl FullScreenTransitionStateChart {
             .ok_or(FullScreenTransitionError::StaleGeneration)
     }
 }
+
+#[cfg(test)]
+mod scenarios;
 
 #[cfg(test)]
 mod tests {
