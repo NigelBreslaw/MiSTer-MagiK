@@ -20,20 +20,7 @@ use super::*;
 const WALKS: usize = 300;
 const STEPS: usize = 80;
 
-struct Rng(u64);
-
-impl Rng {
-    fn below(&mut self, bound: usize) -> usize {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        (self.0 % bound as u64) as usize
-    }
-
-    fn chance(&mut self, percent: usize) -> bool {
-        self.below(100) < percent
-    }
-}
+use super::super::walk_rng::WalkRng as Rng;
 
 /// The documented precedence, written independently of `requested_state`.
 fn expected_state(input: &UiCompositionInput) -> UiCompositionState {
@@ -195,7 +182,7 @@ fn random_walks_hold_the_composition_ownership_contract() {
             }
 
             // A layer the presenter still owns that is no longer desired must be
-            // retired under a generation, and the carrier must be a complete frame.
+            // retired under a generation.
             let desired = Owned::from(decision.direct_layers_desired);
             if owned.exceeds(desired) {
                 retirements += 1;
@@ -211,6 +198,23 @@ fn random_walks_hold_the_composition_ownership_contract() {
                     "{at}: pending retirement clears"
                 );
             }
+            // The frame that carries a retirement is the one the state owns.
+            assert_eq!(
+                decision.retirement_carrier,
+                match decision.state {
+                    UiCompositionState::NavigationTransition
+                    | UiCompositionState::NavigationDestination => DirectLayerCarrier::Navigation,
+                    UiCompositionState::ModalFullSlint | UiCompositionState::ModalOverArcade => {
+                        DirectLayerCarrier::Modal
+                    }
+                    UiCompositionState::Screensaver => DirectLayerCarrier::Screensaver,
+                    UiCompositionState::Recovering => DirectLayerCarrier::Recovery,
+                    UiCompositionState::FullSlint | UiCompositionState::MixedArcade => {
+                        DirectLayerCarrier::LiveSlint
+                    }
+                },
+                "{at}"
+            );
 
             // The presenter acknowledges the frame. A stale generation is refused;
             // the matching one retires the layers and transfers ownership.

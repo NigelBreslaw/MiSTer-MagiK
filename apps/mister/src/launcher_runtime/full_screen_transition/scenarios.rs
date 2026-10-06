@@ -46,16 +46,7 @@ impl Model {
     }
 }
 
-struct Rng(u64);
-
-impl Rng {
-    fn below(&mut self, bound: usize) -> usize {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        (self.0 % bound as u64) as usize
-    }
-}
+use super::super::walk_rng::WalkRng as Rng;
 
 const OWNERS: [FullScreenTransitionOwner; 4] = [
     FullScreenTransitionOwner::Navigation,
