@@ -104,6 +104,17 @@ impl FullScreenTransitionStateChart {
         }
     }
 
+    /// The active transition's generation when `owner` holds it, so a caller needs
+    /// no copy of the generation that could outlive the transition.
+    pub fn generation_for(
+        &self,
+        owner: FullScreenTransitionOwner,
+    ) -> Option<FullScreenTransitionGeneration> {
+        self.active
+            .filter(|active| active.owner == owner)
+            .map(|active| active.generation)
+    }
+
     pub const fn capture_issued(&self) -> bool {
         match self.active {
             Some(active) => active.capture_issued,
@@ -274,6 +285,35 @@ mod tests {
         assert!(chart.policy().force_live_raster);
         assert!(chart.live_frame_presented(generation).unwrap());
         assert_eq!(chart.state(), FullScreenTransitionState::Live);
+    }
+
+    #[test]
+    fn the_generation_is_visible_only_to_the_owner_holding_it() {
+        let mut chart = FullScreenTransitionStateChart::default();
+        assert_eq!(
+            chart.generation_for(FullScreenTransitionOwner::Navigation),
+            None
+        );
+        let generation = chart.begin(FullScreenTransitionOwner::Navigation).unwrap();
+        assert_eq!(
+            chart.generation_for(FullScreenTransitionOwner::Navigation),
+            Some(generation)
+        );
+        assert_eq!(
+            chart.generation_for(FullScreenTransitionOwner::Orientation),
+            None
+        );
+        chart.release(generation).unwrap();
+        assert_eq!(
+            chart.generation_for(FullScreenTransitionOwner::Navigation),
+            Some(generation),
+            "a releasing transition still owns its generation until the live frame lands"
+        );
+        chart.live_frame_presented(generation).unwrap();
+        assert_eq!(
+            chart.generation_for(FullScreenTransitionOwner::Navigation),
+            None
+        );
     }
 
     #[test]
