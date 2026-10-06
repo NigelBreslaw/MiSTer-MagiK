@@ -302,6 +302,15 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 - The `StartupReveal` and `Screensaver` owners are deleted: nothing started them. Phase 3 adds an owner
   when its transition moves onto the chart.
 
+**PR 9 (in progress): orientation and navigation start and end through the same chart helpers.**
+
+- Orientation was already a chart owner (begin, controlled capture, snapshot lock, release, live frame).
+  What was repeated was the pairing of the effect's own call with the chart's: cancel plus release at
+  three places, take-completion plus release at two, and a second copy of the begin-and-log helper.
+- `begin_full_screen_transition(chart, owner)` serves both owners; `abort_orientation_transition` and
+  `end_orientation_transition` hold the two pairings. Host tests check each leaves the effect and the
+  chart in step.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

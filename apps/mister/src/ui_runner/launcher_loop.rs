@@ -1175,11 +1175,14 @@ fn set_launcher_present_mode_label(app: &slint_ui::launcher::Launcher, value: &s
         .set_present_mode_label(value);
 }
 
-fn begin_navigation_full_screen_transition(chart: &mut FullScreenTransitionStateChart) -> bool {
-    match chart.begin(FullScreenTransitionOwner::Navigation) {
+fn begin_full_screen_transition(
+    chart: &mut FullScreenTransitionStateChart,
+    owner: FullScreenTransitionOwner,
+) -> bool {
+    match chart.begin(owner) {
         Ok(_) => true,
         Err(error) => {
-            crate::ui_errln!("navigation full-screen transition begin rejected: {error:?}");
+            crate::ui_errln!("{owner:?} full-screen transition begin rejected: {error:?}");
             false
         }
     }
@@ -4995,8 +4998,10 @@ fn begin_orientation_transition(
     intent: OrientationTransitionIntent,
 ) -> bool {
     let begin_started = Instant::now();
-    if let Err(error) = full_screen_transition.begin(FullScreenTransitionOwner::Orientation) {
-        crate::ui_errln!("orientation full-screen transition begin rejected: {error:?}");
+    if !begin_full_screen_transition(
+        full_screen_transition,
+        FullScreenTransitionOwner::Orientation,
+    ) {
         return false;
     }
     let source_snapshot_started = Instant::now();
@@ -5022,14 +5027,30 @@ fn begin_orientation_transition(
     if animated {
         *orientation_transition_intent = Some(intent);
     } else {
-        let _ = orientation_transition.take_completion();
         *orientation_transition_intent = None;
-        release_full_screen_transition(
-            full_screen_transition,
-            FullScreenTransitionOwner::Orientation,
-        );
+        end_orientation_transition(orientation_transition, full_screen_transition);
     }
     animated
+}
+
+/// The orientation effect ended without an endpoint to confirm: drop its
+/// completion and let the chart force the live frame.
+fn end_orientation_transition(
+    orientation_transition: &mut OrientationTransitionRuntime,
+    chart: &mut FullScreenTransitionStateChart,
+) {
+    let _ = orientation_transition.take_completion();
+    release_full_screen_transition(chart, FullScreenTransitionOwner::Orientation);
+}
+
+/// The orientation effect cannot play (no capture, no snapshot lock): cancel it
+/// and let the chart force the live frame.
+fn abort_orientation_transition(
+    orientation_transition: &mut OrientationTransitionRuntime,
+    chart: &mut FullScreenTransitionStateChart,
+) {
+    orientation_transition.cancel();
+    release_full_screen_transition(chart, FullScreenTransitionOwner::Orientation);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -8203,8 +8224,9 @@ pub(super) fn run_launcher_loop(
                                     },
                                 );
                                 if started
-                                    && begin_navigation_full_screen_transition(
+                                    && begin_full_screen_transition(
                                         &mut full_screen_transition,
+                                        FullScreenTransitionOwner::Navigation,
                                     )
                                 {
                                     settings_navigation_benchmark.note_started(
@@ -8323,8 +8345,9 @@ pub(super) fn run_launcher_loop(
                                                 )
                                             });
                                         let transition_started = navigation_runtime_started
-                                            && begin_navigation_full_screen_transition(
+                                            && begin_full_screen_transition(
                                                 &mut full_screen_transition,
+                                                FullScreenTransitionOwner::Navigation,
                                             );
                                         if transition_started {
                                             let source_state = nav.navigation_transition_state();
@@ -10916,11 +10939,7 @@ pub(super) fn run_launcher_loop(
             && !full_screen_transition.policy().controlled_capture
             && !full_screen_controlled_capture_rendered
         {
-            orientation_transition.cancel();
-            release_full_screen_transition(
-                &mut full_screen_transition,
-                FullScreenTransitionOwner::Orientation,
-            );
+            abort_orientation_transition(&mut orientation_transition, &mut full_screen_transition);
         }
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
@@ -12038,17 +12057,15 @@ pub(super) fn run_launcher_loop(
                         && let Err(error) = full_screen_transition.capture_completed(generation)
                     {
                         crate::ui_errln!("orientation snapshot lock rejected: {error:?}");
-                        orientation_transition.cancel();
-                        release_full_screen_transition(
+                        abort_orientation_transition(
+                            &mut orientation_transition,
                             &mut full_screen_transition,
-                            FullScreenTransitionOwner::Orientation,
                         );
                     }
                 } else {
-                    orientation_transition.cancel();
-                    release_full_screen_transition(
+                    abort_orientation_transition(
+                        &mut orientation_transition,
                         &mut full_screen_transition,
-                        FullScreenTransitionOwner::Orientation,
                     );
                 }
             }
@@ -12078,10 +12095,9 @@ pub(super) fn run_launcher_loop(
                     damage_build_started.elapsed().as_micros();
                 custom_draw_trace.orientation_damage_rects_after = cached_damage.len() as u32;
                 if done {
-                    let _ = orientation_transition.take_completion();
-                    release_full_screen_transition(
+                    end_orientation_transition(
+                        &mut orientation_transition,
                         &mut full_screen_transition,
-                        FullScreenTransitionOwner::Orientation,
                     );
                     match orientation_transition_intent.take() {
                         Some(OrientationTransitionIntent::Confirm) => {
@@ -18670,6 +18686,64 @@ mod tests {
             transition.owner(),
             NavigationTransitionPhase::Capture,
             true,
+        ));
+    }
+
+    fn started_orientation_transition()
+    -> (OrientationTransitionRuntime, FullScreenTransitionStateChart) {
+        let mut chart = FullScreenTransitionStateChart::default();
+        assert!(begin_full_screen_transition(
+            &mut chart,
+            FullScreenTransitionOwner::Orientation
+        ));
+        let mut runtime = OrientationTransitionRuntime::new(960, 540);
+        let frame = vec![Rgb565Pixel(0x1111); 960 * 540];
+        assert!(runtime.start(
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise,
+            &frame,
+            Instant::now(),
+            false,
+        ));
+        (runtime, chart)
+    }
+
+    #[test]
+    pub(super) fn aborting_an_orientation_transition_stops_the_effect_and_releases_the_chart() {
+        let (mut runtime, mut chart) = started_orientation_transition();
+        assert!(runtime.is_active());
+        abort_orientation_transition(&mut runtime, &mut chart);
+        assert!(!runtime.is_active());
+        assert_eq!(chart.state(), FullScreenTransitionState::Releasing);
+        assert_eq!(chart.owner(), Some(FullScreenTransitionOwner::Orientation));
+    }
+
+    #[test]
+    pub(super) fn ending_an_orientation_transition_releases_the_chart() {
+        let (mut runtime, mut chart) = started_orientation_transition();
+        end_orientation_transition(&mut runtime, &mut chart);
+        assert_eq!(chart.state(), FullScreenTransitionState::Releasing);
+    }
+
+    #[test]
+    pub(super) fn a_second_owner_cannot_begin_until_the_first_is_confirmed_live() {
+        let (mut runtime, mut chart) = started_orientation_transition();
+        assert!(!begin_full_screen_transition(
+            &mut chart,
+            FullScreenTransitionOwner::Navigation
+        ));
+        abort_orientation_transition(&mut runtime, &mut chart);
+        assert!(!begin_full_screen_transition(
+            &mut chart,
+            FullScreenTransitionOwner::Navigation
+        ));
+        let generation = chart
+            .generation_for(FullScreenTransitionOwner::Orientation)
+            .unwrap();
+        chart.live_frame_presented(generation).unwrap();
+        assert!(begin_full_screen_transition(
+            &mut chart,
+            FullScreenTransitionOwner::Navigation
         ));
     }
 
