@@ -162,7 +162,9 @@ mod tests {
                 "hdmi-2048x1536p60",
                 "hdmi-2560x1440p60",
                 "crt-240p60",
+                "crt-480p60",
                 "crt-288p50",
+                "crt-576p50",
             ]
         );
         assert_eq!(
@@ -172,7 +174,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("crt-240p60", "CRT 240p 60hz NTSC"),
+                ("crt-480p60", "CRT 480p 60hz NTSC"),
                 ("crt-288p50", "CRT 288p 50hz PAL"),
+                ("crt-576p50", "CRT 576p 50hz PAL"),
             ]
         );
         for (index, mode) in DISPLAY_RESOLUTIONS.iter().enumerate() {
@@ -196,29 +200,13 @@ mod tests {
             "[MiSTer]\nmain=MiSTer_MagiK\n[Menu]\nvideo_mode=8 ; keep\nfoo=bar\n",
         )
         .unwrap();
-        persist_to(&path, "crt-288p50").unwrap();
+        persist_to(&path, "crt-576p50").unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("video_mode=8 ; keep"));
         assert!(text.contains("direct_video=1"));
         assert!(text.contains("menu_pal=1"));
-        assert!(text.contains("forced_scandoubler=0"));
+        assert!(text.contains("forced_scandoubler=1"));
         assert!(text.contains("foo=bar"));
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn retired_crt_modes_cannot_be_persisted() {
-        let path = std::env::temp_dir().join(format!(
-            "mister-magik-display-retired-{}.ini",
-            std::process::id()
-        ));
-        let original = "[MiSTer]\nmain=MiSTer_MagiK\n[Menu]\nvideo_mode=8\n";
-        fs::write(&path, original).unwrap();
-        for retired in ["crt-480p60", "crt-576p50"] {
-            let error = persist_to(&path, retired).unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{retired}");
-            assert_eq!(fs::read_to_string(&path).unwrap(), original, "{retired}");
-        }
         let _ = fs::remove_file(path);
     }
 

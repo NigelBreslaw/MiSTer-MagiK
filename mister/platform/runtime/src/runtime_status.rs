@@ -1831,7 +1831,7 @@ mod tests {
                 selected_game_title: "1942",
                 preview_asset_key: "1942",
                 catalog_generation: "generation-4",
-                output_route: "crt-288p50",
+                output_route: "crt-576p50",
                 crt_font_experiment: "baseline",
                 frames: 42,
                 idle: true,
@@ -1843,7 +1843,7 @@ mod tests {
                 presented_action_sequence: 4,
                 fps_estimate: 59.94,
                 framebuffer_width: 640,
-                framebuffer_height: 288,
+                framebuffer_height: 576,
                 rolling_fps: 60.0,
                 rolling_prepare_us: 1,
                 rolling_render_us: 2,
@@ -1853,7 +1853,7 @@ mod tests {
                 rolling_rows: 6,
                 last_frame_ms_ago: 7,
                 vsync_source: "vsync",
-                vsync_period_us: 19_830,
+                vsync_period_us: 19_829,
                 present_backend: "fpga-vblank-latch-hidden",
                 present_status: "ok",
                 latch_failure_state: "runtime-fault",
@@ -2224,10 +2224,10 @@ mod tests {
         assert_eq!(value["build"]["arch"], "arm");
         assert_eq!(value["scene"], "launcher");
         assert_eq!(value["screen"], "home");
-        assert_eq!(value["output_route"], "crt-288p50");
+        assert_eq!(value["output_route"], "crt-576p50");
         assert_eq!(value["framebuffer_width"], 640);
-        assert_eq!(value["framebuffer_height"], 288);
-        assert_eq!(value["vsync_period_us"], 19_830);
+        assert_eq!(value["framebuffer_height"], 576);
+        assert_eq!(value["vsync_period_us"], 19_829);
         assert_eq!(value["present_backend"], "fpga-vblank-latch-hidden");
         assert_eq!(value["latch_failure_state"], "runtime-fault");
         assert_eq!(value["latch_failure_reason"], "posted-sequence-unverified");

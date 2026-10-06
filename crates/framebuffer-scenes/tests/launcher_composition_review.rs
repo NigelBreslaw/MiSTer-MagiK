@@ -360,6 +360,10 @@ fn responsive_routes_keep_chrome_stable_and_animation_allocation_free() {
         LauncherScene::crt(288, 640),
         LauncherScene::crt(640, 480),
         LauncherScene::crt(480, 640),
+        LauncherScene::crt(640, 512),
+        LauncherScene::crt(512, 640),
+        LauncherScene::crt(640, 576),
+        LauncherScene::crt(576, 640),
     ] {
         let mut prepared = scene.prepare(data(0));
         let first = prepared.pixels().to_vec();

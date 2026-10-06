@@ -336,10 +336,6 @@ CRT, portrait and 5:4), and make it produce the same face type the HDMI path doe
 texels, `dithered = true`, `.cardtex` support at native sizes. Then HDMI landscape becomes one more
 `Layout` rather than a special case, and `responsive.is_none()` branches in `prepare` disappear.
 
-Scope note: the CRT 480p and 576p modes and the 5:4 raster are retired, so the CRT card sizes to prepare
-are 240p and 288p in both orientations (plus the legacy 640x480 CRT240 composition), alongside HDMI
-landscape and portrait. Storage is not a constraint for prepared artwork.
-
 Order: (1) dither parity for responsive faces, behind the existing benchmark and the layout review
 renders; (2) native-size `.cardtex`; (3) route HDMI landscape through `Layout`; (4) delete the
 fixed-canvas path. Each step is gated by `scripts/magik check motion` and card fixtures, since the

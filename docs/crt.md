@@ -18,18 +18,15 @@ Main enables the mux before spawning MagiK and restores it during handoff.
 The maintained Main fork supports two ways to activate the shared CRT path.
 `direct_video=2` uses MiSTer's known HDMI-DAC detection and falls back to
 `hdmi` when no supported DAC is found. Explicit native Analog IO VGA modes use
-`direct_video=1`; `menu_pal` then selects one of the two supported
-unscandoubled progressive Menu modes (`forced_scandoubler` must be 0):
+`direct_video=1`; `menu_pal` and `forced_scandoubler` then select one of the
+four built-in progressive Menu modes:
 
 | Resolved mode | RGB565 composition → scanout | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
 | --- | --- | ---: | --- | --- | --- |
 | `crt-240p60` | 640×240 → 640×240 (legacy compatibility: 640×480) | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
 | `crt-288p50` | 640×288 → 640×288 | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
-
-The 31 kHz scandoubled modes (`crt-480p60` and `crt-576p50`) are retired. A
-configuration that still selects one is not recognised as a CRT route: the
-launcher falls back to its generic layout until a supported mode is chosen from
-Settings, which no longer offers them.
+| `crt-480p60` | 640×480 → 640×480 | 25.175 MHz | 640/16/96/48 | 480/8/4/33 | 31.4688 kHz / 59.940 Hz |
+| `crt-576p50` | 640×576 → 640×576 | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
 
 Both sync polarities are negative. These values come from Main's standard
 Menu Direct Video table; MagiK consumes the resolved name only to choose its
@@ -50,13 +47,16 @@ into Menu's scan space:
 | --- | --- | --- | --- |
 | `crt-240p60` | 640×240 (legacy: 640×480) | 640×240 | `(67,706,12,251)` |
 | `crt-288p50` | 640×288 | 640×288 | `(67,706,12,299)` |
+| `crt-480p60` | 640×480 | 640×480 | `(45,684,31,510)` |
+| `crt-576p50` | 640×576 | 640×576 | `(45,684,40,615)` |
 
 The FPGA OSD/framebuffer path is a direct scan overlay, not a general-purpose
-product scaler. Exact 2× relationships such as 320×144→640×288 are therefore not the UI objective. MagiK gives the FPGA a
+product scaler. Exact 2× relationships such as 320×144→640×288 or
+320×288→640×576 are therefore not the UI objective. MagiK gives the FPGA a
 framebuffer that already matches the complete destination raster. The legacy
 CRT240 policy is the only path that deliberately performs a 480→240
-conversion. Authoritative framebuffer captures are consequently 640×240 or
-640×288 (640×480 only under the legacy CRT240 composition).
+conversion. Authoritative framebuffer captures are consequently 640×240,
+640×288, 640×480, or 640×576.
 
 ## Inspection
 

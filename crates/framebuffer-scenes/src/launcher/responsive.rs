@@ -579,6 +579,10 @@ mod tests {
             (288, 640),
             (640, 480),
             (480, 640),
+            (640, 512),
+            (512, 640),
+            (640, 576),
+            (576, 640),
         ] {
             let scene = LauncherScene::crt(w, h).with_safe_content(crate::Rgb565Rect {
                 x0: 20,
@@ -623,6 +627,8 @@ mod tests {
             (288, 640),
             (640, 480),
             (480, 640),
+            (640, 512),
+            (512, 640),
         ] {
             let scene = LauncherScene::crt(w, h);
             let layout = Layout::for_scene(scene).unwrap();
@@ -678,7 +684,7 @@ mod tests {
         for scene in [
             LauncherScene::crt(640, 240),
             LauncherScene::crt(240, 640),
-            LauncherScene::crt(640, 480),
+            LauncherScene::crt(640, 512),
             LauncherScene::new(540, 960),
         ] {
             let a = scene.render(data);

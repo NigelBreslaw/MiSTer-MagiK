@@ -62,8 +62,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("crt-240-portrait", LauncherScene::crt(240, 640)),
         ("crt-288-landscape", LauncherScene::crt(640, 288)),
         ("crt-288-portrait", LauncherScene::crt(288, 640)),
-        ("crt-240-legacy-480-landscape", LauncherScene::crt(640, 480)),
-        ("crt-240-legacy-480-portrait", LauncherScene::crt(480, 640)),
+        ("crt-480-landscape", LauncherScene::crt(640, 480)),
+        ("crt-480-portrait", LauncherScene::crt(480, 640)),
+        ("crt-5x4-landscape", LauncherScene::crt(640, 512)),
+        ("crt-5x4-portrait", LauncherScene::crt(512, 640)),
     ] {
         let data = LauncherData {
             cards: &snapshot.cards,

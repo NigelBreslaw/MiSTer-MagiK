@@ -13824,9 +13824,10 @@ impl PreviewRoutePolicy {
         Self {
             kind: match route {
                 ResolvedOutputRoute::Hdmi => PreviewRouteKind::Hdmi,
-                ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => {
-                    PreviewRouteKind::CrtBackdrop
-                }
+                ResolvedOutputRoute::Crt240p60
+                | ResolvedOutputRoute::Crt288p50
+                | ResolvedOutputRoute::Crt480p60
+                | ResolvedOutputRoute::Crt576p50 => PreviewRouteKind::CrtBackdrop,
             },
         }
     }
@@ -16781,7 +16782,7 @@ mod tests {
     #[test]
     fn crt_routes_use_roomier_rows_in_normal_and_search_layouts() {
         for (pal, scandoubler, expected_row_height, expected_full_rows) in
-            [(0, 0, 32, 8), (1, 0, 19, 8)]
+            [(0, 0, 32, 8), (1, 0, 19, 8), (0, 1, 32, 10), (1, 1, 39, 10)]
         {
             let ini = format!(
                 "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
@@ -17388,6 +17389,8 @@ mod tests {
         for route in [
             ResolvedOutputRoute::Crt240p60,
             ResolvedOutputRoute::Crt288p50,
+            ResolvedOutputRoute::Crt480p60,
+            ResolvedOutputRoute::Crt576p50,
         ] {
             let crt = PreviewRoutePolicy::for_output_route(route);
             assert!(!crt.allows_hdmi_preview());

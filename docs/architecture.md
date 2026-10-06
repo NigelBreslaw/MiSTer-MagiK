@@ -263,8 +263,8 @@ conversion:
   exposed only as `Nocive15Size.px15`; its 16px renderer resource produces exact
   15-framebuffer-pixel capitals. Wrapped content declares a bounded line capacity
   so it clips instead of painting into adjacent layout.
-- The macOS headless UI preview exposes `hdmi`, `crt-240p`, `crt-native-240p`, and
-  `crt-288p` display profiles. CRT captures use the production
+- The macOS headless UI preview exposes `hdmi`, `crt-240p`, `crt-288p`,
+  `crt-480p`, and `crt-576p` display profiles. CRT captures use the production
   route geometry, content insets, and typed bitmap-font sizes.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
   the FPGA receives a framebuffer already matching the full active raster; its

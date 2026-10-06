@@ -1470,7 +1470,7 @@ mod tests {
             scan_w: 1920,
             scan_h: 1080,
         };
-        for route in ["crt-240p60", "crt-288p50"] {
+        for route in ["crt-240p60", "crt-288p50", "crt-480p60", "crt-576p50"] {
             let plan = if route == "crt-240p60" {
                 UiDisplayPlan::from_geometry_with_route_and_composition(
                     crate::ui_display::ResolvedOutputRoute::Crt240p60

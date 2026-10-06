@@ -465,7 +465,7 @@ mod tests {
             source_height: 2,
             stride_pixels: 2,
         };
-        for (pal, scandoubler) in [(0, 0), (1, 0)] {
+        for (pal, scandoubler) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
             let ini = format!(
                 "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
             );

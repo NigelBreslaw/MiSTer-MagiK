@@ -235,6 +235,34 @@ impl CrtUiMetrics {
                 footer_height: 24,
                 font_family: CrtFontFamily::Spleen6x12,
             },
+            ResolvedOutputRoute::Crt480p60 => Self {
+                grid_x: 4,
+                grid_y: 4,
+                border_x: 1,
+                border_y: 1,
+                body_font: UiPixelSize::Px8,
+                heading_font: UiPixelSize::Px16,
+                card_title_font: UiPixelSize::Px16,
+                card_detail_font: UiPixelSize::Px8,
+                game_row_height: 32,
+                header_height: 48,
+                footer_height: 24,
+                font_family: CrtFontFamily::Spleen6x12,
+            },
+            ResolvedOutputRoute::Crt576p50 => Self {
+                grid_x: 4,
+                grid_y: 5,
+                border_x: 1,
+                border_y: 1,
+                body_font: UiPixelSize::Px8,
+                heading_font: UiPixelSize::Px16,
+                card_title_font: UiPixelSize::Px16,
+                card_detail_font: UiPixelSize::Px8,
+                game_row_height: 39,
+                header_height: 56,
+                footer_height: 29,
+                font_family: CrtFontFamily::Spleen6x12,
+            },
             _ => Self::for_framebuffer(display.render_w, display.render_h),
         }
     }
@@ -625,22 +653,18 @@ impl UiDisplayPlan {
                 .or_else(|| parsed.value("MiSTer", "forced_scandoubler"))
                 .or_else(|| parsed.value("global", "forced_scandoubler"))
                 .is_some_and(|value| value == "1");
-            // Only the unscandoubled 240p and 288p CRT routes are supported. A
-            // scandoubled direct-video configuration (the retired 480p and 576p
-            // modes) falls through to the generic video-mode handling below.
             let route = match (pal, scandoubler) {
-                (false, false) => Some(ResolvedOutputRoute::Crt240p60),
-                (true, false) => Some(ResolvedOutputRoute::Crt288p50),
-                (_, true) => None,
+                (false, false) => ResolvedOutputRoute::Crt240p60,
+                (false, true) => ResolvedOutputRoute::Crt480p60,
+                (true, false) => ResolvedOutputRoute::Crt288p50,
+                (true, true) => ResolvedOutputRoute::Crt576p50,
             };
-            if let Some(route) = route {
-                return Some(Self::from_geometry_with_route(
-                    route.progressive_geometry()?,
-                    route,
-                    "mister-ini-direct-video",
-                    fb_policy,
-                ));
-            }
+            return Some(Self::from_geometry_with_route(
+                route.progressive_geometry()?,
+                route,
+                "mister-ini-direct-video",
+                fb_policy,
+            ));
         }
 
         let video_mode = parsed
@@ -1163,6 +1187,14 @@ mod tests {
             ResolvedOutputRoute::Crt288p50.nominal_period_us(),
             Some(19_830)
         );
+        assert_eq!(
+            ResolvedOutputRoute::Crt480p60.nominal_period_us(),
+            Some(16_683)
+        );
+        assert_eq!(
+            ResolvedOutputRoute::Crt576p50.nominal_period_us(),
+            Some(19_829)
+        );
     }
 
     #[test]
@@ -1359,7 +1391,9 @@ mod tests {
     fn direct_video_and_custom_modes_follow_the_same_contract() {
         let direct_video_cases = [
             (0, 0, (640, 240), (640, 240), (640, 480), 1280, 153_600),
+            (0, 1, (640, 480), (640, 480), (640, 480), 1280, 307_200),
             (1, 0, (640, 288), (640, 288), (640, 288), 1280, 184_320),
+            (1, 1, (640, 576), (640, 576), (640, 576), 1280, 368_640),
         ];
         for (pal, scandoubler, scan, framebuffer, render, stride, pixels) in direct_video_cases {
             let ini = format!(
@@ -1372,16 +1406,6 @@ mod tests {
             assert_eq!((plan.render_w, plan.render_h), render);
             assert_eq!(rgb565_stride_bytes(plan.fb_w), stride);
             assert_eq!(plan.fb_w * plan.fb_h, pixels);
-        }
-
-        // The scandoubled 480p and 576p direct-video modes are retired: they are
-        // not a CRT route, and without a video_mode there is nothing to fall back to.
-        for pal in [0, 1] {
-            let ini = format!("[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler=1\n");
-            assert!(
-                UiDisplayPlan::from_mister_ini_text(&ini).is_none(),
-                "pal={pal}"
-            );
         }
 
         let custom = UiDisplayPlan::from_mister_ini_text(
@@ -1423,6 +1447,22 @@ mod tests {
                 (640, 288),
                 (640, 288),
             ),
+            (
+                "schema=1&output=crt-480p60",
+                ResolvedOutputRoute::Crt480p60,
+                (640, 480),
+                (640, 480),
+                (640, 480),
+                (640, 480),
+            ),
+            (
+                "schema=1&output=crt-576p50",
+                ResolvedOutputRoute::Crt576p50,
+                (640, 576),
+                (640, 576),
+                (640, 576),
+                (640, 576),
+            ),
         ];
 
         for (settings, route, output, scan, framebuffer, render) in cases {
@@ -1439,31 +1479,6 @@ mod tests {
             assert_eq!((plan.fb_w, plan.fb_h), framebuffer, "{settings}");
             assert_eq!((plan.render_w, plan.render_h), render, "{settings}");
             assert_eq!(plan.direct_video, route.is_crt(), "{settings}");
-        }
-    }
-
-    #[test]
-    fn a_configuration_still_on_a_retired_crt_mode_uses_the_generic_layout_at_its_real_geometry() {
-        // Main may still report the retired scandoubled modes. They are not a CRT
-        // route any more, so the launcher shows its generic layout at whatever
-        // raster is actually scanned out, until a supported mode is chosen.
-        let runtime = RuntimeDisplayGeometry {
-            output_w: 640,
-            output_h: 480,
-            scan_w: 640,
-            scan_h: 480,
-        };
-        for retired in ["crt-480p60", "crt-576p50"] {
-            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
-                Some(runtime),
-                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=1\n",
-                Some(&format!("schema=1&output={retired}")),
-                Some(&format!("schema=1&mode={retired}")),
-            )
-            .expect("generic plan");
-            assert_eq!(plan.output_route, ResolvedOutputRoute::Hdmi, "{retired}");
-            assert!(!plan.uses_crt_ui(), "{retired}");
-            assert_eq!((plan.scan_w, plan.scan_h), (640, 480), "{retired}");
         }
     }
 
@@ -1547,11 +1562,11 @@ mod tests {
     fn portrait_rotates_asymmetric_crt_content_insets() {
         let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
             None,
-            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=0\n",
-            Some("schema=1&output=crt-288p50"),
+            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
+            Some("schema=1&output=crt-576p50"),
             None,
         )
-        .expect("CRT 288p route");
+        .expect("CRT 576p route");
         let ui = UiDisplay::for_plan(plan);
         let normal = ui.content_rect();
         let clockwise =
@@ -1720,6 +1735,18 @@ mod tests {
                 (640, 288),
                 (640, 288),
             ),
+            (
+                "schema=1&output=crt-480p60",
+                ResolvedOutputRoute::Crt480p60,
+                (640, 480),
+                (640, 480),
+            ),
+            (
+                "schema=1&output=crt-576p50",
+                ResolvedOutputRoute::Crt576p50,
+                (640, 576),
+                (640, 576),
+            ),
         ] {
             let plan =
                 UiDisplayPlan::from_runtime_or_mister_ini_text(runtime, ini, Some(settings), None)
@@ -1734,6 +1761,7 @@ mod tests {
                 (ui.render_w(), ui.render_h()),
                 match route {
                     ResolvedOutputRoute::Crt288p50 => (640, 288),
+                    ResolvedOutputRoute::Crt576p50 => (640, 576),
                     _ => (640, 480),
                 }
             );
@@ -1787,6 +1815,26 @@ mod tests {
                     height: 253,
                 },
                 (8, 5, 2, 1, 16, 32, 24, 16, 19, 56, 24),
+            ),
+            (
+                ResolvedOutputRoute::Crt480p60,
+                CrtContentRect {
+                    x: 0,
+                    y: 0,
+                    width: 640,
+                    height: 480,
+                },
+                (4, 4, 1, 1, 8, 16, 16, 8, 32, 48, 24),
+            ),
+            (
+                ResolvedOutputRoute::Crt576p50,
+                CrtContentRect {
+                    x: 0,
+                    y: 0,
+                    width: 576,
+                    height: 576,
+                },
+                (4, 5, 1, 1, 8, 16, 16, 8, 39, 56, 29),
             ),
         ] {
             let plan = UiDisplayPlan::from_geometry_with_route(
@@ -1897,17 +1945,17 @@ mod tests {
 
     #[test]
     fn hdmi_framebuffer_policy_cannot_override_crt_render_geometry() {
-        let ini = "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=0\n";
+        let ini = "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n";
         for policy in [
             UiFramebufferSizePolicy::Force960x540,
             UiFramebufferSizePolicy::Force1280x720,
         ] {
             let plan = UiDisplayPlan::from_mister_ini_text_with_policy(ini, policy)
-                .expect("288p CRT plan");
+                .expect("576p CRT plan");
 
-            assert_eq!((plan.fb_w, plan.fb_h), (640, 288));
-            assert_eq!((plan.render_w, plan.render_h), (640, 288));
-            assert_eq!((plan.scan_w, plan.scan_h), (640, 288));
+            assert_eq!((plan.fb_w, plan.fb_h), (640, 576));
+            assert_eq!((plan.render_w, plan.render_h), (640, 576));
+            assert_eq!((plan.scan_w, plan.scan_h), (640, 576));
             assert_eq!(plan.fb_policy, UiFramebufferSizePolicy::Auto);
             assert!(plan.log_line().contains("composition_transformed=false"));
         }
@@ -2022,6 +2070,8 @@ mod tests {
         for route in [
             ResolvedOutputRoute::Crt240p60,
             ResolvedOutputRoute::Crt288p50,
+            ResolvedOutputRoute::Crt480p60,
+            ResolvedOutputRoute::Crt576p50,
         ] {
             let plan = UiDisplayPlan::from_geometry_with_route(
                 route.progressive_geometry().unwrap(),
@@ -2103,15 +2153,15 @@ mod tests {
         assert_eq!((ntsc.render_w, ntsc.render_h), (640, 480));
         assert!(ntsc.direct_video);
 
-        let pal = UiDisplayPlan::from_mister_ini_text(
-            "[MiSTer]\ndirect_video=0\nmenu_pal=0\nforced_scandoubler=1\n[Menu]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=0\n",
+        let pal31 = UiDisplayPlan::from_mister_ini_text(
+            "[MiSTer]\ndirect_video=0\nmenu_pal=0\nforced_scandoubler=0\n[Menu]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
         )
         .expect("pal plan");
-        assert_eq!((pal.output_w, pal.output_h), (640, 288));
-        assert_eq!((pal.scan_w, pal.scan_h), (640, 288));
-        assert_eq!((pal.fb_w, pal.fb_h), (640, 288));
-        assert_eq!((pal.render_w, pal.render_h), (640, 288));
-        assert!(pal.direct_video);
+        assert_eq!((pal31.output_w, pal31.output_h), (640, 576));
+        assert_eq!((pal31.scan_w, pal31.scan_h), (640, 576));
+        assert_eq!((pal31.fb_w, pal31.fb_h), (640, 576));
+        assert_eq!((pal31.render_w, pal31.render_h), (640, 576));
+        assert!(pal31.direct_video);
     }
 
     #[test]

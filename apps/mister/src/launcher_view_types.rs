@@ -265,27 +265,27 @@ mod tests {
     fn active_and_selected_display_choices_share_the_full_catalog_identity() {
         let runtime_index = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
             .iter()
-            .position(|mode| mode.id == "crt-288p50")
-            .expect("CRT 288p runtime mode");
+            .position(|mode| mode.id == "crt-480p60")
+            .expect("CRT 480p runtime mode");
 
         assert_eq!(
             active_display_choice(runtime_index, Some((1234, 567)))
                 .id
                 .as_str(),
-            "crt-288p50"
+            "crt-480p60"
         );
         assert_eq!(
             selected_display_choice(runtime_index).id.as_str(),
-            "crt-288p50"
+            "crt-480p60"
         );
         assert_eq!(
             settings_display_choice(
                 crate::launcher::settings_display_selection_index(runtime_index)
-                    .expect("CRT 288p settings mode"),
+                    .expect("CRT 480p settings mode"),
             )
             .id
             .as_str(),
-            "crt-288p50"
+            "crt-480p60"
         );
     }
 

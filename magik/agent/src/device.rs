@@ -32,6 +32,8 @@ const DISPLAY_MODES: &[&str] = &[
     "hdmi-2560x1440p60",
     "crt-240p60",
     "crt-288p50",
+    "crt-480p60",
+    "crt-576p50",
 ];
 
 fn read(path: &Path, limit: usize) -> Result<String, String> {
@@ -123,7 +125,9 @@ fn display_command(fields: &serde_json::Map<String, Value>) -> Result<String, St
         .get("mode")
         .and_then(Value::as_str)
         .ok_or("display mode is required")?;
-    if fields.len() != 2
+    if fields.len() != 2 + usize::from(fields.contains_key("acknowledge_31khz"))
+        || (matches!(mode, "crt-480p60" | "crt-576p50")
+            && fields.get("acknowledge_31khz") != Some(&Value::Bool(true)))
         || fields.get("attended") != Some(&Value::Bool(true))
         || !DISPLAY_MODES.contains(&mode)
     {
@@ -271,8 +275,6 @@ mod tests {
         for fields in [
             json!({"mode":"crt-240p60"}),
             json!({"mode":"crt-480p60","attended":true}),
-            json!({"mode":"crt-576p50","attended":true}),
-            json!({"mode":"crt-240p60","attended":true,"acknowledge_31khz":true}),
             json!({"mode":"x;reboot","attended":true}),
             json!({"mode":"crt-240p60","attended":true,"extra":1}),
         ] {

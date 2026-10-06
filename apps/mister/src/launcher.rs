@@ -10536,7 +10536,7 @@ mod tests {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let count = settings_display_resolution_count();
-        assert_eq!(count, 8);
+        assert_eq!(count, 10);
         nav.screen = Screen::Settings;
         nav.display_combo_open = true;
         nav.display_selected = 0;
@@ -10559,7 +10559,7 @@ mod tests {
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .expect("last display mode");
         assert_eq!(event.action, LauncherAction::ApplyDisplayResolution);
-        assert_eq!(event.path.as_deref(), Some("crt-288p50"));
+        assert_eq!(event.path.as_deref(), Some("crt-576p50"));
     }
 
     #[test]
@@ -10582,6 +10582,8 @@ mod tests {
                 "hdmi-2560x1440p60",
                 "crt-240p60",
                 "crt-288p50",
+                "crt-480p60",
+                "crt-576p50",
             ]
         );
     }

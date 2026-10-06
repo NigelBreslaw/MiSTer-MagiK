@@ -48,8 +48,9 @@ into an invisible Slint tree. Transient catalog scan milestones do not clone
 navigation shells or rebuild launcher taxonomy on CPU1; the authoritative
 published projection supplies that state.
 
-HDMI retains the original 102,400 initial and 40,960 steady particles. Both
-resolved CRT routes (`crt-240p60` and `crt-288p50`) use deterministic half-density tracks with 51,200 initial and
+HDMI retains the original 102,400 initial and 40,960 steady particles. All four
+resolved CRT routes (`crt-240p60`, `crt-288p50`, `crt-480p60`, and
+`crt-576p50`) use deterministic half-density tracks with 51,200 initial and
 20,480 steady particles. Thinning occurs independently within each MiSTer/MagiK
 letter track, preserving paired morph identity, group alignment, and cabinet
 ordering. CRT projection fits the complete 16:9 scene inside the 4:3 raster:
