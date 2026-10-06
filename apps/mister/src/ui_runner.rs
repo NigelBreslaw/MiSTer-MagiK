@@ -90,6 +90,7 @@ use mister_magik_fb::launcher_runtime::transition_plan::{
     NavigationDisplay, card_home_owns_source, crt_navigation_layout, is_card_edge,
     navigation_geometry, navigation_transition_for_intent,
 };
+use mister_magik_fb::launcher_runtime::transition_spec::TransitionStart;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
 

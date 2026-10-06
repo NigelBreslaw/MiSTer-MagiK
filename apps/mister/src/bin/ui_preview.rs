@@ -55,6 +55,7 @@ mod macos {
         NavigationDisplay, crt_navigation_layout, is_card_edge, navigation_geometry,
         navigation_transition_for_intent,
     };
+    use mister_magik_fb::launcher_runtime::transition_spec::TransitionStart;
     use mister_magik_fb::launcher_taxonomy::{
         CONSOLES_MENU_ID, LauncherMenuItemKind, ROOT_MENU_ID,
     };
@@ -1414,12 +1415,12 @@ mod macos {
                         settings_page_transition(source_screen, self.launcher_nav.screen)
                     && self
                         .navigation_transition
-                        .begin_settings_page(
+                        .begin(TransitionStart::settings_page(
                             route,
                             direction,
                             self.frame_target.cached_565(),
                             now_us,
-                        )
+                        ))
                         .unwrap_or(false)
                 {
                     self.pending_navigation_event = Some(LauncherEvent {
@@ -1487,13 +1488,13 @@ mod macos {
                 }
                 return self
                     .navigation_transition
-                    .begin_system_panel(
+                    .begin(TransitionStart::system_panel(
                         self.display_profile.is_crt(),
                         self.launcher_nav.is_system_hub(),
                         self.frame_target.cached_565(),
                         self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
                         now_us,
-                    )
+                    ))
                     .unwrap_or(false);
             }
             let Some((edge, direction)) =
@@ -1550,7 +1551,7 @@ mod macos {
                     || self.launcher_nav.is_system_hub();
                 let started = self
                     .navigation_transition
-                    .begin_device_card(
+                    .begin(TransitionStart::device_card(
                         edge,
                         direction,
                         geometry,
@@ -1563,7 +1564,7 @@ mod macos {
                         mister_magik_fb::launcher_presentation::system_device_rgb565(kind),
                         self.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
                         now_us,
-                    )
+                    ))
                     .unwrap_or(false);
                 if started
                     && self.display_profile.is_crt()
@@ -1575,13 +1576,13 @@ mod macos {
                 started
             } else {
                 self.navigation_transition
-                    .begin(
+                    .begin(TransitionStart::super_scaler(
                         edge,
                         direction,
                         geometry,
                         self.frame_target.cached_565(),
                         now_us,
-                    )
+                    ))
                     .unwrap_or(false)
             }
         }
@@ -5723,13 +5724,13 @@ mod macos {
             let source = vec![Rgb565Pixel(0); HDMI_FRAME_WIDTH * HDMI_FRAME_HEIGHT];
             assert!(
                 transition
-                    .begin(
+                    .begin(TransitionStart::super_scaler(
                         NavigationTransitionEdge::ConsolesToSystem,
                         NavigationTransitionDirection::Forward,
                         NavigationTransitionGeometry::default(),
                         &source,
                         0,
-                    )
+                    ))
                     .expect("begin transition")
             );
             assert_eq!(transition.frame().phase, NavigationTransitionPhase::Expand);

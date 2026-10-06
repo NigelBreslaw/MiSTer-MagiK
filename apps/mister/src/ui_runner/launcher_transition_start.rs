@@ -8,8 +8,9 @@
 use super::launcher_card_home::LauncherCardHomeSession;
 use super::launcher_loop::card_pixels_as_slint;
 use super::*;
-use crate::ui_display::{CrtUiMetrics, UiLayoutGeometry};
+use crate::ui_display::{CrtUiMetrics, ScreenOrientation, UiLayoutGeometry};
 use mister_magik_framebuffer_scenes::device_card::RevealImage;
+use mister_magik_framebuffer_scenes::settings_cog;
 
 /// Everything a reveal needs to begin, besides the runtime and the card session.
 pub(super) struct TransitionInputs<'a> {
@@ -56,13 +57,13 @@ pub(super) fn begin_navigation_transition(
         // The system hub/list slide has no portrait form.
         return !portrait
             && runtime
-                .begin_system_panel(
+                .begin(TransitionStart::system_panel(
                     crt_layout,
                     nav.is_system_hub(),
                     composed,
                     crt_backdrop,
                     now_us,
-                )
+                ))
                 .unwrap_or(false);
     }
     let card_edge = is_card_edge(edge) && !portrait;
@@ -94,7 +95,7 @@ pub(super) fn begin_navigation_transition(
             None => nav.device_kind(),
         };
         let hub = direction == NavigationTransitionDirection::Forward || nav.is_system_hub();
-        runtime.begin_device_card(
+        runtime.begin(TransitionStart::device_card(
             edge,
             direction,
             geometry,
@@ -103,9 +104,9 @@ pub(super) fn begin_navigation_transition(
             crate::launcher_presentation::system_device_rgb565(kind),
             crt_backdrop,
             now_us,
-        )
+        ))
     } else if portrait {
-        runtime.begin_physical(
+        runtime.begin(TransitionStart::super_scaler_physical(
             edge,
             direction,
             navigation_geometry_to_composition(layout, geometry),
@@ -113,9 +114,11 @@ pub(super) fn begin_navigation_transition(
             layout.composition_h(),
             source,
             now_us,
-        )
+        ))
     } else {
-        runtime.begin(edge, direction, geometry, source, now_us)
+        runtime.begin(TransitionStart::super_scaler(
+            edge, direction, geometry, source, now_us,
+        ))
     };
     if started.as_ref().is_ok_and(|started| *started)
         && crt_layout
@@ -124,6 +127,76 @@ pub(super) fn begin_navigation_transition(
         runtime.update_device_reveal_image(reveal_image());
     }
     started.unwrap_or(false)
+}
+
+/// Everything a Settings-family transition needs to begin.
+pub(super) struct SettingsInputs<'a> {
+    pub route: NavigationTransitionRoute,
+    pub direction: NavigationTransitionDirection,
+    pub orientation: ScreenOrientation,
+    /// The physical output raster.
+    pub render_w: usize,
+    pub render_h: usize,
+    pub reduce_motion: bool,
+    /// The composed cache: the visible frame whenever card-home is not.
+    pub composed: &'a [Rgb565Pixel],
+    pub now_us: u64,
+}
+
+/// Begin the Home <-> Settings card zoom, or the page slide for every other
+/// Settings route. The zoom runs in the physical raster for HDMI landscape and
+/// native CRT modes in either orientation; reduce motion keeps the slide.
+pub(super) fn begin_settings_transition(
+    runtime: &mut NavigationTransitionRuntime,
+    cards: Option<&mut LauncherCardHomeSession>,
+    inputs: &SettingsInputs<'_>,
+) -> bool {
+    let SettingsInputs {
+        route,
+        direction,
+        orientation,
+        render_w,
+        render_h,
+        reduce_motion,
+        composed,
+        now_us,
+    } = *inputs;
+    let settled_cards = cards.filter(|cards| !cards.is_animating());
+    let zoom = route == NavigationTransitionRoute::HomeToSettings
+        && settled_cards.is_some()
+        && settings_cog::supports_dimensions(render_w, render_h)
+        && !reduce_motion;
+    let start = if zoom {
+        let source = match (direction, settled_cards) {
+            // Card motion presents directly into scanout slots, so the generic
+            // cache may still contain a neighbour. Render the settled Settings
+            // card as the exact source.
+            (NavigationTransitionDirection::Forward, Some(cards)) => {
+                card_pixels_as_slint(cards.render())
+            }
+            // Reverse starts from the live Settings page. Home is rendered later
+            // and captured as the destination.
+            _ => composed,
+        };
+        TransitionStart::settings_cog(
+            direction,
+            render_w,
+            render_h,
+            source,
+            crate::launcher_presentation::settings_cog_artwork(),
+            now_us,
+        )
+    } else {
+        let axis = match orientation {
+            ScreenOrientation::Normal => SettingsPageTransitionAxis::Horizontal,
+            ScreenOrientation::MonitorCounterclockwise => SettingsPageTransitionAxis::Vertical,
+            ScreenOrientation::MonitorClockwise => SettingsPageTransitionAxis::VerticalReversed,
+        };
+        TransitionStart::settings_page_physical(
+            route, direction, axis, render_w, render_h, composed, now_us,
+        )
+    };
+    runtime.begin(start).unwrap_or(false)
 }
 
 pub(super) fn navigation_geometry_to_composition(
@@ -417,6 +490,124 @@ mod tests {
                 "{orientation:?}"
             );
         }
+    }
+
+    fn settings_inputs<'a>(
+        fixture: &'a Fixture,
+        route: NavigationTransitionRoute,
+        direction: NavigationTransitionDirection,
+        reduce_motion: bool,
+    ) -> SettingsInputs<'a> {
+        SettingsInputs {
+            route,
+            direction,
+            orientation: ScreenOrientation::Normal,
+            render_w: 960,
+            render_h: 540,
+            reduce_motion,
+            composed: &fixture.composed,
+            now_us: 0,
+        }
+    }
+
+    #[test]
+    fn the_settings_zoom_begins_from_the_settled_card_home_frame() {
+        let fixture = Fixture::new(ScreenOrientation::Normal);
+        let mut cards = active_cards(LauncherScene::new(960, 540));
+        let visible = card_pixels_as_slint(cards.render()).to_vec();
+        assert_ne!(visible, fixture.composed, "the cache must be stale");
+
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        let inputs = settings_inputs(
+            &fixture,
+            NavigationTransitionRoute::HomeToSettings,
+            NavigationTransitionDirection::Forward,
+            false,
+        );
+        assert!(begin_settings_transition(
+            &mut runtime,
+            Some(&mut cards),
+            &inputs
+        ));
+        assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
+        assert!(runtime.render().unwrap() == visible);
+    }
+
+    #[test]
+    fn the_settings_zoom_reverses_from_the_live_settings_page() {
+        let fixture = Fixture::new(ScreenOrientation::Normal);
+        let mut cards = active_cards(LauncherScene::new(960, 540));
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        let inputs = settings_inputs(
+            &fixture,
+            NavigationTransitionRoute::HomeToSettings,
+            NavigationTransitionDirection::Reverse,
+            false,
+        );
+        assert!(begin_settings_transition(
+            &mut runtime,
+            Some(&mut cards),
+            &inputs
+        ));
+        assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
+        assert!(runtime.render().unwrap() == fixture.composed);
+    }
+
+    #[test]
+    fn the_settings_slide_replaces_the_zoom_when_it_cannot_run() {
+        let fixture = Fixture::new(ScreenOrientation::Normal);
+        let route = NavigationTransitionRoute::HomeToSettings;
+        let direction = NavigationTransitionDirection::Forward;
+        let mut cards = active_cards(LauncherScene::new(960, 540));
+
+        // Reduce motion, no card session, an unsupported raster and another
+        // route all keep the page slide, from the composed cache.
+        let slide = |label: &str, inputs: SettingsInputs<'_>, cards: Option<&mut _>| {
+            let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+            assert!(
+                begin_settings_transition(&mut runtime, cards, &inputs),
+                "{label}"
+            );
+            assert_eq!(
+                runtime.request().unwrap().renderer_label(),
+                "settings-page",
+                "{label}"
+            );
+        };
+        slide(
+            "reduce motion",
+            settings_inputs(&fixture, route, direction, true),
+            Some(&mut cards),
+        );
+        slide(
+            "no cards",
+            settings_inputs(&fixture, route, direction, false),
+            None,
+        );
+        slide(
+            "about page",
+            settings_inputs(
+                &fixture,
+                NavigationTransitionRoute::SettingsToAbout,
+                direction,
+                false,
+            ),
+            Some(&mut cards),
+        );
+        let unsupported = SettingsInputs {
+            render_w: 800,
+            render_h: 600,
+            ..settings_inputs(&fixture, route, direction, false)
+        };
+        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+        let _ = begin_settings_transition(&mut runtime, Some(&mut cards), &unsupported);
+        assert_ne!(
+            runtime
+                .request()
+                .map(NavigationTransitionRequest::renderer_label),
+            Some("settings-cog"),
+            "unsupported raster"
+        );
     }
 
     #[test]
