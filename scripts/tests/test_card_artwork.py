@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
-import os
 import subprocess
+import sys
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,42 +16,109 @@ from scripts.magik_ci import distribution as dist
 
 
 class CardArtworkTests(unittest.TestCase):
-    def test_distribution_script_stages_all_declared_artwork_in_zip(self):
-        packaging = (ROOT / "scripts/package-distribution.sh").read_text()
-        block = packaging.split("# Card artwork is mandatory runtime data", 1)[1]
-        block = block.split("\n", 1)[1].split('\nif [[ -n "$ASSET_PACK" ]]', 1)[0]
-        source = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
-        expected = card_artwork.validate(source)
-        with tempfile.TemporaryDirectory() as temp:
-            stage = Path(temp) / "stage"
-            subprocess.run(
-                ["bash", "-ec", block],
-                env={
-                    **os.environ,
-                    "ROOT": str(ROOT),
-                    "STAGE": str(stage),
-                    "PUBLIC_ROOT_RELATIVE": dist.APP,
-                },
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            archive = Path(temp) / "distribution.zip"
-            subprocess.run(["zip", "-qr", str(archive), "."], cwd=stage, check=True)
-            prefix = f"{dist.APP}/{card_artwork.RELATIVE_PATH}/"
-            with zipfile.ZipFile(archive) as package:
+    def test_staging_cli_copies_only_declared_artwork(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as temp:
+                fixture = CandidateFixture(Path(temp))
+                source = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+                (source / "unused.cardtex").write_bytes(b"undeclared artwork")
+                destination = Path(temp) / "staged-artwork"
+                if existing:
+                    destination.mkdir()
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts/magik-ci"),
+                        "ci",
+                        "distribution",
+                        "stage-artwork",
+                        str(source),
+                        str(destination),
+                    ],
+                    cwd=temp,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                expected = {"index.json", "fixture.rgb888", "fixture.cardtex"}
                 self.assertEqual(
-                    {
-                        entry.filename
-                        for entry in package.infolist()
-                        if not entry.is_dir()
-                    },
-                    {prefix + name for name in expected},
+                    {path.name for path in destination.iterdir()}, expected
                 )
                 for name in expected:
                     self.assertEqual(
-                        package.read(prefix + name), (source / name).read_bytes()
+                        (destination / name).read_bytes(), (source / name).read_bytes()
                     )
+
+    def test_nonempty_destination_is_preserved_and_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = CandidateFixture(Path(temp))
+            source = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+            destination = Path(temp) / "staged-artwork"
+            destination.mkdir()
+            leftover = destination / "fixture.cardtex"
+            leftover.write_bytes(b"existing artwork")
+            with self.assertRaisesRegex(ValueError, "destination must be"):
+                card_artwork.stage(source, destination)
+            self.assertEqual(list(destination.iterdir()), [leftover])
+            self.assertEqual(leftover.read_bytes(), b"existing artwork")
+
+    def test_file_or_symlink_destination_is_preserved_and_rejected(self):
+        for kind in ("file", "symlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                fixture = CandidateFixture(Path(temp))
+                source = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+                destination = Path(temp) / "staged-artwork"
+                target = Path(temp) / "target"
+                if kind == "file":
+                    destination.write_bytes(b"existing file")
+                else:
+                    target.mkdir()
+                    destination.symlink_to(target, target_is_directory=True)
+                with self.assertRaisesRegex(ValueError, "destination must be"):
+                    card_artwork.stage(source, destination)
+                if kind == "file":
+                    self.assertEqual(destination.read_bytes(), b"existing file")
+                else:
+                    self.assertTrue(destination.is_symlink())
+                    self.assertEqual(list(target.iterdir()), [])
+
+    def test_invalid_prepared_declarations_fail_before_staging(self):
+        for damage in ("traversal", "absolute", "extension", "digest", "size"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
+                fixture = CandidateFixture(Path(temp))
+                source = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+                index_path = source / "index.json"
+                index = json.loads(index_path.read_text())
+                prepared = index["cards"]["root:arcade"]["prepared"]
+                if damage in ("traversal", "absolute", "extension"):
+                    prepared["file"] = {
+                        "traversal": "../fixture.cardtex",
+                        "absolute": "/fixture.cardtex",
+                        "extension": "fixture.rgb888",
+                    }[damage]
+                elif damage == "digest":
+                    prepared["sha256"] = "0" * 64
+                else:
+                    prepared["bytes"] += 1
+                index_path.write_text(json.dumps(index))
+                destination = Path(temp) / "staged-artwork"
+                with self.assertRaisesRegex(ValueError, "invalid.*source|conflicting"):
+                    card_artwork.stage(source, destination)
+                self.assertFalse(destination.exists())
+
+    def test_identical_shared_artwork_is_copied_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = CandidateFixture(Path(temp))
+            source = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+            with patch.object(
+                card_artwork.shutil, "copyfile", wraps=card_artwork.shutil.copyfile
+            ) as copyfile:
+                card_artwork.stage(source, Path(temp) / "staged-artwork")
+            self.assertEqual(copyfile.call_count, 3)
+            self.assertEqual(
+                {call.args[0].name for call in copyfile.call_args_list},
+                {"index.json", "fixture.rgb888", "fixture.cardtex"},
+            )
 
     def test_invalid_prepared_textures_fail_staging(self):
         for damage in ("missing", "truncated", "checksum"):

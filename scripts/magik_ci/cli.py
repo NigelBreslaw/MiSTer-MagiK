@@ -69,6 +69,9 @@ def parser() -> argparse.ArgumentParser:
     ci_sub = ci.add_subparsers(dest="command", required=True)
     distribution = ci_sub.add_parser("distribution")
     distribution_sub = distribution.add_subparsers(dest="action", required=True)
+    stage_artwork = distribution_sub.add_parser("stage-artwork")
+    stage_artwork.add_argument("source", type=Path)
+    stage_artwork.add_argument("destination", type=Path)
     distribution_verify = distribution_sub.add_parser("verify")
     distribution_verify.add_argument("candidate", type=Path)
     distribution_verify.add_argument(
@@ -360,9 +363,12 @@ def main() -> int:
                 else 1
             )
         elif args.command == "distribution":
-            from . import delivery_tests, distribution, publication
+            from . import card_artwork, delivery_tests, distribution, publication
 
-            if args.action == "test-delivery":
+            if args.action == "stage-artwork":
+                card_artwork.stage(args.source, args.destination)
+                return 0
+            elif args.action == "test-delivery":
                 result = delivery_tests.run(
                     args.candidate, channel=args.channel, source=args.downloader_source
                 )
