@@ -611,6 +611,51 @@ mod tests {
     }
 
     #[test]
+    fn the_settings_zoom_waits_for_a_settled_card_and_supports_native_portrait_rasters() {
+        let fixture = Fixture::new(ScreenOrientation::Normal);
+        let scene = LauncherScene::new(960, 540);
+        let route = NavigationTransitionRoute::HomeToSettings;
+        let direction = NavigationTransitionDirection::Forward;
+        let renderer = |cards: &mut LauncherCardHomeSession, inputs: &SettingsInputs<'_>| {
+            let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+            assert!(begin_settings_transition(&mut runtime, Some(cards), inputs));
+            runtime.request().unwrap().renderer_label()
+        };
+
+        // A carousel still moving keeps the slide.
+        let mut moving = active_cards(scene);
+        let level = root_level();
+        assert!(
+            moving.update_from_navigation(scene, &level, 1, 0.5, "12:00", 16, true, None, None)
+        );
+        assert!(moving.is_animating());
+        assert_eq!(
+            renderer(
+                &mut moving,
+                &settings_inputs(&fixture, route, direction, false)
+            ),
+            "settings-page"
+        );
+
+        // A native portrait CRT raster supports the zoom.
+        let mut settled = active_cards(LauncherScene::crt(240, 640));
+        let composed = vec![COMPOSED; 240 * 640];
+        let portrait = SettingsInputs {
+            render_w: 240,
+            render_h: 640,
+            composed: &composed,
+            ..settings_inputs(&fixture, route, direction, false)
+        };
+        let mut runtime = NavigationTransitionRuntime::new(240, 640, true);
+        assert!(begin_settings_transition(
+            &mut runtime,
+            Some(&mut settled),
+            &portrait
+        ));
+        assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
+    }
+
+    #[test]
     fn portrait_navigation_geometry_uses_physical_rectangles() {
         let display = UiDisplay::for_framebuffer(4, 3);
         let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::MonitorClockwise);

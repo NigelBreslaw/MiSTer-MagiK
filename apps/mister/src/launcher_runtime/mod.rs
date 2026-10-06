@@ -16,8 +16,8 @@ pub mod settings;
 pub mod settings_navigation_bench;
 pub mod startup_intro;
 pub mod transition_plan;
-pub mod transition_spec;
 #[cfg(test)]
 mod transition_scenarios;
+pub mod transition_spec;
 #[cfg(test)]
 mod walk_rng;

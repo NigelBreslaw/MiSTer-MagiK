@@ -238,7 +238,7 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 - `examples/launcher_layout_review.rs` no longer compiled on `main`; it is fixed so the review
   renders can be reproduced.
 
-**PR 4 (in progress): ownership scenarios for composition and the transition chart.**
+**PR 4 (merged, #238): ownership scenarios for composition and the transition chart.**
 
 - `composition/scenarios.rs`: seeded random walks over `UiCompositionController` with a model of
   the physical presenter acknowledging each frame. Checks the documented precedence (screensaver,
@@ -255,6 +255,21 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   orientation scenarios were added.
 - Still to do in Phase 1: damage soundness (incremental result equals a forced full raster), which
   needs the Slint software-renderer damage path driven from a test.
+
+**PR 5 (in progress): one `TransitionStart` for every navigation transition (Phase 2, first half).**
+
+- `launcher_runtime/transition_spec.rs` holds `TransitionStart` (request, route, raster space, clock
+  policy, assets, source) and one constructor per kind. `NavigationTransitionRuntime::begin` is the
+  only way to start: the seven `begin_*` entry points are gone. `begin` refuses a disabled or playing
+  runtime before touching any buffer, so the defensive restore-on-no-start branch is deleted.
+- The Settings zoom/slide decision moves out of `run_launcher_loop` into
+  `launcher_transition_start::begin_settings_transition`, next to the navigation one, and both run from
+  host tests with a real card-home session.
+- One behaviour change, preview only: `configure_preview`'s duration override now also stretches the
+  system-panel slide, which used to ignore it.
+- Still to do in Phase 2: fold the macOS preview's own start path into the shared functions (it wraps a
+  different card-session type), and give `FullScreenTransitionStateChart` the lifecycle that
+  `NavigationTransitionController` still keeps (phases Capture to Settled).
 
 ## Phased plan
 
