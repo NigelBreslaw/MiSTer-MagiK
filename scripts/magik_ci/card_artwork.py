@@ -5,6 +5,7 @@
 
 import json
 import runpy
+import shutil
 from pathlib import Path
 
 from .common import sha256_file
@@ -32,3 +33,19 @@ def validate(root: Path) -> set[str]:
         if sha256_file(path) != digest:
             raise ValueError(f"card artwork checksum mismatch: {name}")
     return {"index.json", *files}
+
+
+def stage(source: Path, destination: Path) -> None:
+    """Copy and validate exactly the artwork declared by the runtime index."""
+    files = validate(source)
+    if destination.is_symlink() or (
+        destination.exists()
+        and (not destination.is_dir() or any(destination.iterdir()))
+    ):
+        raise ValueError(
+            "card artwork destination must be missing or an empty directory"
+        )
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in sorted(files):
+        shutil.copyfile(source / name, destination / name)
+    validate(destination)

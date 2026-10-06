@@ -11,6 +11,15 @@ from scripts.magik_ci.distribution import ROOT
 
 
 class DistributionWorkflowTests(unittest.TestCase):
+    def test_packaging_delegates_artwork_staging_to_cli(self):
+        packaging = (ROOT / "scripts/package-distribution.sh").read_text()
+        self.assertIn(
+            '"$ROOT/scripts/magik-ci" ci distribution stage-artwork '
+            '"$ROOT/apps/mister/assets/ui/launcher-cards" '
+            '"$STAGE/$PUBLIC_ROOT_RELATIVE/assets/ui/launcher-cards"',
+            " ".join(packaging.replace("\\\n", " ").split()),
+        )
+
     def test_only_alpha_builds_and_promotion_reuses_the_versioned_artifact(self):
         workflow = (ROOT / ".github/workflows/distribution.yml").read_text()
         build = workflow.split("\n  distribution:\n", 1)[1].split(
