@@ -115,6 +115,36 @@ static int fast_quantisation_parity(void) {
 }
 #endif
 int main(void) {
+  for (size_t trial = 0; trial < 10000; ++trial) {
+    size_t height = next() % 66, rows = next() % 68, pitch = 1 + next() % 7;
+    uint16_t src[65], actual[480], expected[480];
+    for (size_t j = 0; j < height; ++j) src[j] = (uint16_t)next();
+    for (size_t j = 0; j < 480; ++j) actual[j] = expected[j] = (uint16_t)next();
+    // Tiny signed offsets exercise settlement; random offsets, empty sources,
+    // odd tails and strides exercise both NEON and scalar boundary paths.
+    const int32_t origins[] = {-256, -1, 0, 1, 255};
+    int32_t q = trial % 2 ? origins[trial % 5] : (int32_t)(next() % 196609) - 131072;
+    int32_t step = 1 + next() % 196608;
+    for (size_t y = 0; y < rows; ++y) {
+      int32_t position = q + (int32_t)y * step, r = position >> 16;
+      uint32_t a = r >= 0 && (size_t)r < height ? src[r] : 0;
+      uint32_t b = r + 1 >= 0 && (size_t)(r + 1) < height ? src[r + 1] : 0;
+      double fraction = ((uint32_t)position & 65535) / 256 / 256.0;
+      uint16_t pixel = 0;
+      const unsigned shifts[] = {11, 5, 0}, masks[] = {31, 63, 31};
+      for (size_t c = 0; c < 3; ++c) {
+        double value = ((a >> shifts[c]) & masks[c]) * (1.0 - fraction)
+                     + ((b >> shifts[c]) & masks[c]) * fraction;
+        pixel |= (uint16_t)(value + 0.5) << shifts[c];
+      }
+      expected[3 + y * pitch] = pixel;
+    }
+    magik_launcher_reflect_column(actual + 3, pitch, src, height, rows, q, step);
+    if (memcmp(actual, expected, sizeof actual)) {
+      fprintf(stderr, "reflection mismatch trial %zu\n", trial); return 24;
+    }
+  }
+  puts("10000 rounded reflection cases match, including clipped tails and stride gaps");
   // A filtered column may retain opaque values at the old row-8 proof sites.
   // Its selected row-24 bounds must reject the shortcut and preserve compositing.
   {
