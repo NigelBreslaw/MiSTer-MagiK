@@ -314,10 +314,11 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 **PR 10 (in progress): the navigation timeline and the chart move together through one module, and the
 mapping between them is measured.**
 
-- `launcher_runtime/transition_lifecycle.rs` holds the operations that pair the navigation runtime with
+- `launcher_runtime/presentation_director.rs` holds the operations that pair the navigation runtime with
   the chart: `begin_full_screen_transition`, `release_full_screen_transition`,
   `capture_navigation_destination`, `finish_navigation_transition` and
-  `unwind_navigation_transition`. The loop calls them instead of pairing the two by hand (five sites).
+  `unwind_navigation_transition` (since PR 12 the last three are methods on the director). The loop
+  calls them instead of pairing the two by hand (five sites).
 - A seeded walk drives the real runtime and chart through those operations, including a chart that
   refuses a transition the runtime already started. It found that **the chart's state is not a function
   of the timeline's phase**: an immediate start plays Expand through Settled while the chart is still
@@ -339,6 +340,20 @@ mapping between them is measured.**
   chart waiting on navigation implies a playing runtime, and that the destination is only awaited
   before the snapshot is locked. Dropping the exclusive-view cancel, or its release, fails it.
 - The design of the director, from those measurements, is under Phase 4 below.
+
+**PR 12 (in progress): the `PresentationDirector` exists and the loop drives it (Phase 4, first slice).**
+
+- `launcher_runtime/presentation_director.rs` (renamed from `transition_lifecycle.rs`) holds
+  `PresentationDirector { navigation, chart, composition }`. `run_launcher_loop` owns one director
+  instead of three locals; its pairings are methods: `hold_frame_for_navigation`,
+  `unwind_navigation`, `capture_navigation_destination`, `finish_navigation` and the exclusive-view
+  rule as `cover_navigation(destination_committed)`, which the loop and both walks now share.
+- The renaming in the loop is mechanical (`navigation_transition` is `director.navigation`,
+  `full_screen_transition` is `director.chart`, `composition` is `director.composition`). Behaviour is
+  unchanged.
+- Not yet: the chart is still not an input to `composition.tick`, and the loop still builds that input
+  and reads the director's fields directly. Those are the next slices, with the releasing-chart
+  question from the PR 11 finding.
 
 ## Phased plan
 
@@ -429,7 +444,7 @@ What the walks in PR 10 and PR 11 say the director has to be (measured, not assu
   (navigation: Capture to Settled; orientation has its own); composition says what is on screen
   (full Slint, mixed Arcade, navigation, screensaver, modal, recovering). A director holds all three
   and keeps the relations between them, rather than collapsing one into another. The relations that
-  hold in every walk are in `transition_lifecycle.rs` and `transition_lifecycle/presentation_scenarios.rs`.
+  hold in every walk are in `presentation_director.rs` and `presentation_director/presentation_scenarios.rs`.
 - **Composition never sees the chart today.** The loop derives `navigation_transition_active` from the
   runtime and the chart is consulted separately. The director takes the chart as a composition input, so
   "a navigation composition state implies the chart holds the frame for navigation" is true by
@@ -442,9 +457,10 @@ What the walks in PR 10 and PR 11 say the director has to be (measured, not assu
   screensaver before the forced live raster, so the release waits until the screensaver ends; the chart
   then blocks a new transition for that long. It self-heals, but the director should state what a
   releasing chart means in each composition state instead of leaving it to the ladder's order.
-- **First slice:** the director starts as a struct that owns the three, with the existing paired
-  operations as its methods and the loop's `composition.tick(...)` input built from it. Behaviour
-  stays the same; the director's tests are the two walks above.
+- **First slice (done in PR 12):** the director is a struct that owns the three, with the existing
+  paired operations as its methods. Behaviour stays the same; its tests are the two walks above.
+  Next: build the composition input from the director (chart included), then define what a releasing
+  chart means per composition state.
 
 ### Phase 5: a recipe for the next transition
 

@@ -5324,13 +5324,12 @@ pub(super) fn run_launcher_loop(
     nav.sync_orientation_selection();
     let navigation_motion_enabled =
         !nav.settings.reduce_motion || profile_config.cpu().navigation_transition_requested();
-    let mut navigation_transition = NavigationTransitionRuntime::new(
+    let mut director = PresentationDirector::new(NavigationTransitionRuntime::new(
         layout.logical_w(),
         layout.logical_h(),
         navigation_motion_enabled,
-    );
+    ));
     let mut settings_cog_render_ahead = SettingsCogSession::new();
-    let mut full_screen_transition = FullScreenTransitionStateChart::default();
     nav.screen = start_screen;
     if orientation_benchmark.enabled() {
         nav.settings_selected = 1;
@@ -5521,7 +5520,6 @@ pub(super) fn run_launcher_loop(
     let mut launcher_preview_publication: Option<PhysicalLayerPublication> = None;
     let mut launcher_arcade_publication: Option<PhysicalLayerPublication> = None;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
-    let mut composition = UiCompositionController::new();
     let mut cpu = process_entry_cpu_profile.or_else(|| cpu_profile::start(profile_config.cpu()));
     let mut system_entry_cpu_profile = None;
     let mut screensaver_cpu_profile =
@@ -6415,8 +6413,8 @@ pub(super) fn run_launcher_loop(
         }
         let slint_timer_dispatch_started = Instant::now();
         let gui_timer_dispatch_pmu = gui_profiling.span("gui.timer-dispatch");
-        let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
-        let full_screen_transition_owned_at_loop_start = !full_screen_transition.is_live();
+        let full_screen_transition_policy_at_loop_start = director.chart.policy();
+        let full_screen_transition_owned_at_loop_start = !director.chart.is_live();
         let current_pad_state = pad.state();
         let directional_input_held = current_pad_state.dpad_up
             || current_pad_state.dpad_down
@@ -6429,7 +6427,7 @@ pub(super) fn run_launcher_loop(
         let mut background_work_allowed = !input_pending_before_route
             && !should_defer_launcher_background_work(
                 0,
-                navigation_transition.is_active(),
+                director.navigation.is_active(),
                 orientation_transition.is_active(),
                 directional_input_held,
             )
@@ -6511,8 +6509,8 @@ pub(super) fn run_launcher_loop(
                 &mut nav,
                 &mut layout,
                 &mut layout_epoch,
-                &mut navigation_transition,
-                &mut full_screen_transition,
+                &mut director.navigation,
+                &mut director.chart,
                 &mut orientation_transition,
                 &mut orientation_transition_intent,
                 &mut orientation_preparation_trace,
@@ -6560,8 +6558,8 @@ pub(super) fn run_launcher_loop(
                     &mut nav,
                     &mut layout,
                     &mut layout_epoch,
-                    &mut navigation_transition,
-                    &mut full_screen_transition,
+                    &mut director.navigation,
+                    &mut director.chart,
                     &mut orientation_transition,
                     &mut orientation_transition_intent,
                     &mut orientation_preparation_trace,
@@ -6890,7 +6888,7 @@ pub(super) fn run_launcher_loop(
             || !background_work_allowed
             || directional_input_held
             || latency_critical_input_pending
-            || navigation_transition.is_active()
+            || director.navigation.is_active()
             || orientation_transition.is_active()
             || full_screen_transition_owned_at_loop_start
             || nav.arcade.is_scroll_active()
@@ -7217,7 +7215,7 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        if !navigation_transition.is_active()
+        if !director.navigation.is_active()
             && commit_pending_collection_entry(
                 &mut pending_collection_entry,
                 &mut nav,
@@ -7236,13 +7234,13 @@ pub(super) fn run_launcher_loop(
             preview.cancel_system_entry_preview();
             arcade_entry_latency.cancel_enter();
             full_bridge_dirty = true;
-            if navigation_transition.is_active() {
-                navigation_transition.request_reverse(animation_us);
+            if director.navigation.is_active() {
+                director.navigation.request_reverse(animation_us);
             }
         }
 
-        if navigation_transition.is_active() {
-            navigation_transition.tick(animation_us);
+        if director.navigation.is_active() {
+            director.navigation.tick(animation_us);
             let should_commit = pending_navigation_transition
                 .as_ref()
                 .is_some_and(|pending| {
@@ -7290,7 +7288,7 @@ pub(super) fn run_launcher_loop(
                 } else if event.action != LauncherAction::OpenCollection
                     || pending_collection_entry.is_none()
                 {
-                    navigation_transition.request_reverse(animation_us);
+                    director.navigation.request_reverse(animation_us);
                 }
                 prepare_trace.navigation_commit_us = prepare_trace
                     .navigation_commit_us
@@ -7651,7 +7649,7 @@ pub(super) fn run_launcher_loop(
                     nav.screen,
                     nav.selected,
                     nav.settings_selected,
-                    full_screen_transition.is_live(),
+                    director.chart.is_live(),
                     animation_us,
                 ) {
                     incoming_input_events.push_back(event);
@@ -7851,9 +7849,9 @@ pub(super) fn run_launcher_loop(
                             || lifecycle_view.catalog_recovery_dialog().is_some(),
                         setup.is_active(),
                         nav.confirm_action.is_some(),
-                        navigation_transition.is_active()
+                        director.navigation.is_active()
                             || orientation_transition.is_active()
-                            || !full_screen_transition.is_live()
+                            || !director.chart.is_live()
                             || deferred_settings_activation.is_pending()
                             || level_trick_active,
                         &nav,
@@ -8023,10 +8021,7 @@ pub(super) fn run_launcher_loop(
                                 }
                             }
                             if let Some(orientation) = settings_navigation_benchmark
-                                .take_orientation_change(
-                                    nav.screen,
-                                    full_screen_transition.is_live(),
-                                )
+                                .take_orientation_change(nav.screen, director.chart.is_live())
                             {
                                 apply_orientation_layout(
                                     &app,
@@ -8036,7 +8031,7 @@ pub(super) fn run_launcher_loop(
                                     &mut nav,
                                     &mut layout,
                                     &mut layout_epoch,
-                                    &mut navigation_transition,
+                                    &mut director.navigation,
                                 );
                                 full_bridge_dirty = true;
                                 request_launcher_redraw!();
@@ -8063,23 +8058,23 @@ pub(super) fn run_launcher_loop(
                             if pending_collection_cancelled {
                                 preview.cancel_system_entry_preview();
                                 arcade_entry_latency.cancel_enter();
-                                if navigation_transition.is_active() {
-                                    navigation_transition.request_reverse(animation_us);
+                                if director.navigation.is_active() {
+                                    director.navigation.request_reverse(animation_us);
                                 }
                             }
                             let settings_transition_source = (!launch_failure_visible
                                 && !recovery_dialog_visible
-                                && !navigation_transition.is_active()
-                                && navigation_transition.enabled()
+                                && !director.navigation.is_active()
+                                && director.navigation.enabled()
                                 && settings_navigation_source_candidate(
                                     &nav,
                                     routed_event_this_loop.as_ref(),
                                 ))
                             .then(|| (nav.screen, nav.navigation_transition_state()));
                             let event = if orientation_transition.is_active()
-                                || full_screen_transition.owner()
+                                || director.chart.owner()
                                     == Some(FullScreenTransitionOwner::Orientation)
-                                || navigation_transition.is_active()
+                                || director.navigation.is_active()
                             {
                                 None
                             } else if launch_failure_visible || recovery_dialog_visible {
@@ -8186,7 +8181,7 @@ pub(super) fn run_launcher_loop(
                                     settings_page_transition(source_screen, nav.screen)
                             {
                                 let started = begin_settings_transition(
-                                    &mut navigation_transition,
+                                    &mut director.navigation,
                                     launcher_card_home.as_mut(),
                                     &SettingsInputs {
                                         route,
@@ -8199,16 +8194,11 @@ pub(super) fn run_launcher_loop(
                                         now_us: animation_us,
                                     },
                                 );
-                                if started
-                                    && begin_full_screen_transition(
-                                        &mut full_screen_transition,
-                                        FullScreenTransitionOwner::Navigation,
-                                    )
-                                {
+                                if started && director.hold_frame_for_navigation() {
                                     settings_navigation_benchmark.note_started(
                                         route,
                                         direction,
-                                        navigation_transition.request().map_or(
+                                        director.navigation.request().map_or(
                                             "",
                                             NavigationTransitionRequest::renderer_label,
                                         ),
@@ -8231,7 +8221,7 @@ pub(super) fn run_launcher_loop(
                                     full_bridge_dirty = true;
                                     request_launcher_redraw!();
                                 } else if started {
-                                    unwind_navigation_transition(&mut navigation_transition);
+                                    director.unwind_navigation();
                                 }
                             }
                             if let Some(event) = event {
@@ -8294,7 +8284,7 @@ pub(super) fn run_launcher_loop(
                                         let navigation_runtime_started = transition_spec
                                             .is_some_and(|(edge, direction)| {
                                                 begin_navigation_transition(
-                                                    &mut navigation_transition,
+                                                    &mut director.navigation,
                                                     launcher_card_home.as_mut(),
                                                     target.cached_565(),
                                                     &TransitionInputs {
@@ -8320,10 +8310,7 @@ pub(super) fn run_launcher_loop(
                                                 )
                                             });
                                         let transition_started = navigation_runtime_started
-                                            && begin_full_screen_transition(
-                                                &mut full_screen_transition,
-                                                FullScreenTransitionOwner::Navigation,
-                                            );
+                                            && director.hold_frame_for_navigation();
                                         if transition_started {
                                             let source_state = nav.navigation_transition_state();
                                             pending_navigation_transition =
@@ -8337,9 +8324,7 @@ pub(super) fn run_launcher_loop(
                                             full_bridge_dirty = true;
                                             request_launcher_redraw!();
                                         } else if navigation_runtime_started {
-                                            unwind_navigation_transition(
-                                                &mut navigation_transition,
-                                            );
+                                            director.unwind_navigation();
                                         } else if (collection_id.is_none()
                                             || collection_id.as_deref().is_some_and(
                                                 |collection_id| {
@@ -8649,8 +8634,8 @@ pub(super) fn run_launcher_loop(
                                                 &mut nav,
                                                 &mut layout,
                                                 &mut layout_epoch,
-                                                &mut navigation_transition,
-                                                &mut full_screen_transition,
+                                                &mut director.navigation,
+                                                &mut director.chart,
                                                 &mut orientation_transition,
                                                 &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
@@ -8685,8 +8670,8 @@ pub(super) fn run_launcher_loop(
                                                 &mut nav,
                                                 &mut layout,
                                                 &mut layout_epoch,
-                                                &mut navigation_transition,
-                                                &mut full_screen_transition,
+                                                &mut director.navigation,
+                                                &mut director.chart,
                                                 &mut orientation_transition,
                                                 &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
@@ -8705,7 +8690,7 @@ pub(super) fn run_launcher_loop(
                                     }
                                     LauncherAction::PersistSettings => {
                                         if let Some(settings) = event.settings.as_ref() {
-                                            navigation_transition.set_enabled(
+                                            director.navigation.set_enabled(
                                                 ui.render_w(),
                                                 ui.render_h(),
                                                 !settings.reduce_motion,
@@ -8931,7 +8916,7 @@ pub(super) fn run_launcher_loop(
                     if final_input_tick {
                         break;
                     }
-                    launcher_response_trace.observe_state(&nav, navigation_transition.is_active());
+                    launcher_response_trace.observe_state(&nav, director.navigation.is_active());
                 }
                 input_integrity_trace.flush_if_due(Instant::now(), &input_router);
 
@@ -9046,10 +9031,10 @@ pub(super) fn run_launcher_loop(
             .as_ref()
             .is_some_and(|pending| pending.source_was_arcade);
         let preserve_navigation_source_preview =
-            navigation_transition.is_active() && source_was_arcade;
+            director.navigation.is_active() && source_was_arcade;
         let defer_or_preserve_selected_preview = should_defer_or_preserve_selected_preview(
             defer_selected_preview,
-            navigation_transition.is_active(),
+            director.navigation.is_active(),
             source_was_arcade,
         );
         let bridge_sync_plan =
@@ -9262,9 +9247,8 @@ pub(super) fn run_launcher_loop(
         // CPU1) yields to motion without consuming its deadline.
         let status_write_due =
             frame_accounting.status_write_due() && status_write_deferral.allows(loop_start);
-        let status_snapshot_due = status_write_due
-            && !navigation_transition.is_active()
-            && full_screen_transition.is_live();
+        let status_snapshot_due =
+            status_write_due && !director.navigation.is_active() && director.chart.is_live();
         let status_string_copy_start = (status_snapshot_due
             && frame_accounting.preview_scroll_trace_enabled())
         .then(Instant::now);
@@ -9476,7 +9460,7 @@ pub(super) fn run_launcher_loop(
             );
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
-        if navigation_transition.is_active()
+        if director.navigation.is_active()
             && (effective_view == EffectiveLauncherView::Screensaver
                 || confirm_visible
                 || catalog_scan_visible)
@@ -9484,16 +9468,7 @@ pub(super) fn run_launcher_loop(
             let destination_committed = pending_navigation_transition
                 .as_ref()
                 .is_some_and(|pending| pending.committed);
-            let endpoint = if destination_committed {
-                navigation_transition.settle_at_destination();
-                Some(NavigationTransitionEndpoint::Destination)
-            } else {
-                navigation_transition.cancel_for_exclusive_view()
-            };
-            let _ = finish_navigation_transition(
-                &mut navigation_transition,
-                &mut full_screen_transition,
-            );
+            let endpoint = director.cover_navigation(destination_committed);
             if endpoint == Some(NavigationTransitionEndpoint::Source)
                 && let Some(entry) = pending_collection_entry.take()
             {
@@ -9512,11 +9487,11 @@ pub(super) fn run_launcher_loop(
             && (nav.screen != Screen::Arcade
                 || active_arcade_games_available
                 || nav.active_collection_id() == Some(arcade_catalog::MENU_ARCADE_SYSTEM_ID));
-        let composition_decision = composition.tick(UiCompositionInput {
+        let composition_decision = director.composition.tick(UiCompositionInput {
             screensaver_active: effective_view == EffectiveLauncherView::Screensaver,
-            navigation_transition_active: navigation_transition.is_active(),
+            navigation_transition_active: director.navigation.is_active(),
             navigation_destination_committed,
-            navigation_destination_ready: navigation_transition.destination_ready(),
+            navigation_destination_ready: director.navigation.destination_ready(),
             navigation_destination_layers_ready,
             return_screen: effective_view.return_screen(),
             confirm_visible,
@@ -9539,9 +9514,9 @@ pub(super) fn run_launcher_loop(
             runtime_status::event(event.name, event.detail.as_str());
         }
         if !startup_intro_suppress_launcher_ui {
-            sync_navigation_transition_active(&app, &navigation_transition);
+            sync_navigation_transition_active(&app, &director.navigation);
         }
-        launcher_response_trace.observe_state(&nav, navigation_transition.is_active());
+        launcher_response_trace.observe_state(&nav, director.navigation.is_active());
         if composition_decision.force_full_slint_present {
             full_frame_present = true;
         }
@@ -9626,7 +9601,7 @@ pub(super) fn run_launcher_loop(
                 settings_selected: nav.settings_selected,
                 composition_state: composition_status.state.to_string(),
                 composition_recovery_count: composition_status.recovery_count,
-                navigation_transition_active: navigation_transition.is_active(),
+                navigation_transition_active: director.navigation.is_active(),
                 input_enabled: startup_status.input_enabled,
             })
         } else {
@@ -9737,7 +9712,7 @@ pub(super) fn run_launcher_loop(
         let arcade_visual_changed_this_loop = nav.arcade.visual_index
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
-        let stream_motion_before_render = navigation_transition.is_active()
+        let stream_motion_before_render = director.navigation.is_active()
             || slint_animation_active
             || home_pan_present_active
             || home_horizontal_input_held
@@ -9849,7 +9824,7 @@ pub(super) fn run_launcher_loop(
         let scheduled_frame_class = frame_production_class(
             screensaver.active,
             home_motion_active,
-            navigation_transition.is_active(),
+            director.navigation.is_active(),
         );
         // One app-wide motion signal: anything moving on screen (animations,
         // scrolls, transitions, held directions, the screensaver). Background
@@ -9859,7 +9834,7 @@ pub(super) fn run_launcher_loop(
             stream_motion_before_render
                 || scheduled_frame_class != FrameProductionClass::EventDriven
                 || orientation_transition.is_active()
-                || !full_screen_transition.is_live()
+                || !director.chart.is_live()
                 || directional_input_held,
         );
         let render_intent = LauncherRenderIntent {
@@ -10053,7 +10028,7 @@ pub(super) fn run_launcher_loop(
             .unwrap_or(0);
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("pre-render-pacing", scheduler_phase);
-        let full_screen_transition_policy_before_render = full_screen_transition.policy();
+        let full_screen_transition_policy_before_render = director.chart.policy();
         let navigation_snapshot_locked_before_render =
             full_screen_transition_policy_before_render.snapshot_locked;
         if full_screen_transition_policy_before_render.advance_slint_timers {
@@ -10204,12 +10179,12 @@ pub(super) fn run_launcher_loop(
             startup_intro_suppressed: startup_intro_suppress_launcher_ui,
             confirm_visible,
             catalog_scan_visible,
-            navigation_transition_active: navigation_transition.is_active(),
+            navigation_transition_active: director.navigation.is_active(),
             orientation_transition_active: orientation_transition.is_active(),
             composition_state: composition_decision.state,
             force_full_slint_raster: composition_decision.force_full_slint_raster,
             force_full_slint_present: composition_decision.force_full_slint_present,
-            transition_state: full_screen_transition.state(),
+            transition_state: director.chart.state(),
         });
         if !card_motion_only && let Some(session) = launcher_card_home.as_mut() {
             session.invalidate_compositor();
@@ -10368,9 +10343,9 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(super::launcher_card_home::LauncherCardHomeSession::compositor_stale);
         if navigation_capture_source_carrier_required(
             full_screen_transition_policy_before_render,
-            full_screen_transition.owner(),
-            navigation_transition.frame().phase,
-            navigation_transition.settings_physical_space(),
+            director.chart.owner(),
+            director.navigation.frame().phase,
+            director.navigation.settings_physical_space(),
         ) {
             let mut direct_render_timing = None;
             match launcher_presenter.try_render_direct_hidden_frame(
@@ -10379,7 +10354,7 @@ pub(super) fn run_launcher_loop(
                 |_, pixels| {
                     let started = Instant::now();
                     let start_phase_us = pacer.age_since_last_hit_us(started);
-                    let rendered = navigation_transition.render_into(pixels).is_ok();
+                    let rendered = director.navigation.render_into(pixels).is_ok();
                     direct_render_timing = Some((started, Instant::now(), start_phase_us));
                     rendered
                 },
@@ -10405,7 +10380,7 @@ pub(super) fn run_launcher_loop(
         }
         if orientation_capture_source_carrier_required(
             full_screen_transition_policy_before_render,
-            full_screen_transition.owner(),
+            director.chart.owner(),
             orientation_transition.is_active(),
             orientation_transition.destination_ready(),
         ) {
@@ -10725,8 +10700,8 @@ pub(super) fn run_launcher_loop(
         {
             None
         } else if full_screen_transition_policy_before_render.snapshot_locked {
-            if let Some(generation) = full_screen_transition.generation() {
-                let _ = full_screen_transition.retain_redraw(generation);
+            if let Some(generation) = director.chart.generation() {
+                let _ = director.chart.retain_redraw(generation);
             }
             None
         } else if full_screen_transition_policy_before_render.force_live_raster {
@@ -10739,34 +10714,32 @@ pub(super) fn run_launcher_loop(
             dirty
         } else if full_screen_transition_policy_before_render.controlled_capture
             && (composition_decision.force_full_slint_raster
-                || full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation))
+                || director.chart.owner() == Some(FullScreenTransitionOwner::Orientation))
         {
-            let authorized = full_screen_transition
-                .generation()
-                .is_some_and(|generation| {
-                    match full_screen_transition.take_controlled_capture(generation) {
-                        Ok(authorized) => authorized,
-                        Err(error) => {
-                            crate::ui_errln!("navigation controlled capture rejected: {error:?}");
-                            false
-                        }
+            let authorized = director.chart.generation().is_some_and(|generation| {
+                match director.chart.take_controlled_capture(generation) {
+                    Ok(authorized) => authorized,
+                    Err(error) => {
+                        crate::ui_errln!("navigation controlled capture rejected: {error:?}");
+                        false
                     }
-                });
+                }
+            });
             if authorized {
                 gui_raster_phase = gui_raster_profile_phase(true, true);
                 let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
                 let controlled_raster_started = Instant::now();
                 let (dirty, damage, rendered) = render_launcher_base!(true);
                 drop(gui_raster_pmu);
-                if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation) {
+                if director.chart.owner() == Some(FullScreenTransitionOwner::Orientation) {
                     orientation_controlled_slint_raster_us =
                         controlled_raster_started.elapsed().as_micros();
                 }
                 slint_damage = damage;
                 full_screen_controlled_capture_rendered = rendered;
                 if !rendered
-                    && let Some(generation) = full_screen_transition.generation()
-                    && let Err(error) = full_screen_transition.capture_deferred(generation)
+                    && let Some(generation) = director.chart.generation()
+                    && let Err(error) = director.chart.capture_deferred(generation)
                 {
                     crate::ui_errln!("full-screen controlled capture defer rejected: {error:?}");
                 } else if !rendered {
@@ -10777,8 +10750,8 @@ pub(super) fn run_launcher_loop(
                 None
             }
         } else if !full_screen_transition_policy_before_render.automatic_slint_raster {
-            if let Some(generation) = full_screen_transition.generation() {
-                let _ = full_screen_transition.retain_redraw(generation);
+            if let Some(generation) = director.chart.generation() {
+                let _ = director.chart.retain_redraw(generation);
             }
             None
         } else if crt_backdrop_eligible
@@ -10845,9 +10818,9 @@ pub(super) fn run_launcher_loop(
             input_observation_probe
                 .as_ref()
                 .is_some_and(|probe| probe.changed_since(input_observation)),
-            navigation_transition.is_active()
+            director.navigation.is_active()
                 || orientation_transition.is_active()
-                || !full_screen_transition.is_live(),
+                || !director.chart.is_live(),
             screensaver.active,
             composition_decision.state != UiCompositionState::FullSlint
                 || composition_decision.retirement_generation.is_some(),
@@ -10907,12 +10880,12 @@ pub(super) fn run_launcher_loop(
                     .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1)),
             );
         }
-        if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation)
-            && full_screen_transition.state() == FullScreenTransitionState::CapturePending
-            && !full_screen_transition.policy().controlled_capture
+        if director.chart.owner() == Some(FullScreenTransitionOwner::Orientation)
+            && director.chart.state() == FullScreenTransitionState::CapturePending
+            && !director.chart.policy().controlled_capture
             && !full_screen_controlled_capture_rendered
         {
-            abort_orientation_transition(&mut orientation_transition, &mut full_screen_transition);
+            abort_orientation_transition(&mut orientation_transition, &mut director.chart);
         }
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
@@ -10960,7 +10933,7 @@ pub(super) fn run_launcher_loop(
             wants_arcade_list && composition_decision.allow_arcade_list_blit,
             (wants_preview || preview.empty_base_commit_pending())
                 && composition_decision.allow_preview_blit,
-            navigation_transition.is_active(),
+            director.navigation.is_active(),
             orientation_transition.is_active(),
         );
         let gui_custom_generation_pmu = gui_profiling.phase_span(
@@ -11143,7 +11116,7 @@ pub(super) fn run_launcher_loop(
             let result = backdrop.compose(
                 crt_backdrop_eligible,
                 force_crt_backdrop_repaint,
-                arcade_turbo_active || navigation_transition.is_active(),
+                arcade_turbo_active || director.navigation.is_active(),
                 nav.arcade.selected,
                 transition_id,
                 (preview_cache_state_before_composition == "exact")
@@ -11177,21 +11150,22 @@ pub(super) fn run_launcher_loop(
                 request_launcher_redraw!();
             }
         }
-        let navigation_transition_composition_active = navigation_transition.is_active();
+        let navigation_transition_composition_active = director.navigation.is_active();
         if !navigation_transition_composition_active {
             settings_cog_render_ahead.clear();
         }
-        let navigation_settings_physical_space = navigation_transition.settings_physical_space();
+        let navigation_settings_physical_space = director.navigation.settings_physical_space();
         let navigation_transition_frame_active = navigation_transition_composition_active
-            && navigation_transition.frame().phase != NavigationTransitionPhase::Capture;
+            && director.navigation.frame().phase != NavigationTransitionPhase::Capture;
         let (
             navigation_transition_route,
             navigation_transition_direction,
             navigation_transition_renderer,
         ) = if navigation_transition_frame_active {
-            navigation_transition
+            director
+                .navigation
                 .route()
-                .zip(navigation_transition.request())
+                .zip(director.navigation.request())
                 .map_or(("", "", ""), |(route, request)| {
                     (
                         route.label(),
@@ -11216,7 +11190,7 @@ pub(super) fn run_launcher_loop(
                 .as_ref()
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = !navigation_capture_source_carrier_rendered;
-            if destination_committed && !navigation_transition.destination_ready() {
+            if destination_committed && !director.navigation.destination_ready() {
                 #[cfg(feature = "tooling")]
                 let measure_destination = tooling_frame_evidence
                     .as_ref()
@@ -11228,9 +11202,8 @@ pub(super) fn run_launcher_loop(
                     "transition.destination-layers",
                 );
                 let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
-                    || (full_screen_transition.owner()
-                        == Some(FullScreenTransitionOwner::Navigation)
-                        && full_screen_transition.capture_issued());
+                    || (director.chart.owner() == Some(FullScreenTransitionOwner::Navigation)
+                        && director.chart.capture_issued());
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
                     && controlled_destination_raster_ready;
                 let mut destination_layers_ready = destination_raster_ready
@@ -11251,7 +11224,7 @@ pub(super) fn run_launcher_loop(
                         && preview.trace_cache_state() == "exact"
                         && preview.raw_frame_status() == PreviewRawFrameStatus::Ready;
                     let preview_surface_ready = if preview_exact {
-                        if navigation_transition.settings_physical_space() {
+                        if director.navigation.settings_physical_space() {
                             let (ready, publication) = layer_target.compose_exact_preview_physical(
                                 &preview,
                                 launcher_preview_publication.as_ref(),
@@ -11273,7 +11246,7 @@ pub(super) fn run_launcher_loop(
                     } else {
                         // Capture a clean list destination now. If an exact preview
                         // arrives later, the normal Arcade presentation path adopts it.
-                        if navigation_transition.settings_physical_space() {
+                        if director.navigation.settings_physical_space() {
                             let _ = layer_target.clear_presentation_preview();
                         } else {
                             let _ = layer_target.clear_cached_preview();
@@ -11307,7 +11280,7 @@ pub(super) fn run_launcher_loop(
                         #[cfg(feature = "tooling")]
                         let list_draw_done = measure_destination.then(Instant::now);
                         if let Some(update) = list_update {
-                            if navigation_transition.settings_physical_space() {
+                            if director.navigation.settings_physical_space() {
                                 let _ = layer_target.reclaim_arcade_publication(
                                     &mut arcade_list_renderer,
                                     &mut launcher_arcade_publication,
@@ -11364,7 +11337,8 @@ pub(super) fn run_launcher_loop(
                 if destination_layers_ready
                     && crt_layout
                     && nav.screen == Screen::Arcade
-                    && navigation_transition
+                    && director
+                        .navigation
                         .request()
                         .is_some_and(|r| r.is_device_card())
                     && let Some(source) = preview.selected_backdrop_source()
@@ -11375,7 +11349,7 @@ pub(super) fn run_launcher_loop(
                 }
                 if destination_layers_ready {
                     if let Some((waited, timed_out)) = status_quiesce {
-                        navigation_transition.note_pending_status_quiesce(
+                        director.navigation.note_pending_status_quiesce(
                             waited.as_micros().min(u64::MAX as u128) as u64,
                             timed_out,
                         );
@@ -11395,30 +11369,25 @@ pub(super) fn run_launcher_loop(
                     #[cfg(feature = "tooling")]
                     let snapshot_started = measure_destination.then(Instant::now);
                     if crt_layout {
-                        navigation_transition.update_device_reveal_image(
+                        director.navigation.update_device_reveal_image(
                             selected_device_reveal_image(&preview, crt_backdrop.as_ref(), layout),
                         );
                     }
-                    navigation_transition.update_device_reveal_backdrop(
+                    director.navigation.update_device_reveal_backdrop(
                         crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
                     );
                     // The first Slint destination raster can be expensive, but
                     // animation time only moves per produced frame, so cold
                     // preparation is never spent as motion.
-                    let destination = if navigation_transition.settings_physical_space() {
+                    let destination = if director.navigation.settings_physical_space() {
                         layer_target.presentation_frame_view().pixels()
                     } else {
                         layer_target.cached_frame_view().pixels()
                     };
-                    if !capture_navigation_destination(
-                        &mut navigation_transition,
-                        &mut full_screen_transition,
-                        destination,
-                        animation_us,
-                    ) {
+                    if !director.capture_navigation_destination(destination, animation_us) {
                         render_transition_frame = false;
                     }
-                    navigation_transition.tick(animation_us);
+                    director.navigation.tick(animation_us);
                     #[cfg(feature = "tooling")]
                     if let Some(started) = snapshot_started {
                         destination_stage_us[3] = u128_to_u64(started.elapsed().as_micros());
@@ -11435,9 +11404,9 @@ pub(super) fn run_launcher_loop(
                 let gui_navigation_pmu =
                     gui_profiling.phase_span(gui_custom_selection.navigation_transition_raster);
                 let mut rendered_direct = false;
-                if navigation_transition.settings_physical_space() {
+                if director.navigation.settings_physical_space() {
                     if (layout.logical_w(), layout.logical_h()) == (960, 540)
-                        && let Some(input) = navigation_transition.settings_cog_render_input()
+                        && let Some(input) = director.navigation.settings_cog_render_input()
                     {
                         const SETTINGS_RENDER_LEAD_VBLANKS: u64 = 2;
                         let lead_ms = pacer
@@ -11488,7 +11457,7 @@ pub(super) fn run_launcher_loop(
                                 // The cog blends by reading its output. Keep those
                                 // reads in the existing cached working buffer, then
                                 // write linearly into the granted scanout mapping.
-                                navigation_transition.render().is_ok_and(|frame| {
+                                director.navigation.render().is_ok_and(|frame| {
                                     if pixels.len() != frame.len() {
                                         return false;
                                     }
@@ -11530,7 +11499,8 @@ pub(super) fn run_launcher_loop(
                         settings_cog_render_ahead.recycle(frame);
                     }
                     if !rendered_direct {
-                        let rendered = navigation_transition
+                        let rendered = director
+                            .navigation
                             .render_into(layer_target.presentation_pixels_mut());
                         #[cfg(feature = "tooling")]
                         {
@@ -11544,7 +11514,8 @@ pub(super) fn run_launcher_loop(
                             navigation_frame_rendered = true;
                         }
                     }
-                } else if navigation_transition
+                } else if director
+                    .navigation
                     .render_into(layer_target.presentation_pixels_mut())
                     .is_ok()
                 {
@@ -11558,17 +11529,14 @@ pub(super) fn run_launcher_loop(
             }
             full_frame_present = true;
             request_launcher_redraw!();
-            if navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
+            if director.navigation.frame().phase == NavigationTransitionPhase::Settled {
                 settings_navigation_benchmark.note_rendered_endpoint(frames);
                 let endpoint_is_live = navigation_home_endpoint_is_live(
-                    navigation_transition.route(),
-                    navigation_transition.request(),
-                    navigation_transition.frame().endpoint,
+                    director.navigation.route(),
+                    director.navigation.request(),
+                    director.navigation.frame().endpoint,
                 );
-                let completion = finish_navigation_transition(
-                    &mut navigation_transition,
-                    &mut full_screen_transition,
-                );
+                let completion = director.finish_navigation();
                 #[cfg(feature = "tooling")]
                 {
                     navigation_endpoint_rendered =
@@ -11600,12 +11568,13 @@ pub(super) fn run_launcher_loop(
             navigation_transition_render_us = navigation_transition_compositor_started
                 .elapsed()
                 .as_micros();
-            navigation_transition
+            director
+                .navigation
                 .note_frame_work_us(navigation_transition_render_us.min(u64::MAX as u128) as u64);
-            sync_navigation_transition_active(&app, &navigation_transition);
+            sync_navigation_transition_active(&app, &director.navigation);
         }
         let effect_label_us = navigation_transition_render_us;
-        let navigation_telemetry = navigation_transition.telemetry();
+        let navigation_telemetry = director.navigation.telemetry();
         let mut custom_draw_trace = LauncherCustomDrawTrace {
             arcade_bbox_invalidation,
             arcade_rect_invalidation,
@@ -11671,20 +11640,22 @@ pub(super) fn run_launcher_loop(
                 .unwrap_or(0),
             crt_backdrop_cache_state: preview_cache_state_before_composition,
             effect_label_us,
-            navigation_transition_base_copy_us: navigation_transition
-                .last_render_stats()
-                .base_copy_us as u128,
-            navigation_transition_settings_blit_us: navigation_transition
+            navigation_transition_base_copy_us: director.navigation.last_render_stats().base_copy_us
+                as u128,
+            navigation_transition_settings_blit_us: director
+                .navigation
                 .last_render_stats()
                 .settings_blit_us as u128,
-            navigation_transition_card_scale_us: navigation_transition
+            navigation_transition_card_scale_us: director
+                .navigation
                 .last_render_stats()
                 .card_scale_us as u128,
-            navigation_transition_destination_reveal_us: navigation_transition
+            navigation_transition_destination_reveal_us: director
+                .navigation
                 .last_render_stats()
                 .destination_reveal_us
                 as u128,
-            navigation_transition_overlay_us: navigation_transition.last_render_stats().overlay_us
+            navigation_transition_overlay_us: director.navigation.last_render_stats().overlay_us
                 as u128,
             navigation_transition_edge: navigation_transition_route,
             navigation_transition_route,
@@ -12014,21 +11985,19 @@ pub(super) fn run_launcher_loop(
                     .saturating_mul(2)
                     as u64;
                 if captured {
-                    if let Some(generation) = full_screen_transition
+                    if let Some(generation) = director
+                        .chart
                         .generation_for(FullScreenTransitionOwner::Orientation)
-                        && let Err(error) = full_screen_transition.capture_completed(generation)
+                        && let Err(error) = director.chart.capture_completed(generation)
                     {
                         crate::ui_errln!("orientation snapshot lock rejected: {error:?}");
                         abort_orientation_transition(
                             &mut orientation_transition,
-                            &mut full_screen_transition,
+                            &mut director.chart,
                         );
                     }
                 } else {
-                    abort_orientation_transition(
-                        &mut orientation_transition,
-                        &mut full_screen_transition,
-                    );
+                    abort_orientation_transition(&mut orientation_transition, &mut director.chart);
                 }
             }
             let gui_orientation_pmu =
@@ -12057,10 +12026,7 @@ pub(super) fn run_launcher_loop(
                     damage_build_started.elapsed().as_micros();
                 custom_draw_trace.orientation_damage_rects_after = cached_damage.len() as u32;
                 if done {
-                    end_orientation_transition(
-                        &mut orientation_transition,
-                        &mut full_screen_transition,
-                    );
+                    end_orientation_transition(&mut orientation_transition, &mut director.chart);
                     match orientation_transition_intent.take() {
                         Some(OrientationTransitionIntent::Confirm) => {
                             orientation_confirmation.start_countdown(Instant::now());
@@ -12116,7 +12082,7 @@ pub(super) fn run_launcher_loop(
             empty_base_cached_rect.is_some() || cached_empty_target_presented,
         );
         drop(gui_custom_generation_pmu);
-        if !full_screen_transition.is_live() {
+        if !director.chart.is_live() {
             record_launcher_frame_phase!(LauncherFramePhase::FullScreenTransition);
         }
         let frame_plan = if layout.is_portrait() {
@@ -12221,7 +12187,7 @@ pub(super) fn run_launcher_loop(
                 .unwrap_or(u64::MAX);
         }
         if let Some(frame_started) = navigation_transition_frame_started {
-            navigation_transition.note_frame_work_us(
+            director.navigation.note_frame_work_us(
                 frame_started.elapsed().as_micros().min(u64::MAX as u128) as u64,
             );
         }
@@ -12398,7 +12364,7 @@ pub(super) fn run_launcher_loop(
             composition_decision.force_full_slint_present,
             composition_decision.force_full_slint_raster,
             full_frame_present,
-            navigation_transition.is_active(),
+            director.navigation.is_active(),
         );
         gui_profiling.record_frame_work(GuiFrameWorkRecord::from_traces(
             frames,
@@ -12615,9 +12581,9 @@ pub(super) fn run_launcher_loop(
                 nav.screen,
                 launcher_response_frame_stamp.is_some(),
                 !selection_feedback_stamp.entries.is_empty(),
-                navigation_transition.is_active()
+                director.navigation.is_active()
                     || orientation_transition.is_active()
-                    || !full_screen_transition.is_live(),
+                    || !director.chart.is_live(),
                 screensaver.active,
                 composition_decision.state != UiCompositionState::FullSlint
                     || composition_decision.retirement_generation.is_some(),
@@ -12761,7 +12727,7 @@ pub(super) fn run_launcher_loop(
                 }
                 Err(failure) => {
                     if let Some(generation) = composition_decision.retirement_generation {
-                        let _ = composition.mark_retirement_uncertain(generation);
+                        let _ = director.composition.mark_retirement_uncertain(generation);
                     }
                     launcher_presenter.fail_latch_completion(failure);
                     if let Some(failure) = launcher_presenter.latch_failure() {
@@ -12831,10 +12797,10 @@ pub(super) fn run_launcher_loop(
             if accepted_and_active_confirmed
                 && (full_screen_transition_release_raster_rendered
                     || full_screen_transition_live_endpoint_rendered)
-                && let Some(generation) = full_screen_transition.generation()
+                && let Some(generation) = director.chart.generation()
             {
-                let owner = full_screen_transition.owner();
-                match full_screen_transition.live_frame_presented(generation) {
+                let owner = director.chart.owner();
+                match director.chart.live_frame_presented(generation) {
                     Ok(retained_redraw) => {
                         if owner == Some(FullScreenTransitionOwner::Navigation) {
                             let benchmark_record = if settings_navigation_benchmark.enabled() {
@@ -13093,7 +13059,7 @@ pub(super) fn run_launcher_loop(
                                     && nav.home_horizontal_repeat_active()
                                 || home_horizontal_input_held
                                 || screensaver.active
-                                || navigation_transition.is_active()
+                                || director.navigation.is_active()
                                 || orientation_transition.is_active()
                                 || nav.screen == Screen::Arcade && nav.arcade.is_scroll_active()
                                 || app.window().has_active_animations();
@@ -13416,7 +13382,7 @@ pub(super) fn run_launcher_loop(
         );
         if accepted_and_active_confirmed
             && orientation_benchmark.enabled()
-            && full_screen_transition.is_live()
+            && director.chart.is_live()
             && let Some(record) = orientation_benchmark.note_confirmed_presentation(
                 nav.settings.screen_orientation,
                 frames,
@@ -13467,7 +13433,7 @@ pub(super) fn run_launcher_loop(
             None
         };
         if let Some(receipt) = direct_layer_receipt {
-            let retired = composition.confirm_presented_layers(
+            let retired = director.composition.confirm_presented_layers(
                 composition_decision.retirement_generation,
                 composition_decision.direct_layers_desired,
                 receipt,
