@@ -8437,11 +8437,8 @@ pub(super) fn run_launcher_loop(
                                                 }
                                                 // Both directions derive geometry from the
                                                 // committed navigation state; no history.
-                                                let card_edge = matches!(
-                                                    edge,
-                                                    NavigationTransitionEdge::HomeToArcade
-                                                        | NavigationTransitionEdge::ConsolesToSystem
-                                                ) && !layout.is_portrait();
+                                                let card_edge =
+                                                    is_card_edge(edge) && !layout.is_portrait();
                                                 let geometry = navigation_geometry(
                                                     &nav,
                                                     &NavigationDisplay {
@@ -8464,17 +8461,21 @@ pub(super) fn run_launcher_loop(
                                                     let use_card_reveal =
                                                         card_edge && launcher_card_home.is_some();
                                                     // Begin from the pixels the user is looking at.
-                                                    let source: &[Rgb565Pixel] = if card_home_owns_source(
-                                                        nav.screen,
-                                                        launcher_card_home
-                                                            .as_ref()
-                                                            .is_some_and(|cards| cards.owns_visible_frame()),
-                                                    ) && let Some(cards) = launcher_card_home.as_mut()
-                                                    {
-                                                        card_pixels_as_slint(cards.render())
-                                                    } else {
-                                                        target.cached_565()
-                                                    };
+                                                    let source: &[Rgb565Pixel] =
+                                                        match launcher_card_home.as_mut() {
+                                                            // Card-home draws in the logical raster; portrait
+                                                            // transitions run in the physical composition.
+                                                            Some(cards)
+                                                                if !layout.is_portrait()
+                                                                    && card_home_owns_source(
+                                                                        nav.screen,
+                                                                        cards.owns_visible_frame(),
+                                                                    ) =>
+                                                            {
+                                                                card_pixels_as_slint(cards.render())
+                                                            }
+                                                            _ => target.cached_565(),
+                                                        };
                                                     let started = if use_card_reveal {
                                                         let kind = if let Some(id) = collection_id.as_deref() {
                                                             nav.device_kind_for_collection(id)

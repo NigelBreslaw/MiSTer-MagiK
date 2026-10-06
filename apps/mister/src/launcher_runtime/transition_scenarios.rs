@@ -16,7 +16,7 @@ use super::navigation_transition::{
     NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionEndpoint,
     NavigationTransitionPhase, NavigationTransitionRuntime,
 };
-use super::transition_plan::{NavigationGeometryContext, derive_navigation_geometry};
+use super::transition_plan::{NavigationDisplay, TileView, derive_navigation_geometry};
 use crate::launcher_presentation::{device_reveal_spec, system_device_rgb565};
 use slint::platform::software_renderer::Rgb565Pixel;
 
@@ -46,16 +46,18 @@ fn begin(
     now_us: u64,
 ) -> bool {
     let geometry = derive_navigation_geometry(
-        &NavigationGeometryContext {
+        &NavigationDisplay {
             frame_width: WIDTH,
             frame_height: HEIGHT,
             crt: None,
+            card_home_rect: None,
+        },
+        &TileView {
             selected: 1,
             scroll_x: 0,
             item_count: 4,
             root_menu: edge != NavigationTransitionEdge::ConsolesToSystem,
-            selected_label: "Arcade",
-            card_home_rect: None,
+            label: "Arcade",
         },
         edge,
     );
@@ -208,12 +210,14 @@ mod navigation {
         }
     }
 
-    fn display() -> NavigationDisplay {
+    /// With `card_home` the carousel supplies the source card's rectangle, as on
+    /// device; without it the tile geometry alone must agree between directions.
+    fn display(card_home: bool) -> NavigationDisplay {
         NavigationDisplay {
             frame_width: 960,
             frame_height: 540,
             crt: None,
-            card_home_rect: Some(NavigationTransitionRect {
+            card_home_rect: card_home.then_some(NavigationTransitionRect {
                 x: 360,
                 y: 60,
                 width: 240,
@@ -226,6 +230,7 @@ mod navigation {
     fn plan(
         nav: &LauncherNav,
         event: &LauncherEvent,
+        card_home: bool,
     ) -> (
         NavigationTransitionEdge,
         NavigationTransitionDirection,
@@ -233,7 +238,11 @@ mod navigation {
     ) {
         let (edge, direction) = navigation_transition_for_intent(nav, event, false)
             .unwrap_or_else(|| panic!("{:?} plays a transition", event.action));
-        (edge, direction, navigation_geometry(nav, &display(), edge))
+        (
+            edge,
+            direction,
+            navigation_geometry(nav, &display(card_home), edge),
+        )
     }
 
     fn commit(nav: &mut LauncherNav, event: &LauncherEvent, catalog: &ArcadeCatalog) {
@@ -258,115 +267,129 @@ mod navigation {
 
     #[test]
     fn root_arcade_back_replays_the_forward_geometry() {
-        let catalog = catalog();
-        let mut nav = LauncherNav::new();
-        nav.sync_launcher_taxonomy(&catalog);
-        let open = event(LauncherAction::OpenCollection, Some(MENU_ARCADE_SYSTEM_ID));
-        let (edge, direction, forward) = plan(&nav, &open);
-        assert_eq!(
-            (edge, direction),
-            (
-                NavigationTransitionEdge::HomeToArcade,
-                NavigationTransitionDirection::Forward
-            )
-        );
-        commit(&mut nav, &open, &catalog);
-        assert_eq!(nav.screen, Screen::Arcade);
+        for card_home in [false, true] {
+            let catalog = catalog();
+            let mut nav = LauncherNav::new();
+            nav.sync_launcher_taxonomy(&catalog);
+            let open = event(LauncherAction::OpenCollection, Some(MENU_ARCADE_SYSTEM_ID));
+            let (edge, direction, forward) = plan(&nav, &open, card_home);
+            assert_eq!(
+                (edge, direction),
+                (
+                    NavigationTransitionEdge::HomeToArcade,
+                    NavigationTransitionDirection::Forward
+                )
+            );
+            commit(&mut nav, &open, &catalog);
+            assert_eq!(nav.screen, Screen::Arcade);
 
-        let back = event(LauncherAction::NavigateBack, None);
-        let (edge, direction, reverse) = plan(&nav, &back);
-        assert_eq!(
-            (edge, direction),
-            (
-                NavigationTransitionEdge::HomeToArcade,
-                NavigationTransitionDirection::Reverse
-            )
-        );
-        assert_eq!(reverse, forward);
+            let back = event(LauncherAction::NavigateBack, None);
+            let (edge, direction, reverse) = plan(&nav, &back, card_home);
+            assert_eq!(
+                (edge, direction),
+                (
+                    NavigationTransitionEdge::HomeToArcade,
+                    NavigationTransitionDirection::Reverse
+                )
+            );
+            assert_eq!(reverse, forward, "card_home={card_home}");
+        }
     }
 
     #[test]
     fn nested_system_back_replays_the_forward_geometry() {
-        let catalog = catalog();
-        let mut nav = handhelds_nav(&catalog);
-        let tile = nav.selected;
-        let open = event(LauncherAction::OpenCollection, Some("neogeopocket"));
-        let (edge, _, forward) = plan(&nav, &open);
-        assert_eq!(edge, NavigationTransitionEdge::ConsolesToSystem);
-        commit(&mut nav, &open, &catalog);
-        assert_eq!(nav.screen, Screen::Arcade);
-        assert_ne!(
-            nav.selected, tile,
-            "inside a collection `selected` is a catalog-system index, not the tile"
-        );
+        for card_home in [false, true] {
+            let catalog = catalog();
+            let mut nav = handhelds_nav(&catalog);
+            let tile = nav.selected;
+            let open = event(LauncherAction::OpenCollection, Some("neogeopocket"));
+            let (edge, _, forward) = plan(&nav, &open, card_home);
+            assert_eq!(edge, NavigationTransitionEdge::ConsolesToSystem);
+            commit(&mut nav, &open, &catalog);
+            assert_eq!(nav.screen, Screen::Arcade);
+            assert_ne!(
+                nav.selected, tile,
+                "inside a collection `selected` is a catalog-system index, not the tile"
+            );
 
-        let back = event(LauncherAction::NavigateBack, None);
-        let (edge, direction, reverse) = plan(&nav, &back);
-        assert_eq!(
-            (edge, direction),
-            (
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Reverse
-            )
-        );
-        assert_eq!(reverse, forward);
+            let back = event(LauncherAction::NavigateBack, None);
+            let (edge, direction, reverse) = plan(&nav, &back, card_home);
+            assert_eq!(
+                (edge, direction),
+                (
+                    NavigationTransitionEdge::ConsolesToSystem,
+                    NavigationTransitionDirection::Reverse
+                )
+            );
+            assert_eq!(reverse, forward, "card_home={card_home}");
 
-        // Leaving the level afterwards plays the Home-level reverse.
-        commit(&mut nav, &back, &catalog);
-        assert_eq!(nav.screen, Screen::Home);
-        let (edge, direction, _) = plan(&nav, &event(LauncherAction::NavigateBack, None));
-        assert_eq!(
-            (edge, direction),
-            (
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse
-            )
-        );
+            // Leaving the level afterwards plays the Home-level reverse.
+            commit(&mut nav, &back, &catalog);
+            assert_eq!(nav.screen, Screen::Home);
+            let (edge, direction, _) =
+                plan(&nav, &event(LauncherAction::NavigateBack, None), card_home);
+            assert_eq!(
+                (edge, direction),
+                (
+                    NavigationTransitionEdge::HomeToConsoles,
+                    NavigationTransitionDirection::Reverse
+                )
+            );
+        }
     }
 
     #[test]
     fn back_after_a_game_return_replays_the_forward_geometry() {
-        let catalog = catalog();
-        let mut nav = handhelds_nav(&catalog);
-        let open = event(LauncherAction::OpenCollection, Some("neogeopocket"));
-        let (_, _, forward) = plan(&nav, &open);
-        commit(&mut nav, &open, &catalog);
-        let state = capture_launch_return_state(&nav, &catalog, GAME).expect("return state");
+        for card_home in [false, true] {
+            let catalog = catalog();
+            let mut nav = handhelds_nav(&catalog);
+            let open = event(LauncherAction::OpenCollection, Some("neogeopocket"));
+            let (_, _, forward) = plan(&nav, &open, card_home);
+            commit(&mut nav, &open, &catalog);
+            let state = capture_launch_return_state(&nav, &catalog, GAME).expect("return state");
 
-        // The launch restarts the process: no transition runtime, no history.
-        let mut restored = LauncherNav::new();
-        assert!(apply_launch_return_state(&mut restored, &catalog, state));
-        assert_eq!(restored.screen, Screen::Arcade);
+            // The launch restarts the process: no transition runtime, no history.
+            let mut restored = LauncherNav::new();
+            assert!(apply_launch_return_state(&mut restored, &catalog, state));
+            assert_eq!(restored.screen, Screen::Arcade);
 
-        let (edge, direction, reverse) =
-            plan(&restored, &event(LauncherAction::NavigateBack, None));
-        assert_eq!(
-            (edge, direction),
-            (
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Reverse
-            )
-        );
-        assert_eq!(reverse, forward);
+            let (edge, direction, reverse) = plan(
+                &restored,
+                &event(LauncherAction::NavigateBack, None),
+                card_home,
+            );
+            assert_eq!(
+                (edge, direction),
+                (
+                    NavigationTransitionEdge::ConsolesToSystem,
+                    NavigationTransitionDirection::Reverse
+                )
+            );
+            assert_eq!(reverse, forward, "card_home={card_home}");
+        }
     }
 
     #[test]
-    fn every_back_and_home_intent_from_a_collection_plays_a_reveal() {
+    fn back_and_home_from_a_collection_play_the_same_reverse_reveal() {
         let catalog = catalog();
+        let mut planned = Vec::new();
         for action in [LauncherAction::NavigateBack, LauncherAction::NavigateHome] {
             let mut nav = handhelds_nav(&catalog);
-            commit(
-                &mut nav,
-                &event(LauncherAction::OpenCollection, Some("neogeopocket")),
-                &catalog,
-            );
-            let (_, direction, geometry) = plan(&nav, &event(action, None));
+            let open = event(LauncherAction::OpenCollection, Some("neogeopocket"));
+            let (_, _, forward) = plan(&nav, &open, false);
+            commit(&mut nav, &open, &catalog);
+            let (edge, direction, geometry) = plan(&nav, &event(action, None), false);
             assert_eq!(
-                direction,
-                NavigationTransitionDirection::Reverse,
+                (edge, direction),
+                (
+                    NavigationTransitionEdge::ConsolesToSystem,
+                    NavigationTransitionDirection::Reverse
+                ),
                 "{action:?}"
             );
-            assert!(geometry.source_card.width > 0, "{action:?}");
+            assert_eq!(geometry, forward, "{action:?}");
+            planned.push(geometry);
         }
+        assert_eq!(planned[0], planned[1]);
     }
 }

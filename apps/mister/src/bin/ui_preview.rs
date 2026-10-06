@@ -52,7 +52,7 @@ mod macos {
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_runtime::startup_intro::StartupIntroPlayback;
     use mister_magik_fb::launcher_runtime::transition_plan::{
-        NavigationDisplay, crt_navigation_layout, navigation_geometry,
+        NavigationDisplay, crt_navigation_layout, is_card_edge, navigation_geometry,
         navigation_transition_for_intent,
     };
     use mister_magik_fb::launcher_taxonomy::{
@@ -1501,10 +1501,7 @@ mod macos {
             else {
                 return false;
             };
-            let card_edge = matches!(
-                edge,
-                NavigationTransitionEdge::HomeToArcade | NavigationTransitionEdge::ConsolesToSystem
-            ) && !self.orientation.is_portrait();
+            let card_edge = is_card_edge(edge) && !self.orientation.is_portrait();
             let card_home_rect = card_edge.then(|| {
                 let scene = if self.display_profile.is_crt() {
                     mister_magik_framebuffer_scenes::launcher::LauncherScene::crt(

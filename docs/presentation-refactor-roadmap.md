@@ -220,23 +220,15 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 Each phase ships on its own and is checked with `scripts/magik check` on
 device. There is no big-bang rewrite.
 
-### Phase 0: fix both bugs the way the target architecture would (small)
+### Phase 0: fix both bugs the way the target architecture would (done, #234)
 
-- Add `presented_source()` in the loop that returns the card-home render when
-  card home owns scanout, else the composed cache. Use it at **every**
-  `begin_*` call site, not just the Arcade one.
-- Make reverse geometry derived: compute it with the same
-  `hdmi/crt_navigation_geometry` + `selected_card_rect()` path as forward, and
-  keep `geometry_history` only as a temporary cross-check (log on mismatch),
-  then delete it.
-- Regression tests: (a) first reveal frame equals the last presented
-  card-home frame; (b) a launcher seeded from `LaunchReturnState`, then
-  `NavigateBack` from Arcade, starts a `HomeToArcade` reverse transition.
+See Progress.
 
 ### Phase 1: scenario harness and continuity invariants
 
-- A host-side scenario runner drives the real loop state (the macOS
-  `ui_preview` shares the runtime) through scripted event sequences: every
+- A host-side scenario runner drives the real navigation state and transition
+  runtime (the loop's per-frame state is not drivable from a test yet; making it
+  so is part of this phase) through scripted event sequences: every
   route in both directions; reverse mid-flight; cancel; timeout; screensaver
   during and after; modal; orientation; return-from-game seeding; cold vs warm
   destination.

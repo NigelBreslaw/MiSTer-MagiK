@@ -6,12 +6,11 @@
 use crate::launcher::Screen;
 use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedRgb565Pixel;
 pub use mister_magik_framebuffer_scenes::navigation::{
-    CrtNavigationLayout, NavigationTransitionBuffers, NavigationTransitionCompletion,
-    NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionEndpoint,
-    NavigationTransitionFailure, NavigationTransitionFrame, NavigationTransitionGeometry,
-    NavigationTransitionPhase, NavigationTransitionRect, NavigationTransitionRenderStats,
-    NavigationTransitionRequest, SettingsPageTransitionAxis, crt_navigation_geometry,
-    hdmi_navigation_geometry,
+    NavigationTransitionBuffers, NavigationTransitionCompletion, NavigationTransitionDirection,
+    NavigationTransitionEdge, NavigationTransitionEndpoint, NavigationTransitionFailure,
+    NavigationTransitionFrame, NavigationTransitionGeometry, NavigationTransitionPhase,
+    NavigationTransitionRect, NavigationTransitionRenderStats, NavigationTransitionRequest,
+    SettingsPageTransitionAxis,
 };
 use mister_magik_framebuffer_scenes::navigation::{
     PROGRESS_MAX, SUPER_SCALER_COVER_PROGRESS, forward_progress_q16_at_elapsed_with_cover,
@@ -1117,6 +1116,9 @@ fn shared_rgb565_as_slint(pixels: &[SharedRgb565Pixel]) -> &[Rgb565Pixel] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mister_magik_framebuffer_scenes::navigation::{
+        CrtNavigationLayout, crt_navigation_geometry, hdmi_navigation_geometry,
+    };
 
     #[test]
     fn crt_navigation_geometry_stays_inside_every_supported_frame_shape() {
