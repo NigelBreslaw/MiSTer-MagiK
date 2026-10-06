@@ -15,8 +15,6 @@ pub enum FullScreenTransitionState {
 pub enum FullScreenTransitionOwner {
     Navigation,
     Orientation,
-    StartupReveal,
-    Screensaver,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,6 +41,8 @@ pub struct FullScreenTransitionPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ActiveTransition {
     owner: FullScreenTransitionOwner,
+    /// Never `Live`: a transition that has ended is no `ActiveTransition`.
+    state: FullScreenTransitionState,
     generation: FullScreenTransitionGeneration,
     capture_issued: bool,
     retained_redraw: bool,
@@ -50,7 +50,6 @@ struct ActiveTransition {
 
 #[derive(Debug)]
 pub struct FullScreenTransitionStateChart {
-    state: FullScreenTransitionState,
     next_generation: u64,
     active: Option<ActiveTransition>,
 }
@@ -58,7 +57,6 @@ pub struct FullScreenTransitionStateChart {
 impl Default for FullScreenTransitionStateChart {
     fn default() -> Self {
         Self {
-            state: FullScreenTransitionState::Live,
             next_generation: 1,
             active: None,
         }
@@ -70,24 +68,31 @@ impl FullScreenTransitionStateChart {
         &mut self,
         owner: FullScreenTransitionOwner,
     ) -> Result<FullScreenTransitionGeneration, FullScreenTransitionError> {
-        // `active` is set exactly while the state is not `Live`.
-        if self.state != FullScreenTransitionState::Live {
+        if self.active.is_some() {
             return Err(FullScreenTransitionError::OwnerActive);
         }
         let generation = FullScreenTransitionGeneration(self.next_generation);
         self.next_generation = self.next_generation.wrapping_add(1).max(1);
         self.active = Some(ActiveTransition {
             owner,
+            state: FullScreenTransitionState::CapturePending,
             generation,
             capture_issued: false,
             retained_redraw: false,
         });
-        self.state = FullScreenTransitionState::CapturePending;
         Ok(generation)
     }
 
     pub const fn state(&self) -> FullScreenTransitionState {
-        self.state
+        match self.active {
+            Some(active) => active.state,
+            None => FullScreenTransitionState::Live,
+        }
+    }
+
+    /// Whether Slint runs on its own: no transition owns the frame.
+    pub const fn is_live(&self) -> bool {
+        self.active.is_none()
     }
 
     pub const fn owner(&self) -> Option<FullScreenTransitionOwner> {
@@ -123,7 +128,7 @@ impl FullScreenTransitionStateChart {
     }
 
     pub fn policy(&self) -> FullScreenTransitionPolicy {
-        match self.state {
+        match self.state() {
             FullScreenTransitionState::Live => FullScreenTransitionPolicy {
                 advance_slint_timers: true,
                 automatic_slint_raster: true,
@@ -171,7 +176,7 @@ impl FullScreenTransitionStateChart {
         &mut self,
         generation: FullScreenTransitionGeneration,
     ) -> Result<bool, FullScreenTransitionError> {
-        if self.state != FullScreenTransitionState::CapturePending {
+        if self.state() != FullScreenTransitionState::CapturePending {
             return Err(FullScreenTransitionError::InvalidState);
         }
         let active = self.active_mut(generation)?;
@@ -186,13 +191,14 @@ impl FullScreenTransitionStateChart {
         &mut self,
         generation: FullScreenTransitionGeneration,
     ) -> Result<(), FullScreenTransitionError> {
-        if self.state != FullScreenTransitionState::CapturePending {
+        if self.state() != FullScreenTransitionState::CapturePending {
             return Err(FullScreenTransitionError::InvalidState);
         }
-        if !self.active_ref(generation)?.capture_issued {
+        let active = self.active_mut(generation)?;
+        if !active.capture_issued {
             return Err(FullScreenTransitionError::CaptureNotIssued);
         }
-        self.state = FullScreenTransitionState::SnapshotLocked;
+        active.state = FullScreenTransitionState::SnapshotLocked;
         Ok(())
     }
 
@@ -200,7 +206,7 @@ impl FullScreenTransitionStateChart {
         &mut self,
         generation: FullScreenTransitionGeneration,
     ) -> Result<(), FullScreenTransitionError> {
-        if self.state != FullScreenTransitionState::CapturePending {
+        if self.state() != FullScreenTransitionState::CapturePending {
             return Err(FullScreenTransitionError::InvalidState);
         }
         let active = self.active_mut(generation)?;
@@ -215,16 +221,7 @@ impl FullScreenTransitionStateChart {
         &mut self,
         generation: FullScreenTransitionGeneration,
     ) -> Result<(), FullScreenTransitionError> {
-        self.active_ref(generation)?;
-        if !matches!(
-            self.state,
-            FullScreenTransitionState::CapturePending
-                | FullScreenTransitionState::SnapshotLocked
-                | FullScreenTransitionState::Releasing
-        ) {
-            return Err(FullScreenTransitionError::InvalidState);
-        }
-        self.state = FullScreenTransitionState::Releasing;
+        self.active_mut(generation)?.state = FullScreenTransitionState::Releasing;
         Ok(())
     }
 
@@ -232,12 +229,11 @@ impl FullScreenTransitionStateChart {
         &mut self,
         generation: FullScreenTransitionGeneration,
     ) -> Result<bool, FullScreenTransitionError> {
-        if self.state != FullScreenTransitionState::Releasing {
+        if self.state() != FullScreenTransitionState::Releasing {
             return Err(FullScreenTransitionError::InvalidState);
         }
         let retained_redraw = self.active_ref(generation)?.retained_redraw;
         self.active = None;
-        self.state = FullScreenTransitionState::Live;
         Ok(retained_redraw)
     }
 

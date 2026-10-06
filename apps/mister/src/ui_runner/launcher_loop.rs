@@ -1006,10 +1006,6 @@ fn initial_system_entry_reader_required(
     capsule_seed_ready || sharded_seed_ready
 }
 
-fn full_screen_transition_owns_cpu1(state: FullScreenTransitionState) -> bool {
-    state != FullScreenTransitionState::Live
-}
-
 fn configure_arcade_list_renderer_geometry(
     renderer: &mut ArcadeListRenderer,
     nav: &LauncherNav,
@@ -6423,8 +6419,7 @@ pub(super) fn run_launcher_loop(
         let slint_timer_dispatch_started = Instant::now();
         let gui_timer_dispatch_pmu = gui_profiling.span("gui.timer-dispatch");
         let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
-        let full_screen_transition_owned_at_loop_start =
-            full_screen_transition_owns_cpu1(full_screen_transition.state());
+        let full_screen_transition_owned_at_loop_start = !full_screen_transition.is_live();
         let current_pad_state = pad.state();
         let directional_input_held = current_pad_state.dpad_up
             || current_pad_state.dpad_down
@@ -7659,7 +7654,7 @@ pub(super) fn run_launcher_loop(
                     nav.screen,
                     nav.selected,
                     nav.settings_selected,
-                    full_screen_transition.state() == FullScreenTransitionState::Live,
+                    full_screen_transition.is_live(),
                     animation_us,
                 ) {
                     incoming_input_events.push_back(event);
@@ -7861,7 +7856,7 @@ pub(super) fn run_launcher_loop(
                         nav.confirm_action.is_some(),
                         navigation_transition.is_active()
                             || orientation_transition.is_active()
-                            || full_screen_transition.state() != FullScreenTransitionState::Live
+                            || !full_screen_transition.is_live()
                             || deferred_settings_activation.is_pending()
                             || level_trick_active,
                         &nav,
@@ -8033,8 +8028,7 @@ pub(super) fn run_launcher_loop(
                             if let Some(orientation) = settings_navigation_benchmark
                                 .take_orientation_change(
                                     nav.screen,
-                                    full_screen_transition.state()
-                                        == FullScreenTransitionState::Live,
+                                    full_screen_transition.is_live(),
                                 )
                             {
                                 apply_orientation_layout(
@@ -9271,7 +9265,7 @@ pub(super) fn run_launcher_loop(
             frame_accounting.status_write_due() && status_write_deferral.allows(loop_start);
         let status_snapshot_due = status_write_due
             && !navigation_transition.is_active()
-            && !full_screen_transition_owns_cpu1(full_screen_transition.state());
+            && !!full_screen_transition.is_live();
         let status_string_copy_start = (status_snapshot_due
             && frame_accounting.preview_scroll_trace_enabled())
         .then(Instant::now);
@@ -9869,7 +9863,7 @@ pub(super) fn run_launcher_loop(
             stream_motion_before_render
                 || scheduled_frame_class != FrameProductionClass::EventDriven
                 || orientation_transition.is_active()
-                || full_screen_transition_owns_cpu1(full_screen_transition.state())
+                || !full_screen_transition.is_live()
                 || directional_input_held,
         );
         let render_intent = LauncherRenderIntent {
@@ -10857,7 +10851,7 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|probe| probe.changed_since(input_observation)),
             navigation_transition.is_active()
                 || orientation_transition.is_active()
-                || full_screen_transition.state() != FullScreenTransitionState::Live,
+                || !full_screen_transition.is_live(),
             screensaver.active,
             composition_decision.state != UiCompositionState::FullSlint
                 || composition_decision.retirement_generation.is_some(),
@@ -12144,7 +12138,7 @@ pub(super) fn run_launcher_loop(
             empty_base_cached_rect.is_some() || cached_empty_target_presented,
         );
         drop(gui_custom_generation_pmu);
-        if full_screen_transition.state() != FullScreenTransitionState::Live {
+        if !full_screen_transition.is_live() {
             record_launcher_frame_phase!(LauncherFramePhase::FullScreenTransition);
         }
         let frame_plan = if layout.is_portrait() {
@@ -12645,7 +12639,7 @@ pub(super) fn run_launcher_loop(
                 !selection_feedback_stamp.entries.is_empty(),
                 navigation_transition.is_active()
                     || orientation_transition.is_active()
-                    || full_screen_transition.state() != FullScreenTransitionState::Live,
+                    || !full_screen_transition.is_live(),
                 screensaver.active,
                 composition_decision.state != UiCompositionState::FullSlint
                     || composition_decision.retirement_generation.is_some(),
@@ -13444,7 +13438,7 @@ pub(super) fn run_launcher_loop(
         );
         if accepted_and_active_confirmed
             && orientation_benchmark.enabled()
-            && full_screen_transition.state() == FullScreenTransitionState::Live
+            && full_screen_transition.is_live()
             && let Some(record) = orientation_benchmark.note_confirmed_presentation(
                 nav.settings.screen_orientation,
                 frames,
@@ -16033,22 +16027,6 @@ mod tests {
                 }),
             ]
         );
-    }
-
-    #[test]
-    fn every_owned_full_screen_transition_state_quiesces_cpu1() {
-        assert!(!full_screen_transition_owns_cpu1(
-            FullScreenTransitionState::Live
-        ));
-        assert!(full_screen_transition_owns_cpu1(
-            FullScreenTransitionState::CapturePending
-        ));
-        assert!(full_screen_transition_owns_cpu1(
-            FullScreenTransitionState::SnapshotLocked
-        ));
-        assert!(full_screen_transition_owns_cpu1(
-            FullScreenTransitionState::Releasing
-        ));
     }
 
     #[test]

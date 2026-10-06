@@ -48,17 +48,16 @@ impl Model {
 
 use super::super::walk_rng::WalkRng as Rng;
 
-const OWNERS: [FullScreenTransitionOwner; 4] = [
+const OWNERS: [FullScreenTransitionOwner; 2] = [
     FullScreenTransitionOwner::Navigation,
     FullScreenTransitionOwner::Orientation,
-    FullScreenTransitionOwner::StartupReveal,
-    FullScreenTransitionOwner::Screensaver,
 ];
 
 fn check_policy(chart: &FullScreenTransitionStateChart, model: &Model, at: &str) {
     use FullScreenTransitionState::*;
     let policy = chart.policy();
     assert_eq!(chart.state(), model.state, "{at}");
+    assert_eq!(chart.is_live(), model.state == Live, "{at}");
     assert_eq!(chart.owner(), model.owner, "{at}");
     assert_eq!(chart.generation(), model.generation, "{at}");
     assert_eq!(policy.advance_slint_timers, model.state == Live, "{at}");

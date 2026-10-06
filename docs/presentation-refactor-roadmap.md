@@ -287,11 +287,20 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   holding it. The loop's two copies (`navigation_transition_generation`,
   `orientation_transition_generation`) and the parameter that plumbed one through the orientation start
   are deleted; release and snapshot-lock go through the chart by owner.
-- Deliberately not done: merging the motion timeline (`NavigationTransitionController`: Capture,
-  Expand, Covered, Reveal, Reversing, Settled) into the chart. The chart answers who owns the frame
-  and what may render; the controller is pure progress math with its own clock. Merging them would
-  couple the two without removing a copy of any state, so the chart stays the lifecycle owner and the
-  controller stays the timeline it drives.
+- Not merged here: the motion timeline (`NavigationTransitionController`: Capture, Expand, Covered,
+  Reveal, Reversing, Settled). Merged flat it would only couple the two. The plan is to nest it
+  inside the chart as the Navigation owner's substate (Phase 4), after the chart is simple and
+  orientation uses the same protocol.
+
+**PR 8 (in progress): the chart has one representation of its state.**
+
+- The chart kept `state` and `active` side by side and relied on a comment that `active` is set exactly
+  while the state is not `Live`. `Live` is now "no active transition" and the state of the active one
+  lives inside it, so the two cannot disagree. `state()` is derived; `is_live()` replaces
+  `state() == Live` comparisons and `full_screen_transition_owns_cpu1` in the loop.
+- `release` lost an `InvalidState` branch that could not be reached.
+- The `StartupReveal` and `Screensaver` owners are deleted: nothing started them. Phase 3 adds an owner
+  when its transition moves onto the chart.
 
 ## Phased plan
 
