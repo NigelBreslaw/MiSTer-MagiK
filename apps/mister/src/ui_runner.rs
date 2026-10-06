@@ -87,7 +87,8 @@ use mister_magik_fb::launcher_runtime::settings::{
 };
 use mister_magik_fb::launcher_runtime::settings_navigation_bench::*;
 use mister_magik_fb::launcher_runtime::transition_plan::{
-    NavigationGeometryContext, card_home_owns_source, derive_navigation_geometry,
+    NavigationDisplay, card_home_owns_source, crt_navigation_layout, is_card_edge,
+    navigation_geometry, navigation_transition_for_intent,
 };
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};

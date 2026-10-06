@@ -183,48 +183,52 @@ surprise.
 
 ## Progress
 
-Phase 0 and the first slice of Phase 1 are implemented on
-`nigel/presentation-director-phase0`:
+PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 
-- `launcher_runtime/transition_plan.rs` holds the shared rules. `transition_source_owner` picks
-  the producer of the visible frame, and `derive_navigation_geometry` gives geometry for both
-  directions from committed state. The loop and `ui_preview` both call them.
+**PR 0 (merged, #234): fix both bugs and start the shared planning module.**
+
+- `launcher_runtime/transition_plan.rs` holds the shared rules: `card_home_owns_source` picks the
+  producer of the visible frame, and `derive_navigation_geometry` gives geometry for both
+  directions from committed state.
 - `LauncherNav::menu_tile_view` is the tile a transition collapses into. Inside a collection
   `nav.selected` is a catalog-system index ("transitional compatibility"), not the menu tile, so
   geometry must use the level's remembered view, which is also what Back restores.
 - The remembered geometry stack (`geometry_history`, `geometry_for_reverse`,
-  `clear_geometry_history`) is deleted.
-- `launcher_runtime/transition_scenarios.rs` drives every card-capable edge in both directions from
-  a cold runtime: source continuity, endpoint continuity, mid-flight reversal, and reuse.
-- The unused Arcade-card renderer is deleted from the navigation runtime (`begin_arcade_card`,
-  `NavigationTransitionRenderer::ArcadeCard`, its buffers and test). Production already used the
-  device-card reveal. The cabinet artwork and `ArcadeCardRenderer` stay: the device cards, the
-  settings cog and `visual-concepts` use them.
-- Not done yet: the Home to Arcade source is chosen by a pure rule but not asserted against a real
-  card-home frame (that needs the loop-level harness).
+  `clear_geometry_history`) is deleted, as is the unused Arcade-card navigation renderer. The
+  cabinet artwork and `ArcadeCardRenderer` stay: device cards, the settings cog and
+  `visual-concepts` use them.
+- `launcher_runtime/transition_scenarios.rs` drives every card-capable edge in both directions
+  from a cold runtime: source continuity, endpoint continuity, mid-flight reversal, and reuse.
+
+**PR 1 (in progress): scenario harness at navigation level.**
+
+- The route table (`navigation_transition_for_intent`) and the geometry assembly
+  (`navigation_geometry`, `crt_navigation_layout`, `NavigationDisplay`) move into
+  `transition_plan.rs`. The device loop and the macOS preview both call them; the preview's own
+  copy of the route table and of the CRT/HDMI geometry code is deleted.
+- Navigation scenarios run the real `LauncherNav`: Home to Arcade and Back, a nested system and
+  Back, Back after a restored `LaunchReturnState`, and Back/Home from a collection. Each asserts
+  the reverse reveal replays its forward geometry. Reintroducing `nav.selected` as the tile fails
+  two of them.
+- Still to do in Phase 1: screensaver, modal and orientation scenarios; a random event sweep;
+  damage soundness (incremental result equals a forced full raster); and asserting the Home to
+  Arcade source against a real card-home frame, which needs the loop's per-frame state to be
+  drivable from a test.
 
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
 device. There is no big-bang rewrite.
 
-### Phase 0: fix both bugs the way the target architecture would (small)
+### Phase 0: fix both bugs the way the target architecture would (done, #234)
 
-- Add `presented_source()` in the loop that returns the card-home render when
-  card home owns scanout, else the composed cache. Use it at **every**
-  `begin_*` call site, not just the Arcade one.
-- Make reverse geometry derived: compute it with the same
-  `hdmi/crt_navigation_geometry` + `selected_card_rect()` path as forward, and
-  keep `geometry_history` only as a temporary cross-check (log on mismatch),
-  then delete it.
-- Regression tests: (a) first reveal frame equals the last presented
-  card-home frame; (b) a launcher seeded from `LaunchReturnState`, then
-  `NavigateBack` from Arcade, starts a `HomeToArcade` reverse transition.
+See Progress.
 
 ### Phase 1: scenario harness and continuity invariants
 
-- A host-side scenario runner drives the real loop state (the macOS
-  `ui_preview` shares the runtime) through scripted event sequences: every
+- A host-side scenario runner drives the real navigation state and transition
+  runtime (the loop's per-frame state is not drivable from a test yet; making it
+  so is part of this phase) through scripted event sequences: every
   route in both directions; reverse mid-flight; cancel; timeout; screensaver
   during and after; modal; orientation; return-from-game seeding; cold vs warm
   destination.
@@ -252,6 +256,34 @@ device. There is no big-bang rewrite.
 - The card level trick is the hardest because it presents straight into
   scanout. It should still go through the chart as an owner with a
   `CardBand` damage policy, so other transitions can see what's on screen.
+
+### Phase 3b: one card pipeline for HDMI and CRT
+
+Principle: the bridge already feeds both display types the same data. Differences between HDMI
+and CRT should be explicit presentation parameters (safe insets, pixel aspect, fonts, geometry),
+not separate implementations. Every card improvement must reach both for free.
+
+Today there are two card pipelines, selected by `LauncherScene::uses_responsive_layout`
+(`launcher.rs`), which is true for CRT and for portrait (including HDMI portrait):
+
+| Stage | HDMI landscape (960x540) | CRT and portrait (`launcher/responsive.rs`) |
+| --- | --- | --- |
+| Artwork | `.cardtex` or 360x504 art, kept high precision | `native_surface`: filtered to the native card size, reduced to RGB565 once |
+| Face dithering | `dithered = true`: ordered dither at projection | `dithered = false`: no dither when projecting moving cards |
+| Layout and text | fixed canvas, role fonts | native raster, `Fonts::Uniform` / `Roles`, bitmap labels baked at output size |
+
+The newer performance work (cardtex, fast quantisation, dithered projection kernels) lives on the
+HDMI landscape side, so CRT and portrait do not get it.
+
+Plan: keep `responsive::Layout` as the one geometry and text description (it already covers
+CRT, portrait and 5:4), and make it produce the same face type the HDMI path does: high-precision
+texels, `dithered = true`, `.cardtex` support at native sizes. Then HDMI landscape becomes one more
+`Layout` rather than a special case, and `responsive.is_none()` branches in `prepare` disappear.
+
+Order: (1) dither parity for responsive faces, behind the existing benchmark and the layout review
+renders; (2) native-size `.cardtex`; (3) route HDMI landscape through `Layout`; (4) delete the
+fixed-canvas path. Each step is gated by `scripts/magik check motion` and card fixtures, since the
+projection kernels are on the 60 fps budget.
 
 ### Phase 4: PresentationDirector and loop extraction
 
