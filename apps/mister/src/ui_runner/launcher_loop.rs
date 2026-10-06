@@ -1160,7 +1160,7 @@ fn navigation_home_endpoint_is_live(
                     NavigationTransitionRoute::HomeToArcade
                         | NavigationTransitionRoute::ConsolesToSystem
                 ),
-                "arcade-card" | "device-card"
+                "device-card"
             )
         )
 }
@@ -8504,95 +8504,93 @@ pub(super) fn run_launcher_loop(
                                                         )
                                                         .unwrap_or(false);
                                                 }
-                                                let geometry = match direction {
-                                                    NavigationTransitionDirection::Forward => {
-                                                        let root_menu = nav.current_menu_id()
-                                                        == crate::launcher_taxonomy::ROOT_MENU_ID;
-                                                        let selected_label = nav
-                                                            .current_menu_items()
-                                                            .get(nav.selected)
-                                                            .map(|item| item.title.as_str())
-                                                            .unwrap_or("");
-                                                        Some(if crt_layout {
-                                                            let content = layout.content_rect();
-                                                            crt_navigation_geometry(
-                                                                layout.logical_w(),
-                                                                layout.logical_h(),
-                                                                CrtNavigationLayout {
-                                                                    content_x: content.x,
-                                                                    content_y: content.y,
-                                                                    content_width: content.width,
-                                                                    content_height: content.height,
-                                                                    grid_x: crt_metrics
-                                                                        .grid_x
-                                                                        .max(1)
-                                                                        as usize,
-                                                                    grid_y: crt_metrics
-                                                                        .grid_y
-                                                                        .max(1)
-                                                                        as usize,
-                                                                    header_height: crt_metrics
-                                                                        .header_height
-                                                                        .max(1)
-                                                                        as usize,
-                                                                    footer_height: crt_metrics
-                                                                        .footer_height
-                                                                        .max(1)
-                                                                        as usize,
-                                                                    heading_font_height: crt_metrics
-                                                                        .heading_font
-                                                                        .pixels()
-                                                                        .max(1)
-                                                                        as usize,
-                                                                    title_font_height: crt_metrics
-                                                                        .card_title_font
-                                                                        .pixels()
-                                                                        .max(1)
-                                                                        as usize,
-                                                                    detail_font_height: crt_metrics
-                                                                        .card_detail_font
-                                                                        .pixels()
-                                                                        .max(1)
-                                                                        as usize,
-                                                                    game_row_height: crt_metrics
-                                                                        .game_row_height
-                                                                        .max(1)
-                                                                        as usize,
-                                                                },
-                                                                nav.selected,
-                                                                nav.current_menu_items().len(),
-                                                                root_menu,
-                                                                edge,
-                                                                selected_label,
-                                                            )
-                                                        } else {
-                                                            hdmi_navigation_geometry(
-                                                                layout.logical_w(),
-                                                                layout.logical_h(),
-                                                                nav.selected,
-                                                                nav.scroll_x,
-                                                                root_menu,
-                                                                edge,
-                                                                selected_label,
-                                                            )
-                                                        })
+                                                let root_menu = nav.current_menu_id()
+                                                    == crate::launcher_taxonomy::ROOT_MENU_ID;
+                                                let (tile_selected, tile_scroll_x) =
+                                                    nav.menu_tile_view();
+                                                let selected_label = nav
+                                                    .current_menu_items()
+                                                    .get(tile_selected)
+                                                    .map(|item| item.title.as_str())
+                                                    .unwrap_or("");
+                                                let crt_geometry = crt_layout.then(|| {
+                                                    let content = layout.content_rect();
+                                                    CrtNavigationLayout {
+                                                        content_x: content.x,
+                                                        content_y: content.y,
+                                                        content_width: content.width,
+                                                        content_height: content.height,
+                                                        grid_x: crt_metrics.grid_x.max(1) as usize,
+                                                        grid_y: crt_metrics.grid_y.max(1) as usize,
+                                                        header_height: crt_metrics
+                                                            .header_height
+                                                            .max(1)
+                                                            as usize,
+                                                        footer_height: crt_metrics
+                                                            .footer_height
+                                                            .max(1)
+                                                            as usize,
+                                                        heading_font_height: crt_metrics
+                                                            .heading_font
+                                                            .pixels()
+                                                            .max(1)
+                                                            as usize,
+                                                        title_font_height: crt_metrics
+                                                            .card_title_font
+                                                            .pixels()
+                                                            .max(1)
+                                                            as usize,
+                                                        detail_font_height: crt_metrics
+                                                            .card_detail_font
+                                                            .pixels()
+                                                            .max(1)
+                                                            as usize,
+                                                        game_row_height: crt_metrics
+                                                            .game_row_height
+                                                            .max(1)
+                                                            as usize,
                                                     }
-                                                    NavigationTransitionDirection::Reverse => {
-                                                        navigation_transition
-                                                            .geometry_for_reverse(edge)
-                                                    }
-                                                };
-                                                geometry.is_some_and(|mut geometry| {
-                                                    let started = if matches!(
-                                                        edge,
-                                                        NavigationTransitionEdge::HomeToArcade
-                                                            | NavigationTransitionEdge::ConsolesToSystem
-                                                    ) && !layout.is_portrait()
-                                                        && let Some(cards) = launcher_card_home.as_ref()
+                                                });
+                                                // Both directions derive geometry from the
+                                                // committed navigation state; no history.
+                                                let card_edge = matches!(
+                                                    edge,
+                                                    NavigationTransitionEdge::HomeToArcade
+                                                        | NavigationTransitionEdge::ConsolesToSystem
+                                                ) && !layout.is_portrait();
+                                                let geometry = derive_navigation_geometry(
+                                                    &NavigationGeometryContext {
+                                                        frame_width: layout.logical_w(),
+                                                        frame_height: layout.logical_h(),
+                                                        crt: crt_geometry,
+                                                        selected: tile_selected,
+                                                        scroll_x: tile_scroll_x,
+                                                        item_count: nav.current_menu_items().len(),
+                                                        root_menu,
+                                                        selected_label,
+                                                        card_home_rect: launcher_card_home
+                                                            .as_ref()
+                                                            .filter(|_| card_edge)
+                                                            .map(|cards| cards.selected_card_rect()),
+                                                    },
+                                                    edge,
+                                                );
+                                                {
+                                                    let use_card_reveal =
+                                                        card_edge && launcher_card_home.is_some();
+                                                    // Begin from the pixels the user is looking at.
+                                                    let source: &[Rgb565Pixel] = if card_home_owns_source(
+                                                        nav.screen,
+                                                        launcher_card_home
+                                                            .as_ref()
+                                                            .is_some_and(|cards| cards.owns_visible_frame()),
+                                                    ) && let Some(cards) = launcher_card_home.as_mut()
                                                     {
-                                                        if direction == NavigationTransitionDirection::Forward {
-                                                            geometry.source_card = cards.selected_card_rect();
-                                                        }
+                                                        card_pixels_as_slint(cards.render())
+                                                    } else {
+                                                        target.cached_565()
+                                                    };
+                                                    let started = if use_card_reveal {
                                                         let kind = if let Some(id) = collection_id.as_deref() {
                                                             nav.device_kind_for_collection(id)
                                                         } else {
@@ -8605,7 +8603,7 @@ pub(super) fn run_launcher_loop(
                                                             direction,
                                                             geometry,
                                                             crate::launcher_presentation::device_reveal_spec(kind, crt_layout, hub),
-                                                            target.cached_565(),
+                                                            source,
                                                             crate::launcher_presentation::system_device_rgb565(kind),
                                                             crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
                                                             animation_us,
@@ -8617,10 +8615,9 @@ pub(super) fn run_launcher_loop(
                                                             navigation_geometry_to_composition(
                                                                 layout, geometry,
                                                             ),
-                                                            geometry,
                                                             layout.composition_w(),
                                                             layout.composition_h(),
-                                                            target.cached_565(),
+                                                            source,
                                                             animation_us,
                                                         )
                                                     } else {
@@ -8628,7 +8625,7 @@ pub(super) fn run_launcher_loop(
                                                             edge,
                                                             direction,
                                                             geometry,
-                                                            target.cached_565(),
+                                                            source,
                                                             animation_us,
                                                         )
                                                     };
@@ -8645,7 +8642,7 @@ pub(super) fn run_launcher_loop(
                                                         );
                                                     }
                                                     started.unwrap_or(false)
-                                                })
+                                                }
                                             });
                                         let transition_started = navigation_runtime_started
                                             && begin_navigation_full_screen_transition(
@@ -11922,14 +11919,6 @@ pub(super) fn run_launcher_loop(
                 full_screen_transition_live_endpoint_rendered =
                     endpoint_is_live && completion.is_some();
                 let pending = pending_navigation_transition.take();
-                if completion.is_some_and(|completion| {
-                    completion.endpoint == NavigationTransitionEndpoint::Destination
-                }) && pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.event.action == LauncherAction::NavigateHome)
-                {
-                    navigation_transition.clear_geometry_history();
-                }
                 if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) {
@@ -15855,9 +15844,11 @@ mod tests {
         ));
         assert!(navigation_home_endpoint_is_live(
             Some(NavigationTransitionRoute::HomeToArcade),
-            Some(NavigationTransitionRequest::arcade_card(
+            Some(NavigationTransitionRequest::device_card(
                 NavigationTransitionDirection::Reverse,
+                NavigationTransitionEdge::HomeToArcade,
                 NavigationTransitionGeometry::default(),
+                mister_magik_framebuffer_scenes::device_card::DeviceCardReveal::cabinet(false),
             )),
             Some(NavigationTransitionEndpoint::Destination),
         ));
@@ -15875,9 +15866,11 @@ mod tests {
         ));
         assert!(!navigation_home_endpoint_is_live(
             Some(NavigationTransitionRoute::HomeToSettings),
-            Some(NavigationTransitionRequest::arcade_card(
+            Some(NavigationTransitionRequest::device_card(
                 NavigationTransitionDirection::Reverse,
+                NavigationTransitionEdge::HomeToArcade,
                 NavigationTransitionGeometry::default(),
+                mister_magik_framebuffer_scenes::device_card::DeviceCardReveal::cabinet(false),
             )),
             Some(NavigationTransitionEndpoint::Destination),
         ));
@@ -15896,9 +15889,11 @@ mod tests {
 
         let live_endpoint = navigation_home_endpoint_is_live(
             Some(NavigationTransitionRoute::HomeToArcade),
-            Some(NavigationTransitionRequest::arcade_card(
+            Some(NavigationTransitionRequest::device_card(
                 NavigationTransitionDirection::Reverse,
+                NavigationTransitionEdge::HomeToArcade,
                 NavigationTransitionGeometry::default(),
+                mister_magik_framebuffer_scenes::device_card::DeviceCardReveal::cabinet(false),
             )),
             Some(NavigationTransitionEndpoint::Destination),
         );

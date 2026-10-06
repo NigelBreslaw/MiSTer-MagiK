@@ -86,7 +86,6 @@ enum NavigationTransitionRenderer {
     SuperScaler,
     SettingsPage,
     SettingsCog,
-    ArcadeCard,
     SystemPanel {
         crt: bool,
     },
@@ -668,18 +667,6 @@ impl NavigationTransitionRequest {
         }
     }
 
-    /// Home <-> Arcade card reveal. The buffers must carry the cabinet asset.
-    pub fn arcade_card(
-        direction: NavigationTransitionDirection,
-        geometry: NavigationTransitionGeometry,
-    ) -> Self {
-        Self {
-            duration_us: u64::from(crate::arcade_card::ARCADE_CARD_DURATION_MS) * 1_000,
-            renderer: NavigationTransitionRenderer::ArcadeCard,
-            ..Self::new(NavigationTransitionEdge::HomeToArcade, direction, geometry)
-        }
-    }
-
     pub fn device_card(
         direction: NavigationTransitionDirection,
         edge: NavigationTransitionEdge,
@@ -719,7 +706,6 @@ impl NavigationTransitionRequest {
             NavigationTransitionRenderer::SuperScaler => "super-scaler",
             NavigationTransitionRenderer::SettingsPage => "settings-page",
             NavigationTransitionRenderer::SettingsCog => "settings-cog",
-            NavigationTransitionRenderer::ArcadeCard => "arcade-card",
             NavigationTransitionRenderer::SystemPanel { .. } => "system-panel",
             NavigationTransitionRenderer::DeviceCard(_) => "device-card",
         }
@@ -812,7 +798,6 @@ pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) ->
         }
         NavigationTransitionRenderer::SettingsPage
         | NavigationTransitionRenderer::SettingsCog
-        | NavigationTransitionRenderer::ArcadeCard
         | NavigationTransitionRenderer::DeviceCard(_) => PROGRESS_MAX / 2,
     };
     match request.direction {
@@ -869,9 +854,6 @@ pub struct NavigationTransitionBuffers {
     destination_ready: bool,
     settings_cog_asset: Option<&'static crate::settings_cog::CogArtwork>,
     settings_cog_texture: Option<crate::settings_cog::CogTexture>,
-    arcade_texture: Option<crate::arcade_card::CabinetTexture>,
-    arcade_renderer: std::cell::RefCell<Option<crate::arcade_card::ArcadeCardRenderer>>,
-    arcade_worker_setup: Option<fn()>,
 }
 
 impl NavigationTransitionBuffers {
@@ -923,7 +905,6 @@ impl NavigationTransitionBuffers {
     }
 
     pub fn clear_ready(&mut self) {
-        self.arcade_renderer.get_mut().take();
         self.source_ready = false;
         self.destination_ready = false;
     }
@@ -990,18 +971,6 @@ impl NavigationTransitionBuffers {
 
     pub fn settings_cog_asset(&self) -> Option<&'static crate::settings_cog::CogArtwork> {
         self.settings_cog_asset
-    }
-
-    pub fn set_arcade_cabinet_asset(
-        &mut self,
-        asset: &crate::arcade_card::CabinetArtwork,
-        setup: Option<fn()>,
-    ) {
-        self.arcade_texture = Some(crate::arcade_card::CabinetTexture::from_artwork(asset));
-        self.arcade_worker_setup = setup;
-    }
-    pub fn retire_arcade_renderer(&mut self) {
-        self.arcade_renderer.get_mut().take();
     }
 
     pub fn copy_source_to_working(&mut self) -> Result<usize, NavigationTransitionFailure> {
@@ -1479,9 +1448,6 @@ pub fn render_settings_page_transition_into(
         }
         NavigationTransitionRenderer::SettingsCog => {
             return render_settings_cog_into(buffers, request, frame, output);
-        }
-        NavigationTransitionRenderer::ArcadeCard => {
-            return render_arcade_card_into(buffers, request, frame, output);
         }
         NavigationTransitionRenderer::SettingsPage => {}
         NavigationTransitionRenderer::SuperScaler => {
@@ -2028,80 +1994,6 @@ fn render_system_panel_into(
         copied_pixels: output.len() as u64,
         ..Default::default()
     })
-}
-
-fn render_arcade_card_into(
-    buffers: &NavigationTransitionBuffers,
-    request: NavigationTransitionRequest,
-    frame: NavigationTransitionFrame,
-    output: &mut [Rgb565Pixel],
-) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
-    let source = buffers.source.as_slice();
-    let mut stats = NavigationTransitionRenderStats::default();
-    if !buffers.source_ready || output.len() != source.len() {
-        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
-    }
-    let (Some(destination), Some(cabinet)) = (
-        buffers
-            .destination_ready
-            .then_some(buffers.destination.as_slice()),
-        buffers.arcade_texture.as_ref(),
-    ) else {
-        output.copy_from_slice(source);
-        stats.copied_pixels = source.len() as u64;
-        return Ok(stats);
-    };
-    let duration = crate::arcade_card::ARCADE_CARD_DURATION_MS;
-    let elapsed =
-        (u64::from(frame.progress_q16) * u64::from(duration) / PROGRESS_MAX as u64) as u32;
-    let (launcher, arcade, t_ms) = match request.direction {
-        NavigationTransitionDirection::Forward => (source, destination, elapsed),
-        NavigationTransitionDirection::Reverse => (destination, source, duration - elapsed),
-    };
-    let started = Instant::now();
-    if (buffers.width, buffers.height) == (960, 540) {
-        let mut renderer = buffers.arcade_renderer.borrow_mut();
-        if renderer.is_none() {
-            let (home, arcade) = match request.direction {
-                NavigationTransitionDirection::Forward => (
-                    Arc::clone(&buffers.source),
-                    Arc::clone(&buffers.destination),
-                ),
-                NavigationTransitionDirection::Reverse => (
-                    Arc::clone(&buffers.destination),
-                    Arc::clone(&buffers.source),
-                ),
-            };
-            *renderer = Some(
-                crate::arcade_card::ArcadeCardRenderer::new(
-                    home,
-                    arcade,
-                    cabinet,
-                    buffers.arcade_worker_setup,
-                )
-                .map_err(|_| NavigationTransitionFailure::SnapshotSizeMismatch)?,
-            );
-        }
-        renderer
-            .as_mut()
-            .unwrap()
-            .render(t_ms, output)
-            .map_err(|_| NavigationTransitionFailure::SnapshotSizeMismatch)?;
-    } else if !crate::arcade_card::render_arcade_card_into(
-        buffers.width,
-        buffers.height,
-        launcher,
-        arcade,
-        cabinet,
-        request.geometry.source_card,
-        t_ms,
-        output,
-    ) {
-        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
-    }
-    stats.card_scale_us = elapsed_us(started);
-    stats.copied_pixels = output.len() as u64;
-    Ok(stats)
 }
 
 fn elapsed_us(started: Instant) -> u64 {

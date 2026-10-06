@@ -2760,33 +2760,50 @@ impl LauncherNav {
         self.restore_home_view_state(source);
     }
 
-    fn restore_current_menu_view(&mut self) {
-        let menu_id = self.current_menu_id().to_string();
+    /// The tile and scroll the current menu level shows (or will show again).
+    fn resolved_menu_view(&self) -> (usize, i32) {
+        let menu_id = self.current_menu_id();
         let count = self.home_navigation_count();
-        let memory = self.menu_memory.get(&menu_id).cloned().unwrap_or_default();
         if count == 0 {
-            self.selected = 0;
-            self.scroll_x = 0;
-        } else {
-            self.selected = memory
-                .selected_item_id
-                .as_deref()
-                .and_then(|selected_id| {
-                    if self.current_menu_id() == ROOT_MENU_ID {
-                        ROOT_HOME_CARDS
-                            .iter()
-                            .position(|&id| root_home_card_identity(id) == selected_id)
-                    } else {
-                        self.current_menu_items()
-                            .iter()
-                            .position(|item| item.id == selected_id)
-                    }
-                })
-                .unwrap_or(memory.selected.min(count - 1));
-            self.scroll_x = memory.scroll_x;
-            keep_home_visible(self.selected, &mut self.scroll_x, count);
+            return (0, 0);
         }
+        let memory = self.menu_memory.get(menu_id).cloned().unwrap_or_default();
+        let selected = memory
+            .selected_item_id
+            .as_deref()
+            .and_then(|selected_id| {
+                if menu_id == ROOT_MENU_ID {
+                    ROOT_HOME_CARDS
+                        .iter()
+                        .position(|&id| root_home_card_identity(id) == selected_id)
+                } else {
+                    self.current_menu_items()
+                        .iter()
+                        .position(|item| item.id == selected_id)
+                }
+            })
+            .unwrap_or(memory.selected.min(count - 1));
+        let mut scroll_x = memory.scroll_x;
+        keep_home_visible(selected, &mut scroll_x, count);
+        (selected, scroll_x)
+    }
+
+    fn restore_current_menu_view(&mut self) {
+        (self.selected, self.scroll_x) = self.resolved_menu_view();
         self.restore_home_card_scroll();
+    }
+
+    /// The tile of the current menu level and its scroll, whichever screen is
+    /// showing. On Home this is the live selection. Inside a collection
+    /// `selected` is a catalog-system index, so the level's own tile comes from
+    /// its remembered view; this is the one a Back press restores. Transitions
+    /// use it so a reverse reveal needs no memory of the forward one.
+    pub fn menu_tile_view(&self) -> (usize, i32) {
+        if self.screen == Screen::Home {
+            (self.selected, self.scroll_x)
+        } else {
+            self.resolved_menu_view()
+        }
     }
 
     fn pop_menu(&mut self) -> bool {
@@ -10080,6 +10097,60 @@ mod tests {
         assert_eq!(state.system_index, catalog_system_index(&catalog, "arcade"));
         assert_eq!(state.game_path, "/media/fat/_Arcade/arcade-2.mra");
         assert_eq!(state.game_index, 2);
+    }
+
+    /// A game launch restarts the process, so reverse transitions cannot rely on
+    /// anything an earlier forward transition remembered. The restored navigation
+    /// state alone must identify the tile the reverse reveal collapses into.
+    #[test]
+    fn launch_return_state_identifies_the_tile_for_a_reverse_transition() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("handhelds"));
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "neogeopocket")
+            .expect("SNK NeoGeo Pocket");
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
+        nav.skip_system_page(&catalog);
+        let state =
+            capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/Pocket Tennis.mra")
+                .expect("return state");
+        let collection_id = state.collection_id().expect("collection").to_owned();
+
+        let mut restored = LauncherNav::new();
+        assert!(apply_launch_return_state(&mut restored, &catalog, state));
+        assert_eq!(restored.screen, Screen::Arcade);
+
+        let (selected, _scroll_x) = restored.menu_tile_view();
+        let tile = restored
+            .current_menu_items()
+            .get(selected)
+            .expect("the level's own tile");
+        assert_eq!(tile.id, collection_id);
+    }
+
+    /// Forward and reverse reveals must agree on the tile, though `selected`
+    /// changes meaning (menu index on Home, catalog-system index in a collection).
+    #[test]
+    fn menu_tile_view_is_stable_across_entering_a_collection() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("handhelds"));
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "neogeopocket")
+            .expect("SNK NeoGeo Pocket");
+        let on_home = nav.menu_tile_view();
+
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
+        nav.skip_system_page(&catalog);
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.menu_tile_view(), on_home);
     }
 
     #[test]
