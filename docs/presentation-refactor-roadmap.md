@@ -331,6 +331,15 @@ mapping between them is measured.**
   Dropping the chart's `CapturePending`/`SnapshotLocked` in favour of the phase would change the render
   policy during an immediate start.
 
+**PR 11 (in progress): the chart and composition measured together.**
+
+- A seeded walk over the navigation runtime, the chart and `UiCompositionController`, driven as the loop
+  drives them (including the exclusive-view cancel). It asserts that composition shows a navigation
+  state exactly while the runtime plays, that the chart then holds the frame for navigation, that a
+  chart waiting on navigation implies a playing runtime, and that the destination is only awaited
+  before the snapshot is locked. Dropping the exclusive-view cancel, or its release, fails it.
+- The design of the director, from those measurements, is under Phase 4 below.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
@@ -412,6 +421,30 @@ projection kernels are on the 60 fps budget.
   `director.on_presented(receipt)`.
 - Update `docs/architecture.md`: the Mermaid charts become one chart. Add a
   test that every `(state, event)` pair in the code is listed in the doc table.
+
+What the walks in PR 10 and PR 11 say the director has to be (measured, not assumed):
+
+- **Three independent axes, one owner each.** The chart's state says who may render (Live,
+  CapturePending, SnapshotLocked, Releasing); the owner's timeline says how far its motion got
+  (navigation: Capture to Settled; orientation has its own); composition says what is on screen
+  (full Slint, mixed Arcade, navigation, screensaver, modal, recovering). A director holds all three
+  and keeps the relations between them, rather than collapsing one into another. The relations that
+  hold in every walk are in `transition_lifecycle.rs` and `transition_lifecycle/presentation_scenarios.rs`.
+- **Composition never sees the chart today.** The loop derives `navigation_transition_active` from the
+  runtime and the chart is consulted separately. The director takes the chart as a composition input, so
+  "a navigation composition state implies the chart holds the frame for navigation" is true by
+  construction instead of by the loop's ordering. Both directions are asserted now.
+- **The exclusive-view rule is load-bearing.** A screensaver or confirmation over a playing navigation
+  transition must cancel the runtime and release the chart before composition is asked; the walk fails
+  if either half is dropped. That rule belongs inside the director.
+- **Observation to resolve:** the chart can be `Releasing` (it asks for a forced live Slint raster) while
+  composition shows the screensaver, a modal, or Mixed Arcade. The loop's render ladder serves the
+  screensaver before the forced live raster, so the release waits until the screensaver ends; the chart
+  then blocks a new transition for that long. It self-heals, but the director should state what a
+  releasing chart means in each composition state instead of leaving it to the ladder's order.
+- **First slice:** the director starts as a struct that owns the three, with the existing paired
+  operations as its methods and the loop's `composition.tick(...)` input built from it. Behaviour
+  stays the same; the director's tests are the two walks above.
 
 ### Phase 5: a recipe for the next transition
 
