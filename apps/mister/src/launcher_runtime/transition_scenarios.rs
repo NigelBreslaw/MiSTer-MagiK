@@ -183,6 +183,17 @@ mod navigation {
 
     const GAME: &str = "/media/fat/_Arcade/Pocket Tennis.mra";
 
+    /// A launchable game in `collection`, as the catalog fixture names them.
+    fn game_in(collection: &str) -> &'static str {
+        match collection {
+            MENU_ARCADE_SYSTEM_ID => "/media/fat/_Arcade/Metal Slug.mra",
+            "neogeopocket" => GAME,
+            "gamegear" => "/media/fat/_Arcade/Sonic.mra",
+            "nes" => "/media/fat/_Arcade/Super Mario Bros.mra",
+            other => panic!("no fixture game for {other}"),
+        }
+    }
+
     fn catalog() -> ArcadeCatalog {
         arcade_catalog(
             vec![
@@ -391,5 +402,104 @@ mod navigation {
             planned.push(geometry);
         }
         assert_eq!(planned[0], planned[1]);
+    }
+
+    /// Seeded random walks over the real navigation state. Every reveal out of a
+    /// collection, by Back or Home and whether or not the process restarted for a
+    /// game in between, must replay the geometry its forward reveal planned.
+    #[test]
+    fn random_walks_keep_every_reverse_reveal_symmetric_with_its_forward() {
+        use crate::launcher_taxonomy::LauncherMenuItemKind;
+
+        let catalog = catalog();
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % bound as u64) as usize
+        };
+        let mut collections_entered = 0;
+        let mut restarts = 0;
+        for walk in 0..200 {
+            let card_home = walk % 2 == 0;
+            let mut nav = LauncherNav::new();
+            nav.sync_launcher_taxonomy(&catalog);
+            let mut entered = None;
+            for _ in 0..40 {
+                if nav.screen == Screen::Arcade {
+                    let (edge, forward): (NavigationTransitionEdge, NavigationTransitionGeometry) =
+                        entered
+                            .take()
+                            .expect("Arcade is only reached by a planned reveal");
+                    if next(3) == 0 {
+                        // A game launch restarts the process: only saved state survives.
+                        let game = game_in(nav.active_collection_id().expect("a collection"));
+                        let state = capture_launch_return_state(&nav, &catalog, game);
+                        if let Some(state) = state {
+                            let mut restored = LauncherNav::new();
+                            assert!(apply_launch_return_state(&mut restored, &catalog, state));
+                            nav = restored;
+                            restarts += 1;
+                        }
+                    }
+                    let action = if next(2) == 0 {
+                        LauncherAction::NavigateBack
+                    } else {
+                        LauncherAction::NavigateHome
+                    };
+                    let leave = event(action, None);
+                    let (reverse_edge, direction, reverse) = plan(&nav, &leave, card_home);
+                    assert_eq!(direction, NavigationTransitionDirection::Reverse);
+                    assert_eq!(reverse_edge, edge, "walk {walk}");
+                    assert_eq!(reverse, forward, "walk {walk} {action:?}");
+                    commit(&mut nav, &leave, &catalog);
+                    continue;
+                }
+                let items = nav.current_menu_items().to_vec();
+                match next(4) {
+                    0 => {
+                        let _ = nav.commit_navigation_intent(
+                            &event(LauncherAction::NavigateBack, None),
+                            &catalog,
+                        );
+                    }
+                    1 => {
+                        let _ = nav.commit_navigation_intent(
+                            &event(LauncherAction::NavigateHome, None),
+                            &catalog,
+                        );
+                    }
+                    _ => {
+                        let Some(item) = (!items.is_empty()).then(|| &items[next(items.len())])
+                        else {
+                            continue;
+                        };
+                        // The loop selects the tile before it activates it.
+                        nav.selected = items.iter().position(|i| i.id == item.id).unwrap();
+                        match item.kind {
+                            LauncherMenuItemKind::Menu => {
+                                let _ = nav.commit_navigation_intent(
+                                    &event(LauncherAction::OpenMenu, Some(&item.id)),
+                                    &catalog,
+                                );
+                            }
+                            LauncherMenuItemKind::Collection => {
+                                let open = event(LauncherAction::OpenCollection, Some(&item.id));
+                                let (edge, _, forward) = plan(&nav, &open, card_home);
+                                if nav.commit_navigation_intent(&open, &catalog)
+                                    && nav.screen == Screen::Arcade
+                                {
+                                    entered = Some((edge, forward));
+                                    collections_entered += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(collections_entered > 100, "{collections_entered}");
+        assert!(restarts > 0, "the sweep never exercised a restart");
     }
 }

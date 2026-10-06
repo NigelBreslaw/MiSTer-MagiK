@@ -200,20 +200,28 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 - `launcher_runtime/transition_scenarios.rs` drives every card-capable edge in both directions
   from a cold runtime: source continuity, endpoint continuity, mid-flight reversal, and reuse.
 
-**PR 1 (in progress): scenario harness at navigation level.**
+**PR 1 (merged, #235): scenario harness at navigation level.**
 
 - The route table (`navigation_transition_for_intent`) and the geometry assembly
-  (`navigation_geometry`, `crt_navigation_layout`, `NavigationDisplay`) move into
-  `transition_plan.rs`. The device loop and the macOS preview both call them; the preview's own
-  copy of the route table and of the CRT/HDMI geometry code is deleted.
-- Navigation scenarios run the real `LauncherNav`: Home to Arcade and Back, a nested system and
-  Back, Back after a restored `LaunchReturnState`, and Back/Home from a collection. Each asserts
-  the reverse reveal replays its forward geometry. Reintroducing `nav.selected` as the tile fails
-  two of them.
-- Still to do in Phase 1: screensaver, modal and orientation scenarios; a random event sweep;
-  damage soundness (incremental result equals a forced full raster); and asserting the Home to
-  Arcade source against a real card-home frame, which needs the loop's per-frame state to be
-  drivable from a test.
+  (`navigation_geometry`, `crt_navigation_layout`, `NavigationDisplay`, `TileView`) live in
+  `transition_plan.rs`. The device loop and the macOS preview both call them.
+- Navigation scenarios run the real `LauncherNav` and assert that every reverse reveal replays its
+  forward geometry, with and without the carousel's card rectangle.
+- A review found that portrait transitions could begin from the logical card-home frame; fixed.
+
+**PR 2 (in progress): the transition start path runs from a test.**
+
+- `ui_runner/launcher_transition_start.rs` holds `begin_navigation_transition`, extracted from
+  `run_launcher_loop` with no behaviour change. It takes plain inputs (navigation state, layout, the
+  card-home session, the composed cache) and chooses the source pixels, the geometry and the renderer.
+- Host tests drive it with a real card-home session: Home to Arcade begins from the card-home frame
+  and not the stale cache; portrait and reverse-from-Arcade begin from the composed cache. Making
+  either choice wrong fails a test.
+- A seeded random walk over the real `LauncherNav` (200 walks, 40 steps, with simulated process
+  restarts between a collection and Back) checks every reverse reveal against its forward geometry.
+- Still to do in Phase 1: screensaver, modal and orientation scenarios; damage soundness
+  (incremental result equals a forced full raster). The preview still has its own start path, since
+  it wraps a different card-session type; folding it in is a Phase 2 task.
 
 ## Phased plan
 

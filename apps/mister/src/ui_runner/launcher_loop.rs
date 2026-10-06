@@ -18,6 +18,7 @@ use super::launcher_pacing::{
 };
 use super::launcher_screensaver::{ScreensaverRenderTrace, ScreensaverStartupTimeline};
 use super::launcher_settings_pipeline::{SettingsCogSession, SettingsFrameRequest};
+use super::launcher_transition_start::{TransitionInputs, begin_navigation_transition};
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -165,7 +166,9 @@ fn card_cached_frame_view(
     CachedFrameView::new(card_pixels_as_slint(pixels), width, height)
 }
 
-fn card_pixels_as_slint(pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel]) -> &[Rgb565Pixel] {
+pub(super) fn card_pixels_as_slint(
+    pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
+) -> &[Rgb565Pixel] {
     const {
         assert!(
             std::mem::size_of::<mister_magik_framebuffer_scenes::Rgb565Pixel>()
@@ -196,7 +199,7 @@ fn custom_damage_invalidation_comparison(
     (bounding, rectangles, bounding && !rectangles)
 }
 
-fn selected_device_reveal_image(
+pub(super) fn selected_device_reveal_image(
     preview: &crate::preview_state::PreviewState,
     backdrop: Option<&CrtBackdropController>,
     layout: crate::ui_display::UiLayoutGeometry,
@@ -211,43 +214,6 @@ fn selected_device_reveal_image(
             integer_scale: backdrop.is_some_and(|b| b.reference_height() > b.physical_height()),
         }
     })
-}
-
-fn navigation_geometry_to_composition(
-    layout: UiLayoutGeometry,
-    mut geometry: NavigationTransitionGeometry,
-) -> NavigationTransitionGeometry {
-    fn map_rect(
-        layout: UiLayoutGeometry,
-        rect: NavigationTransitionRect,
-    ) -> NavigationTransitionRect {
-        if rect.width == 0 || rect.height == 0 {
-            return rect;
-        }
-        let mapped = layout.logical_rect_to_composition(DirtyRect {
-            x0: rect.x as usize,
-            y0: rect.y as usize,
-            x1: rect.right() as usize,
-            y1: rect.bottom() as usize,
-        });
-        NavigationTransitionRect {
-            x: mapped.x0.min(u16::MAX as usize) as u16,
-            y: mapped.y0.min(u16::MAX as usize) as u16,
-            width: mapped.width().min(u16::MAX as usize) as u16,
-            height: mapped.rows().min(u32::from(u16::MAX)) as u16,
-        }
-    }
-
-    geometry.source_card = map_rect(layout, geometry.source_card);
-    geometry.source_label = map_rect(layout, geometry.source_label);
-    geometry.source_detail = map_rect(layout, geometry.source_detail);
-    geometry.destination_title = map_rect(layout, geometry.destination_title);
-    geometry.destination_detail = map_rect(layout, geometry.destination_detail);
-    geometry.destination_list = map_rect(layout, geometry.destination_list);
-    geometry.destination_selected_row = map_rect(layout, geometry.destination_selected_row);
-    geometry.destination_preview = map_rect(layout, geometry.destination_preview);
-    geometry.destination_footer = map_rect(layout, geometry.destination_footer);
-    geometry
 }
 
 fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEvent>) -> bool {
@@ -8415,120 +8381,31 @@ pub(super) fn run_launcher_loop(
                                         }
                                         let navigation_runtime_started = transition_spec
                                             .is_some_and(|(edge, direction)| {
-                                                if matches!(
-                                                    event.action,
-                                                    LauncherAction::ToggleSystemPage
-                                                        | LauncherAction::OpenSystemSection
-                                                ) {
-                                                    if layout.is_portrait() {
-                                                        return false;
-                                                    }
-                                                    return navigation_transition
-                                                        .begin_system_panel(
-                                                            crt_layout,
-                                                            nav.is_system_hub(),
-                                                            target.cached_565(),
-                                                            crt_backdrop
-                                                                .as_ref()
-                                                                .map_or(&[], |b| b.pixels()),
-                                                            animation_us,
-                                                        )
-                                                        .unwrap_or(false);
-                                                }
-                                                // Both directions derive geometry from the
-                                                // committed navigation state; no history.
-                                                let card_edge =
-                                                    is_card_edge(edge) && !layout.is_portrait();
-                                                let geometry = navigation_geometry(
-                                                    &nav,
-                                                    &NavigationDisplay {
-                                                        frame_width: layout.logical_w(),
-                                                        frame_height: layout.logical_h(),
-                                                        crt: crt_layout.then(|| {
-                                                            crt_navigation_layout(
-                                                                layout.content_rect(),
-                                                                &crt_metrics,
-                                                            )
-                                                        }),
-                                                        card_home_rect: launcher_card_home
+                                                begin_navigation_transition(
+                                                    &mut navigation_transition,
+                                                    launcher_card_home.as_mut(),
+                                                    &TransitionInputs {
+                                                        edge,
+                                                        direction,
+                                                        nav: &nav,
+                                                        collection_id: collection_id.as_deref(),
+                                                        layout,
+                                                        crt_layout,
+                                                        crt_metrics: &crt_metrics,
+                                                        composed: target.cached_565(),
+                                                        crt_backdrop: crt_backdrop
                                                             .as_ref()
-                                                            .filter(|_| card_edge)
-                                                            .map(|cards| cards.selected_card_rect()),
+                                                            .map_or(&[], |b| b.pixels()),
+                                                        now_us: animation_us,
                                                     },
-                                                    edge,
-                                                );
-                                                {
-                                                    let use_card_reveal =
-                                                        card_edge && launcher_card_home.is_some();
-                                                    // Begin from the pixels the user is looking at.
-                                                    let source: &[Rgb565Pixel] =
-                                                        match launcher_card_home.as_mut() {
-                                                            // Card-home draws in the logical raster; portrait
-                                                            // transitions run in the physical composition.
-                                                            Some(cards)
-                                                                if !layout.is_portrait()
-                                                                    && card_home_owns_source(
-                                                                        nav.screen,
-                                                                        cards.owns_visible_frame(),
-                                                                    ) =>
-                                                            {
-                                                                card_pixels_as_slint(cards.render())
-                                                            }
-                                                            _ => target.cached_565(),
-                                                        };
-                                                    let started = if use_card_reveal {
-                                                        let kind = if let Some(id) = collection_id.as_deref() {
-                                                            nav.device_kind_for_collection(id)
-                                                        } else {
-                                                            nav.device_kind()
-                                                        };
-                                                        let hub = direction == NavigationTransitionDirection::Forward
-                                                            || nav.is_system_hub();
-                                                        navigation_transition.begin_device_card(
-                                                            edge,
-                                                            direction,
-                                                            geometry,
-                                                            crate::launcher_presentation::device_reveal_spec(kind, crt_layout, hub),
-                                                            source,
-                                                            crate::launcher_presentation::system_device_rgb565(kind),
-                                                            crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
-                                                            animation_us,
+                                                    || {
+                                                        selected_device_reveal_image(
+                                                            &preview,
+                                                            crt_backdrop.as_ref(),
+                                                            layout,
                                                         )
-                                                    } else if layout.is_portrait() {
-                                                        navigation_transition.begin_physical(
-                                                            edge,
-                                                            direction,
-                                                            navigation_geometry_to_composition(
-                                                                layout, geometry,
-                                                            ),
-                                                            layout.composition_w(),
-                                                            layout.composition_h(),
-                                                            source,
-                                                            animation_us,
-                                                        )
-                                                    } else {
-                                                        navigation_transition.begin(
-                                                            edge,
-                                                            direction,
-                                                            geometry,
-                                                            source,
-                                                            animation_us,
-                                                        )
-                                                    };
-                                                    if started.as_ref().is_ok_and(|started| *started)
-                                                        && crt_layout
-                                                        && direction == NavigationTransitionDirection::Reverse
-                                                    {
-                                                        navigation_transition.update_device_reveal_image(
-                                                            selected_device_reveal_image(
-                                                                &preview,
-                                                                crt_backdrop.as_ref(),
-                                                                layout,
-                                                            ),
-                                                        );
-                                                    }
-                                                    started.unwrap_or(false)
-                                                }
+                                                    },
+                                                )
                                             });
                                         let transition_started = navigation_runtime_started
                                             && begin_navigation_full_screen_transition(
@@ -16013,31 +15890,6 @@ mod tests {
             shield_base_damage_under_publication(damage, &mut None),
             damage
         );
-    }
-
-    #[test]
-    fn portrait_navigation_geometry_uses_physical_rectangles() {
-        let display = UiDisplay::for_framebuffer(4, 3);
-        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::MonitorClockwise);
-        let logical_rect = NavigationTransitionRect {
-            x: 0,
-            y: 0,
-            width: 2,
-            height: 1,
-        };
-        let geometry = NavigationTransitionGeometry {
-            source_card: logical_rect,
-            destination_preview: logical_rect,
-            ..NavigationTransitionGeometry::default()
-        };
-
-        let mapped = navigation_geometry_to_composition(layout, geometry);
-
-        assert_eq!(mapped.source_card, mapped.destination_preview);
-        assert_eq!(mapped.source_card.x, 0);
-        assert_eq!(mapped.source_card.y, 1);
-        assert_eq!(mapped.source_card.width, 1);
-        assert_eq!(mapped.source_card.height, 2);
     }
 
     #[test]
