@@ -1179,15 +1179,9 @@ fn set_launcher_present_mode_label(app: &slint_ui::launcher::Launcher, value: &s
         .set_present_mode_label(value);
 }
 
-fn begin_navigation_full_screen_transition(
-    chart: &mut FullScreenTransitionStateChart,
-    generation: &mut Option<FullScreenTransitionGeneration>,
-) -> bool {
+fn begin_navigation_full_screen_transition(chart: &mut FullScreenTransitionStateChart) -> bool {
     match chart.begin(FullScreenTransitionOwner::Navigation) {
-        Ok(started) => {
-            *generation = Some(started);
-            true
-        }
+        Ok(_) => true,
         Err(error) => {
             crate::ui_errln!("navigation full-screen transition begin rejected: {error:?}");
             false
@@ -1197,12 +1191,12 @@ fn begin_navigation_full_screen_transition(
 
 fn release_full_screen_transition(
     chart: &mut FullScreenTransitionStateChart,
-    generation: Option<FullScreenTransitionGeneration>,
+    owner: FullScreenTransitionOwner,
 ) {
-    if let Some(generation) = generation
+    if let Some(generation) = chart.generation_for(owner)
         && let Err(error) = chart.release(generation)
     {
-        crate::ui_errln!("navigation full-screen transition release rejected: {error:?}");
+        crate::ui_errln!("{owner:?} full-screen transition release rejected: {error:?}");
     }
 }
 
@@ -4999,21 +4993,16 @@ fn begin_orientation_transition(
     layout_epoch: &mut u64,
     navigation_transition: &mut NavigationTransitionRuntime,
     full_screen_transition: &mut FullScreenTransitionStateChart,
-    orientation_transition_generation: &mut Option<FullScreenTransitionGeneration>,
     orientation_transition: &mut OrientationTransitionRuntime,
     orientation_transition_intent: &mut Option<OrientationTransitionIntent>,
     orientation_preparation_trace: &mut OrientationPreparationTrace,
     intent: OrientationTransitionIntent,
 ) -> bool {
     let begin_started = Instant::now();
-    let generation = match full_screen_transition.begin(FullScreenTransitionOwner::Orientation) {
-        Ok(generation) => generation,
-        Err(error) => {
-            crate::ui_errln!("orientation full-screen transition begin rejected: {error:?}");
-            return false;
-        }
-    };
-    *orientation_transition_generation = Some(generation);
+    if let Err(error) = full_screen_transition.begin(FullScreenTransitionOwner::Orientation) {
+        crate::ui_errln!("orientation full-screen transition begin rejected: {error:?}");
+        return false;
+    }
     let source_snapshot_started = Instant::now();
     let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
     let source_snapshot_us = source_snapshot_started.elapsed().as_micros();
@@ -5039,7 +5028,10 @@ fn begin_orientation_transition(
     } else {
         let _ = orientation_transition.take_completion();
         *orientation_transition_intent = None;
-        release_full_screen_transition(full_screen_transition, Some(generation));
+        release_full_screen_transition(
+            full_screen_transition,
+            FullScreenTransitionOwner::Orientation,
+        );
     }
     animated
 }
@@ -5346,7 +5338,6 @@ pub(super) fn run_launcher_loop(
     );
     let mut settings_cog_render_ahead = SettingsCogSession::new();
     let mut full_screen_transition = FullScreenTransitionStateChart::default();
-    let mut navigation_transition_generation = None;
     nav.screen = start_screen;
     if orientation_benchmark.enabled() {
         nav.settings_selected = 1;
@@ -5357,7 +5348,6 @@ pub(super) fn run_launcher_loop(
     let mut orientation_transition =
         OrientationTransitionRuntime::new(ui.render_w(), ui.render_h());
     let mut orientation_transition_intent = None;
-    let mut orientation_transition_generation = None;
     let mut orientation_preparation_trace = OrientationPreparationTrace::default();
     // Main owns the active display mode; the launcher only mirrors its reported state.
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some()
@@ -6531,7 +6521,6 @@ pub(super) fn run_launcher_loop(
                 &mut layout_epoch,
                 &mut navigation_transition,
                 &mut full_screen_transition,
-                &mut orientation_transition_generation,
                 &mut orientation_transition,
                 &mut orientation_transition_intent,
                 &mut orientation_preparation_trace,
@@ -6581,7 +6570,6 @@ pub(super) fn run_launcher_loop(
                     &mut layout_epoch,
                     &mut navigation_transition,
                     &mut full_screen_transition,
-                    &mut orientation_transition_generation,
                     &mut orientation_transition,
                     &mut orientation_transition_intent,
                     &mut orientation_preparation_trace,
@@ -8223,7 +8211,6 @@ pub(super) fn run_launcher_loop(
                                 if started
                                     && begin_navigation_full_screen_transition(
                                         &mut full_screen_transition,
-                                        &mut navigation_transition_generation,
                                     )
                                 {
                                     settings_navigation_benchmark.note_started(
@@ -8344,7 +8331,6 @@ pub(super) fn run_launcher_loop(
                                         let transition_started = navigation_runtime_started
                                             && begin_navigation_full_screen_transition(
                                                 &mut full_screen_transition,
-                                                &mut navigation_transition_generation,
                                             );
                                         if transition_started {
                                             let source_state = nav.navigation_transition_state();
@@ -8672,7 +8658,6 @@ pub(super) fn run_launcher_loop(
                                                 &mut layout_epoch,
                                                 &mut navigation_transition,
                                                 &mut full_screen_transition,
-                                                &mut orientation_transition_generation,
                                                 &mut orientation_transition,
                                                 &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
@@ -8709,7 +8694,6 @@ pub(super) fn run_launcher_loop(
                                                 &mut layout_epoch,
                                                 &mut navigation_transition,
                                                 &mut full_screen_transition,
-                                                &mut orientation_transition_generation,
                                                 &mut orientation_transition,
                                                 &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
@@ -9517,7 +9501,7 @@ pub(super) fn run_launcher_loop(
             if completion.is_some() {
                 release_full_screen_transition(
                     &mut full_screen_transition,
-                    navigation_transition_generation,
+                    FullScreenTransitionOwner::Navigation,
                 );
             }
             if endpoint == Some(NavigationTransitionEndpoint::Source)
@@ -10941,7 +10925,7 @@ pub(super) fn run_launcher_loop(
             orientation_transition.cancel();
             release_full_screen_transition(
                 &mut full_screen_transition,
-                orientation_transition_generation,
+                FullScreenTransitionOwner::Orientation,
             );
         }
         if startup_intro_prepare_live_launcher {
@@ -11445,11 +11429,13 @@ pub(super) fn run_launcher_loop(
                             animation_us,
                         )
                         .is_err()
-                        || navigation_transition_generation.is_some_and(|generation| {
-                            full_screen_transition
-                                .capture_completed(generation)
-                                .is_err()
-                        })
+                        || full_screen_transition
+                            .generation_for(FullScreenTransitionOwner::Navigation)
+                            .is_some_and(|generation| {
+                                full_screen_transition
+                                    .capture_completed(generation)
+                                    .is_err()
+                            })
                     {
                         navigation_transition.settle_at_destination();
                         render_transition_frame = false;
@@ -11610,7 +11596,7 @@ pub(super) fn run_launcher_loop(
                 if completion.is_some() {
                     release_full_screen_transition(
                         &mut full_screen_transition,
-                        navigation_transition_generation,
+                        FullScreenTransitionOwner::Navigation,
                     );
                 }
                 full_screen_transition_live_endpoint_rendered =
@@ -12053,21 +12039,22 @@ pub(super) fn run_launcher_loop(
                     .saturating_mul(2)
                     as u64;
                 if captured {
-                    if let Some(generation) = orientation_transition_generation
+                    if let Some(generation) = full_screen_transition
+                        .generation_for(FullScreenTransitionOwner::Orientation)
                         && let Err(error) = full_screen_transition.capture_completed(generation)
                     {
                         crate::ui_errln!("orientation snapshot lock rejected: {error:?}");
                         orientation_transition.cancel();
                         release_full_screen_transition(
                             &mut full_screen_transition,
-                            orientation_transition_generation,
+                            FullScreenTransitionOwner::Orientation,
                         );
                     }
                 } else {
                     orientation_transition.cancel();
                     release_full_screen_transition(
                         &mut full_screen_transition,
-                        orientation_transition_generation,
+                        FullScreenTransitionOwner::Orientation,
                     );
                 }
             }
@@ -12100,7 +12087,7 @@ pub(super) fn run_launcher_loop(
                     let _ = orientation_transition.take_completion();
                     release_full_screen_transition(
                         &mut full_screen_transition,
-                        orientation_transition_generation,
+                        FullScreenTransitionOwner::Orientation,
                     );
                     match orientation_transition_intent.take() {
                         Some(OrientationTransitionIntent::Confirm) => {
@@ -12877,48 +12864,41 @@ pub(super) fn run_launcher_loop(
                 let owner = full_screen_transition.owner();
                 match full_screen_transition.live_frame_presented(generation) {
                     Ok(retained_redraw) => {
-                        match owner {
-                            Some(FullScreenTransitionOwner::Navigation) => {
-                                navigation_transition_generation = None;
-                                let benchmark_record = if settings_navigation_benchmark.enabled() {
-                                    let telemetry = f.read_magik_presentation_telemetry();
-                                    settings_navigation_benchmark.note_confirmed_presentation(
-                                        nav.screen,
-                                        frames,
-                                        confirmed_present_sequence,
-                                        Instant::now(),
-                                        telemetry,
-                                    )
-                                } else {
-                                    None
-                                };
-                                if let Some(record) = benchmark_record {
-                                    print_startup_event(
-                                        start,
-                                        "settings_navigation_benchmark_leg_completed",
-                                        format!(
-                                            concat!(
-                                                "leg={} route={} direction={} source={} destination={} ",
-                                                "start_frame={} rendered_endpoint_frame={} ",
-                                                "presented_endpoint_frame={} sequence={}"
-                                            ),
-                                            settings_navigation_benchmark.records().len(),
-                                            record.leg.route.label(),
-                                            record.leg.direction.label(),
-                                            screen_label(record.leg.source),
-                                            screen_label(record.leg.destination),
-                                            record.start_frame,
-                                            record.rendered_endpoint_frame,
-                                            record.presented_endpoint_frame,
-                                            record.presented_sequence,
+                        if owner == Some(FullScreenTransitionOwner::Navigation) {
+                            let benchmark_record = if settings_navigation_benchmark.enabled() {
+                                let telemetry = f.read_magik_presentation_telemetry();
+                                settings_navigation_benchmark.note_confirmed_presentation(
+                                    nav.screen,
+                                    frames,
+                                    confirmed_present_sequence,
+                                    Instant::now(),
+                                    telemetry,
+                                )
+                            } else {
+                                None
+                            };
+                            if let Some(record) = benchmark_record {
+                                print_startup_event(
+                                    start,
+                                    "settings_navigation_benchmark_leg_completed",
+                                    format!(
+                                        concat!(
+                                            "leg={} route={} direction={} source={} destination={} ",
+                                            "start_frame={} rendered_endpoint_frame={} ",
+                                            "presented_endpoint_frame={} sequence={}"
                                         ),
-                                    );
-                                }
+                                        settings_navigation_benchmark.records().len(),
+                                        record.leg.route.label(),
+                                        record.leg.direction.label(),
+                                        screen_label(record.leg.source),
+                                        screen_label(record.leg.destination),
+                                        record.start_frame,
+                                        record.rendered_endpoint_frame,
+                                        record.presented_endpoint_frame,
+                                        record.presented_sequence,
+                                    ),
+                                );
                             }
-                            Some(FullScreenTransitionOwner::Orientation) => {
-                                orientation_transition_generation = None;
-                            }
-                            _ => {}
                         }
                         // Reverse card/cog endpoints already contain the current
                         // Home raster. Transition-owned redraw requests made while

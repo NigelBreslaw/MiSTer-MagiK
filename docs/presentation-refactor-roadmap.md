@@ -281,6 +281,18 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   its portrait transitions stay logical; the device composes physically.
 - Preview CRT geometry now comes from the layout's content rect, as on the device.
 
+**PR 7 (in progress): the chart owns the transition generation.**
+
+- `FullScreenTransitionStateChart::generation_for(owner)` returns the active generation to the owner
+  holding it. The loop's two copies (`navigation_transition_generation`,
+  `orientation_transition_generation`) and the parameter that plumbed one through the orientation start
+  are deleted; release and snapshot-lock go through the chart by owner.
+- Deliberately not done: merging the motion timeline (`NavigationTransitionController`: Capture,
+  Expand, Covered, Reveal, Reversing, Settled) into the chart. The chart answers who owns the frame
+  and what may render; the controller is pure progress math with its own clock. Merging them would
+  couple the two without removing a copy of any state, so the chart stays the lifecycle owner and the
+  controller stays the timeline it drives.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
