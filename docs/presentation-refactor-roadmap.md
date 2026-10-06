@@ -397,6 +397,23 @@ effect.**
   events, plan and present (`run_launcher_loop` is still the owner of everything that is not
   transition, composition or presentation acknowledgement), and `architecture.md`.
 
+**PR 15 (in progress): bundle B, orientation goes through the same director protocol as navigation.**
+
+- `OrientationIntent` (Confirm, Rollback, Benchmark) and `director.orientation_intent`: set when an
+  animated effect begins, cleared when it is aborted, handed back by `end_orientation`. The loop's
+  intent local, its plumbing through four call sites and its enum are gone. A redundant
+  `take_completion` after an unanimated begin is deleted.
+- `capture_orientation_destination` (capture, then the chart's snapshot lock, aborting on either
+  refusal) and `abort_stalled_orientation_capture` replace two hand-written blocks.
+- `navigation_needs_source_carrier(policy)` and `orientation_needs_source_carrier(policy)` replace two
+  loop predicates that were handed the director's own owner, phase and effect state by the caller; their
+  tests now drive a real runtime and chart, including the cases the old pure tests could not state
+  (wrong owner, logical raster, effect not playing, past Capture).
+- **Measured:** unlike navigation, the orientation effect maps one-to-one onto the chart: awaiting its
+  destination is `CapturePending`, a captured one is `SnapshotLocked`, an ended one leaves the chart
+  `Releasing`, and the intent lives exactly while the effect plays. The walk asserts exactly that. The
+  effect's `destination_ready` flag is left stale after it ends; nothing reads it then.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

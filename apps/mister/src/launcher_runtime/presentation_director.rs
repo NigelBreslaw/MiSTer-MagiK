@@ -915,6 +915,32 @@ mod tests {
         ));
         assert!(!other.navigation_needs_source_carrier(other.chart.policy()));
 
+        // Only while the capture is pending: once the runtime has its destination
+        // it is past Capture, whatever the chart still authorizes.
+        let mut past = director();
+        assert!(
+            past.navigation
+                .begin(TransitionStart::settings_page_physical(
+                    NavigationTransitionRoute::HomeToSettings,
+                    NavigationTransitionDirection::Forward,
+                    SettingsPageTransitionAxis::Horizontal,
+                    WIDTH,
+                    HEIGHT,
+                    &source,
+                    0,
+                ))
+                .unwrap()
+        );
+        assert!(begin_full_screen_transition(
+            &mut past.chart,
+            FullScreenTransitionOwner::Navigation
+        ));
+        past.navigation
+            .capture_destination(&frame(0x2222), 1_000)
+            .unwrap();
+        assert!(past.chart.policy().controlled_capture);
+        assert!(!past.navigation_needs_source_carrier(past.chart.policy()));
+
         // Only the physical raster needs it: a logical Settings slide does not.
         let mut logical = director();
         assert!(
