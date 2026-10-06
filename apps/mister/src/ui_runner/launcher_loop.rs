@@ -4945,6 +4945,18 @@ fn apply_orientation_layout(
     window.request_redraw();
 }
 
+/// Stop the screensaver's render-ahead pipeline and keep it until it has
+/// stopped, so a replacement never starts while the old one still runs.
+fn retire_screensaver_pipeline(
+    pipeline: &mut Option<ScreensaverRenderAhead>,
+    retiring: &mut Vec<ScreensaverRenderAhead>,
+) {
+    if let Some(pipeline) = pipeline.take() {
+        pipeline.cancel();
+        retiring.push(pipeline);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn begin_orientation_transition(
     app: &slint_ui::launcher::Launcher,
@@ -4958,22 +4970,18 @@ fn begin_orientation_transition(
     nav: &mut LauncherNav,
     layout: &mut UiLayoutGeometry,
     layout_epoch: &mut u64,
-    navigation_transition: &mut NavigationTransitionRuntime,
-    full_screen_transition: &mut FullScreenTransitionStateChart,
-    orientation_transition: &mut OrientationTransitionRuntime,
+    director: &mut PresentationDirector,
     orientation_transition_intent: &mut Option<OrientationTransitionIntent>,
     orientation_preparation_trace: &mut OrientationPreparationTrace,
     intent: OrientationTransitionIntent,
 ) -> bool {
     let begin_started = Instant::now();
-    if !begin_full_screen_transition(
-        full_screen_transition,
-        FullScreenTransitionOwner::Orientation,
-    ) {
-        return false;
-    }
     let source_snapshot_started = Instant::now();
-    let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
+    let Some(animated) =
+        director.begin_orientation(from, to, target.cached_565(), now, reduce_motion)
+    else {
+        return false;
+    };
     let source_snapshot_us = source_snapshot_started.elapsed().as_micros();
     let layout_started = Instant::now();
     apply_orientation_layout(
@@ -4984,7 +4992,7 @@ fn begin_orientation_transition(
         nav,
         layout,
         layout_epoch,
-        navigation_transition,
+        &mut director.navigation,
     );
     *orientation_preparation_trace = OrientationPreparationTrace {
         begin_us: begin_started.elapsed().as_micros(),
@@ -4996,29 +5004,9 @@ fn begin_orientation_transition(
         *orientation_transition_intent = Some(intent);
     } else {
         *orientation_transition_intent = None;
-        end_orientation_transition(orientation_transition, full_screen_transition);
+        director.end_orientation();
     }
     animated
-}
-
-/// The orientation effect ended without an endpoint to confirm: drop its
-/// completion and let the chart force the live frame.
-fn end_orientation_transition(
-    orientation_transition: &mut OrientationTransitionRuntime,
-    chart: &mut FullScreenTransitionStateChart,
-) {
-    let _ = orientation_transition.take_completion();
-    release_full_screen_transition(chart, FullScreenTransitionOwner::Orientation);
-}
-
-/// The orientation effect cannot play (no capture, no snapshot lock): cancel it
-/// and let the chart force the live frame.
-fn abort_orientation_transition(
-    orientation_transition: &mut OrientationTransitionRuntime,
-    chart: &mut FullScreenTransitionStateChart,
-) {
-    orientation_transition.cancel();
-    release_full_screen_transition(chart, FullScreenTransitionOwner::Orientation);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5315,11 +5303,14 @@ pub(super) fn run_launcher_loop(
     nav.sync_orientation_selection();
     let navigation_motion_enabled =
         !nav.settings.reduce_motion || profile_config.cpu().navigation_transition_requested();
-    let mut director = PresentationDirector::new(NavigationTransitionRuntime::new(
-        layout.logical_w(),
-        layout.logical_h(),
-        navigation_motion_enabled,
-    ));
+    let mut director = PresentationDirector::new(
+        NavigationTransitionRuntime::new(
+            layout.logical_w(),
+            layout.logical_h(),
+            navigation_motion_enabled,
+        ),
+        OrientationTransitionRuntime::new(ui.render_w(), ui.render_h()),
+    );
     let mut settings_cog_render_ahead = SettingsCogSession::new();
     nav.screen = start_screen;
     if orientation_benchmark.enabled() {
@@ -5328,8 +5319,6 @@ pub(super) fn run_launcher_loop(
     let mut display_confirmation = DisplayConfirmation::new();
     let mut orientation_confirmation = OrientationConfirmation::new(orientation_store);
     let mut orientation_full_redraw_pending = layout.is_portrait();
-    let mut orientation_transition =
-        OrientationTransitionRuntime::new(ui.render_w(), ui.render_h());
     let mut orientation_transition_intent = None;
     let mut orientation_preparation_trace = OrientationPreparationTrace::default();
     // Main owns the active display mode; the launcher only mirrors its reported state.
@@ -6419,7 +6408,7 @@ pub(super) fn run_launcher_loop(
             && !should_defer_launcher_background_work(
                 0,
                 director.navigation.is_active(),
-                orientation_transition.is_active(),
+                director.orientation.is_active(),
                 directional_input_held,
             )
             && !full_screen_transition_owned_at_loop_start
@@ -6484,7 +6473,7 @@ pub(super) fn run_launcher_loop(
                 loop_start,
             )
         {
-            if !orientation_transition.set_effect(leg.effect) {
+            if !director.orientation.set_effect(leg.effect) {
                 orientation_benchmark.fail("benchmark-effect-changed-during-transition");
                 continue;
             }
@@ -6500,9 +6489,7 @@ pub(super) fn run_launcher_loop(
                 &mut nav,
                 &mut layout,
                 &mut layout_epoch,
-                &mut director.navigation,
-                &mut director.chart,
-                &mut orientation_transition,
+                &mut director,
                 &mut orientation_transition_intent,
                 &mut orientation_preparation_trace,
                 OrientationTransitionIntent::Benchmark,
@@ -6549,9 +6536,7 @@ pub(super) fn run_launcher_loop(
                     &mut nav,
                     &mut layout,
                     &mut layout_epoch,
-                    &mut director.navigation,
-                    &mut director.chart,
-                    &mut orientation_transition,
+                    &mut director,
                     &mut orientation_transition_intent,
                     &mut orientation_preparation_trace,
                     OrientationTransitionIntent::Rollback,
@@ -6880,7 +6865,7 @@ pub(super) fn run_launcher_loop(
             || directional_input_held
             || latency_critical_input_pending
             || director.navigation.is_active()
-            || orientation_transition.is_active()
+            || director.orientation.is_active()
             || full_screen_transition_owned_at_loop_start
             || nav.arcade.is_scroll_active()
             || (nav.arcade_filter.drawer_open && nav.arcade_filter.is_scroll_active());
@@ -7840,7 +7825,7 @@ pub(super) fn run_launcher_loop(
                         setup.is_active(),
                         nav.confirm_action.is_some(),
                         director.navigation.is_active()
-                            || orientation_transition.is_active()
+                            || director.orientation.is_active()
                             || !director.chart.is_live()
                             || deferred_settings_activation.is_pending()
                             || level_trick_active,
@@ -8061,7 +8046,7 @@ pub(super) fn run_launcher_loop(
                                     routed_event_this_loop.as_ref(),
                                 ))
                             .then(|| (nav.screen, nav.navigation_transition_state()));
-                            let event = if orientation_transition.is_active()
+                            let event = if director.orientation.is_active()
                                 || director.chart.owner()
                                     == Some(FullScreenTransitionOwner::Orientation)
                                 || director.navigation.is_active()
@@ -8621,15 +8606,13 @@ pub(super) fn run_launcher_loop(
                                                 &mut nav,
                                                 &mut layout,
                                                 &mut layout_epoch,
-                                                &mut director.navigation,
-                                                &mut director.chart,
-                                                &mut orientation_transition,
+                                                &mut director,
                                                 &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
                                                 OrientationTransitionIntent::Confirm,
                                             );
                                             if !animated {
-                                                let _ = orientation_transition.take_completion();
+                                                let _ = director.orientation.take_completion();
                                                 orientation_confirmation
                                                     .start_countdown(Instant::now());
                                             }
@@ -8657,9 +8640,7 @@ pub(super) fn run_launcher_loop(
                                                 &mut nav,
                                                 &mut layout,
                                                 &mut layout_epoch,
-                                                &mut director.navigation,
-                                                &mut director.chart,
-                                                &mut orientation_transition,
+                                                &mut director,
                                                 &mut orientation_transition_intent,
                                                 &mut orientation_preparation_trace,
                                                 OrientationTransitionIntent::Rollback,
@@ -9812,7 +9793,7 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::ui_motion::set_active(
             stream_motion_before_render
                 || scheduled_frame_class != FrameProductionClass::EventDriven
-                || orientation_transition.is_active()
+                || director.orientation.is_active()
                 || !director.chart.is_live()
                 || directional_input_held,
         );
@@ -10081,10 +10062,10 @@ pub(super) fn run_launcher_loop(
                     layer_target.cached_frame_view().pixels().len()
                 );
             }
-            if let Some(pipeline) = screensaver_pipeline.take() {
-                pipeline.cancel();
-                retiring_screensaver_pipelines.push(pipeline);
-            }
+            retire_screensaver_pipeline(
+                &mut screensaver_pipeline,
+                &mut retiring_screensaver_pipelines,
+            );
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
             window.request_redraw();
@@ -10114,10 +10095,10 @@ pub(super) fn run_launcher_loop(
         }
         if !screensaver.active {
             screensaver_loader = None;
-            if let Some(pipeline) = screensaver_pipeline.take() {
-                pipeline.cancel();
-                retiring_screensaver_pipelines.push(pipeline);
-            }
+            retire_screensaver_pipeline(
+                &mut screensaver_pipeline,
+                &mut retiring_screensaver_pipelines,
+            );
             screensaver_launcher_frame = None;
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
@@ -10159,7 +10140,7 @@ pub(super) fn run_launcher_loop(
             confirm_visible,
             catalog_scan_visible,
             navigation_transition_active: director.navigation.is_active(),
-            orientation_transition_active: orientation_transition.is_active(),
+            orientation_transition_active: director.orientation.is_active(),
             composition_state: composition_decision.state,
             force_full_slint_raster: composition_decision.force_full_slint_raster,
             force_full_slint_present: composition_decision.force_full_slint_present,
@@ -10360,8 +10341,8 @@ pub(super) fn run_launcher_loop(
         if orientation_capture_source_carrier_required(
             full_screen_transition_policy_before_render,
             director.chart.owner(),
-            orientation_transition.is_active(),
-            orientation_transition.destination_ready(),
+            director.orientation.is_active(),
+            director.orientation.destination_ready(),
         ) {
             let mut direct_render_timing = None;
             match launcher_presenter.try_render_direct_hidden_frame(
@@ -10370,7 +10351,7 @@ pub(super) fn run_launcher_loop(
                 |_, pixels| {
                     let started = Instant::now();
                     let start_phase_us = pacer.age_since_last_hit_us(started);
-                    let rendered = orientation_transition.copy_source_into(pixels);
+                    let rendered = director.orientation.copy_source_into(pixels);
                     direct_render_timing = Some((started, Instant::now(), start_phase_us));
                     rendered
                 },
@@ -10518,10 +10499,10 @@ pub(super) fn run_launcher_loop(
                         actual_tick,
                     );
                     screensaver.fail_current_activation(Instant::now());
-                    if let Some(pipeline) = screensaver_pipeline.take() {
-                        pipeline.cancel();
-                        retiring_screensaver_pipelines.push(pipeline);
-                    }
+                    retire_screensaver_pipeline(
+                        &mut screensaver_pipeline,
+                        &mut retiring_screensaver_pipelines,
+                    );
                     screensaver_frame_visible = false;
                     screensaver_active_cards = 0;
                     window.request_redraw();
@@ -10541,10 +10522,10 @@ pub(super) fn run_launcher_loop(
                             layer_target.cached_frame_view().pixels().len()
                         );
                     }
-                    if let Some(pipeline) = screensaver_pipeline.take() {
-                        pipeline.cancel();
-                        retiring_screensaver_pipelines.push(pipeline);
-                    }
+                    retire_screensaver_pipeline(
+                        &mut screensaver_pipeline,
+                        &mut retiring_screensaver_pipelines,
+                    );
                     screensaver_frame_visible = false;
                     screensaver_active_cards = 0;
                     window.request_redraw();
@@ -10560,10 +10541,10 @@ pub(super) fn run_launcher_loop(
             screensaver_starvation_count = screensaver_starvation_count.saturating_add(1);
             crate::ui_errln!("screensaver: shared screenshot runtime starved; restoring launcher");
             screensaver.fail_current_activation(Instant::now());
-            if let Some(pipeline) = screensaver_pipeline.take() {
-                pipeline.cancel();
-                retiring_screensaver_pipelines.push(pipeline);
-            }
+            retire_screensaver_pipeline(
+                &mut screensaver_pipeline,
+                &mut retiring_screensaver_pipelines,
+            );
             screensaver_frame_visible = false;
             window.request_redraw();
             full_frame_present = true;
@@ -10798,7 +10779,7 @@ pub(super) fn run_launcher_loop(
                 .as_ref()
                 .is_some_and(|probe| probe.changed_since(input_observation)),
             director.navigation.is_active()
-                || orientation_transition.is_active()
+                || director.orientation.is_active()
                 || !director.chart.is_live(),
             screensaver.active,
             composition_decision.state != UiCompositionState::FullSlint
@@ -10864,7 +10845,7 @@ pub(super) fn run_launcher_loop(
             && !director.chart.policy().controlled_capture
             && !full_screen_controlled_capture_rendered
         {
-            abort_orientation_transition(&mut orientation_transition, &mut director.chart);
+            director.abort_orientation();
         }
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
@@ -10913,7 +10894,7 @@ pub(super) fn run_launcher_loop(
             (wants_preview || preview.empty_base_commit_pending())
                 && composition_decision.allow_preview_blit,
             director.navigation.is_active(),
-            orientation_transition.is_active(),
+            director.orientation.is_active(),
         );
         let gui_custom_generation_pmu = gui_profiling.phase_span(
             gui_custom_selection
@@ -11916,17 +11897,17 @@ pub(super) fn run_launcher_loop(
         // and custom layer composition no longer run a post-raster rotation.
         let orientation_damage_rotation_us = 0;
         let orientation_damage_rects_after_rotation = cached_damage.len() as u32;
-        if orientation_transition.is_active() {
+        if director.orientation.is_active() {
             let orientation_started = Instant::now();
-            let transition_from = orientation_transition.from();
-            let transition_to = orientation_transition.to();
+            let transition_from = director.orientation.from();
+            let transition_to = director.orientation.to();
             custom_draw_trace.orientation_transition_active = true;
             custom_draw_trace.orientation_transition_from = transition_from.id();
             custom_draw_trace.orientation_transition_to = transition_to.id();
             custom_draw_trace.orientation_transition_leg = orientation_benchmark
                 .active_leg()
                 .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
-            custom_draw_trace.orientation_transition_effect = orientation_transition.effect().id();
+            custom_draw_trace.orientation_transition_effect = director.orientation.effect().id();
             let preparation_trace = std::mem::take(&mut orientation_preparation_trace);
             custom_draw_trace.orientation_begin_us = preparation_trace.begin_us;
             custom_draw_trace.orientation_source_snapshot_us = preparation_trace.source_snapshot_us;
@@ -11939,18 +11920,18 @@ pub(super) fn run_launcher_loop(
             custom_draw_trace.orientation_damage_rects_before = orientation_damage_rects_before;
             custom_draw_trace.orientation_damage_rects_after =
                 orientation_damage_rects_after_rotation;
-            if !orientation_transition.destination_ready()
-                && full_screen_controlled_capture_rendered
+            if !director.orientation.destination_ready() && full_screen_controlled_capture_rendered
             {
                 let capture_started = Instant::now();
                 let destination_pmu =
                     mister_magik_perf_events::sampled_span(orientation_pmu_label(
-                        orientation_transition.effect(),
+                        director.orientation.effect(),
                         transition_from,
                         transition_to,
                         OrientationPmuPhase::Destination,
                     ));
-                let captured = orientation_transition
+                let captured = director
+                    .orientation
                     .capture_destination(layer_target.presentation_frame_view().pixels());
                 drop(destination_pmu);
                 custom_draw_trace.orientation_transition_destination_capture_us =
@@ -11968,19 +11949,17 @@ pub(super) fn run_launcher_loop(
                         && let Err(error) = director.chart.capture_completed(generation)
                     {
                         crate::ui_errln!("orientation snapshot lock rejected: {error:?}");
-                        abort_orientation_transition(
-                            &mut orientation_transition,
-                            &mut director.chart,
-                        );
+                        director.abort_orientation();
                     }
                 } else {
-                    abort_orientation_transition(&mut orientation_transition, &mut director.chart);
+                    director.abort_orientation();
                 }
             }
             let gui_orientation_pmu =
                 gui_profiling.phase_span(gui_custom_selection.orientation_transition_raster);
             let orientation_rendered = (!orientation_capture_source_carrier_rendered).then(|| {
-                orientation_transition
+                director
+                    .orientation
                     .render_into(layer_target.presentation_pixels_mut(), animation_now)
             });
             drop(gui_orientation_pmu);
@@ -12003,7 +11982,7 @@ pub(super) fn run_launcher_loop(
                     damage_build_started.elapsed().as_micros();
                 custom_draw_trace.orientation_damage_rects_after = cached_damage.len() as u32;
                 if done {
-                    end_orientation_transition(&mut orientation_transition, &mut director.chart);
+                    director.end_orientation();
                     match orientation_transition_intent.take() {
                         Some(OrientationTransitionIntent::Confirm) => {
                             orientation_confirmation.start_countdown(Instant::now());
@@ -12179,10 +12158,10 @@ pub(super) fn run_launcher_loop(
                 "screensaver: shared screenshot confirmation failed: {error}; restoring launcher"
             );
             screensaver.fail_current_activation(Instant::now());
-            if let Some(pipeline) = screensaver_pipeline.take() {
-                pipeline.cancel();
-                retiring_screensaver_pipelines.push(pipeline);
-            }
+            retire_screensaver_pipeline(
+                &mut screensaver_pipeline,
+                &mut retiring_screensaver_pipelines,
+            );
             screensaver_frame_visible = false;
             window.request_redraw();
         }
@@ -12467,7 +12446,7 @@ pub(super) fn run_launcher_loop(
         let selection_feedback_stamp = presented_frame.selection_feedback.clone();
         let mut accepted_and_active_confirmed = false;
         let mut confirmed_present_sequence = 0u16;
-        let mut confirmed_direct_layer_receipt = None;
+        let mut confirmed_presentation = PresentationOutcome::Unacknowledged;
         let mut selection_feedback_confirmed_at =
             (!latch_trace_flush_deferred && visible_frame_presented).then_some(animation_now);
         let runtime_status_sequence_before_frame = if settings_navigation_benchmark.enabled() {
@@ -12559,7 +12538,7 @@ pub(super) fn run_launcher_loop(
                 launcher_response_frame_stamp.is_some(),
                 !selection_feedback_stamp.entries.is_empty(),
                 director.navigation.is_active()
-                    || orientation_transition.is_active()
+                    || director.orientation.is_active()
                     || !director.chart.is_live(),
                 screensaver.active,
                 composition_decision.state != UiCompositionState::FullSlint
@@ -12695,17 +12674,14 @@ pub(super) fn run_launcher_loop(
                     presented_frame.main_present_completion_poll_count = completion.poll_count;
                     presented_frame.main_present_completion_poll_wall_us = completion.wall_us;
                     presented_frame.main_present_completion_poll_cpu_us = completion.cpu_us;
-                    confirmed_direct_layer_receipt = Some(DirectLayerPresentationReceipt {
+                    confirmed_presentation = PresentationOutcome::Confirmed {
                         sequence: status.active_sequence,
                         slot: presented_frame.main_present_buffer,
                         route_epoch: status.active_route_epoch,
-                        carrier: composition_decision.retirement_carrier,
-                    });
+                    };
                 }
                 Err(failure) => {
-                    if let Some(generation) = composition_decision.retirement_generation {
-                        let _ = director.composition.mark_retirement_uncertain(generation);
-                    }
+                    director.presentation_failed(&composition_decision);
                     launcher_presenter.fail_latch_completion(failure);
                     if let Some(failure) = launcher_presenter.latch_failure() {
                         frame_accounting.record_latch_failure(failure);
@@ -12727,7 +12703,8 @@ pub(super) fn run_launcher_loop(
                 // the highlight is the one that confirmed it.
                 selection_feedback_confirmed_at = Some(animation_now);
                 if orientation_capture_source_carrier_rendered {
-                    if !orientation_transition
+                    if !director
+                        .orientation
                         .restart_animation(animation_now + frame_clock.period())
                     {
                         orientation_benchmark.fail("orientation-carrier-restart-failed");
@@ -13037,7 +13014,7 @@ pub(super) fn run_launcher_loop(
                                 || home_horizontal_input_held
                                 || screensaver.active
                                 || director.navigation.is_active()
-                                || orientation_transition.is_active()
+                                || director.orientation.is_active()
                                 || nav.screen == Screen::Arcade && nav.arcade.is_scroll_active()
                                 || app.window().has_active_animations();
                             let endpoint_rendered = navigation_endpoint_rendered
@@ -13397,27 +13374,17 @@ pub(super) fn run_launcher_loop(
         if preview_present_confirmed && let Some(commit) = preview_presentation_commit {
             preview.confirm_presentation(commit);
         }
-        let direct_layer_receipt = if accepted_and_active_confirmed {
-            confirmed_direct_layer_receipt
-        } else if !latch_trace_flush_deferred && visible_frame_presented {
-            Some(DirectLayerPresentationReceipt {
-                sequence: (frames as u16).wrapping_add(1).max(1),
-                slot: 0,
-                route_epoch: 0,
-                carrier: composition_decision.retirement_carrier,
-            })
-        } else {
-            None
-        };
-        if let Some(receipt) = direct_layer_receipt {
-            let retired = director.composition.confirm_presented_layers(
-                composition_decision.retirement_generation,
-                composition_decision.direct_layers_desired,
-                receipt,
-            );
-            if retired && let Some(generation) = preview.retirement_generation() {
-                preview.confirm_retirement(generation);
-            }
+        let retired = director.on_presented(
+            &composition_decision,
+            PresentationOutcome::resolve(
+                accepted_and_active_confirmed,
+                confirmed_presentation,
+                !latch_trace_flush_deferred && visible_frame_presented,
+                (frames as u16).wrapping_add(1).max(1),
+            ),
+        );
+        if retired && let Some(generation) = preview.retirement_generation() {
+            preview.confirm_retirement(generation);
         }
         record_launcher_frame_phase!(LauncherFramePhase::PresentationAcknowledged);
         if preview.frame_intent().is_actionable() {
@@ -18591,64 +18558,6 @@ mod tests {
             transition.owner(),
             NavigationTransitionPhase::Capture,
             true,
-        ));
-    }
-
-    fn started_orientation_transition()
-    -> (OrientationTransitionRuntime, FullScreenTransitionStateChart) {
-        let mut chart = FullScreenTransitionStateChart::default();
-        assert!(begin_full_screen_transition(
-            &mut chart,
-            FullScreenTransitionOwner::Orientation
-        ));
-        let mut runtime = OrientationTransitionRuntime::new(960, 540);
-        let frame = vec![Rgb565Pixel(0x1111); 960 * 540];
-        assert!(runtime.start(
-            ScreenOrientation::Normal,
-            ScreenOrientation::MonitorClockwise,
-            &frame,
-            Instant::now(),
-            false,
-        ));
-        (runtime, chart)
-    }
-
-    #[test]
-    pub(super) fn aborting_an_orientation_transition_stops_the_effect_and_releases_the_chart() {
-        let (mut runtime, mut chart) = started_orientation_transition();
-        assert!(runtime.is_active());
-        abort_orientation_transition(&mut runtime, &mut chart);
-        assert!(!runtime.is_active());
-        assert_eq!(chart.state(), FullScreenTransitionState::Releasing);
-        assert_eq!(chart.owner(), Some(FullScreenTransitionOwner::Orientation));
-    }
-
-    #[test]
-    pub(super) fn ending_an_orientation_transition_releases_the_chart() {
-        let (mut runtime, mut chart) = started_orientation_transition();
-        end_orientation_transition(&mut runtime, &mut chart);
-        assert_eq!(chart.state(), FullScreenTransitionState::Releasing);
-    }
-
-    #[test]
-    pub(super) fn a_second_owner_cannot_begin_until_the_first_is_confirmed_live() {
-        let (mut runtime, mut chart) = started_orientation_transition();
-        assert!(!begin_full_screen_transition(
-            &mut chart,
-            FullScreenTransitionOwner::Navigation
-        ));
-        abort_orientation_transition(&mut runtime, &mut chart);
-        assert!(!begin_full_screen_transition(
-            &mut chart,
-            FullScreenTransitionOwner::Navigation
-        ));
-        let generation = chart
-            .generation_for(FullScreenTransitionOwner::Orientation)
-            .unwrap();
-        chart.live_frame_presented(generation).unwrap();
-        assert!(begin_full_screen_transition(
-            &mut chart,
-            FullScreenTransitionOwner::Navigation
         ));
     }
 

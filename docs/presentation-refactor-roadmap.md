@@ -369,6 +369,34 @@ navigation.**
   determines a navigation state from exactly the facts the director now supplies, and the chart adds
   none; the relation between them is asserted instead.
 
+**PR 14 (in progress): bundle A, the director takes presentation acknowledgement and the orientation
+effect.**
+
+- The orientation runtime is now `director.orientation`. `begin_orientation` (chart holds the frame,
+  then the effect takes its snapshot), `end_orientation` and `abort_orientation` are director methods;
+  the loop's own copies and their tests are gone. The orientation begin helper takes the director
+  instead of three runtime parameters.
+- Presentation acknowledgement: `PresentationOutcome` (`Confirmed`, `Visible`, `Unacknowledged`) with
+  `resolve` (the latch's confirmation when the frame was accepted and active, else a visible-frame
+  acknowledgement when no latch trace flush is deferred, else none), `director.on_presented(decision,
+  outcome)` (builds the receipt with the carrier the decision names and retires the layers) and
+  `director.presentation_failed(decision)` (marks the retirement uncertain). The loop's receipt local and
+  its selection are replaced by these. A test drives a retirement through unacknowledged, failed and
+  acknowledged frames and checks the controller's own status.
+- Deletion: six copies of "cancel the screensaver render-ahead pipeline and keep it until it stops" in
+  the loop are one `retire_screensaver_pipeline`.
+- **Decision on a per-state `DamagePolicy`:** not added. `full_frame_present` is the sum of about twelve
+  causes (orientation redraw, an unpublished cached frame, the display session, startup reveal, the CRT
+  backdrop leaving, six screensaver failure paths, the composition's `force_full_slint_present`, the
+  navigation compositor). Two of them are derivable from the director's state, but the navigation
+  compositor sets the flag *after* earlier calls in the same frame have read it, so folding it into one
+  early decision would change what those calls see during a transition. A policy type with no safe
+  consumer would be dead weight. Consolidating the causes needs the renderer-side damage harness
+  (Phase 1's "incremental equals forced full raster"), so it moves there.
+- Still open: what a releasing chart means per composition state (needs a device), the loop shrink to
+  events, plan and present (`run_launcher_loop` is still the owner of everything that is not
+  transition, composition or presentation acknowledgement), and `architecture.md`.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
