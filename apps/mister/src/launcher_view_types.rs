@@ -265,28 +265,48 @@ mod tests {
     fn active_and_selected_display_choices_share_the_full_catalog_identity() {
         let runtime_index = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
             .iter()
-            .position(|mode| mode.id == "crt-480p60")
-            .expect("CRT 480p runtime mode");
+            .position(|mode| mode.id == "crt-288p50")
+            .expect("CRT 288p runtime mode");
 
         assert_eq!(
             active_display_choice(runtime_index, Some((1234, 567)))
                 .id
                 .as_str(),
-            "crt-480p60"
+            "crt-288p50"
         );
         assert_eq!(
             selected_display_choice(runtime_index).id.as_str(),
-            "crt-480p60"
+            "crt-288p50"
         );
         assert_eq!(
             settings_display_choice(
                 crate::launcher::settings_display_selection_index(runtime_index)
-                    .expect("CRT 480p settings mode"),
+                    .expect("CRT 288p settings mode"),
             )
             .id
             .as_str(),
-            "crt-480p60"
+            "crt-288p50"
         );
+    }
+
+    #[test]
+    fn a_hidden_active_mode_is_still_named_but_is_not_a_settings_choice() {
+        let modes = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS;
+        for hidden in ["crt-480p60", "crt-576p50"] {
+            let runtime_index = modes
+                .iter()
+                .position(|mode| mode.id == hidden)
+                .expect("mode stays in the runtime table");
+            assert_eq!(
+                active_display_choice(runtime_index, None).id.as_str(),
+                hidden
+            );
+            assert_eq!(
+                crate::launcher::settings_display_selection_index(runtime_index),
+                None,
+                "{hidden}"
+            );
+        }
     }
 
     #[test]

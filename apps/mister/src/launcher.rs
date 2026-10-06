@@ -132,7 +132,9 @@ const SETTINGS_ABOUT_SELECTED: usize = 7;
 const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
 const LICENSE_SCROLL_LINE_PX: f64 = 18.0;
-const SETTINGS_DISPLAY_ORDER: [usize; 10] = [0, 1, 2, 3, 4, 5, 6, 8, 7, 9];
+// Indexes into DISPLAY_RESOLUTIONS in the order Settings offers them. The CRT 480p
+// (7) and 576p (9) modes are not offered.
+const SETTINGS_DISPLAY_ORDER: [usize; 8] = [0, 1, 2, 3, 4, 5, 6, 8];
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
 pub fn settings_display_resolutions() -> impl Iterator<Item = &'static DisplayResolution> {
     SETTINGS_DISPLAY_ORDER
@@ -10536,7 +10538,7 @@ mod tests {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let count = settings_display_resolution_count();
-        assert_eq!(count, 10);
+        assert_eq!(count, 8);
         nav.screen = Screen::Settings;
         nav.display_combo_open = true;
         nav.display_selected = 0;
@@ -10559,7 +10561,7 @@ mod tests {
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .expect("last display mode");
         assert_eq!(event.action, LauncherAction::ApplyDisplayResolution);
-        assert_eq!(event.path.as_deref(), Some("crt-576p50"));
+        assert_eq!(event.path.as_deref(), Some("crt-288p50"));
     }
 
     #[test]
@@ -10570,7 +10572,7 @@ mod tests {
 
         assert_eq!(settings_display_resolution_index("crt-240p60"), Some(6));
         assert_eq!(settings_display_resolution_index("crt-288p50"), Some(7));
-        assert_eq!(ids.len(), DISPLAY_RESOLUTIONS.len());
+        assert_eq!(ids.len(), DISPLAY_RESOLUTIONS.len() - 2);
         assert_eq!(
             ids,
             vec![
@@ -10582,10 +10584,13 @@ mod tests {
                 "hdmi-2560x1440p60",
                 "crt-240p60",
                 "crt-288p50",
-                "crt-480p60",
-                "crt-576p50",
             ]
         );
+        // The modes stay known to the runtime, but Settings does not offer them.
+        for hidden in ["crt-480p60", "crt-576p50"] {
+            assert!(DISPLAY_RESOLUTIONS.iter().any(|mode| mode.id == hidden));
+            assert_eq!(settings_display_resolution_index(hidden), None, "{hidden}");
+        }
     }
 
     #[test]
