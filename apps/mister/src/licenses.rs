@@ -211,13 +211,9 @@ mod tests {
             (640, 240),
             (640, 288),
             (640, 480),
-            (640, 512),
-            (640, 576),
             (240, 640),
             (288, 640),
             (480, 640),
-            (512, 640),
-            (576, 640),
         ] {
             let viewport = LicenseViewport::for_crt(width, height, 0, 0).unwrap();
             for (index, title) in LICENSE_TITLES.iter().enumerate() {

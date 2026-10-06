@@ -312,17 +312,17 @@ mod tests {
     }
 
     #[test]
-    fn pal_576p_route_uses_native_scanout_geometry() {
+    fn pal_288p_route_uses_native_scanout_geometry() {
         let plan = UiDisplayPlan::from_mister_ini_text(
-            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
+            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=0\n",
         )
         .expect("plan");
 
         let route = LauncherFramebufferRoute::for_scan(plan.scan_w, plan.scan_h, plan.direct_video);
 
-        assert_eq!((plan.render_w, plan.render_h), (640, 576));
-        assert_eq!((plan.fb_w, plan.fb_h), (640, 576));
-        assert_eq!((route.mode().hact, route.mode().vact), (640, 576));
+        assert_eq!((plan.render_w, plan.render_h), (640, 288));
+        assert_eq!((plan.fb_w, plan.fb_h), (640, 288));
+        assert_eq!((route.mode().hact, route.mode().vact), (640, 288));
         assert!(route.direct_video());
     }
 }

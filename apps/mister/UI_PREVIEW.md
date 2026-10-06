@@ -127,7 +127,7 @@ selects the production CRT Slint variant and CRT navigation metrics:
 
 ```bash
 apps/mister/scripts/dev-ui-mac.sh --display-profile hdmi
-apps/mister/scripts/dev-ui-mac.sh --display-profile crt --scenario arcade
+apps/mister/scripts/dev-ui-mac.sh --display-profile crt-240p --scenario arcade
 ```
 
 The CRT profile is for layout and clipping review. macOS does not emulate

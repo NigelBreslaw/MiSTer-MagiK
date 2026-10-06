@@ -348,12 +348,7 @@ mod tests {
 
     #[test]
     fn crt_profiles_use_native_geometry_and_half_density() {
-        for (route, height) in [
-            ("crt-240p60", 240),
-            ("crt-288p50", 288),
-            ("crt-480p60", 480),
-            ("crt-576p50", 576),
-        ] {
+        for (route, height) in [("crt-240p60", 240), ("crt-288p50", 288)] {
             let playback = StartupIntroPlayback::new(&crt_display(route)).unwrap();
             assert_eq!(
                 (playback.geometry().width(), playback.geometry().height()),

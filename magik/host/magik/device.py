@@ -14,8 +14,6 @@ DISPLAY_MODES = (
     "hdmi-2560x1440p60",
     "crt-240p60",
     "crt-288p50",
-    "crt-480p60",
-    "crt-576p50",
 )
 
 
@@ -90,7 +88,6 @@ def add_commands(commands):
     change = display.add_parser("set")
     change.add_argument("mode", choices=DISPLAY_MODES)
     change.add_argument("--attended", action="store_true", required=True)
-    change.add_argument("--acknowledge-31khz", action="store_true")
 
 
 def run_device(arguments, run):
@@ -136,8 +133,6 @@ def run_device(arguments, run):
         operation = "display-" + arguments.action
         if arguments.action == "set":
             fields = {"mode": arguments.mode, "attended": arguments.attended}
-            if arguments.acknowledge_31khz:
-                fields["acknowledge_31khz"] = True
     else:
         operation = "device-evidence"
     required = (

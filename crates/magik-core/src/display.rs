@@ -19,8 +19,6 @@ pub enum ResolvedOutputRoute {
     Hdmi,
     Crt240p60,
     Crt288p50,
-    Crt480p60,
-    Crt576p50,
 }
 
 /// Selects how the NTSC 240-line route is composed before scanout.
@@ -77,8 +75,6 @@ impl ResolvedOutputRoute {
             "hdmi" => Some(Self::Hdmi),
             "crt-240p60" => Some(Self::Crt240p60),
             "crt-288p50" => Some(Self::Crt288p50),
-            "crt-480p60" => Some(Self::Crt480p60),
-            "crt-576p50" => Some(Self::Crt576p50),
             _ => None,
         }
     }
@@ -92,8 +88,6 @@ impl ResolvedOutputRoute {
             Self::Hdmi => "hdmi",
             Self::Crt240p60 => "crt-240p60",
             Self::Crt288p50 => "crt-288p50",
-            Self::Crt480p60 => "crt-480p60",
-            Self::Crt576p50 => "crt-576p50",
         }
     }
 
@@ -102,8 +96,6 @@ impl ResolvedOutputRoute {
             Self::Hdmi => None,
             Self::Crt240p60 => Some(16_652),
             Self::Crt288p50 => Some(19_830),
-            Self::Crt480p60 => Some(16_683),
-            Self::Crt576p50 => Some(19_829),
         }
     }
 
@@ -135,13 +127,7 @@ impl ResolvedOutputRoute {
                 right: 32,
                 bottom: 15,
             },
-            Self::Crt576p50 => ContentInsets {
-                right: 64,
-                left: 0,
-                top: 0,
-                bottom: 0,
-            },
-            _ => ContentInsets {
+            Self::Hdmi => ContentInsets {
                 left: 0,
                 top: 0,
                 right: 0,
@@ -155,8 +141,6 @@ impl ResolvedOutputRoute {
             Self::Hdmi => None,
             Self::Crt240p60 => Some(DisplayGeometry::new(640, 240)),
             Self::Crt288p50 => Some(DisplayGeometry::new(640, 288)),
-            Self::Crt480p60 => Some(DisplayGeometry::new(640, 480)),
-            Self::Crt576p50 => Some(DisplayGeometry::new(640, 576)),
         }
     }
 
@@ -165,8 +149,6 @@ impl ResolvedOutputRoute {
             Self::Hdmi => None,
             Self::Crt240p60 => Some((640, 240)),
             Self::Crt288p50 => Some((640, 288)),
-            Self::Crt480p60 => Some((640, 480)),
-            Self::Crt576p50 => Some((640, 576)),
         }
     }
 
@@ -180,12 +162,11 @@ impl ResolvedOutputRoute {
         composition: Crt240Composition,
     ) -> (usize, usize) {
         match self {
-            Self::Crt288p50 | Self::Crt576p50 => framebuffer,
+            Self::Crt288p50 => framebuffer,
             Self::Crt240p60 => match composition {
                 Crt240Composition::Legacy480 => (CRT_COMPOSITION_W, CRT_COMPOSITION_H),
                 Crt240Composition::Native240 => framebuffer,
             },
-            Self::Crt480p60 => (CRT_COMPOSITION_W, CRT_COMPOSITION_H),
             Self::Hdmi => framebuffer,
         }
     }
@@ -455,16 +436,6 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
         forced_scandoubler: 0,
     },
     DisplayResolution {
-        id: "crt-480p60",
-        label: "CRT 480p 60hz NTSC",
-        output_w: 640,
-        output_h: 480,
-        video_mode: None,
-        direct_video: 1,
-        menu_pal: 0,
-        forced_scandoubler: 1,
-    },
-    DisplayResolution {
         id: "crt-288p50",
         label: "CRT 288p 50hz PAL",
         output_w: 640,
@@ -473,16 +444,6 @@ pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
         direct_video: 1,
         menu_pal: 1,
         forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "crt-576p50",
-        label: "CRT 576p 50hz PAL",
-        output_w: 640,
-        output_h: 576,
-        video_mode: None,
-        direct_video: 1,
-        menu_pal: 1,
-        forced_scandoubler: 1,
     },
 ];
 
@@ -502,8 +463,6 @@ pub fn route_for_mode_id(id: &str) -> Option<ResolvedOutputRoute> {
         }
         "crt-240p60" => Some(ResolvedOutputRoute::Crt240p60),
         "crt-288p50" => Some(ResolvedOutputRoute::Crt288p50),
-        "crt-480p60" => Some(ResolvedOutputRoute::Crt480p60),
-        "crt-576p50" => Some(ResolvedOutputRoute::Crt576p50),
         _ => None,
     }
 }
@@ -518,8 +477,6 @@ pub fn geometry_for_mode_id(id: &str) -> Option<DisplayGeometry> {
         "hdmi-2560x1440p60" => Some(DisplayGeometry::with_scan(2560, 1440, 1280, 1440)),
         "crt-240p60" => Some(DisplayGeometry::new(640, 240)),
         "crt-288p50" => Some(DisplayGeometry::new(640, 288)),
-        "crt-480p60" => Some(DisplayGeometry::new(640, 480)),
-        "crt-576p50" => Some(DisplayGeometry::new(640, 576)),
         "auto" | "custom" => None,
         _ => None,
     }
@@ -607,8 +564,6 @@ mod tests {
             ("hdmi-2560x1440p60", (1280, 720), (1280, 720)),
             ("crt-240p60", (640, 240), (640, 480)),
             ("crt-288p50", (640, 288), (640, 288)),
-            ("crt-480p60", (640, 480), (640, 480)),
-            ("crt-576p50", (640, 576), (640, 576)),
         ] {
             let plan = ResolvedDisplayPlan::from_mode_or_detected(mode, None).expect(mode);
             assert_eq!((plan.fb_w, plan.fb_h), fb, "{mode}");
@@ -640,20 +595,15 @@ mod tests {
     }
 
     #[test]
-    fn native_policy_leaves_other_crt_routes_unchanged() {
-        for route in [
-            ResolvedOutputRoute::Crt288p50,
-            ResolvedOutputRoute::Crt480p60,
-            ResolvedOutputRoute::Crt576p50,
-        ] {
-            let plan = ResolvedDisplayPlan::from_geometry_with_crt240_composition(
-                route.progressive_geometry().unwrap(),
-                route,
-                FramebufferSizePolicy::Auto,
-                Crt240Composition::Native240,
-            );
-            assert_eq!((plan.fb_w, plan.fb_h), (plan.render_w, plan.render_h));
-        }
+    fn native_policy_leaves_the_pal_route_unchanged() {
+        let route = ResolvedOutputRoute::Crt288p50;
+        let plan = ResolvedDisplayPlan::from_geometry_with_crt240_composition(
+            route.progressive_geometry().unwrap(),
+            route,
+            FramebufferSizePolicy::Auto,
+            Crt240Composition::Native240,
+        );
+        assert_eq!((plan.fb_w, plan.fb_h), (plan.render_w, plan.render_h));
     }
 
     #[test]
@@ -714,7 +664,7 @@ mod tests {
 
     #[test]
     fn selectable_catalog_stays_stable() {
-        assert_eq!(DISPLAY_RESOLUTIONS.len(), 10);
+        assert_eq!(DISPLAY_RESOLUTIONS.len(), 8);
         assert!(DISPLAY_RESOLUTIONS.iter().all(|mode| mode.id != "auto"));
         assert!(
             DISPLAY_RESOLUTIONS
@@ -725,6 +675,32 @@ mod tests {
             find_display_resolution("auto"),
             Some(&AUTOMATIC_DISPLAY_RESOLUTION)
         );
+    }
+
+    #[test]
+    fn only_240p_and_288p_crt_modes_remain() {
+        let crt: Vec<_> = DISPLAY_RESOLUTIONS
+            .iter()
+            .filter(|mode| mode.id.starts_with("crt-"))
+            .map(|mode| mode.id)
+            .collect();
+        assert_eq!(crt, ["crt-240p60", "crt-288p50"]);
+        for retired in ["crt-480p60", "crt-576p50"] {
+            assert!(find_display_resolution(retired).is_none(), "{retired}");
+            assert!(route_for_mode_id(retired).is_none(), "{retired}");
+            assert!(geometry_for_mode_id(retired).is_none(), "{retired}");
+            assert!(
+                ResolvedOutputRoute::from_runtime_settings_v1(&format!(
+                    "schema=1&output={retired}"
+                ))
+                .is_none(),
+                "{retired}"
+            );
+            assert!(
+                runtime_display_geometry_v1(&format!("schema=1&mode={retired}")).is_none(),
+                "{retired}"
+            );
+        }
     }
 
     #[test]

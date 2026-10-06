@@ -103,7 +103,7 @@ impl CrtSettingsGeometry {
 
     #[must_use]
     pub fn for_viewport(width: usize, height: usize, safe_x: usize, safe_y: usize) -> Option<Self> {
-        if width.max(height) != 640 || !matches!(width.min(height), 240 | 288 | 480 | 512 | 576) {
+        if width.max(height) != 640 || !matches!(width.min(height), 240 | 288 | 480) {
             return None;
         }
         let narrow = width.min(height);
@@ -827,12 +827,13 @@ mod tests {
             (288, 640),
             (640, 480),
             (480, 640),
-            (640, 576),
-            (576, 640),
         ] {
             assert!(supports_dimensions(width, height), "{width}x{height}");
         }
-        assert!(!supports_dimensions(800, 600));
+        // The retired 5:4 and 576-line CRT rasters are not supported.
+        for (width, height) in [(640, 512), (512, 640), (640, 576), (576, 640), (800, 600)] {
+            assert!(!supports_dimensions(width, height), "{width}x{height}");
+        }
     }
 
     #[test]

@@ -1,11 +1,11 @@
 {
   "schema": "mister-magik-launcher-visual-baseline-v1",
   "source_commit": "cf0905f5a0f98c264797e59a5ad0c2e4e656a450",
-  "scene_manifest_sha256": "d53a60a81a87d0bbe7d895028837dc379075d878e98b10b9bb188e4ebe86e896",
+  "scene_manifest_sha256": "6c7666ea2724e9ff77e80a5d5d3caaf75ef022fdebd9de77f4af97fc9d1e2c6a",
   "review": {
     "owner": "Codex (visual review delegated by Nigel Breslaw)",
     "result": "accepted",
-    "scope": "18 launcher PNGs: HDMI, CRT 240p, and CRT 480p steady states plus navigation-transition midpoints"
+    "scope": "12 launcher PNGs: HDMI and CRT 240p steady states plus navigation-transition midpoints"
   },
   "shared_provenance": {
     "capture_schema": "mister-magik-launcher-capture-v1",
@@ -85,72 +85,6 @@
       "width": 640,
       "height": 480,
       "display_profile": "crt-240p"
-    },
-    {
-      "id": "crt-arcade",
-      "rgb565_hash": "64928b75f565327e",
-      "provenance_sha256": "218c08e21c32dbb5842cba0e527fbbc8d60742ef7a088a3330e1e5e5bec9ede9",
-      "scenario": "arcade",
-      "frame": 0,
-      "fixed_time_us": 16666,
-      "width": 640,
-      "height": 480,
-      "display_profile": "crt-480p"
-    },
-    {
-      "id": "crt-catalog-scan",
-      "rgb565_hash": "123a516764a56d5f",
-      "provenance_sha256": "52aa33e962554e455dc85d7e32b0f56a8c0dc117d88eacc544c6535a980ea2ac",
-      "scenario": "catalog-scan",
-      "frame": 0,
-      "fixed_time_us": 16666,
-      "width": 640,
-      "height": 480,
-      "display_profile": "crt-480p"
-    },
-    {
-      "id": "crt-controller-setup",
-      "rgb565_hash": "c8abfcaeaca949bd",
-      "provenance_sha256": "6221bcb5b4c5a89238df3992ef2ca1ba22f571bcc1b020ad704430fa412a5e10",
-      "scenario": "controller-setup",
-      "frame": 0,
-      "fixed_time_us": 16666,
-      "width": 640,
-      "height": 480,
-      "display_profile": "crt-480p"
-    },
-    {
-      "id": "crt-home",
-      "rgb565_hash": "d991d704b5ca3636",
-      "provenance_sha256": "020a3cb8a9d5b844118dd7457003326906a41ac82836381a0e369e574dfac423",
-      "scenario": "home",
-      "frame": 0,
-      "fixed_time_us": 16666,
-      "width": 640,
-      "height": 480,
-      "display_profile": "crt-480p"
-    },
-    {
-      "id": "crt-navigation-transition-midpoint",
-      "rgb565_hash": "d2cc1fa75fb13556",
-      "provenance_sha256": "44d9196d63584ebfe3202dd1d8cd64162bb237eb2500cfd17952134705e0333e",
-      "scenario": "home",
-      "frame": 17,
-      "fixed_time_us": 900000,
-      "width": 640,
-      "height": 480,
-      "display_profile": "crt-480p"
-    },
-    {
-      "id": "crt-settings",
-      "rgb565_hash": "92c380a381efe82d",
-      "provenance_sha256": "8bf47eb08a3f73ba4ef44bd43e0089a33e8ab4c3a9c31439367660c044eaca1e",
-      "scenario": "settings",
-      "frame": 0,
-      "fixed_time_us": 16666,
-      "width": 640,
-      "height": 480,
-      "display_profile": "crt-480p"
     },
     {
       "id": "hdmi-arcade",

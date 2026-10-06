@@ -92,7 +92,6 @@ impl CrtBackdropState {
     pub fn for_display(display: &UiDisplay) -> Option<Self> {
         let reference_height = match display.output_route() {
             ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => CRT_COMPOSITION_H,
-            ResolvedOutputRoute::Crt480p60 | ResolvedOutputRoute::Crt576p50 => display.render_h(),
             ResolvedOutputRoute::Hdmi => return None,
         };
         Some(Self::new_with_reference_height(
@@ -1986,20 +1985,6 @@ mod tests {
                 Crt240Composition::Native240,
                 (640, 288, 288),
                 CRT_COMPOSITION_H,
-            ),
-            (
-                ResolvedOutputRoute::Crt480p60,
-                DisplayGeometry::new(640, 480),
-                Crt240Composition::Native240,
-                (640, 480, 480),
-                480,
-            ),
-            (
-                ResolvedOutputRoute::Crt576p50,
-                DisplayGeometry::new(640, 576),
-                Crt240Composition::Native240,
-                (640, 576, 576),
-                576,
             ),
         ] {
             let plan = UiDisplayPlan::from_geometry_with_route_and_composition(

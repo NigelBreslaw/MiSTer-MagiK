@@ -3890,7 +3890,7 @@ mod tests {
     fn slow_frame_samples_are_bounded_and_survive_recent_frame_clears() {
         let start = Instant::now();
         let mut accounting =
-            LauncherFrameAccounting::new(start, "crt-576p50", "baseline", 640, 576, false);
+            LauncherFrameAccounting::new(start, "crt-288p50", "baseline", 640, 288, false);
         for frame in 0..40 {
             accounting.accumulate_frame_budget(
                 &presented_frame(frame, start + Duration::from_micros(frame * 25_000), 22_000),
@@ -3928,7 +3928,7 @@ mod tests {
     fn cadence_warning_samples_are_retained_before_budget_overrun() {
         let start = Instant::now();
         let mut accounting =
-            LauncherFrameAccounting::new(start, "crt-576p50", "baseline", 640, 576, false);
+            LauncherFrameAccounting::new(start, "crt-288p50", "baseline", 640, 288, false);
         accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_CADENCE_WARNING_US), 0);
 
         let status = accounting.current_frame_budget_status();

@@ -3121,7 +3121,6 @@ mod macos {
                 // CRT-240p renders a 640x480 logical surface before the
                 // output plan expands it to the physical 640x240 mode.
                 SceneProfile::Crt240p => (640, 480),
-                SceneProfile::Crt480p => (640, 480),
             };
             if provenance.get("width").and_then(serde_json::Value::as_u64) != Some(expected_width)
                 || provenance.get("height").and_then(serde_json::Value::as_u64)
@@ -3187,7 +3186,6 @@ mod macos {
         let profile = match scene.profile {
             SceneProfile::Hdmi => "hdmi",
             SceneProfile::Crt240p => "crt-240p",
-            SceneProfile::Crt480p => "crt-480p",
         };
         let mut arguments = [
             "--content",
@@ -3452,7 +3450,7 @@ mod macos {
                         let value = arguments
                             .next()
                             .ok_or(
-                                "--display-profile requires hdmi, crt-240p, crt-288p, crt-480p, or crt-576p",
+                                "--display-profile requires hdmi, crt-240p, crt-native-240p, or crt-288p",
                             )?;
                         display_profile = DisplayProfile::parse(&value)?;
                     }
@@ -3468,7 +3466,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--list-scenes] [--check-baselines DIR | --matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--cold-start auto|force|skip] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo | --panel-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-native-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
+                            "usage: mister-magik-ui-preview [--list-scenes] [--check-baselines DIR | --matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--cold-start auto|force|skip] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo | --panel-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-native-240p|crt-288p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -3556,8 +3554,6 @@ mod macos {
         Crt240p,
         CrtNative240p,
         Crt288p,
-        Crt480p,
-        Crt576p,
     }
 
     impl DisplayProfile {
@@ -3567,10 +3563,8 @@ mod macos {
                 "crt-240p" | "crt-240p60" => Ok(Self::Crt240p),
                 "crt-native-240p" => Ok(Self::CrtNative240p),
                 "crt-288p" | "crt-288p50" => Ok(Self::Crt288p),
-                "crt" | "crt-480p" | "crt-480p60" => Ok(Self::Crt480p),
-                "crt-576p" | "crt-576p50" => Ok(Self::Crt576p),
                 _ => Err(format!(
-                    "invalid display profile {value:?}; expected hdmi, crt-240p, crt-288p, crt-480p, or crt-576p"
+                    "invalid display profile {value:?}; expected hdmi, crt-240p, crt-native-240p, or crt-288p"
                 )),
             }
         }
@@ -3584,8 +3578,6 @@ mod macos {
                 Self::Hdmi => ResolvedOutputRoute::Hdmi,
                 Self::Crt240p | Self::CrtNative240p => ResolvedOutputRoute::Crt240p60,
                 Self::Crt288p => ResolvedOutputRoute::Crt288p50,
-                Self::Crt480p => ResolvedOutputRoute::Crt480p60,
-                Self::Crt576p => ResolvedOutputRoute::Crt576p50,
             }
         }
 
@@ -3594,8 +3586,6 @@ mod macos {
                 Self::Hdmi => (HDMI_FRAME_WIDTH, HDMI_FRAME_HEIGHT),
                 Self::Crt240p | Self::CrtNative240p => (640, 240),
                 Self::Crt288p => (640, 288),
-                Self::Crt480p => (640, 480),
-                Self::Crt576p => (640, 576),
             }
         }
 
@@ -3636,8 +3626,6 @@ mod macos {
                 Self::Hdmi => "hdmi-1920x1080p60",
                 Self::Crt240p | Self::CrtNative240p => "crt-240p60",
                 Self::Crt288p => "crt-288p50",
-                Self::Crt480p => "crt-480p60",
-                Self::Crt576p => "crt-576p50",
             };
             mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
                 .iter()
@@ -3658,8 +3646,6 @@ mod macos {
                 Self::Crt240p => "display:crt-240p",
                 Self::CrtNative240p => "display:crt-native-240p",
                 Self::Crt288p => "display:crt-288p",
-                Self::Crt480p => "display:crt-480p",
-                Self::Crt576p => "display:crt-576p",
             }
         }
 
@@ -3669,8 +3655,6 @@ mod macos {
                 Self::Crt240p => "crt-240p",
                 Self::CrtNative240p => "crt-native-240p",
                 Self::Crt288p => "crt-288p",
-                Self::Crt480p => "crt-480p",
-                Self::Crt576p => "crt-576p",
             }
         }
     }
@@ -5098,11 +5082,17 @@ mod macos {
         #[test]
         fn preview_options_parse_crt_and_offline_card_controls() {
             let options = PreviewOptions::parse(
-                ["--display-profile", "crt", "--no-scan", "--no-download"].map(String::from),
+                [
+                    "--display-profile",
+                    "crt-240p",
+                    "--no-scan",
+                    "--no-download",
+                ]
+                .map(String::from),
             )
             .unwrap();
 
-            assert_eq!(options.display_profile, DisplayProfile::Crt480p);
+            assert_eq!(options.display_profile, DisplayProfile::Crt240p);
             assert!(options.no_scan);
             assert!(options.no_download);
         }
@@ -5171,22 +5161,6 @@ mod macos {
                     UiPixelSize::Px16,
                     "Spleen 6x12",
                 ),
-                (
-                    "crt-480p",
-                    DisplayProfile::Crt480p,
-                    ResolvedOutputRoute::Crt480p60,
-                    (640, 480),
-                    UiPixelSize::Px8,
-                    "Spleen 6x12",
-                ),
-                (
-                    "crt-576p",
-                    DisplayProfile::Crt576p,
-                    ResolvedOutputRoute::Crt576p50,
-                    (640, 576),
-                    UiPixelSize::Px8,
-                    "Spleen 6x12",
-                ),
             ] {
                 assert_eq!(DisplayProfile::parse(name).unwrap(), profile);
                 assert_eq!(profile.route(), route);
@@ -5231,8 +5205,6 @@ mod macos {
                 (DisplayProfile::Hdmi, "hdmi-1920x1080p60"),
                 (DisplayProfile::Crt240p, "crt-240p60"),
                 (DisplayProfile::Crt288p, "crt-288p50"),
-                (DisplayProfile::Crt480p, "crt-480p60"),
-                (DisplayProfile::Crt576p, "crt-576p50"),
             ] {
                 let index = profile.display_resolution_index();
                 assert_eq!(
@@ -5566,7 +5538,7 @@ mod macos {
             assert_provenance_change(&base, |value| value.width += 1);
             assert_provenance_change(&base, |value| value.height += 1);
             assert_provenance_change(&base, |value| value.orientation = "monitor-clockwise");
-            assert_provenance_change(&base, |value| value.display_profile = "crt-480p");
+            assert_provenance_change(&base, |value| value.display_profile = "crt-288p");
             assert_provenance_change(&base, |value| value.refresh_hz = 120);
             assert_provenance_change(&base, |value| value.fixed_time_us += 1);
             assert_provenance_change(&base, |value| value.scene_seed = None);
