@@ -37,6 +37,8 @@ class CandidateFixture:
         artwork = self.stage / dist.APP / card_artwork.RELATIVE_PATH
         pixels = bytes(card_artwork.SOURCE_BYTES)
         (artwork / "fixture.rgb888").write_bytes(pixels)
+        prepared = b"prepared card texture fixture"
+        (artwork / "fixture.cardtex").write_bytes(prepared)
         (artwork / "index.json").write_text(
             json.dumps(
                 {
@@ -48,6 +50,11 @@ class CandidateFixture:
                         key: {
                             "file": "fixture.rgb888",
                             "sha256": hashlib.sha256(pixels).hexdigest(),
+                            "prepared": {
+                                "file": "fixture.cardtex",
+                                "bytes": len(prepared),
+                                "sha256": hashlib.sha256(prepared).hexdigest(),
+                            },
                         }
                         for key in card_artwork.ROOT_KEYS
                     },

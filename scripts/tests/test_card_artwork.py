@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.magik_ci import card_artwork
 from scripts.magik_ci.distribution import ROOT
@@ -13,6 +17,75 @@ from scripts.magik_ci import distribution as dist
 
 
 class CardArtworkTests(unittest.TestCase):
+    def test_distribution_script_stages_all_declared_artwork_in_zip(self):
+        packaging = (ROOT / "scripts/package-distribution.sh").read_text()
+        block = packaging.split("# Card artwork is mandatory runtime data", 1)[1]
+        block = block.split("\n", 1)[1].split('\nif [[ -n "$ASSET_PACK" ]]', 1)[0]
+        source = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
+        expected = card_artwork.validate(source)
+        with tempfile.TemporaryDirectory() as temp:
+            stage = Path(temp) / "stage"
+            subprocess.run(
+                ["bash", "-ec", block],
+                env={
+                    **os.environ,
+                    "ROOT": str(ROOT),
+                    "STAGE": str(stage),
+                    "PUBLIC_ROOT_RELATIVE": dist.APP,
+                },
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            archive = Path(temp) / "distribution.zip"
+            subprocess.run(["zip", "-qr", str(archive), "."], cwd=stage, check=True)
+            prefix = f"{dist.APP}/{card_artwork.RELATIVE_PATH}/"
+            with zipfile.ZipFile(archive) as package:
+                self.assertEqual(
+                    {
+                        entry.filename
+                        for entry in package.infolist()
+                        if not entry.is_dir()
+                    },
+                    {prefix + name for name in expected},
+                )
+                for name in expected:
+                    self.assertEqual(
+                        package.read(prefix + name), (source / name).read_bytes()
+                    )
+
+    def test_invalid_prepared_textures_fail_staging(self):
+        for damage in ("missing", "truncated", "checksum"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
+                fixture = CandidateFixture(Path(temp))
+                source = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+                texture = source / "fixture.cardtex"
+                if damage == "missing":
+                    texture.unlink()
+                elif damage == "truncated":
+                    texture.write_bytes(b"partial")
+                else:
+                    texture.write_bytes(b"x" * texture.stat().st_size)
+                destination = Path(temp) / "staged-artwork"
+                with self.assertRaisesRegex(ValueError, "card artwork"):
+                    card_artwork.stage(source, destination)
+                self.assertFalse(destination.exists())
+
+    def test_staging_rejects_prepared_texture_corrupted_during_copy(self):
+        copyfile = card_artwork.shutil.copyfile
+
+        def corrupt_copy(source, destination):
+            copyfile(source, destination)
+            if source.suffix == ".cardtex":
+                destination.write_bytes(b"partial")
+
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = CandidateFixture(Path(temp))
+            source = fixture.stage / dist.APP / card_artwork.RELATIVE_PATH
+            with patch.object(card_artwork.shutil, "copyfile", corrupt_copy):
+                with self.assertRaisesRegex(ValueError, "invalid card artwork file"):
+                    card_artwork.stage(source, Path(temp) / "staged-artwork")
+
     def test_shipped_pack_has_all_approved_sources_and_taxonomy_keys(self):
         root = ROOT / "apps/mister" / card_artwork.RELATIVE_PATH
         files = card_artwork.validate(root)

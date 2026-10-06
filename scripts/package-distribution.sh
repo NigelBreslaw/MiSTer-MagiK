@@ -337,10 +337,18 @@ cp "$RUNTIME_METADATA" "$STAGE/$PUBLIC_ROOT_RELATIVE/magik-metadata-v1.bin"
 cp "$ARCADE_UPDATER_INDEX" "$STAGE/$PUBLIC_ROOT_RELATIVE/arcade-updater-index-v1.lz4b"
 
 # Card artwork is mandatory runtime data, independent of the optional screenshot pack.
-mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/ui/launcher-cards"
-cp "$ROOT/apps/mister/assets/ui/launcher-cards/"*.rgb888 \
-  "$ROOT/apps/mister/assets/ui/launcher-cards/index.json" \
-  "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/ui/launcher-cards/"
+python3 - "$ROOT" "$STAGE/$PUBLIC_ROOT_RELATIVE" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from scripts.magik_ci import card_artwork
+
+card_artwork.stage(
+    Path(sys.argv[1]) / "apps/mister" / card_artwork.RELATIVE_PATH,
+    Path(sys.argv[2]) / card_artwork.RELATIVE_PATH,
+)
+PY
 
 if [[ -n "$ASSET_PACK" ]]; then
   mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets"
