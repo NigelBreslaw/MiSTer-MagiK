@@ -18,3 +18,5 @@ pub mod startup_intro;
 pub mod transition_plan;
 #[cfg(test)]
 mod transition_scenarios;
+#[cfg(test)]
+mod walk_rng;

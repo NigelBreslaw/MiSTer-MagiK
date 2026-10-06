@@ -219,11 +219,10 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   either choice wrong fails a test.
 - A seeded random walk over the real `LauncherNav` (200 walks, 40 steps, with simulated process
   restarts between a collection and Back) checks every reverse reveal against its forward geometry.
-- Still to do in Phase 1: screensaver, modal and orientation scenarios; damage soundness
-  (incremental result equals a forced full raster). The preview still has its own start path, since
+- Still to do in Phase 1: damage soundness (incremental result equals a forced full raster); see PR 4. The preview still has its own start path, since
   it wraps a different card-session type; folding it in is a Phase 2 task.
 
-**PR 3 (in progress): dither parity for CRT and portrait cards (Phase 3b step 1).**
+**PR 3 (merged, #237): dither parity for CRT and portrait cards (Phase 3b step 1).**
 
 - Responsive faces now dither their rotated poses at projection, as HDMI landscape does. The
   face-on resting pose stays exact, because those faces are already dithered once when baked and
@@ -238,6 +237,24 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
   `scripts/magik check motion` is still owed.
 - `examples/launcher_layout_review.rs` no longer compiled on `main`; it is fixed so the review
   renders can be reproduced.
+
+**PR 4 (in progress): ownership scenarios for composition and the transition chart.**
+
+- `composition/scenarios.rs`: seeded random walks over `UiCompositionController` with a model of
+  the physical presenter acknowledging each frame. Checks the documented precedence (screensaver,
+  full-screen overlay, confirmation, navigation, Arcade, Slint), that direct layers exist only in
+  `MixedArcade` and a layer still owned when its state ends is always retired under a generation,
+  that a stale generation is refused, that every state change repaints and the navigation
+  destination forces a full raster, and that an invalid route recovers. Five injected faults are
+  each caught.
+- `full_screen_transition/scenarios.rs`: random walks over `FullScreenTransitionStateChart`
+  against an independent model, for all four owners and with live, older and never-issued
+  generations from every state. Five injected faults are caught; a sixth (the `active` clause in
+  `begin`) was redundant with the state check and is removed.
+- Orientation endpoints and cancellation already have exhaustive per-case tests, so no new
+  orientation scenarios were added.
+- Still to do in Phase 1: damage soundness (incremental result equals a forced full raster), which
+  needs the Slint software-renderer damage path driven from a test.
 
 ## Phased plan
 
