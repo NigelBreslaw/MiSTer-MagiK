@@ -914,14 +914,6 @@ struct PendingCollectionEntry {
     open_game_list_directly: bool,
 }
 
-struct PendingNavigationTransition {
-    event: launcher::LauncherEvent,
-    source_state: launcher::NavigationTransitionState,
-    source_was_arcade: bool,
-    committed: bool,
-    status_quiesce_started_at: Option<Instant>,
-}
-
 #[derive(Default)]
 struct DeferredSettingsActivation {
     event: Option<crate::input_event::InputEvent>,
@@ -5153,7 +5145,6 @@ pub(super) fn run_launcher_loop(
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
     let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
     let mut pending_collection_entry: Option<PendingCollectionEntry> = None;
-    let mut pending_navigation_transition: Option<PendingNavigationTransition> = None;
     let mut deferred_settings_activation = DeferredSettingsActivation::default();
     let mut deferred_navigation_hydration_finish: Option<String> = None;
     let mut catalog_ready_deferred_since: Option<Instant> = None;
@@ -7241,20 +7232,19 @@ pub(super) fn run_launcher_loop(
 
         if director.navigation.is_active() {
             director.navigation.tick(animation_us);
-            let should_commit = pending_navigation_transition
-                .as_ref()
-                .is_some_and(|pending| {
-                    if pending.committed {
-                        return false;
-                    }
-                    pending.event.action != LauncherAction::OpenCollection
-                        || pending_collection_entry.as_ref().is_none_or(|entry| {
-                            collection_has_resident_rows(&catalog, &entry.collection_id)
-                        })
-                });
+            let should_commit = director.pending.as_ref().is_some_and(|pending| {
+                if pending.committed {
+                    return false;
+                }
+                pending.event.action != LauncherAction::OpenCollection
+                    || pending_collection_entry.as_ref().is_none_or(|entry| {
+                        collection_has_resident_rows(&catalog, &entry.collection_id)
+                    })
+            });
             if should_commit {
                 let navigation_commit_started = Instant::now();
-                let event = pending_navigation_transition
+                let event = director
+                    .pending
                     .as_ref()
                     .map(|pending| pending.event.clone())
                     .expect("checked pending transition");
@@ -7276,7 +7266,7 @@ pub(super) fn run_launcher_loop(
                         arcade_entry_latency
                             .record_rows_ready(start, loop_start, &lifecycle, &catalog, &nav);
                     }
-                    if let Some(pending) = pending_navigation_transition.as_mut() {
+                    if let Some(pending) = director.pending.as_mut() {
                         pending.committed = true;
                     }
                     let after = LauncherProjectionKey::from_nav(&nav);
@@ -8194,7 +8184,19 @@ pub(super) fn run_launcher_loop(
                                         now_us: animation_us,
                                     },
                                 );
-                                if started && director.hold_frame_for_navigation() {
+                                if started
+                                    && director.adopt_navigation(|| PendingNavigation {
+                                        event: launcher::LauncherEvent {
+                                            action: LauncherAction::NavigateBack,
+                                            path: None,
+                                            settings: None,
+                                        },
+                                        source_state,
+                                        source_was_arcade: false,
+                                        committed: true,
+                                        status_quiesce_started_at: None,
+                                    })
+                                {
                                     settings_navigation_benchmark.note_started(
                                         route,
                                         direction,
@@ -8206,18 +8208,6 @@ pub(super) fn run_launcher_loop(
                                         nav.screen,
                                         frames,
                                     );
-                                    pending_navigation_transition =
-                                        Some(PendingNavigationTransition {
-                                            event: launcher::LauncherEvent {
-                                                action: LauncherAction::NavigateBack,
-                                                path: None,
-                                                settings: None,
-                                            },
-                                            source_state,
-                                            source_was_arcade: false,
-                                            committed: true,
-                                            status_quiesce_started_at: None,
-                                        });
                                     full_bridge_dirty = true;
                                     request_launcher_redraw!();
                                 } else if started {
@@ -8310,17 +8300,14 @@ pub(super) fn run_launcher_loop(
                                                 )
                                             });
                                         let transition_started = navigation_runtime_started
-                                            && director.hold_frame_for_navigation();
+                                            && director.adopt_navigation(|| PendingNavigation {
+                                                event: event.clone(),
+                                                source_state: nav.navigation_transition_state(),
+                                                source_was_arcade: nav.screen == Screen::Arcade,
+                                                committed: false,
+                                                status_quiesce_started_at: None,
+                                            });
                                         if transition_started {
-                                            let source_state = nav.navigation_transition_state();
-                                            pending_navigation_transition =
-                                                Some(PendingNavigationTransition {
-                                                    event: event.clone(),
-                                                    source_state,
-                                                    source_was_arcade: nav.screen == Screen::Arcade,
-                                                    committed: false,
-                                                    status_quiesce_started_at: None,
-                                                });
                                             full_bridge_dirty = true;
                                             request_launcher_redraw!();
                                         } else if navigation_runtime_started {
@@ -9027,7 +9014,8 @@ pub(super) fn run_launcher_loop(
             }
             sync_settings_bridge(&app, &nav, &lifecycle, ui, &mut bridge_models);
         }
-        let source_was_arcade = pending_navigation_transition
+        let source_was_arcade = director
+            .pending
             .as_ref()
             .is_some_and(|pending| pending.source_was_arcade);
         let preserve_navigation_source_preview =
@@ -9465,10 +9453,7 @@ pub(super) fn run_launcher_loop(
                 || confirm_visible
                 || catalog_scan_visible)
         {
-            let destination_committed = pending_navigation_transition
-                .as_ref()
-                .is_some_and(|pending| pending.committed);
-            let endpoint = director.cover_navigation(destination_committed);
+            let endpoint = director.cover_navigation();
             if endpoint == Some(NavigationTransitionEndpoint::Source)
                 && let Some(entry) = pending_collection_entry.take()
             {
@@ -9476,22 +9461,16 @@ pub(super) fn run_launcher_loop(
                 deferred_navigation_hydration_finish = Some(entry.collection_id);
                 arcade_entry_latency.cancel_enter();
             }
-            pending_navigation_transition = None;
         }
-        let navigation_destination_committed = pending_navigation_transition
-            .as_ref()
-            .is_some_and(|pending| pending.committed);
+        let navigation_destination_committed = director.destination_committed();
         // The list is the navigation destination. Preview media is asynchronous and
         // must never hold the full-screen transition closed after the list is ready.
         let navigation_destination_layers_ready = navigation_destination_committed
             && (nav.screen != Screen::Arcade
                 || active_arcade_games_available
                 || nav.active_collection_id() == Some(arcade_catalog::MENU_ARCADE_SYSTEM_ID));
-        let composition_decision = director.composition.tick(UiCompositionInput {
+        let composition_decision = director.compose(CompositionRequest {
             screensaver_active: effective_view == EffectiveLauncherView::Screensaver,
-            navigation_transition_active: director.navigation.is_active(),
-            navigation_destination_committed,
-            navigation_destination_ready: director.navigation.destination_ready(),
             navigation_destination_layers_ready,
             return_screen: effective_view.return_screen(),
             confirm_visible,
@@ -11186,9 +11165,7 @@ pub(super) fn run_launcher_loop(
         let mut navigation_endpoint_rendered = false;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
-            let destination_committed = pending_navigation_transition
-                .as_ref()
-                .is_some_and(|pending| pending.committed);
+            let destination_committed = director.destination_committed();
             let mut render_transition_frame = !navigation_capture_source_carrier_rendered;
             if destination_committed && !director.navigation.destination_ready() {
                 #[cfg(feature = "tooling")]
@@ -11322,7 +11299,7 @@ pub(super) fn run_launcher_loop(
                 let mut status_quiesce = None;
                 if destination_layers_ready {
                     let worker_active = frame_accounting.runtime_status_worker_active();
-                    if let Some(pending) = pending_navigation_transition.as_mut() {
+                    if let Some(pending) = director.pending.as_mut() {
                         let started = pending
                             .status_quiesce_started_at
                             .get_or_insert_with(Instant::now);
@@ -11544,7 +11521,7 @@ pub(super) fn run_launcher_loop(
                 }
                 full_screen_transition_live_endpoint_rendered =
                     endpoint_is_live && completion.is_some();
-                let pending = pending_navigation_transition.take();
+                let pending = director.pending.take();
                 if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) {

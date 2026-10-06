@@ -351,9 +351,23 @@ mapping between them is measured.**
 - The renaming in the loop is mechanical (`navigation_transition` is `director.navigation`,
   `full_screen_transition` is `director.chart`, `composition` is `director.composition`). Behaviour is
   unchanged.
-- Not yet: the chart is still not an input to `composition.tick`, and the loop still builds that input
-  and reads the director's fields directly. Those are the next slices, with the releasing-chart
-  question from the PR 11 finding.
+- Not yet: the releasing-chart question from the PR 11 finding.
+
+**PR 13 (in progress): the director supplies composition's transition facts and owns the pending
+navigation.**
+
+- `PendingNavigation` (the intent a playing transition will commit, the state to restore, whether it
+  has committed) moves from a loop local into `director.pending`. It is set exactly when the director
+  adopts a transition (`adopt_navigation`, which also has the chart hold the frame) and cleared when the
+  transition is covered; the loop reads it through the director. `cover_navigation` now reads the
+  committed flag itself.
+- `director.compose(CompositionRequest)` replaces the loop's call to `composition.tick`. The request has
+  only what the loop knows about the screen; the director adds whether a navigation transition plays,
+  whether its destination is committed, and whether it is ready, all from its own state, so the loop can
+  no longer pass those inconsistently.
+- Decision: the chart is **not** an input to composition. The PR 11 walk shows composition already
+  determines a navigation state from exactly the facts the director now supplies, and the chart adds
+  none; the relation between them is asserted instead.
 
 ## Phased plan
 
@@ -459,8 +473,9 @@ What the walks in PR 10 and PR 11 say the director has to be (measured, not assu
   releasing chart means in each composition state instead of leaving it to the ladder's order.
 - **First slice (done in PR 12):** the director is a struct that owns the three, with the existing
   paired operations as its methods. Behaviour stays the same; its tests are the two walks above.
-  Next: build the composition input from the director (chart included), then define what a releasing
-  chart means per composition state.
+  Done in PR 13: the director supplies composition's transition facts and owns the pending navigation
+  (the chart is deliberately not a composition input; see PR 13). Next: define what a releasing chart
+  means per composition state.
 
 ### Phase 5: a recipe for the next transition
 
