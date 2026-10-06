@@ -1055,75 +1055,6 @@ fn configure_arcade_list_renderer_geometry(
     );
 }
 
-fn navigation_transition_for_intent(
-    nav: &LauncherNav,
-    event: &launcher::LauncherEvent,
-    card_levels: bool,
-) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
-    use crate::launcher_taxonomy::ROOT_MENU_ID;
-
-    // The card launcher plays its own level trick between Home levels.
-    let home_level_change = nav.screen == Screen::Home
-        && matches!(
-            event.action,
-            LauncherAction::OpenMenu | LauncherAction::NavigateBack | LauncherAction::NavigateHome
-        );
-    if card_levels && home_level_change {
-        return None;
-    }
-    match event.action {
-        LauncherAction::ToggleSystemPage | LauncherAction::OpenSystemSection => Some((
-            NavigationTransitionEdge::SystemPanel,
-            NavigationTransitionDirection::Forward,
-        )),
-        LauncherAction::OpenMenu => Some((
-            NavigationTransitionEdge::HomeToConsoles,
-            NavigationTransitionDirection::Forward,
-        )),
-        LauncherAction::OpenCollection if nav.current_menu_id() == ROOT_MENU_ID => Some((
-            NavigationTransitionEdge::HomeToArcade,
-            NavigationTransitionDirection::Forward,
-        )),
-        LauncherAction::OpenCollection => Some((
-            NavigationTransitionEdge::ConsolesToSystem,
-            NavigationTransitionDirection::Forward,
-        )),
-        LauncherAction::NavigateBack if nav.screen == Screen::Home => Some((
-            NavigationTransitionEdge::HomeToConsoles,
-            NavigationTransitionDirection::Reverse,
-        )),
-        LauncherAction::NavigateBack
-            if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
-        {
-            Some((
-                NavigationTransitionEdge::HomeToArcade,
-                NavigationTransitionDirection::Reverse,
-            ))
-        }
-        LauncherAction::NavigateBack if nav.screen == Screen::Arcade => Some((
-            NavigationTransitionEdge::ConsolesToSystem,
-            NavigationTransitionDirection::Reverse,
-        )),
-        LauncherAction::NavigateHome if nav.screen == Screen::Home => Some((
-            NavigationTransitionEdge::HomeToConsoles,
-            NavigationTransitionDirection::Reverse,
-        )),
-        LauncherAction::NavigateHome
-            if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
-        {
-            Some((
-                NavigationTransitionEdge::HomeToArcade,
-                NavigationTransitionDirection::Reverse,
-            ))
-        }
-        LauncherAction::NavigateHome if nav.screen == Screen::Arcade => Some((
-            NavigationTransitionEdge::ConsolesToSystem,
-            NavigationTransitionDirection::Reverse,
-        )),
-        _ => None,
-    }
-}
-
 fn settings_cog_transition_eligible(
     route: NavigationTransitionRoute,
     card_home_settled: bool,
@@ -8504,53 +8435,6 @@ pub(super) fn run_launcher_loop(
                                                         )
                                                         .unwrap_or(false);
                                                 }
-                                                let root_menu = nav.current_menu_id()
-                                                    == crate::launcher_taxonomy::ROOT_MENU_ID;
-                                                let (tile_selected, tile_scroll_x) =
-                                                    nav.menu_tile_view();
-                                                let selected_label = nav
-                                                    .current_menu_items()
-                                                    .get(tile_selected)
-                                                    .map(|item| item.title.as_str())
-                                                    .unwrap_or("");
-                                                let crt_geometry = crt_layout.then(|| {
-                                                    let content = layout.content_rect();
-                                                    CrtNavigationLayout {
-                                                        content_x: content.x,
-                                                        content_y: content.y,
-                                                        content_width: content.width,
-                                                        content_height: content.height,
-                                                        grid_x: crt_metrics.grid_x.max(1) as usize,
-                                                        grid_y: crt_metrics.grid_y.max(1) as usize,
-                                                        header_height: crt_metrics
-                                                            .header_height
-                                                            .max(1)
-                                                            as usize,
-                                                        footer_height: crt_metrics
-                                                            .footer_height
-                                                            .max(1)
-                                                            as usize,
-                                                        heading_font_height: crt_metrics
-                                                            .heading_font
-                                                            .pixels()
-                                                            .max(1)
-                                                            as usize,
-                                                        title_font_height: crt_metrics
-                                                            .card_title_font
-                                                            .pixels()
-                                                            .max(1)
-                                                            as usize,
-                                                        detail_font_height: crt_metrics
-                                                            .card_detail_font
-                                                            .pixels()
-                                                            .max(1)
-                                                            as usize,
-                                                        game_row_height: crt_metrics
-                                                            .game_row_height
-                                                            .max(1)
-                                                            as usize,
-                                                    }
-                                                });
                                                 // Both directions derive geometry from the
                                                 // committed navigation state; no history.
                                                 let card_edge = matches!(
@@ -8558,16 +8442,17 @@ pub(super) fn run_launcher_loop(
                                                     NavigationTransitionEdge::HomeToArcade
                                                         | NavigationTransitionEdge::ConsolesToSystem
                                                 ) && !layout.is_portrait();
-                                                let geometry = derive_navigation_geometry(
-                                                    &NavigationGeometryContext {
+                                                let geometry = navigation_geometry(
+                                                    &nav,
+                                                    &NavigationDisplay {
                                                         frame_width: layout.logical_w(),
                                                         frame_height: layout.logical_h(),
-                                                        crt: crt_geometry,
-                                                        selected: tile_selected,
-                                                        scroll_x: tile_scroll_x,
-                                                        item_count: nav.current_menu_items().len(),
-                                                        root_menu,
-                                                        selected_label,
+                                                        crt: crt_layout.then(|| {
+                                                            crt_navigation_layout(
+                                                                layout.content_rect(),
+                                                                &crt_metrics,
+                                                            )
+                                                        }),
                                                         card_home_rect: launcher_card_home
                                                             .as_ref()
                                                             .filter(|_| card_edge)

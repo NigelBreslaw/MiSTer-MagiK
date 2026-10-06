@@ -9,10 +9,13 @@
 //! process memory, so a transition behaves identically after a game return,
 //! an orientation change or a cancelled predecessor.
 
-use crate::launcher::Screen;
+use crate::launcher::{LauncherAction, LauncherEvent, LauncherNav, Screen};
+use crate::launcher_taxonomy::ROOT_MENU_ID;
+use crate::ui_display::{CrtContentRect, CrtUiMetrics};
 use mister_magik_framebuffer_scenes::navigation::{
-    CrtNavigationLayout, NavigationTransitionEdge, NavigationTransitionGeometry,
-    NavigationTransitionRect, crt_navigation_geometry, hdmi_navigation_geometry,
+    CrtNavigationLayout, NavigationTransitionDirection, NavigationTransitionEdge,
+    NavigationTransitionGeometry, NavigationTransitionRect, crt_navigation_geometry,
+    hdmi_navigation_geometry,
 };
 
 /// Whether card-home, not the composed RGB565 cache, drew the visible frame.
@@ -78,6 +81,98 @@ pub fn derive_navigation_geometry(
         geometry.source_card = rect;
     }
     geometry
+}
+
+/// The edge and direction a navigation intent plays, if it plays one.
+///
+/// `card_levels` is true when card-home owns Home level changes; it plays its own
+/// level trick for those, so no full-screen transition runs.
+pub fn navigation_transition_for_intent(
+    nav: &LauncherNav,
+    event: &LauncherEvent,
+    card_levels: bool,
+) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
+    use NavigationTransitionDirection::{Forward, Reverse};
+    use NavigationTransitionEdge::{ConsolesToSystem, HomeToArcade, HomeToConsoles, SystemPanel};
+
+    let home_level_change = nav.screen == Screen::Home
+        && matches!(
+            event.action,
+            LauncherAction::OpenMenu | LauncherAction::NavigateBack | LauncherAction::NavigateHome
+        );
+    if card_levels && home_level_change {
+        return None;
+    }
+    let root = nav.current_menu_id() == ROOT_MENU_ID;
+    match (event.action, nav.screen) {
+        (LauncherAction::ToggleSystemPage | LauncherAction::OpenSystemSection, _) => {
+            Some((SystemPanel, Forward))
+        }
+        (LauncherAction::OpenMenu, _) => Some((HomeToConsoles, Forward)),
+        (LauncherAction::OpenCollection, _) if root => Some((HomeToArcade, Forward)),
+        (LauncherAction::OpenCollection, _) => Some((ConsolesToSystem, Forward)),
+        (LauncherAction::NavigateBack | LauncherAction::NavigateHome, Screen::Home) => {
+            Some((HomeToConsoles, Reverse))
+        }
+        (LauncherAction::NavigateBack | LauncherAction::NavigateHome, Screen::Arcade) => {
+            Some((if root { HomeToArcade } else { ConsolesToSystem }, Reverse))
+        }
+        _ => None,
+    }
+}
+
+/// The CRT geometry inputs: the route's content rectangle and UI metrics.
+pub fn crt_navigation_layout(
+    content: CrtContentRect,
+    metrics: &CrtUiMetrics,
+) -> CrtNavigationLayout {
+    CrtNavigationLayout {
+        content_x: content.x,
+        content_y: content.y,
+        content_width: content.width,
+        content_height: content.height,
+        grid_x: metrics.grid_x.max(1) as usize,
+        grid_y: metrics.grid_y.max(1) as usize,
+        header_height: metrics.header_height.max(1) as usize,
+        footer_height: metrics.footer_height.max(1) as usize,
+        heading_font_height: metrics.heading_font.pixels().max(1) as usize,
+        title_font_height: metrics.card_title_font.pixels().max(1) as usize,
+        detail_font_height: metrics.card_detail_font.pixels().max(1) as usize,
+        game_row_height: metrics.game_row_height.max(1) as usize,
+    }
+}
+
+/// The display facts navigation geometry needs, besides the navigation state.
+#[derive(Clone, Copy, Debug)]
+pub struct NavigationDisplay {
+    pub frame_width: usize,
+    pub frame_height: usize,
+    pub crt: Option<CrtNavigationLayout>,
+    pub card_home_rect: Option<NavigationTransitionRect>,
+}
+
+/// Geometry for `edge` in either direction, from the navigation state alone.
+pub fn navigation_geometry(
+    nav: &LauncherNav,
+    display: &NavigationDisplay,
+    edge: NavigationTransitionEdge,
+) -> NavigationTransitionGeometry {
+    let (selected, scroll_x) = nav.menu_tile_view();
+    let items = nav.current_menu_items();
+    derive_navigation_geometry(
+        &NavigationGeometryContext {
+            frame_width: display.frame_width,
+            frame_height: display.frame_height,
+            crt: display.crt,
+            selected,
+            scroll_x,
+            item_count: items.len(),
+            root_menu: nav.current_menu_id() == ROOT_MENU_ID,
+            selected_label: items.get(selected).map_or("", |item| item.title.as_str()),
+            card_home_rect: display.card_home_rect,
+        },
+        edge,
+    )
 }
 
 #[cfg(test)]

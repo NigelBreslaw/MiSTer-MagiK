@@ -46,12 +46,15 @@ mod macos {
         start_screenshot_media_worker_with_config,
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
-        CrtNavigationLayout, NavigationTransitionDirection, NavigationTransitionEdge,
-        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionRuntime,
-        crt_navigation_geometry, hdmi_navigation_geometry, settings_page_transition,
+        NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionEndpoint,
+        NavigationTransitionPhase, NavigationTransitionRuntime, settings_page_transition,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_runtime::startup_intro::StartupIntroPlayback;
+    use mister_magik_fb::launcher_runtime::transition_plan::{
+        NavigationDisplay, crt_navigation_layout, navigation_geometry,
+        navigation_transition_for_intent,
+    };
     use mister_magik_fb::launcher_taxonomy::{
         CONSOLES_MENU_ID, LauncherMenuItemKind, ROOT_MENU_ID,
     };
@@ -1494,68 +1497,15 @@ mod macos {
                     .unwrap_or(false);
             }
             let Some((edge, direction)) =
-                navigation_transition_for_intent(&self.launcher_nav, &event)
+                navigation_transition_for_intent(&self.launcher_nav, &event, false)
             else {
                 return false;
             };
-            let (tile_selected, tile_scroll_x) = self.launcher_nav.menu_tile_view();
-            let selected_label = self
-                .launcher_nav
-                .current_menu_items()
-                .get(tile_selected)
-                .map(|item| item.title.as_str())
-                .unwrap_or("")
-                .to_owned();
-            let mut geometry = match direction {
-                // Both directions derive from the committed navigation state.
-                NavigationTransitionDirection::Forward | NavigationTransitionDirection::Reverse => {
-                    let root_menu = self.launcher_nav.current_menu_id() == ROOT_MENU_ID;
-                    if self.display_profile.is_crt() {
-                        let display = self.display_profile.display();
-                        let content = display.content_rect();
-                        let metrics = CrtUiMetrics::for_display(&display);
-                        crt_navigation_geometry(
-                            self.frame_width,
-                            self.frame_height,
-                            CrtNavigationLayout {
-                                content_x: content.x,
-                                content_y: content.y,
-                                content_width: content.width,
-                                content_height: content.height,
-                                grid_x: metrics.grid_x.max(1) as usize,
-                                grid_y: metrics.grid_y.max(1) as usize,
-                                header_height: metrics.header_height.max(1) as usize,
-                                footer_height: metrics.footer_height.max(1) as usize,
-                                heading_font_height: metrics.heading_font.pixels().max(1) as usize,
-                                title_font_height: metrics.card_title_font.pixels().max(1) as usize,
-                                detail_font_height: metrics.card_detail_font.pixels().max(1)
-                                    as usize,
-                                game_row_height: metrics.game_row_height.max(1) as usize,
-                            },
-                            tile_selected,
-                            self.launcher_nav.current_menu_items().len(),
-                            root_menu,
-                            edge,
-                            &selected_label,
-                        )
-                    } else {
-                        hdmi_navigation_geometry(
-                            self.frame_width,
-                            self.frame_height,
-                            tile_selected,
-                            tile_scroll_x,
-                            root_menu,
-                            edge,
-                            &selected_label,
-                        )
-                    }
-                }
-            };
-            if matches!(
+            let card_edge = matches!(
                 edge,
                 NavigationTransitionEdge::HomeToArcade | NavigationTransitionEdge::ConsolesToSystem
-            ) && !self.orientation.is_portrait()
-            {
+            ) && !self.orientation.is_portrait();
+            let card_home_rect = card_edge.then(|| {
                 let scene = if self.display_profile.is_crt() {
                     mister_magik_framebuffer_scenes::launcher::LauncherScene::crt(
                         self.frame_width,
@@ -1567,14 +1517,32 @@ mod macos {
                         self.frame_height,
                     )
                 };
-                geometry.source_card = self.native_cards.as_ref().map_or_else(
+                self.native_cards.as_ref().map_or_else(
                     || {
                         scene
                             .slot_zero(self.launcher_nav.current_menu_id() != ROOT_MENU_ID)
                             .rect()
                     },
                     |cards| cards.selected_card_rect(),
-                );
+                )
+            });
+            let geometry = navigation_geometry(
+                &self.launcher_nav,
+                &NavigationDisplay {
+                    frame_width: self.frame_width,
+                    frame_height: self.frame_height,
+                    crt: self.display_profile.is_crt().then(|| {
+                        let display = self.display_profile.display();
+                        crt_navigation_layout(
+                            display.content_rect(),
+                            &CrtUiMetrics::for_display(&display),
+                        )
+                    }),
+                    card_home_rect,
+                },
+                edge,
+            );
+            if card_edge {
                 let kind = event
                     .path
                     .as_deref()
@@ -3128,59 +3096,6 @@ mod macos {
             Scenario::Licenses => Some(Scenario::About),
             Scenario::LicenseText => Some(Scenario::Licenses),
             _ => Some(Scenario::Home),
-        }
-    }
-
-    fn navigation_transition_for_intent(
-        nav: &LauncherNav,
-        event: &LauncherEvent,
-    ) -> Option<(NavigationTransitionEdge, NavigationTransitionDirection)> {
-        match event.action {
-            LauncherAction::OpenMenu => Some((
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Forward,
-            )),
-            LauncherAction::OpenCollection if nav.current_menu_id() == ROOT_MENU_ID => Some((
-                NavigationTransitionEdge::HomeToArcade,
-                NavigationTransitionDirection::Forward,
-            )),
-            LauncherAction::OpenCollection => Some((
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Forward,
-            )),
-            LauncherAction::NavigateBack if nav.screen == Screen::Home => Some((
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse,
-            )),
-            LauncherAction::NavigateBack
-                if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
-            {
-                Some((
-                    NavigationTransitionEdge::HomeToArcade,
-                    NavigationTransitionDirection::Reverse,
-                ))
-            }
-            LauncherAction::NavigateBack if nav.screen == Screen::Arcade => Some((
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Reverse,
-            )),
-            LauncherAction::NavigateHome if nav.screen == Screen::Home => Some((
-                NavigationTransitionEdge::HomeToConsoles,
-                NavigationTransitionDirection::Reverse,
-            )),
-            LauncherAction::NavigateHome
-                if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
-            {
-                Some((
-                    NavigationTransitionEdge::HomeToArcade,
-                    NavigationTransitionDirection::Reverse,
-                ))
-            }
-            LauncherAction::NavigateHome if nav.screen == Screen::Arcade => Some((
-                NavigationTransitionEdge::ConsolesToSystem,
-                NavigationTransitionDirection::Reverse,
-            )),
-            _ => None,
         }
     }
 
