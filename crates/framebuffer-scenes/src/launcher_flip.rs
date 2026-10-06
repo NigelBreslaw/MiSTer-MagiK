@@ -864,8 +864,8 @@ fn render(
             let end = (c.reflection_y + (face.height / 4).min(64) as i64 * ONE * ONE / step + ONE
                 - 1)
                 / ONE;
-            // Fade remains baked before interpolation. The vector kernel
-            // only replaces the exact RGB565 lerp, not sampling or the fade.
+            // Fade remains baked before interpolation. Rust and ARM round
+            // the RGB565 lerp identically, preserving native pixels near rest.
             let index = target.index(x, first_y as usize);
             crate::launcher_texture::reflect_column(
                 &mut target.pixels[index..],
@@ -1185,33 +1185,24 @@ mod tests {
                     + ONE
                     - 1)
                     / ONE;
-                for row in 0..(end - c.reflection_y / ONE) as usize {
-                    let y = (c.reflection_y / ONE) as usize + row;
-                    if y < 495 {
-                        assert_eq!(reflected[y * 960 + x], {
-                            let q = ((y as i64 * ONE + ONE / 2 - c.reflection_y)
-                                * i64::from(c.step))
-                            .div_euclid(ONE)
-                                - ONE / 2;
-                            let r = q.div_euclid(ONE);
-                            let get = |i: i64| {
-                                if (0..64).contains(&i) {
-                                    crate::launcher_texture::over(
-                                        reference[i as usize],
-                                        Rgb565Pixel(0),
-                                    )
-                                    .0
-                                } else {
-                                    0
-                                }
-                            };
-                            Rgb565Pixel(crate::launcher::mix_colour(
-                                get(r),
-                                get(r + 1),
-                                (q.rem_euclid(ONE) / 256) as usize,
-                            ))
-                        });
-                    }
+                let source = reference.map(|p| crate::launcher_texture::over(p, Rgb565Pixel(0)).0);
+                let first = c.reflection_y / ONE;
+                let rows = (end.min(495) - first).max(0) as usize;
+                let q = ((first * ONE + ONE / 2 - c.reflection_y) * i64::from(c.step))
+                    .div_euclid(ONE)
+                    - ONE / 2;
+                let mut expected = vec![Rgb565Pixel(0); rows];
+                // Column interpolation has independent rounding/stride tests.
+                // This test owns reflection source cropping and pose mapping.
+                crate::launcher_texture::reflect_column(
+                    &mut expected,
+                    1,
+                    &source,
+                    rows,
+                    (q as i32, c.step),
+                );
+                for (row, pixel) in expected.into_iter().enumerate() {
+                    assert_eq!(reflected[(first as usize + row) * 960 + x], pixel);
                 }
             }
         }

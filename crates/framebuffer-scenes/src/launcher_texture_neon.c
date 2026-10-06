@@ -63,7 +63,7 @@ void magik_launcher_shade_rgba(uint32_t *pixels, size_t n, uint32_t light) {
 
 static inline uint16x4_t reflect_channel(uint16x4_t a, uint16x4_t b,
                                         uint16x4_t w) {
-  return vshr_n_u16(vmla_u16(vmul_u16(a, vsub_u16(vdup_n_u16(256), w)), b, w), 8);
+  return vrshr_n_u16(vmla_u16(vmul_u16(a, vsub_u16(vdup_n_u16(256), w)), b, w), 8);
 }
 
 static const uint8_t reflection_bayer[4][4] = {
@@ -187,7 +187,7 @@ void magik_launcher_reflect_column(uint16_t *out, size_t pitch,
     if (y + 1 < rows && r >= 0 && r2 >= 0 &&
         (size_t)(r + 3) < height && (size_t)(r2 + 3) < height) {
       // Two adjacent pairs; the extra two lanes are bounded lookahead and
-      // discarded. Each RGB565 channel retains its own exact integer floor.
+      // discarded. Round each RGB565 channel to avoid a darkening step near rest.
       uint16x4x2_t ab = vtrn_u16(vld1_u16(src + r), vld1_u16(src + r2));
       uint16x4_t w = vset_lane_u16(((uint32_t)next & 65535) >> 8,
                                    vdup_n_u16(((uint32_t)q & 65535) >> 8), 1);
@@ -202,9 +202,9 @@ void magik_launcher_reflect_column(uint16_t *out, size_t pitch,
       uint32_t a = r >= 0 && (size_t)r < height ? src[r] : 0;
       uint32_t b = r + 1 >= 0 && (size_t)(r + 1) < height ? src[r + 1] : 0;
       uint32_t w = ((uint32_t)q & 65535) >> 8;
-      uint32_t red = ((a >> 11) * (256 - w) + (b >> 11) * w) >> 8;
-      uint32_t green = (((a >> 5) & 63) * (256 - w) + ((b >> 5) & 63) * w) >> 8;
-      uint32_t blue = ((a & 31) * (256 - w) + (b & 31) * w) >> 8;
+      uint32_t red = ((a >> 11) * (256 - w) + (b >> 11) * w + 128) >> 8;
+      uint32_t green = (((a >> 5) & 63) * (256 - w) + ((b >> 5) & 63) * w + 128) >> 8;
+      uint32_t blue = ((a & 31) * (256 - w) + (b & 31) * w + 128) >> 8;
       out[y * pitch] = (uint16_t)(red << 11 | green << 5 | blue);
       ++y; q = next;
     }

@@ -2162,6 +2162,54 @@ mod tests {
     }
 
     #[test]
+    fn root_reflection_has_no_brightness_pop_at_rest() {
+        let artwork = vec![Rgb565Pixel(0xc618); 180 * 252];
+        let images = [artwork.as_slice(); CARDS.len()];
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        for (direction, selected, target) in [
+            (BrowseDirection::Right, 0, 1),
+            (BrowseDirection::Left, 1, 0),
+        ] {
+            let mut prepared = LauncherScene::new(960, 540)
+                .prepare_initial_with_artwork(data(), &images)
+                .finish();
+            let mut previous = Vec::new();
+            for progress in [units - 36, units - 6, units - 2, units - 1, units] {
+                prepared.render_frame(BrowseFrame {
+                    selected,
+                    target,
+                    phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                    direction: Some(direction),
+                    progress_millis: progress,
+                    duration_millis: units,
+                });
+                // The centre card is within 0.08 pixels of rest. Its interior
+                // reflection may retain small filtering differences, but not
+                // a simultaneous colour-step change across the faded surface.
+                let reflection: Vec<_> = (418..470)
+                    .flat_map(|y| {
+                        prepared.pixels()[y * 960 + 530..y * 960 + 700]
+                            .iter()
+                            .copied()
+                    })
+                    .collect();
+                if !previous.is_empty() {
+                    let changed = reflection
+                        .iter()
+                        .zip(&previous)
+                        .filter(|(a, b)| a != b)
+                        .count();
+                    assert!(
+                        changed < reflection.len() / 32,
+                        "{direction:?} progress={progress}: {changed} reflection pixels changed"
+                    );
+                }
+                previous = reflection;
+            }
+        }
+    }
+
+    #[test]
     fn embedded_wordmark_omits_title_without_losing_game_count() {
         use std::borrow::Cow;
         let scene = LauncherScene::new(960, 540);
@@ -2338,50 +2386,50 @@ mod tests {
         #[cfg(not(any(feature = "card-axis-filter", feature = "card-fast-quantisation")))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
-            0x36fabc701678cc9a, 0x6a08efbe22d0e31a, 0x5880b55a0baf09ec, 0xbdd0e07700134dbb, 0x49ce9c9c95c377e2,
-            0x49ce9c9c95c377e2, 0x51862b9059de4275, 0xeffaef589d036f39, 0x3149d99b94dea527, 0x36fabc701678cc9a,
-            0x8ac3e8bf7e261ed0, 0x5c4451338d451a3c, 0xf2e631987c5752cb, 0xd38ac2cec688754d, 0x8c7eb1f6b049d4cd,
-            0x8c7eb1f6b049d4cd, 0x271be268569d947f, 0xc5972294525a9131, 0xeb6cd5617205cb2f, 0x8ac3e8bf7e261ed0,
-            0x27a12a16d2e6a868, 0x6477cb6848985af8, 0xaea182ed0b7d5635, 0xef6d11ade6194059, 0x13500dcdc849291e,
-            0x13500dcdc849291e, 0x14462cd4661b9526, 0x19f2244bc241d868, 0xb7aa77298eb94d2c, 0x27a12a16d2e6a868,
-            0xaa769ab53008e152, 0xe3823e3d6d57bc56, 0x55df3e7e7d7c6165, 0xcc6e3ee81fbe57c2, 0xfbef8529b4330d49,
-            0xfbef8529b4330d49, 0x139b1d2f44ca6384, 0x0618df4108f2c8da, 0x1634c66b6c7f299c, 0xaa769ab53008e152,
+            0x4687b9f98929fc27, 0x01de40663697711d, 0xf8cd84aad96c6ec2, 0x510785231b4c077d, 0xf154ac04f8082d34,
+            0xf154ac04f8082d34, 0xdfa4872b2baf7994, 0x2d94a95f2e285101, 0xcaeb9d49054907c3, 0x4687b9f98929fc27,
+            0xa3a21f881cbf4664, 0xfef51d36b8c21824, 0x280897d875ab263a, 0x8118a532cc198e5e, 0xaf5d68ee8ee3967a,
+            0xaf5d68ee8ee3967a, 0x8462d643dbb856e7, 0x230c8f2e842deb99, 0x114e9baef71de9e9, 0xa3a21f881cbf4664,
+            0xe9cf6da3375de669, 0x730f75e83d18691d, 0xa417c14b1fc44df2, 0x63dbf6e4dedf0746, 0xc786cc582e9d37d5,
+            0xc786cc582e9d37d5, 0x366b0289fa74114a, 0x463ab1ff5ef46b44, 0x89c9cef96d772fbd, 0xe9cf6da3375de669,
+            0x05f064e4433ecfff, 0xe6c79ba3506155a8, 0x7f32800560411bf6, 0x4f58fd6de56be674, 0xb2197e7c030baeaf,
+            0xb2197e7c030baeaf, 0x16729c7c019de07f, 0x4b715808b1d56531, 0x5f423f222c991daa, 0x05f064e4433ecfff,
         ];
         #[cfg(all(feature = "card-axis-filter", not(feature = "card-fast-quantisation")))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
-            0x36fabc701678cc9a, 0xac34339a55a0b426, 0xdf603ff7187edd76, 0xe80a212c0185a5b2, 0x49ce9c9c95c377e2,
-            0x49ce9c9c95c377e2, 0x024846d4352f0363, 0xf699a80037bfb8d7, 0x48b8c8b1580cbaab, 0x36fabc701678cc9a,
-            0x8ac3e8bf7e261ed0, 0xf4cbf0663442465b, 0x0f0b3cf648885806, 0x08f080cdd3fd1446, 0x8c7eb1f6b049d4cd,
-            0x8c7eb1f6b049d4cd, 0xaa187e61864629ac, 0x9bdad3a6ea222bb0, 0x631b0969ee8521d0, 0x8ac3e8bf7e261ed0,
-            0x27a12a16d2e6a868, 0xf62ef825a4c8118b, 0x9c61e175d2d4730a, 0xe374d08856f63105, 0x13500dcdc849291e,
-            0x13500dcdc849291e, 0xff0cd1031aa708ea, 0x9db0496e177602ab, 0xd3aaca18f93ac5a9, 0x27a12a16d2e6a868,
-            0xaa769ab53008e152, 0x8b281496a84c53d6, 0x102ff7df67a03359, 0xf2526e3a65710a45, 0xfbef8529b4330d49,
-            0xfbef8529b4330d49, 0xa207e4d3cc759e1f, 0x49b84d0ad0dd8f9e, 0x399e287e8d681688, 0xaa769ab53008e152,
+            0x4687b9f98929fc27, 0x9d2be33a3ca71867, 0x52234dbf6ae11548, 0x72d7e978eb358360, 0xf154ac04f8082d34,
+            0xf154ac04f8082d34, 0x00885c42b0b1224e, 0xb8afd0c2d7cf3b77, 0x094557929b2959f5, 0x4687b9f98929fc27,
+            0xa3a21f881cbf4664, 0xf30858f191210220, 0x46c34199c6793773, 0x4bdac484e0fc474e, 0xaf5d68ee8ee3967a,
+            0xaf5d68ee8ee3967a, 0x419f80209fe256e7, 0x68155adb4065b614, 0x37b059c1682383b9, 0xa3a21f881cbf4664,
+            0xe9cf6da3375de669, 0x26e2b9a147a62d4a, 0x6bcd3cda29c00830, 0xfbcdd5738ae3435e, 0xc786cc582e9d37d5,
+            0xc786cc582e9d37d5, 0xb0558b05213a0fc6, 0xfa9d3103db322152, 0xfcdd5a98642a4af4, 0xe9cf6da3375de669,
+            0x05f064e4433ecfff, 0xb69eb98349911ee6, 0x9af5b5149ab523e0, 0x1d93c65f8e6513af, 0xb2197e7c030baeaf,
+            0xb2197e7c030baeaf, 0xe6f0c10553de8328, 0xb99d3aedca25975f, 0x74bf11d83730d174, 0x05f064e4433ecfff,
         ];
         #[cfg(all(not(feature = "card-axis-filter"), feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
-            0x57fe7a44179189f1, 0x42e6271a156773ae, 0xb8e56a2d3eaa89cb, 0x473ce95f24959e0b, 0x0ce5598ffbcc2fa2,
-            0x0ce5598ffbcc2fa2, 0xb704319aa128ea52, 0xcb2524353567ad0b, 0x89375b9caaf4ea96, 0x57fe7a44179189f1,
-            0x2e2c682322a5f016, 0xed405e558a7edcb5, 0x780f1554571e0895, 0x6f1cca9859584603, 0xf6853a526f4dab12,
-            0xf6853a526f4dab12, 0xe55c7bb7d93998c4, 0x6bb5ae178c17dc23, 0x240b8c4e072897bb, 0x2e2c682322a5f016,
-            0x571fe578034931d0, 0x351e1f9c81bd96db, 0x08c6bcec1ce640f7, 0x1d99b76bd4c0b958, 0x301b2b9b4c1929d4,
-            0x301b2b9b4c1929d4, 0xbb709c3bc8f74af8, 0xf8caa7a8c846314d, 0xf269527504006d1f, 0x571fe578034931d0,
-            0x9dfa108c2cc0ea38, 0xc8f77117e8ff9f39, 0xd778b2e975165a65, 0xd72154ef737dfdfe, 0xda559e1dd6ff4747,
-            0xda559e1dd6ff4747, 0x2bdab5c543c6440b, 0xcbe71b75df670069, 0x9efe834d9bb36b06, 0x9dfa108c2cc0ea38,
+            0xd3ce5764e8c88bde, 0xa7cef90c802d6414, 0xea9b95bdbad042bb, 0x67a9abee891b4c1a, 0x7e1400988e2a7fb4,
+            0x7e1400988e2a7fb4, 0x2cca0ac9cf164e40, 0xa430e84ae034b4bd, 0xb60e7727de597315, 0xd3ce5764e8c88bde,
+            0x894bea54aa9836d9, 0xa9542f4c893edf6e, 0xd00f7ba74da7f23f, 0xc90db7c08e8b7d36, 0x8cb97d71b576291e,
+            0x8cb97d71b576291e, 0x8e0599c022f7c66a, 0x220aa55a5bf3985c, 0xff691925f4a8aae2, 0x894bea54aa9836d9,
+            0x770dd2ef67cb6c6d, 0xd6bc2e159648a26b, 0x4607b9d9167ede78, 0xee5906843702bdce, 0x59c7656caf6975c7,
+            0x59c7656caf6975c7, 0x0dfcd84a3cea3bd1, 0x35e29c73b33f9a99, 0x1eac72acc2434f87, 0x770dd2ef67cb6c6d,
+            0x01835b8cc58f40e3, 0x7194de163e779a40, 0xb09cafaea111e878, 0x4ee964d3c599c1eb, 0x1c2d34df7305cc00,
+            0x1c2d34df7305cc00, 0xa9d8a77c8682ad63, 0x2da52633c18f31b4, 0x03bed3a550bbe6f3, 0x01835b8cc58f40e3,
         ];
         #[cfg(all(feature = "card-axis-filter", feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
-            0x57fe7a44179189f1, 0x7bfdfe4b5e3f1173, 0x4a65d5c20cef20ca, 0xbac5ae0b3efd8ebf, 0x0ce5598ffbcc2fa2,
-            0x0ce5598ffbcc2fa2, 0x534f3b03078acca6, 0x1aa504206a12ff6e, 0x4c505ecd642e10e7, 0x57fe7a44179189f1,
-            0x2e2c682322a5f016, 0x8fbe0e5b4230678f, 0xc3255d74b2469602, 0x2595ae542fa6b626, 0xf6853a526f4dab12,
-            0xf6853a526f4dab12, 0x0d1ff712c6ecdb6d, 0x698b4819ce88bbc4, 0x6199b2ef4c0db601, 0x2e2c682322a5f016,
-            0x571fe578034931d0, 0x9a669ef1b4a58cc2, 0x4ddf9764a868af4e, 0xf4eb5cdfb62bf08d, 0x301b2b9b4c1929d4,
-            0x301b2b9b4c1929d4, 0x738cc785a927a1a1, 0x483ec24854eb52a0, 0x86f7b36bf4ec307f, 0x571fe578034931d0,
-            0x9dfa108c2cc0ea38, 0x509552590bddc974, 0xa0d93e1646dd8a59, 0x09dd587741370911, 0xda559e1dd6ff4747,
-            0xda559e1dd6ff4747, 0xfce70120a4e6ea44, 0x1b31083216b0d051, 0x6fbf5ef6af3ec6a3, 0x9dfa108c2cc0ea38,
+            0xd3ce5764e8c88bde, 0xbe353139c21b115f, 0xefb5b4c5a8c033ac, 0x1dffc79049677eb6, 0x7e1400988e2a7fb4,
+            0x7e1400988e2a7fb4, 0x223c8ad98be9529c, 0xc477be9f19c4cc32, 0xd9ec89c562a0692a, 0xd3ce5764e8c88bde,
+            0x894bea54aa9836d9, 0x718ec4a0237e3357, 0x581e8d415693322a, 0xa807b755f3257e35, 0x8cb97d71b576291e,
+            0x8cb97d71b576291e, 0xa9b50de28cfe8685, 0x4c898431e46984ad, 0x2ab8a331dccf997b, 0x894bea54aa9836d9,
+            0x770dd2ef67cb6c6d, 0x04b3a82dc0f9a64f, 0x5b99b9272cd6f2aa, 0xfe4a1413639e296b, 0x59c7656caf6975c7,
+            0x59c7656caf6975c7, 0xd946f64e7185a0e0, 0x84b5967c6ad423fb, 0x7cf79629415ee38e, 0x770dd2ef67cb6c6d,
+            0x01835b8cc58f40e3, 0x1de7c482fd4af7c3, 0x264835274b00ba2f, 0x592a09a382103d9f, 0x1c2d34df7305cc00,
+            0x1c2d34df7305cc00, 0xdd11fbe762e6be97, 0xd41fd59f8dadf2a3, 0xe7a463268ab42d90, 0x01835b8cc58f40e3,
         ];
         assert_eq!(actual, REFERENCE, "Root raster: {actual:x?}");
     }

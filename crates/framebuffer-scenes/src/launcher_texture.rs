@@ -112,11 +112,18 @@ pub(super) fn reflect_column(
         };
         for y in 0..rows {
             let row = q.div_euclid(65536);
-            destination[y * pitch] = Rgb565Pixel(crate::launcher::mix_colour(
-                get(row),
-                get(row + 1),
-                (q.rem_euclid(65536) / 256) as usize,
-            ));
+            let a = get(row);
+            let b = get(row + 1);
+            let weight = (q.rem_euclid(65536) / 256) as u32;
+            // A tiny offset must not darken the already-quantised reflection
+            // by a whole colour step just before the card reaches its rest pose.
+            let channel = |shift: u32, mask: u16| {
+                let a = u32::from((a >> shift) & mask);
+                let b = u32::from((b >> shift) & mask);
+                ((a * (256 - weight) + b * weight + 128) >> 8) as u16
+            };
+            destination[y * pitch] =
+                Rgb565Pixel(channel(11, 31) << 11 | channel(5, 63) << 5 | channel(0, 31));
             q += sample.1;
         }
     }
@@ -1543,7 +1550,7 @@ mod tests {
         assert_eq!(cropped.sample(filter, 63 * 65536), 0);
     }
     #[test]
-    fn reflected_column_matches_old_rgb565_lerp_and_preserves_stride_gaps() {
+    fn reflected_column_rounds_channels_and_preserves_stride_gaps() {
         for height in [0, 1, 3, 64, 65] {
             let source: Vec<u16> = (0..height).map(|i| (i * 997 + 17) as u16).collect();
             for origin in [-98304, -32768, 0, 12345, 61 * 65536] {
@@ -1561,16 +1568,35 @@ mod tests {
                                     source.get(r as usize).copied().unwrap_or(0)
                                 }
                             };
-                            expected[y * 7] = Rgb565Pixel(crate::launcher::mix_colour(
-                                get(r),
-                                get(r + 1),
-                                (q.rem_euclid(65536) / 256) as usize,
-                            ));
+                            let a = get(r);
+                            let b = get(r + 1);
+                            let weight = (q.rem_euclid(65536) / 256) as f64;
+                            let channel = |shift: u32, mask: u16| {
+                                (f64::from((a >> shift) & mask) * (256.0 - weight) / 256.0
+                                    + f64::from((b >> shift) & mask) * weight / 256.0)
+                                    .round() as u16
+                            };
+                            expected[y * 7] = Rgb565Pixel(
+                                channel(11, 31) << 11 | channel(5, 63) << 5 | channel(0, 31),
+                            );
                         }
                         reflect_column(&mut actual, 7, &source, rows, (origin, step));
                         assert_eq!(actual, expected);
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_column_keeps_native_pixels_at_tiny_offsets() {
+        let source: Vec<u16> = (0..64).map(|i| (i * 7919) as u16).collect();
+        for origin in [-256, -1, 0, 1, 255] {
+            let mut actual = vec![Rgb565Pixel(0x5aa5); source.len() * 3];
+            reflect_column(&mut actual, 3, &source, source.len(), (origin, 65536));
+            for (row, &pixel) in source.iter().enumerate() {
+                assert_eq!(actual[row * 3], Rgb565Pixel(pixel), "origin={origin}");
+                assert_eq!(actual[row * 3 + 1..row * 3 + 3], [Rgb565Pixel(0x5aa5); 2]);
             }
         }
     }
