@@ -9999,7 +9999,7 @@ pub(super) fn run_launcher_loop(
                     card_level =
                         crate::launcher_home::CardLevelSnapshot::from_runtime(&nav, &catalog);
                 }
-                session.update(
+                let accepted = session.update_from_navigation(
                     super::launcher_card_home::scene_for_display(ui, layout),
                     &card_level,
                     predicted_selected,
@@ -10008,7 +10008,11 @@ pub(super) fn run_launcher_loop(
                     animation_us / 1_000,
                     !nav.settings.reduce_motion,
                     nav.home_card_browse_prediction(animation_now),
+                    nav.home_level_transition(),
                 );
+                if accepted {
+                    nav.acknowledge_home_level_transition();
+                }
                 // Idle on a card: prepare the level it opens and the parent, so
                 // the level trick never waits on preparation. The worker shares
                 // CPU0 with the card helper; start only once card frames stop,
@@ -10559,7 +10563,7 @@ pub(super) fn run_launcher_loop(
             #[cfg(feature = "tooling")]
             let pose_sampled_at = Instant::now();
             let (selected, visual_index) = nav.home_card_visual_prediction(pose_at);
-            session.update(
+            let accepted = session.update_from_navigation(
                 super::launcher_card_home::scene_for_display(ui, layout),
                 &card_level,
                 selected,
@@ -10568,7 +10572,11 @@ pub(super) fn run_launcher_loop(
                 animation_us / 1_000,
                 !nav.settings.reduce_motion,
                 nav.home_card_browse_prediction(pose_at),
+                nav.home_level_transition(),
             );
+            if accepted {
+                nav.acknowledge_home_level_transition();
+            }
             let level_trick = session.is_level_trick_active();
             session.render_direct_bands();
             let request = session.current_request();

@@ -272,10 +272,14 @@ impl CardFaceCache {
             .keys
             .iter()
             .map(String::as_str)
-            .eq(level.cards.iter().map(|c| c.artwork_key.as_str()))
+            .eq(level.cards.iter().map(|c| c.artwork_key()))
         {
             self.fallbacks.clear();
-            self.keys = level.cards.iter().map(|c| c.artwork_key.clone()).collect();
+            self.keys = level
+                .cards
+                .iter()
+                .map(|c| c.artwork_key().to_owned())
+                .collect();
             self.generation = self.generation.wrapping_add(1).max(1);
         }
         let mut loader = Loader::new(root);
@@ -349,8 +353,8 @@ mod tests {
             LauncherHomeCounts::default(),
         ));
         level.cards.truncate(2);
-        level.cards[0].artwork_key = "snes".into();
-        level.cards[1].artwork_key = "n64".into();
+        level.cards[0].artwork_override = Some("snes".into());
+        level.cards[1].artwork_override = Some("n64".into());
         level
     }
     #[test]
@@ -398,7 +402,11 @@ mod tests {
         let level = CardLevelSnapshot::root(&LauncherHomeSnapshot::from_counts(
             LauncherHomeCounts::default(),
         ));
-        let keys: Vec<_> = level.cards.iter().map(|c| c.artwork_key.clone()).collect();
+        let keys: Vec<_> = level
+            .cards
+            .iter()
+            .map(|c| c.artwork_key().to_owned())
+            .collect();
         let installed = load_cards(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join(RELATIVE_PATH),
             &keys,

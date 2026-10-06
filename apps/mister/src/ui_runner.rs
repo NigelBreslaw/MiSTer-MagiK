@@ -172,7 +172,7 @@ impl NativeCardPreview {
         if !self.level.matches_runtime(nav, catalog) {
             self.level = crate::launcher_home::CardLevelSnapshot::from_runtime(nav, catalog);
         }
-        self.session.update(
+        let accepted = self.session.update_from_navigation(
             self.scene,
             &self.level,
             nav.selected,
@@ -181,7 +181,11 @@ impl NativeCardPreview {
             elapsed.as_millis().min(u128::from(u64::MAX)) as u64,
             !nav.settings.reduce_motion,
             nav.home_card_browse_prediction(now),
+            nav.home_level_transition(),
         );
+        if accepted {
+            nav.acknowledge_home_level_transition();
+        }
         self.session.render()
     }
     pub fn selected_card_rect(
