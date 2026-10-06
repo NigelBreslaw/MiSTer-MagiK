@@ -694,28 +694,14 @@ impl LauncherFramePreparer {
         {
             #[cfg(feature = "launcher-profile")]
             let _clear = crate::launcher_profile::span("flip.clear");
-            for y in 120..495 {
-                pixels[y * 960 + clip.0..y * 960 + clip.1].fill(Rgb565Pixel(0));
-            }
+            clear_card_rows(pixels, LOGICAL_WIDTH, (120, 495), clip);
         }
         if !self.faces.is_empty() {
             let plan = self.trick.map_or_else(
                 || build_carousel_plan(&self.faces, request.frame, self.cyclic),
                 |plan| plan.with_faces(&self.faces),
             );
-            // Each screen strip is independent: finish every reflection before
-            // its bodies, then reuse the same cache-local scratch for the next.
-            let width = crate::launcher_flip::STRIP_WIDTH;
-            for left in (clip.0..clip.1).step_by(width) {
-                draw_carousel_plan(
-                    pixels,
-                    LOGICAL_WIDTH,
-                    (0, 0),
-                    &plan,
-                    scratch,
-                    (left, (left + width).min(clip.1)),
-                );
-            }
+            draw_card_strips(pixels, LOGICAL_WIDTH, clip, &plan, scratch);
         }
     }
     /// Compact scratch for `render_tile` only, not whole-card preparation.
@@ -1137,12 +1123,14 @@ impl PreparedLauncher {
         // All animation, including projected edges and reflections, is clipped
         // to this region. Keep static chrome resident between frames.
         for rect in self.logical_damage() {
-            for y in rect.y0..rect.y1 {
-                let range = y * LOGICAL_WIDTH + rect.x0..y * LOGICAL_WIDTH + rect.x1;
-                // The damage region contains only the pure-black background in
-                // chrome. Avoid reading a second framebuffer just to clear.
-                self.logical[range].fill(Rgb565Pixel(BACKGROUND));
-            }
+            // The damage region contains only the pure-black background in
+            // chrome. Avoid reading a second framebuffer just to clear.
+            clear_card_rows(
+                &mut self.logical,
+                LOGICAL_WIDTH,
+                (rect.y0, rect.y1),
+                (rect.x0, rect.x1),
+            );
         }
         #[cfg(feature = "launcher-profile")]
         drop(clear_profile);
@@ -1151,16 +1139,14 @@ impl PreparedLauncher {
             return;
         }
         let plan = build_carousel_plan(&self.faces, frame, self.cyclic);
-        for left in (self.carousel_clip().0..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
-            draw_carousel_plan(
-                &mut self.logical,
-                LOGICAL_WIDTH,
-                (0, 0),
-                &plan,
-                &mut self.flip_columns,
-                (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
-            );
-        }
+        let clip = (self.carousel_clip().0, 934);
+        draw_card_strips(
+            &mut self.logical,
+            LOGICAL_WIDTH,
+            clip,
+            &plan,
+            &mut self.flip_columns,
+        );
         // The projected card rasterizer clips its writes to the
         // carousel. Static margins therefore need no restoration pass.
         self.fit_output();
@@ -1699,6 +1685,44 @@ fn build_carousel_plan<'a>(
         items[slot] = Some(CarouselItem { face, blend, pose });
     }
     CarouselPlan { items, row: false }
+}
+
+/// Clear the rows the card row owns, within `clip`. Everything the carousel
+/// draws (projected edges and reflections included) stays inside them, so the
+/// chrome around the row never needs restoring.
+fn clear_card_rows(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    rows: (usize, usize),
+    clip: (usize, usize),
+) {
+    for y in rows.0..rows.1 {
+        pixels[y * stride + clip.0..y * stride + clip.1].fill(Rgb565Pixel(BACKGROUND));
+    }
+}
+
+/// Draw `plan` across `clip` in independent strips: each strip finishes every
+/// reflection before its bodies, then reuses the same cache-local scratch for
+/// the next. The one place the HDMI landscape and responsive layouts compose
+/// their card row.
+fn draw_card_strips(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    clip: (usize, usize),
+    plan: &CarouselPlan<'_>,
+    scratch: &mut [crate::launcher_flip::Scratch],
+) {
+    let width = crate::launcher_flip::STRIP_WIDTH;
+    for left in (clip.0..clip.1).step_by(width) {
+        draw_carousel_plan(
+            pixels,
+            stride,
+            (0, 0),
+            plan,
+            scratch,
+            (left, (left + width).min(clip.1)),
+        );
+    }
 }
 
 fn draw_carousel_plan(
@@ -2964,6 +2988,250 @@ mod tests {
             println!(
                 "{{\"benchmark\":\"host-chrome-refresh\",\"sample\":{sample},\"full_prepare_us\":{full_us},\"chrome_refresh_us\":{chrome_us},\"rgb565_exact\":true}}"
             );
+        }
+    }
+
+    /// Every output size and level the launcher shows, rendered at rest and
+    /// mid-flip in both directions, as one 64-bit hash each. This pins the card
+    /// row raster across refactors of how it is composed: any visual change
+    /// must update the table on purpose. The pixel-changing experiment features
+    /// (`card-axis-filter`, `card-fast-quantisation`) have their own output.
+    #[cfg(not(any(feature = "card-axis-filter", feature = "card-fast-quantisation")))]
+    fn card_row_hashes() -> Vec<(String, u64)> {
+        fn fnv(pixels: &[Rgb565Pixel]) -> u64 {
+            pixels.iter().fold(0xcbf2_9ce4_8422_2325, |hash, pixel| {
+                (hash ^ u64::from(pixel.0)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+        }
+        let nested = NestedLevel {
+            path: &["CONSOLES"],
+            games: 60,
+            children: 6,
+            children_label: "MAKERS",
+            detail: Some((9, "SYSTEMS")),
+            accent: 0x2a7f,
+        };
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        let mut out = Vec::new();
+        for (name, scene) in [
+            ("hdmi-960x540", LauncherScene::new(960, 540)),
+            ("hdmi-1280x720", LauncherScene::new(1280, 720)),
+            ("hdmi-portrait-540x960", LauncherScene::new(540, 960)),
+            ("crt-640x480", LauncherScene::crt(640, 480)),
+            ("crt-640x288", LauncherScene::crt(640, 288)),
+            ("crt-portrait-480x640", LauncherScene::crt(480, 640)),
+        ] {
+            for (level_name, level) in [
+                ("root", LauncherLevel::Root),
+                ("nested", LauncherLevel::Nested(nested)),
+            ] {
+                let mut input = data();
+                input.level = level;
+                let mut prepared = scene.prepare(input);
+                let frames = [
+                    (
+                        "rest",
+                        0,
+                        0,
+                        crate::launcher_navigation::BrowsePhase::Settled,
+                        None,
+                        0,
+                    ),
+                    (
+                        "right-start",
+                        0,
+                        1,
+                        crate::launcher_navigation::BrowsePhase::Flipping,
+                        Some(BrowseDirection::Right),
+                        units / 8,
+                    ),
+                    (
+                        "right-mid",
+                        0,
+                        1,
+                        crate::launcher_navigation::BrowsePhase::Flipping,
+                        Some(BrowseDirection::Right),
+                        units / 2,
+                    ),
+                    (
+                        "right-late",
+                        0,
+                        1,
+                        crate::launcher_navigation::BrowsePhase::Flipping,
+                        Some(BrowseDirection::Right),
+                        units * 7 / 8,
+                    ),
+                    (
+                        "left-mid",
+                        2,
+                        1,
+                        crate::launcher_navigation::BrowsePhase::Flipping,
+                        Some(BrowseDirection::Left),
+                        units / 2,
+                    ),
+                ];
+                for (frame_name, selected, target, phase, direction, progress) in frames {
+                    prepared.render_frame(BrowseFrame {
+                        selected,
+                        target,
+                        phase,
+                        direction,
+                        progress_millis: progress,
+                        duration_millis: units,
+                    });
+                    out.push((
+                        format!("{name} {level_name} {frame_name}"),
+                        fnv(prepared.pixels()),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    #[cfg(not(any(feature = "card-axis-filter", feature = "card-fast-quantisation")))]
+    #[test]
+    fn card_row_raster_hashes_are_pinned() {
+        const CARD_ROW_HASHES: [(&str, u64); 60] = [
+            ("hdmi-960x540 root rest", 0x8fa7aa1c72be7616),
+            ("hdmi-960x540 root right-start", 0x4e7141ecbcffefff),
+            ("hdmi-960x540 root right-mid", 0xbcb05aec3e4efc4d),
+            ("hdmi-960x540 root right-late", 0x07f00626f24bc90e),
+            ("hdmi-960x540 root left-mid", 0xc243faf56d053520),
+            ("hdmi-960x540 nested rest", 0xce41ffd8cf978135),
+            ("hdmi-960x540 nested right-start", 0x4850d84b3df4321f),
+            ("hdmi-960x540 nested right-mid", 0xeacef394cce29e2c),
+            ("hdmi-960x540 nested right-late", 0x506de6d80f8b7ca6),
+            ("hdmi-960x540 nested left-mid", 0xdaeaa223f122a241),
+            ("hdmi-1280x720 root rest", 0xd6f6da8e278bb12b),
+            ("hdmi-1280x720 root right-start", 0x297208a338a23511),
+            ("hdmi-1280x720 root right-mid", 0xb79dc917607ccc44),
+            ("hdmi-1280x720 root right-late", 0xe13e0e60cfe7482b),
+            ("hdmi-1280x720 root left-mid", 0xb0a88eb3a27e5d5a),
+            ("hdmi-1280x720 nested rest", 0x538ec366ae9e734f),
+            ("hdmi-1280x720 nested right-start", 0xe19437bb8cd4cde2),
+            ("hdmi-1280x720 nested right-mid", 0x16a61476e10090f2),
+            ("hdmi-1280x720 nested right-late", 0xedc3687816f6ae9f),
+            ("hdmi-1280x720 nested left-mid", 0x80966bbb01371184),
+            ("hdmi-portrait-540x960 root rest", 0xed43abe965c0d3dd),
+            ("hdmi-portrait-540x960 root right-start", 0xd73b9d48550436ef),
+            ("hdmi-portrait-540x960 root right-mid", 0x68a910516dbbb36f),
+            ("hdmi-portrait-540x960 root right-late", 0xc0b0410abc71a9b0),
+            ("hdmi-portrait-540x960 root left-mid", 0xf6c5a821a1a03078),
+            ("hdmi-portrait-540x960 nested rest", 0xc37cb1a714f1dca7),
+            (
+                "hdmi-portrait-540x960 nested right-start",
+                0x259e82e21f7ce878,
+            ),
+            ("hdmi-portrait-540x960 nested right-mid", 0x6ca9cca4c8d60c51),
+            (
+                "hdmi-portrait-540x960 nested right-late",
+                0xbc120b705db8b750,
+            ),
+            ("hdmi-portrait-540x960 nested left-mid", 0x7c970af2ba913c4c),
+            ("crt-640x480 root rest", 0x5374849f1687e2f6),
+            ("crt-640x480 root right-start", 0xba65fc0058d2391c),
+            ("crt-640x480 root right-mid", 0x27f7e6ca50e415fd),
+            ("crt-640x480 root right-late", 0x3375922f50469188),
+            ("crt-640x480 root left-mid", 0xe7c5571b5be82465),
+            ("crt-640x480 nested rest", 0xb8be79c1dd82963c),
+            ("crt-640x480 nested right-start", 0xed86cd2750a75a43),
+            ("crt-640x480 nested right-mid", 0x53d58b454734a351),
+            ("crt-640x480 nested right-late", 0x5f6d8940aae63396),
+            ("crt-640x480 nested left-mid", 0xd7396b8b595ed01d),
+            ("crt-640x288 root rest", 0x8bf80f2c151336d8),
+            ("crt-640x288 root right-start", 0x454de93834182ce1),
+            ("crt-640x288 root right-mid", 0xa0069821bed80939),
+            ("crt-640x288 root right-late", 0xe42329d517659fec),
+            ("crt-640x288 root left-mid", 0xfd6fcbcd131ca87a),
+            ("crt-640x288 nested rest", 0x6ffc5fc2502d2934),
+            ("crt-640x288 nested right-start", 0x53d5533dbf469d0c),
+            ("crt-640x288 nested right-mid", 0xe9ca455ee2880ca8),
+            ("crt-640x288 nested right-late", 0x4271b3444b81e9fa),
+            ("crt-640x288 nested left-mid", 0xff01e255a1814799),
+            ("crt-portrait-480x640 root rest", 0x59ed097dfee20a5f),
+            ("crt-portrait-480x640 root right-start", 0x4e33d8b9396ee748),
+            ("crt-portrait-480x640 root right-mid", 0x98cf84003a457b52),
+            ("crt-portrait-480x640 root right-late", 0x03c492a602313d40),
+            ("crt-portrait-480x640 root left-mid", 0x5716a7af51d83317),
+            ("crt-portrait-480x640 nested rest", 0xcfa7307702e9a6e7),
+            (
+                "crt-portrait-480x640 nested right-start",
+                0xb27578dde09b6a5f,
+            ),
+            ("crt-portrait-480x640 nested right-mid", 0x3e9b7960ad17b5e4),
+            ("crt-portrait-480x640 nested right-late", 0x5fcbe7a9e986f363),
+            ("crt-portrait-480x640 nested left-mid", 0xff35b6a5195839c2),
+        ];
+        let actual = card_row_hashes();
+        let changed: Vec<_> = actual
+            .iter()
+            .zip(CARD_ROW_HASHES)
+            .filter(|((name, hash), (pinned_name, pinned))| name != pinned_name || hash != pinned)
+            .map(|((name, hash), _)| format!("(\"{name}\", {hash:#018x}),"))
+            .collect();
+        assert_eq!(actual.len(), CARD_ROW_HASHES.len());
+        assert!(
+            changed.is_empty(),
+            "the card row raster changed; if that is intended, update the table:\n{}",
+            changed.join("\n")
+        );
+    }
+
+    /// The tile renderer (the production path for HDMI landscape) and the
+    /// whole-frame renderer compose the card row through the same functions; the
+    /// rows and columns the card row owns must agree for every frame and every
+    /// way of splitting the carousel into tiles.
+    #[test]
+    fn tile_rendering_matches_frame_rendering_in_the_card_row() {
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        let mut prepared = LauncherScene::new(960, 540).prepare(data());
+        let preparer = prepared.frame_preparer();
+        let (left, right) = prepared.carousel_clip();
+        for (selected, target, direction, progress) in [
+            (0, 0, None, 0),
+            (0, 1, Some(BrowseDirection::Right), units / 8),
+            (0, 1, Some(BrowseDirection::Right), units / 2),
+            (2, 1, Some(BrowseDirection::Left), units / 2),
+            (2, 1, Some(BrowseDirection::Left), units * 7 / 8),
+        ] {
+            let frame = BrowseFrame {
+                selected,
+                target,
+                phase: if direction.is_some() {
+                    crate::launcher_navigation::BrowsePhase::Flipping
+                } else {
+                    crate::launcher_navigation::BrowsePhase::Settled
+                },
+                direction,
+                progress_millis: progress,
+                duration_millis: units,
+            };
+            prepared.render_frame(frame);
+            let expected = prepared.pixels().to_vec();
+            let request = LauncherFrameRequest {
+                frame,
+                timestamp_us: 0,
+                generation: 1,
+            };
+            for splits in [
+                vec![(left, right)],
+                vec![(left, 600), (600, right)],
+                vec![(left, 400), (400, 700), (700, right)],
+            ] {
+                let mut buffer = preparer.new_tile_buffer();
+                let mut tiled = vec![Rgb565Pixel(0x1234); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+                for clip in &splits {
+                    preparer.render_tile_into(request, &mut buffer, &mut tiled, *clip);
+                }
+                for y in 120..495 {
+                    let row = y * LOGICAL_WIDTH;
+                    assert!(
+                        tiled[row + left..row + right] == expected[row + left..row + right],
+                        "{frame:?} splits {splits:?} row {y}"
+                    );
+                }
+            }
         }
     }
 
