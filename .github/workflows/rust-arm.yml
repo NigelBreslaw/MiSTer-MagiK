@@ -43,9 +43,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      # Rendering tests are CPU-bound at opt-level 0. Keep debug assertions and
-      # overflow checks, while optimizing the two groups that execute them.
-      CARGO_PROFILE_TEST_OPT_LEVEL: ${{ (matrix.group == 'domain' || matrix.group == 'app') && '1' || '0' }}
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
@@ -90,6 +87,17 @@ jobs:
           restore-keys: |
             cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
+      - name: Optimize rendering tests
+        if: matrix.group == 'domain' || matrix.group == 'app'
+        # Keep debug assertions and overflow checks. Optimize only the raster
+        # crate, avoiding the cold-build cost of optimizing all Slint dependencies.
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [profile.test.package.mister-magik-framebuffer-scenes]
+          opt-level = 1
+          EOF
+
       - name: Cache host build outputs
         if: matrix.group == 'domain' || matrix.group == 'app'
         uses: actions/cache@v6
@@ -99,7 +107,7 @@ jobs:
             !${{ matrix.group == 'domain' && 'target/ci-host-domain/debug' || 'apps/mister/target/debug' }}/incremental
           # Cache a dependency baseline, as for ARM. Cargo revalidates checked-out
           # sources; exact-only keys bound storage instead of rolling per commit.
-          key: target-host-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.group }}-test-opt1-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_build_cache }}
+          key: target-host-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.group }}-test-scenes-opt1-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_build_cache }}
 
       - name: Full host validation (${{ matrix.group }})
         run: scripts/magik-ci ci host-assurance --group ${{ matrix.group }}
