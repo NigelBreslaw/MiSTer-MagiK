@@ -77,6 +77,9 @@ pub fn finish_navigation_transition(
 }
 
 #[cfg(test)]
+mod presentation_scenarios;
+
+#[cfg(test)]
 mod tests {
     use super::super::full_screen_transition::FullScreenTransitionState;
     use super::super::navigation_transition::{
@@ -93,7 +96,7 @@ mod tests {
 
     /// Start the way the loop does: the runtime first, then the chart, and a
     /// transition the chart refuses is unwound.
-    fn start(
+    pub(super) fn start(
         runtime: &mut NavigationTransitionRuntime,
         chart: &mut FullScreenTransitionStateChart,
         edge: NavigationTransitionEdge,
