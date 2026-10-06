@@ -11,11 +11,12 @@
 //! playing navigation transition covers it (`cover_navigation`) before
 //! composition is asked.
 
-use super::super::composition::{UiCompositionInput, UiCompositionState};
+use super::super::composition::UiCompositionState;
 use super::super::full_screen_transition::{FullScreenTransitionOwner, FullScreenTransitionState};
 use super::super::navigation_transition::NavigationTransitionPhase;
 use super::super::transition_scenarios::{DIRECTIONS, EDGES, frame};
 use super::super::walk_rng::WalkRng as Rng;
+use super::CompositionRequest;
 use super::tests::{director, start};
 use crate::launcher::Screen;
 use std::collections::BTreeSet;
@@ -33,7 +34,6 @@ fn random_walks_measure_what_composition_shows_for_every_chart_state() {
         let mut d = director();
         let mut now_us = 0u64;
         let (mut screensaver, mut confirm) = (false, false);
-        let mut committed = false;
         for step in 0..STEPS {
             let at = format!("walk {walk} step {step}");
             now_us += [0, 5_000, 40_000, 400_000, 10_000_000][rng.below(5)];
@@ -42,7 +42,7 @@ fn random_walks_measure_what_composition_shows_for_every_chart_state() {
                     let edge = EDGES[rng.below(EDGES.len())];
                     let direction = DIRECTIONS[rng.below(DIRECTIONS.len())];
                     if start(&mut d, edge, direction, &source, now_us) {
-                        committed = rng.chance(30);
+                        d.pending.as_mut().unwrap().committed = rng.chance(30);
                     }
                 }
                 2 => {
@@ -101,14 +101,11 @@ fn random_walks_measure_what_composition_shows_for_every_chart_state() {
 
             // The loop's exclusive-view rule, applied before composition is asked.
             if d.navigation.is_active() && (screensaver || confirm) {
-                d.cover_navigation(committed);
+                d.cover_navigation();
             }
 
-            let decision = d.composition.tick(UiCompositionInput {
+            let decision = d.compose(CompositionRequest {
                 screensaver_active: screensaver,
-                navigation_transition_active: d.navigation.is_active(),
-                navigation_destination_committed: committed,
-                navigation_destination_ready: d.navigation.destination_ready(),
                 navigation_destination_layers_ready: rng.chance(60),
                 return_screen: Some(if rng.chance(50) {
                     Screen::Home
