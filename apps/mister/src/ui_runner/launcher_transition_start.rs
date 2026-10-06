@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Starting a navigation reveal: the pixels it begins from, its geometry, and the
-//! renderer that plays it. The launcher loop supplies plain inputs, so the rules
+//! Starting a navigation transition: the pixels it begins from, its geometry, and
+//! the renderer that plays it. The launcher loop supplies plain inputs, so the rules
 //! here run on the host exactly as on the device.
 
 use super::launcher_card_home::LauncherCardHomeSession;
@@ -12,7 +12,7 @@ use crate::ui_display::{CrtUiMetrics, UiLayoutGeometry};
 use mister_magik_framebuffer_scenes::device_card::RevealImage;
 
 /// Everything a reveal needs to begin, besides the runtime and the card session.
-pub(super) struct RevealInputs<'a> {
+pub(super) struct TransitionInputs<'a> {
     pub edge: NavigationTransitionEdge,
     pub direction: NavigationTransitionDirection,
     pub nav: &'a LauncherNav,
@@ -27,19 +27,19 @@ pub(super) struct RevealInputs<'a> {
     pub now_us: u64,
 }
 
-/// Begin the full-screen reveal for `inputs.edge`. Returns whether it started.
+/// Begin the full-screen transition for `inputs.edge`. Returns whether it started.
 ///
 /// The reveal begins from the pixels the user is looking at: the card-home frame
 /// while it owns Home in a landscape raster, otherwise the composed cache.
 /// Portrait transitions run in the physical composition raster, which card-home
 /// does not draw, so they always begin from the composed cache.
-pub(super) fn begin_navigation_reveal(
+pub(super) fn begin_navigation_transition(
     runtime: &mut NavigationTransitionRuntime,
     cards: Option<&mut LauncherCardHomeSession>,
-    inputs: &RevealInputs<'_>,
+    inputs: &TransitionInputs<'_>,
     reveal_image: impl FnOnce() -> Option<RevealImage>,
 ) -> bool {
-    let RevealInputs {
+    let TransitionInputs {
         edge,
         direction,
         nav,
@@ -52,6 +52,19 @@ pub(super) fn begin_navigation_reveal(
         now_us,
     } = *inputs;
     let portrait = layout.is_portrait();
+    if edge == NavigationTransitionEdge::SystemPanel {
+        // The system hub/list slide has no portrait form.
+        return !portrait
+            && runtime
+                .begin_system_panel(
+                    crt_layout,
+                    nav.is_system_hub(),
+                    composed,
+                    crt_backdrop,
+                    now_us,
+                )
+                .unwrap_or(false);
+    }
     let card_edge = is_card_edge(edge) && !portrait;
     let geometry = navigation_geometry(
         nav,
@@ -182,13 +195,16 @@ mod tests {
         cards
     }
 
-    fn home_nav() -> LauncherNav {
-        let catalog = arcade_catalog(
+    fn catalog() -> crate::arcade_catalog::ArcadeCatalog {
+        arcade_catalog(
             vec![arcade_game("Metal Slug").build()],
             vec![arcade_system("arcade", 1)],
-        );
+        )
+    }
+
+    fn home_nav() -> LauncherNav {
         let mut nav = LauncherNav::new();
-        nav.sync_launcher_taxonomy(&catalog);
+        nav.sync_launcher_taxonomy(&catalog());
         assert_eq!(nav.screen, Screen::Home);
         nav
     }
@@ -216,8 +232,8 @@ mod tests {
             edge: NavigationTransitionEdge,
             direction: NavigationTransitionDirection,
             collection_id: Option<&'a str>,
-        ) -> RevealInputs<'a> {
-            RevealInputs {
+        ) -> TransitionInputs<'a> {
+            TransitionInputs {
                 edge,
                 direction,
                 nav,
@@ -247,7 +263,7 @@ mod tests {
             NavigationTransitionDirection::Forward,
             Some(MENU_ARCADE_SYSTEM_ID),
         );
-        assert!(begin_navigation_reveal(
+        assert!(begin_navigation_transition(
             &mut runtime,
             Some(&mut cards),
             &inputs,
@@ -267,48 +283,89 @@ mod tests {
             NavigationTransitionDirection::Forward,
             None,
         );
-        assert!(begin_navigation_reveal(&mut runtime, None, &inputs, || {
-            None
-        }));
+        assert!(begin_navigation_transition(
+            &mut runtime,
+            None,
+            &inputs,
+            || { None }
+        ));
         assert!(runtime.render().unwrap() == fixture.composed);
     }
 
     #[test]
     fn portrait_never_begins_from_the_logical_card_home_frame() {
-        let fixture = Fixture::new(ScreenOrientation::MonitorClockwise);
-        assert!(fixture.layout.is_portrait());
-        let nav = home_nav();
-        let mut cards = active_cards(LauncherScene::new(
-            fixture.layout.logical_w(),
-            fixture.layout.logical_h(),
-        ));
-        let mut runtime = NavigationTransitionRuntime::new(
-            fixture.layout.logical_w(),
-            fixture.layout.logical_h(),
-            true,
-        );
-        let inputs = fixture.inputs(
-            &nav,
+        for edge in [
             NavigationTransitionEdge::HomeToConsoles,
-            NavigationTransitionDirection::Forward,
-            None,
-        );
-        assert!(begin_navigation_reveal(
-            &mut runtime,
-            Some(&mut cards),
-            &inputs,
-            || None
-        ));
-        assert!(runtime.render().unwrap() == fixture.composed);
+            NavigationTransitionEdge::HomeToArcade,
+        ] {
+            let fixture = Fixture::new(ScreenOrientation::MonitorClockwise);
+            assert!(fixture.layout.is_portrait());
+            let nav = home_nav();
+            let mut cards = active_cards(LauncherScene::new(
+                fixture.layout.logical_w(),
+                fixture.layout.logical_h(),
+            ));
+            let mut runtime = NavigationTransitionRuntime::new(
+                fixture.layout.logical_w(),
+                fixture.layout.logical_h(),
+                true,
+            );
+            let inputs = fixture.inputs(
+                &nav,
+                edge,
+                NavigationTransitionDirection::Forward,
+                Some(MENU_ARCADE_SYSTEM_ID),
+            );
+            assert!(
+                begin_navigation_transition(&mut runtime, Some(&mut cards), &inputs, || None),
+                "{edge:?}"
+            );
+            assert!(runtime.render().unwrap() == fixture.composed, "{edge:?}");
+        }
+    }
+
+    #[test]
+    fn a_crt_reverse_reveal_refreshes_the_device_reveal_image_once_it_starts() {
+        let fixture = Fixture::new(ScreenOrientation::Normal);
+        let catalog = catalog();
+        let mut nav = home_nav();
+        let open = LauncherEvent {
+            action: LauncherAction::OpenCollection,
+            path: Some(MENU_ARCADE_SYSTEM_ID.to_owned()),
+            settings: None,
+        };
+        assert!(nav.commit_navigation_intent(&open, &catalog));
+        for (crt_layout, direction, expected) in [
+            (true, NavigationTransitionDirection::Reverse, 1),
+            (true, NavigationTransitionDirection::Forward, 0),
+            (false, NavigationTransitionDirection::Reverse, 0),
+        ] {
+            let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
+            let mut inputs = fixture.inputs(
+                &nav,
+                NavigationTransitionEdge::HomeToArcade,
+                direction,
+                None,
+            );
+            inputs.crt_layout = crt_layout;
+            let calls = std::cell::Cell::new(0);
+            assert!(begin_navigation_transition(
+                &mut runtime,
+                None,
+                &inputs,
+                || {
+                    calls.set(calls.get() + 1);
+                    None
+                }
+            ));
+            assert_eq!(calls.get(), expected, "crt={crt_layout} {direction:?}");
+        }
     }
 
     #[test]
     fn a_reverse_reveal_from_arcade_begins_from_the_composed_cache_even_with_card_home() {
         let fixture = Fixture::new(ScreenOrientation::Normal);
-        let catalog = arcade_catalog(
-            vec![arcade_game("Metal Slug").build()],
-            vec![arcade_system("arcade", 1)],
-        );
+        let catalog = catalog();
         let mut nav = home_nav();
         let open = LauncherEvent {
             action: LauncherAction::OpenCollection,
@@ -326,13 +383,40 @@ mod tests {
             NavigationTransitionDirection::Reverse,
             None,
         );
-        assert!(begin_navigation_reveal(
+        assert!(begin_navigation_transition(
             &mut runtime,
             Some(&mut cards),
             &inputs,
             || None
         ));
         assert!(runtime.render().unwrap() == fixture.composed);
+    }
+
+    #[test]
+    fn the_system_panel_slide_starts_in_landscape_and_never_in_portrait() {
+        for (orientation, starts) in [
+            (ScreenOrientation::Normal, true),
+            (ScreenOrientation::MonitorClockwise, false),
+        ] {
+            let fixture = Fixture::new(orientation);
+            let nav = home_nav();
+            let mut runtime = NavigationTransitionRuntime::new(
+                fixture.layout.logical_w(),
+                fixture.layout.logical_h(),
+                true,
+            );
+            let inputs = fixture.inputs(
+                &nav,
+                NavigationTransitionEdge::SystemPanel,
+                NavigationTransitionDirection::Forward,
+                None,
+            );
+            assert_eq!(
+                begin_navigation_transition(&mut runtime, None, &inputs, || None),
+                starts,
+                "{orientation:?}"
+            );
+        }
     }
 
     #[test]

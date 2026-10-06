@@ -183,6 +183,17 @@ mod navigation {
 
     const GAME: &str = "/media/fat/_Arcade/Pocket Tennis.mra";
 
+    /// A launchable game in `collection`, as the catalog fixture names them.
+    fn game_in(collection: &str) -> &'static str {
+        match collection {
+            MENU_ARCADE_SYSTEM_ID => "/media/fat/_Arcade/Metal Slug.mra",
+            "neogeopocket" => GAME,
+            "gamegear" => "/media/fat/_Arcade/Sonic.mra",
+            "nes" => "/media/fat/_Arcade/Super Mario Bros.mra",
+            other => panic!("no fixture game for {other}"),
+        }
+    }
+
     fn catalog() -> ArcadeCatalog {
         arcade_catalog(
             vec![
@@ -423,8 +434,8 @@ mod navigation {
                             .expect("Arcade is only reached by a planned reveal");
                     if next(3) == 0 {
                         // A game launch restarts the process: only saved state survives.
-                        let state = capture_launch_return_state(&nav, &catalog, GAME)
-                            .filter(|_| nav.active_collection_id() == Some("neogeopocket"));
+                        let game = game_in(nav.active_collection_id().expect("a collection"));
+                        let state = capture_launch_return_state(&nav, &catalog, game);
                         if let Some(state) = state {
                             let mut restored = LauncherNav::new();
                             assert!(apply_launch_return_state(&mut restored, &catalog, state));

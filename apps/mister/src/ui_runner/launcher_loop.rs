@@ -18,7 +18,7 @@ use super::launcher_pacing::{
 };
 use super::launcher_screensaver::{ScreensaverRenderTrace, ScreensaverStartupTimeline};
 use super::launcher_settings_pipeline::{SettingsCogSession, SettingsFrameRequest};
-use super::launcher_transition_start::{RevealInputs, begin_navigation_reveal};
+use super::launcher_transition_start::{TransitionInputs, begin_navigation_transition};
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -8381,30 +8381,10 @@ pub(super) fn run_launcher_loop(
                                         }
                                         let navigation_runtime_started = transition_spec
                                             .is_some_and(|(edge, direction)| {
-                                                if matches!(
-                                                    event.action,
-                                                    LauncherAction::ToggleSystemPage
-                                                        | LauncherAction::OpenSystemSection
-                                                ) {
-                                                    if layout.is_portrait() {
-                                                        return false;
-                                                    }
-                                                    return navigation_transition
-                                                        .begin_system_panel(
-                                                            crt_layout,
-                                                            nav.is_system_hub(),
-                                                            target.cached_565(),
-                                                            crt_backdrop
-                                                                .as_ref()
-                                                                .map_or(&[], |b| b.pixels()),
-                                                            animation_us,
-                                                        )
-                                                        .unwrap_or(false);
-                                                }
-                                                begin_navigation_reveal(
+                                                begin_navigation_transition(
                                                     &mut navigation_transition,
                                                     launcher_card_home.as_mut(),
-                                                    &RevealInputs {
+                                                    &TransitionInputs {
                                                         edge,
                                                         direction,
                                                         nav: &nav,

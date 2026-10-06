@@ -211,7 +211,7 @@ PR numbers below follow the phases: PR 0 is Phase 0, PR 1 is Phase 1, and so on.
 
 **PR 2 (in progress): the transition start path runs from a test.**
 
-- `ui_runner/launcher_transition_start.rs` holds `begin_navigation_reveal`, extracted from
+- `ui_runner/launcher_transition_start.rs` holds `begin_navigation_transition`, extracted from
   `run_launcher_loop` with no behaviour change. It takes plain inputs (navigation state, layout, the
   card-home session, the composed cache) and chooses the source pixels, the geometry and the renderer.
 - Host tests drive it with a real card-home session: Home to Arcade begins from the card-home frame
