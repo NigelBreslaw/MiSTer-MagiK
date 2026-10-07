@@ -12,6 +12,8 @@ use crate::bitmap_text::BitmapFont;
 use crate::launcher_flip::Dither;
 use std::sync::Arc;
 mod artwork;
+#[cfg(test)]
+mod face_parity;
 mod level_trick;
 mod responsive;
 mod row;

@@ -435,6 +435,14 @@ effect.**
   level trick all name the same thing; the level trick's own clear-and-strip loop (a fifth copy) is gone.
   The base poses' clips and the sliding-row poses use the same constants. No pixel changes.
 
+**PR 18 (in progress): a harness for the two card face bakes.**
+
+- `launcher/face_parity.rs` compares the fixed canvas's faces with the responsive layout's at the same
+  size, per region (border ring, label band, interior), and pins the 27 current differences
+  (`Layout::for_card_size` is a test-only constructor). A second test pins one relationship rather than a
+  count: the responsive compact face of a card without an icon (Arcade, Favourites, Settings) is drawn in the detail colours. Results are in
+  Phase 3b above.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
@@ -534,20 +542,24 @@ projection kernels are on the 60 fps budget.
 2. **Revised after measuring (replaces "make `Layout` express the fixed canvas's geometry"):** the
    geometry composition is already one pipeline: plan, optional pose mapping (`Layout::map_pose`, which
    the fixed canvas simply skips), strips. Nothing is gained by teaching the mapping to be an identity.
-   What actually differs is the **face bake**. At the same 180x252 size, with the same source surface,
-   `native_surface` (the responsive path) and `surface` (the fixed path) disagree on 16-27% of the
-   pixels of a generic card, by up to 47 in a 6-bit channel (mean 4.5-7.8 per differing channel): the
-   `native_surface` is documented to build one destination-space silhouette for colour and alpha and
-   to re-quantise with its own spatial threshold, which is the likely cause (the frame, edge and
-   rounded corners); where the differing pixels sit was not mapped, only their count and size.
-   Artwork cards differ too, but
-   that comparison is not apples to apples (the fixed path's real quantisation is not what a scratch
-   test can reproduce from outside), so no number is claimed. Consequence: sharing the face bake for
-   HDMI landscape is not a refactor but a **choice of which renderer is right**, and either choice
-   changes visible pixels on the primary HDMI UI (card frame and corners). That needs a design
-   decision and a device look, not a host test; the pinned hashes will say exactly what changed.
-   Work that can still be done on the host first: a face-level comparison harness (compare `Face`
-   pixels, not scratch packings) so the decision is made on the real difference.
+   What actually differs is the **face bake**, and `launcher/face_parity.rs` now measures it on real
+   `Face` pixels (the fixed canvas's `face_cached`/`faces_rgb888` against `Layout::faces`, both at
+   180x252, 27 cases, pinned). Findings: (a) the border ring (outer 8 px) differs on 65-70% of its
+   pixels for generic cards and on essentially all of them for artwork cards, so the frame is drawn
+   differently; (b) about 2,000-5,300 interior pixels differ even for plain generic faces (not counting the
+   compact faces of the cards without an icon, see (d)) and about 16,600 for artwork cards; (c) label bands differ (the title and count sit at different rows and with
+   different spacing); (d) for the **generic fallback** faces (cards drawn without their artwork), the responsive
+   **compact** face of the cards without an icon (Arcade, Favourites, Settings) is drawn in the detail
+   (selected-card) colours: `native_surface` builds a generic card's body from the *detail* surface
+   whatever face it is for, so for Arcade it is about 11,000 pixels from the fixed detail face but about
+   41,000 from the fixed compact face. **This is not what a device shows**: with the card artwork
+   installed there is no such gap (the artwork cases' compact and detail comparisons come out within a
+   percent of each other), and nobody has seen a card change brightness when selected. It is a property
+   of the fallback drawing only, recorded because the test pins it, not a defect to fix.
+   Consequence: sharing the face bake for HDMI landscape is a **choice of which renderer is right**, and
+   either choice changes visible pixels on the primary HDMI UI. The harness is the instrument for that
+   decision; the pinned table will show exactly what a change moves. It is relative by design: a change
+   to the shared `surface` moves both faces equally and is guarded by the pinned card-row hashes.
 3. Native-size `.cardtex` (encoder, regeneration in the assets repo, motion benchmark on the device).
 4. Unify chrome last, or keep `render_logical` as the HDMI landscape chrome indefinitely: it is not
    on the motion path, and it is the part where the two designs genuinely differ.
