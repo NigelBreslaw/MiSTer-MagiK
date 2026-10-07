@@ -9,28 +9,15 @@ use std::borrow::Cow;
 
 // CRT roles share one scaled font; HDMI borrows the supplied role fonts.
 pub(super) enum Fonts<'a> {
-    /// The route's scaled cell, plus the same font at native width for
-    /// labels that would not fit the doubled cell.
-    Uniform(Cow<'a, BitmapFont>, Cow<'a, BitmapFont>),
+    /// The route's scaled cell.
+    Uniform(Cow<'a, BitmapFont>),
     Roles(LauncherTypography<'a>),
 }
 
 impl Fonts<'_> {
-    /// A card title that fits `width`: the heading, or a narrower face.
-    fn card_title(&self, text: &str, width: usize) -> &BitmapFont {
-        let heading = self.get(TextRole::Heading);
-        if heading.measure(text) <= width {
-            return heading;
-        }
-        match self {
-            Self::Uniform(_, narrow) => narrow,
-            Self::Roles(fonts) => fonts.font_for(TextRole::Metadata, text),
-        }
-    }
-
     fn get(&self, role: TextRole) -> &BitmapFont {
         match self {
-            Self::Uniform(font, _) => font,
+            Self::Uniform(font) => font,
             Self::Roles(fonts) => match role {
                 TextRole::Heading => fonts.heading,
                 TextRole::Number => fonts.number,
@@ -71,27 +58,6 @@ impl Layout {
             layout.card_w = layout.card_h * 5 * ax / (7 * ay) / 2 * 2;
         }
         Some(layout)
-    }
-
-    /// A plain landscape layout whose card is `card_w` x `card_h`: enough to bake
-    /// faces at an exact size, for comparing the two face bakes.
-    #[cfg(test)]
-    pub(super) fn for_card_size(card_w: usize, card_h: usize) -> Self {
-        Self {
-            width: 960,
-            height: 540,
-            crt: false,
-            sx: 1,
-            sy: 1,
-            margin_x: 57,
-            margin_y: 27,
-            top: 137,
-            bottom: 276,
-            card_h,
-            card_w,
-            centre_y: 206,
-            library_y: 302,
-        }
     }
 
     pub fn for_scene(scene: LauncherScene) -> Option<Self> {
@@ -161,19 +127,11 @@ impl Layout {
         let font = typography
             .map(|fonts| Cow::Borrowed(fonts.fallback))
             .unwrap_or_else(|| Cow::Owned(legacy_font()));
-        let narrow = if self.sy == 1 {
-            font.clone()
+        Fonts::Uniform(if (self.sx, self.sy) == (1, 1) {
+            font
         } else {
-            Cow::Owned(scale_font(&font, 1, self.sy))
-        };
-        Fonts::Uniform(
-            if (self.sx, self.sy) == (1, 1) {
-                font
-            } else {
-                Cow::Owned(scale_font(&font, self.sx, self.sy))
-            },
-            narrow,
-        )
+            Cow::Owned(scale_font(&font, self.sx, self.sy))
+        })
     }
 
     pub fn chrome(&self, pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, fonts: &Fonts<'_>) {
@@ -359,61 +317,6 @@ impl Layout {
         if y < self.height {
             pixels[y * self.width + self.margin_x..(y + 1) * self.width - self.margin_x]
                 .fill(Rgb565Pixel(RULE));
-        }
-    }
-
-    pub fn faces(
-        &self,
-        card: &PreparedCard<'_>,
-        fonts: &Fonts<'_>,
-        bodies: &mut artwork::BodyCache,
-        slides: bool,
-    ) -> CardFaces {
-        let (w, h) = (self.card_w, self.card_h);
-        let (mut pixels, alpha) = bodies.native(card, w, h, false);
-        let title = fonts.card_title(card.name, w.saturating_sub(8 * self.sx));
-        let metadata = fonts.get(TextRole::Metadata);
-        let detail_y = if self.crt {
-            (h * 86 / 100).min(h.saturating_sub(14 * self.sy))
-        } else {
-            h * 86 / 100
-        };
-        let title_y = if self.crt {
-            (h * 73 / 100).min(detail_y.saturating_sub(14 * self.sy))
-        } else {
-            h * 73 / 100
-        };
-        title.draw_centered(
-            &mut pixels,
-            w,
-            h,
-            (w / 2) as i32,
-            title_y as i32,
-            card.name,
-            CREAM,
-        );
-        let compact = crate::launcher_flip::Face::with_alpha(pixels.clone(), &alpha, w, h);
-        if let Some(count) = card.games {
-            metadata.draw_centered(
-                &mut pixels,
-                w,
-                h,
-                (w / 2) as i32,
-                detail_y as i32,
-                &format_games(count),
-                CREAM,
-            );
-        }
-        let back = artwork::has_back(card).then(|| {
-            let (pixels, alpha) = bodies.native(card, w, h, true);
-            crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h)
-        });
-        CardFaces {
-            source_retry: false,
-            compact,
-            detail: crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h),
-            back,
-            slides,
         }
     }
 
@@ -621,57 +524,6 @@ mod tests {
                 "SETTINGS",
             ] {
                 assert!(font.measure(title) <= layout.card_w - 6, "{w}x{h}: {title}");
-            }
-        }
-    }
-
-    #[test]
-    fn resting_crt_labels_reach_the_output_without_resampling() {
-        let cards = [LauncherCard {
-            id: LauncherCardId::Favourites,
-            name: "FAVOURITES",
-            games: Some(35216),
-            colour: 0xf81f,
-        }];
-        for (w, h) in [
-            (640, 240),
-            (240, 640),
-            (640, 288),
-            (288, 640),
-            (640, 480),
-            (480, 640),
-            (640, 512),
-            (512, 640),
-        ] {
-            let scene = LauncherScene::crt(w, h);
-            let layout = Layout::for_scene(scene).unwrap();
-            let mut prepared = scene.prepare(LauncherData {
-                cards: &cards,
-                selected: 0,
-                library_games: 35216,
-                collections: 77,
-                favourites: 1,
-                clock: "07:28",
-                level: LauncherLevel::Root,
-            });
-            prepared.render_frame(BrowseFrame {
-                selected: 0,
-                target: 0,
-                phase: crate::launcher_navigation::BrowsePhase::Settled,
-                direction: None,
-                progress_millis: 0,
-                duration_millis: 0,
-            });
-            let face = &prepared.faces[0].detail;
-            let (x0, y0) = ((w - layout.card_w) / 2, layout.centre_y - layout.card_h / 2);
-            for y in layout.card_h * 73 / 100..layout.card_h * 95 / 100 {
-                for x in 6..layout.card_w - 6 {
-                    assert_eq!(
-                        prepared.pixels()[(y0 + y) * w + x0 + x],
-                        face.pixels[y * layout.card_w + x],
-                        "{w}x{h} label pixel {x},{y}"
-                    );
-                }
             }
         }
     }

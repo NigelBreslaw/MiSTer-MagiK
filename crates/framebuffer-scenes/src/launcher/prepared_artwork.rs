@@ -200,7 +200,7 @@ impl PreparedArtwork {
 mod tests {
     use super::*;
     #[test]
-    fn prepared_landscape_payload_does_not_override_responsive_faces() {
+    fn prepared_payload_matches_raw_faces_on_every_output() {
         let source =
             include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/console-nes.rgb888");
         let packed = PreparedArtwork::encode(source, LauncherCardId::Consoles, 0x2a7f);
