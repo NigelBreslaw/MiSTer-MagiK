@@ -518,6 +518,17 @@ effect.**
   `CENTRE_X` and `CENTRE_Y` in `launcher.rs`. No pixel changes: all pinned raster hashes pass unchanged.
   This finishes Phase 3b step 1's "card size, row centre and pitch".
 
+**PR 23 (in progress): Phase 4 loose ends.**
+
+- The transition chart in `docs/architecture.md` is tested against the code
+  (`the_documented_chart_is_the_chart_the_code_runs`): every state change an operation can make is drawn
+  and every drawn edge is one the code can make.
+- What a releasing chart means for composition is written down (see Phase 4) instead of left to the
+  render ladder's order.
+- The `prepared-artwork` tests pointed at a card file that no longer exists (`console-nes.rgb888`), so
+  they could not build and CI never enabled the feature. They use `02_consoles.rgb888` and CI's
+  framebuffer-scenes step now runs them.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
@@ -654,6 +665,7 @@ projection kernels are on the 60 fps budget.
   `director.on_presented(receipt)`.
 - Update `docs/architecture.md`: the Mermaid charts become one chart. Add a
   test that every `(state, event)` pair in the code is listed in the doc table.
+  (The transition chart's edges are now tested against the doc, PR 23; the charts are not one chart yet.)
 
 What the walks in PR 10 and PR 11 say the director has to be (measured, not assumed):
 
@@ -670,11 +682,13 @@ What the walks in PR 10 and PR 11 say the director has to be (measured, not assu
 - **The exclusive-view rule is load-bearing.** A screensaver or confirmation over a playing navigation
   transition must cancel the runtime and release the chart before composition is asked; the walk fails
   if either half is dropped. That rule belongs inside the director.
-- **Observation to resolve:** the chart can be `Releasing` (it asks for a forced live Slint raster) while
-  composition shows the screensaver, a modal, or Mixed Arcade. The loop's render ladder serves the
-  screensaver before the forced live raster, so the release waits until the screensaver ends; the chart
-  then blocks a new transition for that long. It self-heals, but the director should state what a
-  releasing chart means in each composition state instead of leaving it to the ladder's order.
+- **Resolved (PR 23): what a releasing chart means in each composition state.** The chart can be
+  `Releasing` (it asks for a forced live Slint raster) while composition shows the screensaver, a modal,
+  or Mixed Arcade. The loop's render ladder serves that view first, so the release waits until it ends.
+  A new transition begins only from `Live` (a start over a releasing chart is refused) and composition
+  never shows a navigation transition while the chart is `Releasing`; both are asserted by the seeded
+  walks. The rule is now in `docs/architecture.md`. Not measured: how long a refused start waits after the
+  screensaver ends.
 - **First slice (done in PR 12):** the director is a struct that owns the three, with the existing
   paired operations as its methods. Behaviour stays the same; its tests are the two walks above.
   Done in PR 13: the director supplies composition's transition facts and owns the pending navigation

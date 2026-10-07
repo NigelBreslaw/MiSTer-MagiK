@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn prepared_payload_matches_raw_faces_on_every_output() {
         let source =
-            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/console-nes.rgb888");
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/02_consoles.rgb888");
         let packed = PreparedArtwork::encode(source, LauncherCardId::Consoles, 0x2a7f);
         let cards = [LauncherCard {
             id: LauncherCardId::Consoles,
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn prepared_labels_and_every_mip_match_raw_faces() {
         let source =
-            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/console-nes.rgb888");
+            include_bytes!("../../../../apps/mister/assets/ui/launcher-cards/02_consoles.rgb888");
         let bytes = PreparedArtwork::encode(source, LauncherCardId::Consoles, 0x2a7f);
         use crate::bitmap_text::{BitmapFont, BitmapGlyph};
         let font = BitmapFont {

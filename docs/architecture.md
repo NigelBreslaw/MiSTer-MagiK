@@ -585,6 +585,15 @@ Latch acceptance is not a release acknowledgement: the chart returns to
 `Live` only after the forced frame's sequence is confirmed active at a physical
 refresh.
 
+What `Releasing` means for composition: the chart asks for a live Slint frame
+and waits for it. While composition shows the screensaver or a confirmation the
+render ladder serves that view first, no live frame is presented, and the chart
+stays `Releasing` until the view ends. A new transition begins only from `Live`,
+so a start requested in that window is refused (the navigation walks assert it),
+and composition never shows a navigation transition while the chart is
+`Releasing` (the composition walks assert it). A test checks that the chart above
+is the chart the code runs.
+
 Every non-`Live` state owns CPU1. Slint timers, runtime-status serialization,
 search polling, media maintenance, update checks, and other launcher background
 work remain quiescent for the complete ownership interval. The primary catalog
