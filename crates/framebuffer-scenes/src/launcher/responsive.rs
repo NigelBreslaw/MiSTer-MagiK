@@ -73,6 +73,27 @@ impl Layout {
         Some(layout)
     }
 
+    /// A plain landscape layout whose card is `card_w` x `card_h`: enough to bake
+    /// faces at an exact size, for comparing the two face bakes.
+    #[cfg(test)]
+    pub(super) fn for_card_size(card_w: usize, card_h: usize) -> Self {
+        Self {
+            width: 960,
+            height: 540,
+            crt: false,
+            sx: 1,
+            sy: 1,
+            margin_x: 57,
+            margin_y: 27,
+            top: 137,
+            bottom: 276,
+            card_h,
+            card_w,
+            centre_y: 206,
+            library_y: 302,
+        }
+    }
+
     pub fn for_scene(scene: LauncherScene) -> Option<Self> {
         if !scene.crt && scene.width >= scene.height {
             return None;
