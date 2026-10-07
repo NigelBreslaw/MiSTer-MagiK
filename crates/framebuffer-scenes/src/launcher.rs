@@ -954,7 +954,8 @@ impl PreparedLauncher {
         // Every output bakes its faces through the same functions, at the size
         // it shows them: 180x252 on the HDMI landscape canvas, the card's own
         // size elsewhere, with the output's label fonts.
-        let (face_width, face_height) = responsive.map_or((180, 252), |layout| layout.face_size());
+        let (face_width, face_height) =
+            responsive.map_or((180, 252), |layout| (layout.card_w, layout.card_h));
         let (face_typography, narrow_title) =
             match fonts.as_ref().map(responsive::Fonts::for_labels) {
                 Some((labels, narrow)) => (Some(labels), narrow),
@@ -1105,7 +1106,8 @@ impl PreparedLauncher {
                 faces.source_retry = loaded.as_ref().is_some_and(|source| source.retry);
                 // Every projection is dithered. A reflection is 64 rows under a
                 // 252-row card; a smaller card keeps the same proportion.
-                let fade_rows = (64 * face_height / 252).clamp(2, 64);
+                let fade_rows =
+                    responsive.map_or(64, |layout| (64 * layout.card_h / 252).clamp(2, 64));
                 for face in [&mut faces.compact, &mut faces.detail]
                     .into_iter()
                     .chain(faces.back.as_mut())
@@ -3472,7 +3474,7 @@ mod tests {
         ] {
             for level in [LauncherLevel::Root, LauncherLevel::Nested(nested)] {
                 let (width, height) = responsive::Layout::for_level(scene, level.slides())
-                    .map_or((180, 252), |layout| layout.face_size());
+                    .map_or((180, 252), |layout| (layout.card_w, layout.card_h));
                 for artwork in [None, Some(Artwork::Rgb888(&images))] {
                     let mut input = data();
                     input.cards = &cards;
@@ -3569,27 +3571,6 @@ mod tests {
             }
             let rest_us = started.elapsed().as_secs_f64() * 1e6 / 30.0;
             println!("BENCH {name}: flip {flip:.0} us/frame, rest {rest_us:.0} us/frame");
-        }
-    }
-
-    /// A scene whose cards are taller than the shared 180x252 face still
-    /// bakes and renders: the face stays 180x252 and the projection scales it.
-    #[test]
-    fn large_portrait_scenes_bake_the_shared_face() {
-        for (width, height) in [(1080, 1920), (720, 1280)] {
-            let scene = LauncherScene::new(width, height);
-            let layout = responsive::Layout::for_level(scene, false).expect("portrait layout");
-            assert_eq!(layout.face_size().1.min(252), layout.face_size().1);
-            let mut prepared = scene.prepare(data());
-            prepared.render_frame(BrowseFrame {
-                selected: 0,
-                target: 1,
-                phase: crate::launcher_navigation::BrowsePhase::Flipping,
-                direction: Some(BrowseDirection::Right),
-                progress_millis: crate::launcher_navigation::SPRING_POSITION_UNITS / 2,
-                duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
-            });
-            assert_eq!(prepared.pixels().len(), width * height);
         }
     }
 

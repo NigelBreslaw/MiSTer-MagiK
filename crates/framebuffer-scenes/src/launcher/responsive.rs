@@ -63,17 +63,6 @@ pub(super) struct Layout {
 }
 
 impl Layout {
-    /// The size faces are baked at: the card's own, unless it is taller than
-    /// the shared 180x252 face (a scratch column holds 272 rows), in which
-    /// case the HDMI face is baked and the projection scales it.
-    pub fn face_size(&self) -> (usize, usize) {
-        if self.card_h <= 252 {
-            (self.card_w, self.card_h)
-        } else {
-            (180, 252)
-        }
-    }
-
     pub fn for_level(scene: LauncherScene, nested: bool) -> Option<Self> {
         let mut layout = Self::for_scene(scene)?;
         if nested && layout.crt && layout.width > layout.height {
