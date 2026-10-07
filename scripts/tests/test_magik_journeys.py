@@ -100,6 +100,7 @@ def test_catalog_moves_at_either_boundary_and_restores_selection(
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_focus_label", lambda *_: None)
     monkeypatch.setattr(actions, "_exists", lambda *_: state["open"])
+    monkeypatch.setattr(actions, "_selected_labels", lambda _: ["Arcade"])
     monkeypatch.setattr(actions, "one_element", lambda *_: Games())
     monkeypatch.setattr(actions, "screenshot", capture)
     if capture_fails:
@@ -108,3 +109,29 @@ def test_catalog_moves_at_either_boundary_and_restores_selection(
     else:
         actions.launcher_catalog(object(), tmp_path / "catalog.png")
     assert state == {"selection": initial, "open": False}
+
+
+def test_arcade_hub_needs_a_second_enter_to_reach_the_list(actions, monkeypatch):
+    # The CRT and HDMI portrait show the Arcade hub first: the selection moves
+    # off the Arcade card without the list appearing.
+    state = {"enters": 0}
+
+    def press(_, key):
+        assert key == "\n"
+        state["enters"] += 1
+
+    monkeypatch.setattr(actions, "_press_key", press)
+    monkeypatch.setattr(
+        actions,
+        "_selected_labels",
+        lambda _: ["Arcade"] if state["enters"] == 0 else ["Hub row"],
+    )
+    monkeypatch.setattr(actions, "_exists", lambda *_: state["enters"] >= 2)
+    actions._open_arcade_games(object())
+    assert state["enters"] == 2
+
+    # A route that opens the list directly takes one Enter.
+    state["enters"] = 0
+    monkeypatch.setattr(actions, "_exists", lambda *_: state["enters"] >= 1)
+    actions._open_arcade_games(object())
+    assert state["enters"] == 1
