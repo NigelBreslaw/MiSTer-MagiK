@@ -250,13 +250,17 @@ void magik_launcher_filter_column_axes(uint32_t *out,
   }
 }
 
+static inline uint16_t nearest_rgb(uint32_t r, uint32_t g, uint32_t b) {
+  return (uint16_t)(((r * 31 + 127) / 255) << 11 |
+                    ((g * 63 + 127) / 255) << 5 | (b * 31 + 127) / 255);
+}
+
 static uint16_t over_pixel(uint32_t p, uint16_t dst) {
   uint32_t alpha = p >> 24;
   if (!alpha)
     return dst;
   if (alpha == 255)
-    return (uint16_t)(((p & 248) << 8) | (((p >> 8) & 252) << 3) |
-                      ((p >> 19) & 31));
+    return nearest_rgb(p & 255, (p >> 8) & 255, (p >> 16) & 255);
   uint32_t r = (p & 255) + ((dst >> 11) * 255 / 31) * (255 - alpha) / 255;
   uint32_t g =
       ((p >> 8) & 255) + (((dst >> 5) & 63) * 255 / 63) * (255 - alpha) / 255;
@@ -268,14 +272,19 @@ static uint16_t over_pixel(uint32_t p, uint16_t dst) {
     g = 255;
   if (b > 255)
     b = 255;
-  return (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | b >> 3);
+  return nearest_rgb(r, g, b);
+}
+
+static inline uint32x2_t nearest_channel2(uint32x2_t value, uint32_t levels) {
+  // Exact nearest rounding followed by division by 255, without a division.
+  uint32x2_t biased = vadd_u32(vmul_n_u32(value, levels), vdup_n_u32(128));
+  return vshr_n_u32(vadd_u32(biased, vshr_n_u32(biased, 8)), 8);
 }
 
 static inline uint32x2_t pack_opaque2(uint32x2_t p) {
-  uint32x2_t red = vshl_n_u32(vand_u32(p, vdup_n_u32(248)), 8);
-  uint32x2_t green =
-      vshl_n_u32(vand_u32(vshr_n_u32(p, 8), vdup_n_u32(252)), 3);
-  uint32x2_t blue = vand_u32(vshr_n_u32(p, 19), vdup_n_u32(31));
+  uint32x2_t red = vshl_n_u32(nearest_channel2(vand_u32(p, vdup_n_u32(255)), 31), 11);
+  uint32x2_t green = vshl_n_u32(nearest_channel2(vand_u32(vshr_n_u32(p, 8), vdup_n_u32(255)), 63), 5);
+  uint32x2_t blue = nearest_channel2(vand_u32(vshr_n_u32(p, 16), vdup_n_u32(255)), 31);
   return vorr_u32(vorr_u32(red, green), blue);
 }
 
@@ -409,10 +418,9 @@ void magik_launcher_flat(uint16_t *out, size_t pitch, const uint32_t *src,
         uint32x4_t alpha = vshrq_n_u32(p, 24);
         uint32x2_t m = vmin_u32(vget_low_u32(alpha), vget_high_u32(alpha));
         if (vget_lane_u32(m, 0) == 255 && vget_lane_u32(m, 1) == 255) {
-          uint32x4_t red = vshlq_n_u32(vandq_u32(p, vdupq_n_u32(248)), 8);
-          uint32x4_t green = vshlq_n_u32(vandq_u32(vshrq_n_u32(p, 8), vdupq_n_u32(252)), 3);
-          uint32x4_t blue = vandq_u32(vshrq_n_u32(p, 19), vdupq_n_u32(31));
-          vst1_u16(out + y * pitch + x, vmovn_u32(vorrq_u32(vorrq_u32(red, green), blue)));
+          uint32x4_t packed = vcombine_u32(pack_opaque2(vget_low_u32(p)),
+                                           pack_opaque2(vget_high_u32(p)));
+          vst1_u16(out + y * pitch + x, vmovn_u32(packed));
         } else {
           uint32_t pixels[4];
           vst1q_u32(pixels, p);

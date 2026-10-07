@@ -1107,14 +1107,14 @@ impl PreparedLauncher {
                     }
                 };
                 faces.source_retry = loaded.as_ref().is_some_and(|source| source.retry);
-                // Every projection is dithered. A reflection is 64 rows under a
-                // 252-row card; a smaller card keeps the same proportion.
+                // Card colours stay uniform after filtering and distance lighting.
+                // A smaller card keeps the same reflection proportion.
                 let fade_rows = (64 * face_height / CARD_H).clamp(2, 64);
                 for face in [&mut faces.compact, &mut faces.detail]
                     .into_iter()
                     .chain(faces.back.as_mut())
                 {
-                    face.dither = Dither::Always;
+                    face.dither = Dither::Off;
                     face.reflection_fade_rows = fade_rows;
                 }
                 Arc::new(faces)
@@ -2602,53 +2602,29 @@ mod tests {
                 }
             }
         }
-        #[cfg(not(any(feature = "card-axis-filter", feature = "card-fast-quantisation")))]
+        #[cfg(not(feature = "card-axis-filter"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
-            0x4687b9f98929fc27, 0x01de40663697711d, 0xf8cd84aad96c6ec2, 0x510785231b4c077d, 0xf154ac04f8082d34,
-            0xf154ac04f8082d34, 0xdfa4872b2baf7994, 0x2d94a95f2e285101, 0xcaeb9d49054907c3, 0x4687b9f98929fc27,
-            0x1d8e5f16ba98c107, 0xd901bd2138ac1e56, 0xb9fab7f7778269d0, 0x28882b8f9e405f9e, 0xff957d853a6955df,
-            0xff957d853a6955df, 0x3bba4523bbf95dfd, 0x2bb7db83fd3dbea4, 0x8db7fe2a51ccbb4e, 0x1d8e5f16ba98c107,
-            0x429ff164c1e6503c, 0x6bdc37b4d365f9e6, 0xd645694a191228c5, 0x9cf9d1524f237448, 0x91613abda05c6985,
-            0x91613abda05c6985, 0xfee7320dd9d9d638, 0x292791385399fe6c, 0xbea73577d5c79117, 0x429ff164c1e6503c,
-            0xf4391645fe8dacff, 0x4ab6185785c0bfae, 0xd66ec3c477a220a2, 0x4b47dd731c349d98, 0x9509e8277cba470e,
-            0x9509e8277cba470e, 0xb64e00f604c97817, 0xd59b3a4c1a97b482, 0x6a131650ad1b6d83, 0xf4391645fe8dacff,
+            0x05da80783b3e852e, 0x14675cd3814ce698, 0x61a6223b0ad16ad8, 0xca3af7754b6dc2d0, 0x3524e4b7d998e089,
+            0x3524e4b7d998e089, 0x62b3e034bf74aee5, 0x1bbd99afcdafd89e, 0x95cb773a33dcf504, 0x05da80783b3e852e,
+            0x2d5de22cf60b8cd5, 0xb21e265afc2a4131, 0x6dc2b7396320ca55, 0xb743572a7a4cfb60, 0xf04a3982dc4b3232,
+            0xf04a3982dc4b3232, 0x6c2065632d1d5ccd, 0x55511ad18196d4aa, 0x3799b29b08af9243, 0x2d5de22cf60b8cd5,
+            0xb41efc7feab02b3c, 0xc4418c5331185f25, 0x4c9edfde998af125, 0x6e19c8ab7a637fda, 0x7c5b34654f6265ac,
+            0x7c5b34654f6265ac, 0x399fb5e24b29d5eb, 0x1e8e98dea6c17a8a, 0x0a6a4deb252d3578, 0xb41efc7feab02b3c,
+            0xc79ee13ae866dbce, 0x8d8c17f0f17439dd, 0x61d763f7a66bce44, 0x6edb8a147c73f994, 0x34bfc6d3a47f7b59,
+            0x34bfc6d3a47f7b59, 0x33e6e71708675d9b, 0xdefcb0aa4ad89d43, 0x8373c7b52150293c, 0xc79ee13ae866dbce,
         ];
-        #[cfg(all(feature = "card-axis-filter", not(feature = "card-fast-quantisation")))]
+        #[cfg(feature = "card-axis-filter")]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
-            0x4687b9f98929fc27, 0x9d2be33a3ca71867, 0x52234dbf6ae11548, 0x72d7e978eb358360, 0xf154ac04f8082d34,
-            0xf154ac04f8082d34, 0x00885c42b0b1224e, 0xb8afd0c2d7cf3b77, 0x094557929b2959f5, 0x4687b9f98929fc27,
-            0x1d8e5f16ba98c107, 0xbd99c8fcfac38887, 0xa2c24c457df0b99e, 0xa18d5502ec398560, 0xff957d853a6955df,
-            0xff957d853a6955df, 0x914d5776f2c34827, 0x1b81e42214f785d6, 0xba1a93c8048a58eb, 0x1d8e5f16ba98c107,
-            0x429ff164c1e6503c, 0x43292a361f6b42cb, 0x396177d2b3f12264, 0xe2da0a59e9b4a2d3, 0x91613abda05c6985,
-            0x91613abda05c6985, 0x05891c964962df69, 0xc689ffd1d1dba015, 0x9b355449bf523113, 0x429ff164c1e6503c,
-            0xf4391645fe8dacff, 0x5d10177563d83b50, 0x6d5e61b8347b45c6, 0xd53e9d36895362d0, 0x9509e8277cba470e,
-            0x9509e8277cba470e, 0xf73a2a190f9940db, 0xdecf4c1c54442402, 0xd6c04fc4f78f1a75, 0xf4391645fe8dacff,
-        ];
-        #[cfg(all(not(feature = "card-axis-filter"), feature = "card-fast-quantisation"))]
-        #[rustfmt::skip]
-        const REFERENCE: [u64; 40] = [
-            0xd3ce5764e8c88bde, 0xa7cef90c802d6414, 0xea9b95bdbad042bb, 0x67a9abee891b4c1a, 0x7e1400988e2a7fb4,
-            0x7e1400988e2a7fb4, 0x2cca0ac9cf164e40, 0xa430e84ae034b4bd, 0xb60e7727de597315, 0xd3ce5764e8c88bde,
-            0xdcc543ef9215f322, 0x97e9939f8c9ba2e1, 0x5475222493c44834, 0x01e0288acdd11c4e, 0x1b7b9869f3976209,
-            0x1b7b9869f3976209, 0x5f008b75641ad106, 0x19c6ea7d2473b3d7, 0xcb368cd2c3662f96, 0xdcc543ef9215f322,
-            0xc0388fee60001b4e, 0xd53ec84822dee2c8, 0x0517a4afb5be4217, 0x57efdfac4f5cb651, 0x6133b3161113656f,
-            0x6133b3161113656f, 0x802b62a4a7a3ad35, 0x2873e0a0e45c9c6b, 0x48a5075d0f062401, 0xc0388fee60001b4e,
-            0xcb1d859d9d7fac3a, 0x9ab41e69d8d4d782, 0xae6fe0d2f0ed2c9a, 0x601c2b4be3468668, 0x0697ea514fac7afa,
-            0x0697ea514fac7afa, 0x80b220f84a7d3b55, 0x7434f7c1fb308a45, 0x629ff6ff230c37fb, 0xcb1d859d9d7fac3a,
-        ];
-        #[cfg(all(feature = "card-axis-filter", feature = "card-fast-quantisation"))]
-        #[rustfmt::skip]
-        const REFERENCE: [u64; 40] = [
-            0xd3ce5764e8c88bde, 0xbe353139c21b115f, 0xefb5b4c5a8c033ac, 0x1dffc79049677eb6, 0x7e1400988e2a7fb4,
-            0x7e1400988e2a7fb4, 0x223c8ad98be9529c, 0xc477be9f19c4cc32, 0xd9ec89c562a0692a, 0xd3ce5764e8c88bde,
-            0xdcc543ef9215f322, 0xdf1c64781f3e2e07, 0xacf3142ac673e71b, 0x0f577961a759fdc8, 0x1b7b9869f3976209,
-            0x1b7b9869f3976209, 0xdf5fdad25676fb64, 0xb416fbb8265dc6d4, 0x13f492b007206b54, 0xdcc543ef9215f322,
-            0xc0388fee60001b4e, 0xaa93d9d0125dfde5, 0x180508b9cd143767, 0x214e090ab29ee6d1, 0x6133b3161113656f,
-            0x6133b3161113656f, 0xdc4e279e49035373, 0xba68976a38c2b38f, 0xd62a611eaef36d81, 0xc0388fee60001b4e,
-            0xcb1d859d9d7fac3a, 0xda0a7e717378c6fe, 0x22ee660a071146d9, 0x30610708794c90ea, 0x0697ea514fac7afa,
-            0x0697ea514fac7afa, 0x209cd0bf5bd6f14b, 0x574ac432b739a05e, 0x89e84dc4e8ea7d37, 0xcb1d859d9d7fac3a,
+            0x05da80783b3e852e, 0x3a7336aa8a212aa4, 0xeb5a9e0660db05e5, 0xfd3c40e967e3b911, 0x3524e4b7d998e089,
+            0x3524e4b7d998e089, 0xd04342053726eb07, 0xc79e61bfee16dd1f, 0x5d4cd22bb2337498, 0x05da80783b3e852e,
+            0x2d5de22cf60b8cd5, 0x791b5cb17cac8c52, 0xba8fc4959ccc7c7c, 0x31bc8d532d5b715b, 0xf04a3982dc4b3232,
+            0xf04a3982dc4b3232, 0xc39fd91ceabb0bf2, 0x31ca909de69a2f5f, 0x7228b42e66b16354, 0x2d5de22cf60b8cd5,
+            0xb41efc7feab02b3c, 0xf98da01460ad5944, 0x6ffe8de00769aeaf, 0x15c436d86ecf7f7a, 0x7c5b34654f6265ac,
+            0x7c5b34654f6265ac, 0x35849e4c9313a807, 0x90f634f9d3d73d54, 0x544171f82cf53f75, 0xb41efc7feab02b3c,
+            0xc79ee13ae866dbce, 0x3e9c755def34c4d4, 0x517e9b35b1eab6a5, 0xcb6f310e5ecbb8ca, 0x34bfc6d3a47f7b59,
+            0x34bfc6d3a47f7b59, 0x80f0a3c29527e6d9, 0x7f19638d50cd3b4e, 0xf9d53180481c5c85, 0xc79ee13ae866dbce,
         ];
         assert_eq!(actual, REFERENCE, "Root raster: {actual:x?}");
     }
@@ -2718,12 +2694,12 @@ mod tests {
     }
 
     #[test]
-    fn every_scene_dithers_every_projection() {
+    fn every_scene_uses_nearest_card_colours() {
         for (scene, expected) in [
-            (LauncherScene::new(960, 540), Dither::Always),
-            (LauncherScene::new(540, 960), Dither::Always),
-            (LauncherScene::crt(640, 240), Dither::Always),
-            (LauncherScene::crt(240, 640), Dither::Always),
+            (LauncherScene::new(960, 540), Dither::Off),
+            (LauncherScene::new(540, 960), Dither::Off),
+            (LauncherScene::crt(640, 240), Dither::Off),
+            (LauncherScene::crt(240, 640), Dither::Off),
         ] {
             let prepared = PreparedLauncher::new(scene, data(), None, None);
             for faces in prepared.faces.iter() {
@@ -3221,75 +3197,75 @@ mod tests {
     #[test]
     fn card_row_raster_hashes_are_pinned() {
         const CARD_ROW_HASHES: [(&str, u64); 60] = [
-            ("hdmi-960x540 root rest", 0x8fa7aa1c72be7616),
-            ("hdmi-960x540 root right-start", 0x4e7141ecbcffefff),
-            ("hdmi-960x540 root right-mid", 0xbcb05aec3e4efc4d),
-            ("hdmi-960x540 root right-late", 0x07f00626f24bc90e),
-            ("hdmi-960x540 root left-mid", 0xc243faf56d053520),
-            ("hdmi-960x540 nested rest", 0xce41ffd8cf978135),
-            ("hdmi-960x540 nested right-start", 0x4850d84b3df4321f),
-            ("hdmi-960x540 nested right-mid", 0xeacef394cce29e2c),
-            ("hdmi-960x540 nested right-late", 0x506de6d80f8b7ca6),
-            ("hdmi-960x540 nested left-mid", 0xdaeaa223f122a241),
-            ("hdmi-1280x720 root rest", 0xd6f6da8e278bb12b),
-            ("hdmi-1280x720 root right-start", 0x297208a338a23511),
-            ("hdmi-1280x720 root right-mid", 0xb79dc917607ccc44),
-            ("hdmi-1280x720 root right-late", 0xe13e0e60cfe7482b),
-            ("hdmi-1280x720 root left-mid", 0xb0a88eb3a27e5d5a),
-            ("hdmi-1280x720 nested rest", 0x538ec366ae9e734f),
-            ("hdmi-1280x720 nested right-start", 0xe19437bb8cd4cde2),
-            ("hdmi-1280x720 nested right-mid", 0x16a61476e10090f2),
-            ("hdmi-1280x720 nested right-late", 0xedc3687816f6ae9f),
-            ("hdmi-1280x720 nested left-mid", 0x80966bbb01371184),
-            ("hdmi-portrait-540x960 root rest", 0x3f90c4b7c55f4959),
-            ("hdmi-portrait-540x960 root right-start", 0x1887dc6cc10e8fd0),
-            ("hdmi-portrait-540x960 root right-mid", 0x6a206be4766d1e02),
-            ("hdmi-portrait-540x960 root right-late", 0x16e7c59131dd450b),
-            ("hdmi-portrait-540x960 root left-mid", 0x347b355b8ae1ced7),
-            ("hdmi-portrait-540x960 nested rest", 0xcd7bb98ac6536723),
+            ("hdmi-960x540 root rest", 0x2f7dfde5a669f964),
+            ("hdmi-960x540 root right-start", 0xb1503fe885ecf7a6),
+            ("hdmi-960x540 root right-mid", 0xa790be4374f3c8ea),
+            ("hdmi-960x540 root right-late", 0xc59a2746507e7720),
+            ("hdmi-960x540 root left-mid", 0xd024cf74fdfcb6cd),
+            ("hdmi-960x540 nested rest", 0x1d704468b983380b),
+            ("hdmi-960x540 nested right-start", 0xce1239409d847fb2),
+            ("hdmi-960x540 nested right-mid", 0xe024fd8efe44f423),
+            ("hdmi-960x540 nested right-late", 0x0f3cc959daf63cdc),
+            ("hdmi-960x540 nested left-mid", 0x83899fa15cbae20f),
+            ("hdmi-1280x720 root rest", 0x005c93c2555449f2),
+            ("hdmi-1280x720 root right-start", 0x937cd12bc66f3e8d),
+            ("hdmi-1280x720 root right-mid", 0x6811973384660c43),
+            ("hdmi-1280x720 root right-late", 0x4fd1d290b84db2bd),
+            ("hdmi-1280x720 root left-mid", 0x4f37405ff4bca2bd),
+            ("hdmi-1280x720 nested rest", 0x3cc66059c5e1a459),
+            ("hdmi-1280x720 nested right-start", 0xfd3b9c3518a7a44c),
+            ("hdmi-1280x720 nested right-mid", 0x99a68818a09be273),
+            ("hdmi-1280x720 nested right-late", 0x87c746d7ee0bb2bf),
+            ("hdmi-1280x720 nested left-mid", 0x715517314dacea91),
+            ("hdmi-portrait-540x960 root rest", 0xd26a86460c8117a7),
+            ("hdmi-portrait-540x960 root right-start", 0x3851a890a9e3e974),
+            ("hdmi-portrait-540x960 root right-mid", 0x15ceedc35813519f),
+            ("hdmi-portrait-540x960 root right-late", 0x97d589b6d1ebafd6),
+            ("hdmi-portrait-540x960 root left-mid", 0x590fbbe0fd2a2dd7),
+            ("hdmi-portrait-540x960 nested rest", 0xc0d83aba165dce2a),
             (
                 "hdmi-portrait-540x960 nested right-start",
-                0x2891e54318dc635c,
+                0x503a22bf3fa5b8c0,
             ),
-            ("hdmi-portrait-540x960 nested right-mid", 0x2ee3456dafd49f18),
+            ("hdmi-portrait-540x960 nested right-mid", 0x9e2403dc31f3ee93),
             (
                 "hdmi-portrait-540x960 nested right-late",
-                0x3dac9a71ff54f4fa,
+                0xf540767316ea674b,
             ),
-            ("hdmi-portrait-540x960 nested left-mid", 0x790419b87b5d5114),
-            ("crt-640x480 root rest", 0xca705023a4192348),
-            ("crt-640x480 root right-start", 0x7f8ecb32cd74fff4),
-            ("crt-640x480 root right-mid", 0xfbd1ab84209ba722),
-            ("crt-640x480 root right-late", 0x631da8438ce2e681),
-            ("crt-640x480 root left-mid", 0xccc4e0e3e9f085bc),
-            ("crt-640x480 nested rest", 0xaa9ea010ae7046d3),
-            ("crt-640x480 nested right-start", 0x09980da561076410),
-            ("crt-640x480 nested right-mid", 0xbc69320851799ea1),
-            ("crt-640x480 nested right-late", 0xb0a93ffab295840c),
-            ("crt-640x480 nested left-mid", 0x19d85994f9938f29),
-            ("crt-640x288 root rest", 0x433713fe1cfdbfe0),
-            ("crt-640x288 root right-start", 0x76e8d39818a4848a),
-            ("crt-640x288 root right-mid", 0xdb6b87900f42d13e),
-            ("crt-640x288 root right-late", 0x0d0ac9575c0db1cb),
-            ("crt-640x288 root left-mid", 0x89b675772550ccd4),
-            ("crt-640x288 nested rest", 0xd50c93c5e15a7091),
-            ("crt-640x288 nested right-start", 0x2dfbcc4d7e379a11),
-            ("crt-640x288 nested right-mid", 0xe95eebe882ebd855),
-            ("crt-640x288 nested right-late", 0xd2c6d411bf73f639),
-            ("crt-640x288 nested left-mid", 0x6da8a068a6685bf0),
-            ("crt-portrait-480x640 root rest", 0xf2af231f49b06714),
-            ("crt-portrait-480x640 root right-start", 0x162d4d199521d705),
-            ("crt-portrait-480x640 root right-mid", 0xdcbf2ea60c141252),
-            ("crt-portrait-480x640 root right-late", 0x10f173090c708cac),
-            ("crt-portrait-480x640 root left-mid", 0x6d8813884cca9b3f),
-            ("crt-portrait-480x640 nested rest", 0xfe3526b6b27faab2),
+            ("hdmi-portrait-540x960 nested left-mid", 0xe7db3b4ed4c15251),
+            ("crt-640x480 root rest", 0x6afbe66068689fbc),
+            ("crt-640x480 root right-start", 0xb2e8123bde69432c),
+            ("crt-640x480 root right-mid", 0xd4e4c7b96b25ba8e),
+            ("crt-640x480 root right-late", 0x07c02ccc6c2988db),
+            ("crt-640x480 root left-mid", 0x876a0b291809e719),
+            ("crt-640x480 nested rest", 0x96aeca2df4798ea5),
+            ("crt-640x480 nested right-start", 0xa84922d6317daaf4),
+            ("crt-640x480 nested right-mid", 0x066b7f7beb5903ec),
+            ("crt-640x480 nested right-late", 0xccf8a4a8b7425310),
+            ("crt-640x480 nested left-mid", 0xb3199aeeecb86f02),
+            ("crt-640x288 root rest", 0xe11d295791573431),
+            ("crt-640x288 root right-start", 0xf4dadfc87886a15a),
+            ("crt-640x288 root right-mid", 0x9c0baee079f2e031),
+            ("crt-640x288 root right-late", 0x38e6baf0c9c8571d),
+            ("crt-640x288 root left-mid", 0x10fa9ae19604c4e5),
+            ("crt-640x288 nested rest", 0x96efedd153c85646),
+            ("crt-640x288 nested right-start", 0xf0ebf8e6a853ca5c),
+            ("crt-640x288 nested right-mid", 0xa83ded2b4b7fe714),
+            ("crt-640x288 nested right-late", 0x8b434b88444c59f1),
+            ("crt-640x288 nested left-mid", 0x6c1b876974fd73ff),
+            ("crt-portrait-480x640 root rest", 0x88f6680b7b61aeec),
+            ("crt-portrait-480x640 root right-start", 0x9d2221cceccd7714),
+            ("crt-portrait-480x640 root right-mid", 0xcc6e75c787353db6),
+            ("crt-portrait-480x640 root right-late", 0xe55bb688681f269d),
+            ("crt-portrait-480x640 root left-mid", 0x947ef4df55ce0a37),
+            ("crt-portrait-480x640 nested rest", 0x23b292162a3d4954),
             (
                 "crt-portrait-480x640 nested right-start",
-                0xc4a2762ae5848d20,
+                0x7634b697456f2315,
             ),
-            ("crt-portrait-480x640 nested right-mid", 0x4eef80ee2f3c1001),
-            ("crt-portrait-480x640 nested right-late", 0xbd86f13e8728fcd6),
-            ("crt-portrait-480x640 nested left-mid", 0x5945b5550d957faf),
+            ("crt-portrait-480x640 nested right-mid", 0x83aef9ec986d255e),
+            ("crt-portrait-480x640 nested right-late", 0x58f4f8a5cc9e2a90),
+            ("crt-portrait-480x640 nested left-mid", 0x9f2f31cbd4181b68),
         ];
         let actual = card_row_hashes();
         let changed: Vec<_> = actual

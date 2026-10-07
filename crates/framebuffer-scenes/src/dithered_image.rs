@@ -1,8 +1,15 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Destination-space quantisation for explicit image quality experiments.
+//! Destination-space RGB565 quantisation for images and card projection.
 use crate::Rgb565Pixel;
 const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+/// Nearest representable RGB565 colour, independent of screen coordinates.
+#[inline]
+pub(crate) fn quantise_nearest_rgb8(rgb: [u8; 3]) -> Rgb565Pixel {
+    let channel = |value: u8, levels: u32| ((u32::from(value) * levels + 127) / 255) as u16;
+    Rgb565Pixel(channel(rgb[0], 31) << 11 | channel(rgb[1], 63) << 5 | channel(rgb[2], 31))
+}
+
 #[inline]
 pub fn quantise_rgb8(rgb: [u8; 3], x: usize, y: usize) -> Rgb565Pixel {
     let threshold = BAYER[y % 4][x % 4] * 16 + 8;
@@ -29,6 +36,22 @@ pub(crate) fn quantise_fast_rgb8(rgb: [u8; 3], x: usize, y: usize) -> Rgb565Pixe
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nearest_conversion_minimises_channel_error_and_preserves_native_colours() {
+        for value in 0..=255u8 {
+            let actual = quantise_nearest_rgb8([value; 3]).0;
+            for (shift, maximum) in [(11, 31), (5, 63), (0, 31)] {
+                let expected = (f64::from(value) * f64::from(maximum) / 255.0).round() as u16;
+                assert_eq!((actual >> shift) & maximum, expected);
+            }
+        }
+        for pixel in 0..=u16::MAX {
+            let (r, g, b) = (pixel >> 11, (pixel >> 5) & 63, pixel & 31);
+            let rgb = [r * 255 / 31, g * 255 / 63, b * 255 / 31].map(|v| v as u8);
+            assert_eq!(quantise_nearest_rgb8(rgb).0, pixel);
+        }
+    }
+
     #[cfg(feature = "card-fast-quantisation")]
     #[test]
     fn candidate_preserves_endpoints_and_monotonic_channel_response() {

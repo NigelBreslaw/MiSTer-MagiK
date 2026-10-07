@@ -37,7 +37,7 @@ BRANDS = {
     "bandai": ("Bandai", "#ff0000", True),
     "commodore": ("Commodore", "#e5d8bc", False),
     "apple": ("Apple", "#e7e2d3", False),
-    "sinclair": ("Sinclair", "#101010", True),
+    "sinclair": ("Sinclair", "#000000", True),
     "tandy": ("Tandy", "#a32832", True),
     "acorn": ("Acorn", "#174d35", True),
     "dos-pc": ("DOS / PC", "#163d40", False),

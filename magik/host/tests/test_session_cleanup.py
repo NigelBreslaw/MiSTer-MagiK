@@ -118,7 +118,8 @@ def test_real_session_validates_renderer_before_scenario(
     request = SimpleNamespace(config=SimpleNamespace(getoption=options.__getitem__))
     context = {
         "card_sampler": "independent-vertical-prefilter" if matching else "current",
-        "card_quantiser": "centred-bayer-shifts",
+        "card_quantiser": "nearest-rgb565",
+        "card_fast_quantisation_feature": True,
     }
     agent = SimpleNamespace(metrics=lambda: {"context": context})
     status = SimpleNamespace(

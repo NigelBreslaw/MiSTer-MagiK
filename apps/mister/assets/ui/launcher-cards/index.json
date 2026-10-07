@@ -164,11 +164,11 @@
       "contains_name": true,
       "file": "brand-sinclair.rgb888",
       "prepared": {
-        "bytes": 78482,
+        "bytes": 79981,
         "file": "brand-sinclair.2-edc6.cardtex",
-        "sha256": "00da492c33f97fb6e788ebc9747937f603e9eb638c78d9370ef648c36783ccf6"
+        "sha256": "1ef1ac7bf2ce44d6d3f94972217a0c0baa810574c4f19ed2f294c5ae93494db7"
       },
-      "sha256": "225b468555287f184a71f5976371384e8d8f8e41ac56dddfdbaa5c955e6911ea"
+      "sha256": "b1ca213f011789d52943049b101f5fc963a8516e421effd4c8e6201c909d5a5f"
     },
     "menu:computers:tandy": {
       "contains_name": true,

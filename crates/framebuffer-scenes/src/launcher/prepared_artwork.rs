@@ -157,7 +157,7 @@ impl PreparedArtwork {
                 width: W,
                 height: H,
                 reflection_fade_rows: 64,
-                dither: crate::launcher_flip::Dither::Always,
+                dither: crate::launcher_flip::Dither::Off,
                 texture: Texture::from_levels(levels),
             });
             surfaces.push(surface);
