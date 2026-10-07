@@ -214,6 +214,12 @@ impl LauncherScene {
         }
     }
 
+    /// A portrait HDMI output, drawn rotated into the landscape scanout.
+    #[must_use]
+    pub const fn is_hdmi_portrait(self) -> bool {
+        !self.crt && self.height > self.width
+    }
+
     #[must_use]
     pub const fn uses_responsive_layout(self) -> bool {
         self.crt || self.height > self.width

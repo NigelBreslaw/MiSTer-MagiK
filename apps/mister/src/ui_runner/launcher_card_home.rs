@@ -13,7 +13,6 @@ use crate::launcher_artwork::CardFaceCache;
 #[cfg(test)]
 use crate::launcher_home::CARD_COUNT;
 use crate::launcher_home::CardLevelSnapshot;
-use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
 use mister_magik_framebuffer_scenes::launcher::{
     CardSlot, LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherFrameRequest, LauncherScene,
@@ -25,10 +24,29 @@ use mister_magik_framebuffer_scenes::launcher_navigation::{
 use mister_magik_framebuffer_scenes::launcher_parallel::{
     ParallelFrameTiming, ParallelLauncherRenderer,
 };
+use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565Pixel, Rgb565Rect};
 use std::sync::Arc;
 #[path = "launcher_card_preparation.rs"]
 mod preparation;
 use preparation::{HomePreparation, PreparedContent};
+
+/// A rotated output's physical copies of the card frame: the whole frame
+/// (chrome and the primary band) and the helper band, each in scanout order.
+/// The chrome is rotated only when it changes; each frame rotates the bands.
+#[derive(Default)]
+struct PhysicalBands {
+    frame: Vec<Rgb565Pixel>,
+    helper: Vec<Rgb565Pixel>,
+    /// What the rotated chrome shows: its content and the rotation it used.
+    chrome: Option<(u64, Rgb565OutputLayout)>,
+}
+
+/// The rotated frame and helper band with the physical rectangle each band owns.
+pub(super) struct DirectBands<'a> {
+    pub frame: &'a [Rgb565Pixel],
+    pub helper: &'a [Rgb565Pixel],
+    pub damage: [DirtyRect; 2],
+}
 
 struct VisiblePrepared(Option<Box<PreparedLauncher>>);
 impl std::ops::Deref for VisiblePrepared {
@@ -145,6 +163,7 @@ pub(super) struct LauncherCardHomeSession {
     aside: Vec<Aside>,
     now_ms: u64,
     renderer: Option<Box<ParallelLauncherRenderer>>,
+    physical: PhysicalBands,
     last_rendered: Option<(BrowseFrame, u64)>,
     last_timing: Option<ParallelFrameTiming>,
     last_request: LauncherFrameRequest,
@@ -210,6 +229,7 @@ impl LauncherCardHomeSession {
             aside: Vec::new(),
             now_ms: 0,
             renderer,
+            physical: PhysicalBands::default(),
             last_rendered: None,
             last_timing: None,
             last_request: LauncherFrameRequest {
@@ -1112,6 +1132,83 @@ impl LauncherCardHomeSession {
                 .as_ref()
                 .is_none_or(|pending| pending.scene == self.scene)
     }
+    /// Whether the card frame can go straight into the hidden scanout slot,
+    /// without a Slint raster: native HDMI landscape, and HDMI portrait
+    /// outside a level change (its trick still renders on one thread).
+    pub(super) fn can_render_direct(&self) -> bool {
+        self.can_render_native()
+            || (self.active
+                && self.scene.is_hdmi_portrait()
+                && self.trick.is_none()
+                && self.renderer.is_some()
+                && self
+                    .pending
+                    .as_ref()
+                    .is_none_or(|pending| pending.scene == self.scene))
+    }
+
+    /// The bands of the frame just rendered with `render_direct_bands`,
+    /// rotated into scanout order. `None` if the helper band is not the
+    /// current frame (the caller then falls back to the Slint path).
+    pub(super) fn direct_physical_bands(
+        &mut self,
+        output: Rgb565OutputLayout,
+    ) -> Option<DirectBands<'_>> {
+        let geometry = self.prepared.frame_preparer().geometry();
+        let split = self.renderer.as_ref()?.rendered_split();
+        let helper = self.renderer.as_ref()?.helper_pixels(self.last_request)?;
+        if output.logical_width() * output.logical_height() != self.prepared.pixels().len() {
+            return None;
+        }
+        let bands = [
+            Rgb565Rect {
+                x0: geometry.clip.0,
+                y0: geometry.rows.0,
+                x1: split,
+                y1: geometry.rows.1,
+            },
+            Rgb565Rect {
+                x0: split,
+                y0: geometry.rows.0,
+                x1: geometry.clip.1,
+                y1: geometry.rows.1,
+            },
+        ];
+        let physical = &mut self.physical;
+        physical.frame.resize(output.len(), Rgb565Pixel(0));
+        physical.helper.resize(output.len(), Rgb565Pixel(0));
+        let source = self.prepared.pixels();
+        if physical.chrome != Some((self.content_generation, output)) {
+            output.gather_logical_rect(
+                source,
+                &mut physical.frame,
+                Rgb565Rect {
+                    x0: 0,
+                    y0: 0,
+                    x1: output.logical_width(),
+                    y1: output.logical_height(),
+                },
+            );
+            physical.chrome = Some((self.content_generation, output));
+        }
+        output.gather_logical_rect(source, &mut physical.frame, bands[0]);
+        output.gather_logical_rect(helper, &mut physical.helper, bands[1]);
+        let damage = bands.map(|band| {
+            let rect = output.logical_rect_to_physical(band);
+            DirtyRect {
+                x0: rect.x0,
+                y0: rect.y0,
+                x1: rect.x1,
+                y1: rect.y1,
+            }
+        });
+        Some(DirectBands {
+            frame: &physical.frame,
+            helper: &physical.helper,
+            damage,
+        })
+    }
+
     fn next_request(&mut self, frame: BrowseFrame) -> LauncherFrameRequest {
         self.last_request = LauncherFrameRequest {
             frame,
@@ -2001,6 +2098,52 @@ mod tests {
         assert_eq!(session.render(), serial.pixels());
         assert!(session.can_render_native());
         assert_eq!(session.current_request().timestamp_us, 32_000);
+    }
+
+    #[test]
+    fn portrait_direct_bands_rotate_to_the_serial_frame() {
+        use mister_magik_framebuffer_scenes::OutputRotation;
+        let scene = LauncherScene::new(540, 960);
+        let level = snapshot();
+        let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 1,
+            phase: BrowsePhase::Flipping,
+            direction: Some(BrowseDirection::Right),
+            progress_millis: 230,
+            duration_millis: 460,
+        };
+        session.update(scene, &level, 0, 0.5, "07:28", 230, true, Some(frame), None);
+        assert!(session.can_render_direct() && !session.can_render_native());
+        session.render_direct_bands();
+        for rotation in [
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let output = Rgb565OutputLayout::new(540, 960, 960, rotation).unwrap();
+            let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
+            serial.render_frame(frame);
+            let mut expected = vec![Rgb565Pixel(0); output.len()];
+            output.gather_logical_rect(
+                serial.pixels(),
+                &mut expected,
+                Rgb565Rect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 540,
+                    y1: 960,
+                },
+            );
+            let bands = session.direct_physical_bands(output).expect("bands");
+            let mut composed = bands.frame.to_vec();
+            let rect = bands.damage[1];
+            for y in rect.y0..rect.y1 {
+                let range = y * 960 + rect.x0..y * 960 + rect.x1;
+                composed[range.clone()].copy_from_slice(&bands.helper[range]);
+            }
+            assert!(composed == expected, "{rotation:?}");
+        }
     }
 
     #[test]

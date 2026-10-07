@@ -490,8 +490,17 @@ effect.**
   checks every responsive output, root and nested, against the serial render at three splits. Host
   release, microseconds per flip frame, serial / two bands: CRT 640x240 437 / 252; 640x288 538 / 316;
   640x480 721 / 409; CRT portrait 548 / 317; HDMI portrait 660 / 378; HDMI landscape 872 / 494
-  (`bench_parallel_card_row`). Still HDMI-only: level-change trick bands, helper render-ahead and the
-  direct two-band publisher.
+  (`bench_parallel_card_row`). Still HDMI-only: level-change trick bands and helper render-ahead.
+- **HDMI portrait takes the direct path.** Device profile (portrait, before): 149 presentations in
+  5 s, 29 ms in the Slint raster (`BackgroundOverlayLines::process_line`, 42% of samples), the cards
+  about 35%, 151 dropped frames all attributed to Slint. Portrait never reached the direct path (it
+  was gated to 960x540 landscape), so each frame re-rastered the carousel through Slint, rotated, over a
+  home screen with no Slint content. The direct path now serves HDMI portrait outside a level change:
+  `LauncherCardHomeSession::direct_physical_bands` rotates the chrome (only when its content or the
+  rotation changes) and each band (`Rgb565OutputLayout::gather_logical_rect`) into scanout order, and
+  the presenter copies them like landscape tiles. Device, after: 300 presentations in 5 s, 0-1 dropped,
+  frame-to-present 16.0 ms (was 32.9), 299 of 300 delivered by the direct path. CRT, and portrait level
+  changes, still use the Slint path.
 
 ## Phased plan
 
