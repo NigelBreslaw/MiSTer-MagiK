@@ -531,10 +531,14 @@ effect.**
 
 **PR 24 (in progress): portrait level changes take the direct path, and the harness drives the CRT.**
 
-- A level change on HDMI portrait presents through the rotated bands like browsing does: the chrome
-  (which fades every frame of a level change) is rotated whole each frame and copied whole; the card
-  bands are the two-band render from PR 21. `direct_physical_bands` no longer refuses while a level
-  change plays; a test compares a gather frame with the serial render rotated.
+- A level change on HDMI portrait presents through the rotated bands like browsing does. Only the
+  chrome regions the level change fades are rotated and copied each frame; the card bands are the
+  two-band render from PR 21. Rotation uses the shared tiled/NEON kernel (`Rgb565SurfaceMut`), not a
+  per-pixel gather: the first version's gather was 19% of all samples and held the route at about
+  30 fps. One predicate, `can_render_direct`, now gates the direct path, the helper's render-ahead
+  and the bands, so portrait gets the same render-ahead as landscape instead of a lesser copy. Device,
+  HDMI portrait, Home to Consoles and back (`check animation-app`, route consoles): dropped frames 234
+  of 478 presentations before, 35 of 450 after.
 - `check journeys` could not open the Arcade list on CRT: the CRT shows the Arcade hub first, with GAMES
   selected, so the list needs a second Enter (`_open_arcade_games`). Found with the framebuffer capture.
   The journeys pass on CRT 240p.

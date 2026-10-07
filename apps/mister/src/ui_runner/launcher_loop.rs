@@ -10163,12 +10163,11 @@ pub(super) fn run_launcher_loop(
                         let (width, height) = (output.physical_width(), output.physical_height());
                         let cached = card_cached_frame_view(bands.frame, width, height);
                         let helper = card_cached_frame_view(bands.helper, width, height);
-                        let level_change_damage = bands.chrome_damage.map(DirtyRectList::from_one);
                         launcher_presenter.try_copy_direct_hidden_tiles(
                             f,
                             display_session,
                             cached,
-                            level_change_damage.as_ref().unwrap_or(&chrome_damage),
+                            bands.chrome_damage.as_ref().unwrap_or(&chrome_damage),
                             [cached, helper],
                             bands.damage,
                             identity,
