@@ -605,11 +605,11 @@ pub struct PreparedLauncherFrame {
 }
 
 impl PreparedLauncherFrame {
-    pub(super) fn spare_pixels() -> Self {
+    fn spare_pixels(len: usize) -> Self {
         Self {
             request: None,
             scratch: Vec::new(),
-            pixels: vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT],
+            pixels: vec![Rgb565Pixel(BACKGROUND); len],
         }
     }
 
@@ -633,11 +633,22 @@ impl PreparedLauncherFrame {
     }
 }
 
+/// Where the card row sits in an output: what a tile renderer needs to split
+/// it into column bands and size its buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CarouselGeometry {
+    pub stride: usize,
+    pub height: usize,
+    pub rows: (usize, usize),
+    pub clip: (usize, usize),
+}
+
 #[derive(Clone)]
 pub struct LauncherFramePreparer {
     faces: Arc<Vec<Arc<CardFaces>>>,
     cyclic: bool,
     trick: Option<level_trick::TrickPlan>,
+    layout: Option<responsive::Layout>,
 }
 
 impl LauncherFramePreparer {
@@ -647,9 +658,36 @@ impl LauncherFramePreparer {
             && self.trick == other.trick
     }
 
+    pub fn geometry(&self) -> CarouselGeometry {
+        if let Some(layout) = &self.layout {
+            let row = layout.card_row();
+            let (stride, height) = layout.size();
+            return CarouselGeometry {
+                stride,
+                height,
+                rows: row.rows,
+                clip: row.clip,
+            };
+        }
+        let row = CardRow::canvas(
+            self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides),
+        );
+        CarouselGeometry {
+            stride: LOGICAL_WIDTH,
+            height: LOGICAL_HEIGHT,
+            rows: row.rows,
+            clip: row.clip,
+        }
+    }
+
     pub fn carousel_clip(&self) -> (usize, usize) {
-        CardRow::canvas(self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides))
-            .clip
+        self.geometry().clip
+    }
+
+    /// A pixel buffer for the helper's next frame, sized for this output.
+    pub fn new_spare_buffer(&self) -> PreparedLauncherFrame {
+        let geometry = self.geometry();
+        PreparedLauncherFrame::spare_pixels(geometry.stride * geometry.height)
     }
     pub fn render_tile(
         &self,
@@ -676,7 +714,8 @@ impl LauncherFramePreparer {
         destination: &mut [Rgb565Pixel],
         clip: (usize, usize),
     ) {
-        assert!(destination.len() >= 960 * 540);
+        let geometry = self.geometry();
+        assert!(destination.len() >= geometry.stride * geometry.height);
         buffer.request = Some(request);
         self.render_tile_pixels(request, &mut buffer.scratch, destination, clip);
     }
@@ -688,42 +727,42 @@ impl LauncherFramePreparer {
         pixels: &mut [Rgb565Pixel],
         clip: (usize, usize),
     ) {
-        assert!(clip.0 >= self.carousel_clip().0 && clip.0 <= clip.1 && clip.1 <= CardRow::RIGHT);
+        let geometry = self.geometry();
+        assert!(clip.0 >= geometry.clip.0 && clip.0 <= clip.1 && clip.1 <= geometry.clip.1);
+        let row = CardRow {
+            rows: geometry.rows,
+            clip,
+        };
         {
             #[cfg(feature = "launcher-profile")]
             let _clear = crate::launcher_profile::span("flip.clear");
-            clear_card_rows(
-                pixels,
-                LOGICAL_WIDTH,
-                CardRow::canvas(false).with_clip(clip),
-            );
+            clear_card_rows(pixels, geometry.stride, row);
         }
         if !self.faces.is_empty() {
-            let plan = self.trick.map_or_else(
-                || build_carousel_plan(&self.faces, request.frame, self.cyclic),
-                |plan| plan.with_faces(&self.faces),
-            );
-            draw_card_strips(
-                pixels,
-                LOGICAL_WIDTH,
-                CardRow::canvas(false).with_clip(clip),
-                &plan,
-                scratch,
-            );
+            let plan = match &self.layout {
+                Some(layout) => layout.plan(&self.faces, request.frame, self.cyclic),
+                None => self.trick.map_or_else(
+                    || build_carousel_plan(&self.faces, request.frame, self.cyclic),
+                    |plan| plan.with_faces(&self.faces),
+                ),
+            };
+            draw_card_strips(pixels, geometry.stride, row, &plan, scratch);
         }
     }
     /// Compact scratch for `render_tile` only, not whole-card preparation.
     pub fn new_tile_buffer(&self) -> PreparedLauncherFrame {
         let mut buffer = self.new_direct_tile_buffer();
-        buffer.pixels = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let geometry = self.geometry();
+        buffer.pixels = vec![Rgb565Pixel(BACKGROUND); geometry.stride * geometry.height];
         buffer
     }
 
     pub(crate) fn new_direct_tile_buffer(&self) -> PreparedLauncherFrame {
+        let stride = self.geometry().stride;
         PreparedLauncherFrame {
             request: None,
             scratch: (0..CAROUSEL_CAPACITY)
-                .map(|_| crate::launcher_flip::Scratch::strip())
+                .map(|_| crate::launcher_flip::Scratch::strip_for(stride))
                 .collect(),
             pixels: Vec::new(),
         }
@@ -812,6 +851,7 @@ impl PreparedLauncher {
             faces: self.faces.clone(),
             cyclic: self.cyclic,
             trick: None,
+            layout: self.responsive,
         }
     }
     pub fn shares_faces_with(&self, other: &Self) -> bool {
@@ -1127,13 +1167,19 @@ impl PreparedLauncher {
         renderer.merge_retained_helper(&mut self.logical);
     }
 
+    /// Whether the output is drawn straight into `pixels()`, so card bands can
+    /// be rendered in parallel: native 960x540 and every responsive layout.
+    pub fn supports_parallel(&self) -> bool {
+        self.responsive.is_some() || self.scene == LauncherScene::new(960, 540)
+    }
+
     pub fn render_parallel_frame(
         &mut self,
         renderer: &mut crate::launcher_parallel::ParallelLauncherRenderer,
         request: LauncherFrameRequest,
     ) -> Result<crate::launcher_parallel::ParallelFrameTiming, String> {
-        if self.scene != LauncherScene::new(960, 540) {
-            return Err("parallel cards require native geometry".into());
+        if !self.supports_parallel() {
+            return Err("parallel cards require native or responsive geometry".into());
         }
         renderer.render(&self.frame_preparer(), request, &mut self.logical)
     }

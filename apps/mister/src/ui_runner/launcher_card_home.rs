@@ -962,7 +962,7 @@ impl LauncherCardHomeSession {
         }
         if self.last_rendered != Some((self.frame, self.content_generation)) {
             let request = self.next_request(self.frame);
-            if self.scene == LauncherScene::new(960, 540)
+            if self.prepared.supports_parallel()
                 && let Some(renderer) = self.renderer.as_mut()
             {
                 self.last_timing = Some(
@@ -977,7 +977,7 @@ impl LauncherCardHomeSession {
             self.last_rendered = Some((self.frame, self.content_generation));
         } else {
             if !retain_bands
-                && self.scene == LauncherScene::new(960, 540)
+                && self.prepared.supports_parallel()
                 && let Some(renderer) = self.renderer.as_mut()
             {
                 self.prepared.merge_retained_helper(renderer);

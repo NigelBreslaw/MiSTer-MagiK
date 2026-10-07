@@ -358,13 +358,28 @@ impl Layout {
         if faces.is_empty() {
             return;
         }
+        self.draw_plan(pixels, &self.plan(faces, frame, cyclic), scratch);
+    }
+
+    /// The carousel for `frame`, mapped to this output's card geometry.
+    pub fn plan<'a>(
+        &self,
+        faces: &'a [Arc<CardFaces>],
+        frame: BrowseFrame,
+        cyclic: bool,
+    ) -> CarouselPlan<'a> {
         let mut plan = if self.crt && faces.first().is_some_and(|f| f.slides) {
             row::build_with_tilt(faces, frame, 0)
         } else {
             build_carousel_plan(faces, frame, cyclic)
         };
         self.map_plan(&mut plan);
-        self.draw_plan(pixels, &plan, scratch);
+        plan
+    }
+
+    /// The output's width and height in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        (self.width, self.height)
     }
 
     /// Carousel rows owned by the card renderer: cleared before every frame.

@@ -482,10 +482,16 @@ effect.**
   now; CRT 640x288 542 / 618 / 528; CRT portrait 549 / 578 / 540. Resting frames stay 8-11% above the
   original because every projection is dithered. `bench_card_row_render` (ignored) and
   `write_card_previews` (ignored) reproduce the numbers and the images.
-- **Still open, and the main cause of the 30 fps:** on the device `ParallelLauncherRenderer` (a primary
-  and a helper thread, each drawing part of the carousel) is used only when the scene is exactly 960x540
-  HDMI landscape (`launcher_card_home.rs`, `render_parallel_frame`); CRT and portrait draw the whole
-  carousel on one thread. Next PR: make the tile path and the parallel renderer work for every output.
+- **Two bands on every output.** `ParallelLauncherRenderer` (a primary and a helper thread, each drawing
+  part of the carousel) used to run only for exactly 960x540 HDMI landscape. The tile path now takes its
+  geometry (stride, card rows, column clip) and responsive layout from the `LauncherFramePreparer`, so
+  CRT and portrait render in two bands too (`PreparedLauncher::supports_parallel`). The first split is
+  the native proportion of the carousel, and the minimum band shrinks on narrow carousels. A test
+  checks every responsive output, root and nested, against the serial render at three splits. Host
+  release, microseconds per flip frame, serial / two bands: CRT 640x240 437 / 252; 640x288 538 / 316;
+  640x480 721 / 409; CRT portrait 548 / 317; HDMI portrait 660 / 378; HDMI landscape 872 / 494
+  (`bench_parallel_card_row`). Still HDMI-only: level-change trick bands, helper render-ahead and the
+  direct two-band publisher.
 
 ## Phased plan
 
