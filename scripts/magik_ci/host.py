@@ -11,6 +11,8 @@ import subprocess
 import time
 from pathlib import Path
 
+APP_SHARDS = ("checks", "ui", "ui-preview", "bench-scenes")
+
 HOST_GROUPS = (
     "static",
     "domain",
@@ -37,7 +39,24 @@ def _crate_commands(manifest: str) -> list[list[str]]:
     ]
 
 
-def commands(group: str) -> list[list[str]]:
+def _app_shard(command: list[str]) -> str:
+    if command[:2] == ["cargo", "test"] and "--features" in command:
+        features = command[command.index("--features") + 1]
+        return {
+            "ui": "ui",
+            "ui-preview": "ui-preview",
+            "ui,bench-scenes": "bench-scenes",
+        }.get(features, "checks")
+    return "checks"
+
+
+def commands(group: str, *, app_shard: str | None = None) -> list[list[str]]:
+    if app_shard is not None:
+        if group != "app" or app_shard not in APP_SHARDS:
+            raise ValueError(f"unsupported app assurance shard: {group}/{app_shard}")
+        return [
+            command for command in commands("app") if _app_shard(command) == app_shard
+        ]
     if group == "static":
         return []
     if group == "domain":
@@ -270,7 +289,8 @@ def commands(group: str) -> list[list[str]]:
     raise ValueError(f"unsupported host assurance group: {group}")
 
 
-def execute(repository: Path, group: str) -> None:
+def execute(repository: Path, group: str, *, app_shard: str | None = None) -> None:
+    group_commands = commands(group, app_shard=app_shard)
     if group == "static":
         from .assurance import execute as execute_fast
 
@@ -278,7 +298,6 @@ def execute(repository: Path, group: str) -> None:
             repository, ["scripts", "docs", "apps/mister/src", "apps/mister/ui/"]
         )
         return
-    group_commands = commands(group)
     total = len(group_commands)
     environment = os.environ.copy()
     environment.update(
@@ -289,10 +308,11 @@ def execute(repository: Path, group: str) -> None:
     )
     if group == "domain":
         environment["CARGO_TARGET_DIR"] = str(repository / "target/ci-host-domain")
+    label = f"{group}/{app_shard}" if app_shard else group
     for index, command in enumerate(group_commands, start=1):
         started = time.monotonic()
         rendered = shlex.join(command)
-        print(f"host-assurance[{group}] {index}/{total} start: {rendered}", flush=True)
+        print(f"host-assurance[{label}] {index}/{total} start: {rendered}", flush=True)
         outcome = "failed"
         try:
             subprocess.run(command, cwd=repository, env=environment, check=True)
@@ -300,7 +320,7 @@ def execute(repository: Path, group: str) -> None:
         finally:
             elapsed = time.monotonic() - started
             print(
-                f"host-assurance[{group}] {index}/{total} {outcome} "
+                f"host-assurance[{label}] {index}/{total} {outcome} "
                 f"elapsed={elapsed:.2f}s: {rendered}",
                 flush=True,
             )

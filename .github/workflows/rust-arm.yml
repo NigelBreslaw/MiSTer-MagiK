@@ -34,106 +34,58 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - group: static
-          - group: domain
-          - group: app
-          - group: catalog
-          - group: tools
+        group: [static, domain, catalog, tools]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      # Cargo revalidates local sources after checkout. Retain the app's
-      # incremental state so rustc can reuse unchanged code across CI runs.
-      CARGO_INCREMENTAL: ${{ matrix.group == 'app' && '1' || '0' }}
+      CARGO_INCREMENTAL: "0"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Resolve private asset revision
-        if: matrix.group == 'app'
-        id: host-magik-assets-ref
-        run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout private build assets
-        if: matrix.group == 'app'
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/host-validation
         with:
-          repository: NigelBreslaw/mister-magik-private-assets
-          ref: ${{ steps.host-magik-assets-ref.outputs.sha }}
-          path: private/magik-assets
-          ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
+          group: ${{ matrix.group }}
 
-      - name: Compute cache identities
-        if: matrix.group != 'static'
-        id: cache-id
-        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
-
-      - name: Install Rust toolchain
-        if: matrix.group != 'static'
-        working-directory: apps/mister
-        run: |
-          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
-          test -n "$toolchain"
-          rustup default "$toolchain"
-          rustup show
-
-      - name: Cache cargo registry
-        if: matrix.group != 'static'
-        uses: actions/cache@v6
+  host-dev-app-shard:
+    name: host-dev (app / ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [checks, ui, ui-preview, bench-scenes]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/host-validation
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_host }}
-          restore-keys: |
-            cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+          group: app
+          app-shard: ${{ matrix.shard }}
+          assets-ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
 
-      - name: Optimize rendering tests
-        if: matrix.group == 'domain' || matrix.group == 'app'
-        # Keep debug assertions and overflow checks. Optimize only the raster
-        # crate, avoiding the cold-build cost of optimizing all Slint dependencies.
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [profile.test.package.mister-magik-framebuffer-scenes]
-          opt-level = 1
-          EOF
-
-      - name: Cache host build outputs
-        if: matrix.group == 'domain' || matrix.group == 'app'
-        uses: actions/cache@v6
-        with:
-          path: |
-            ${{ matrix.group == 'domain' && 'target/ci-host-domain/debug' || 'apps/mister/target/debug' }}
-          # Cache a dependency baseline, as for ARM. Cargo revalidates checked-out
-          # sources; exact-only keys bound storage instead of rolling per commit.
-          key: target-host-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.group }}-test-scenes-opt1${{ matrix.group == 'app' && '-incremental' || '' }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_build_cache }}
-
-      - name: Full host validation (${{ matrix.group }})
-        run: scripts/magik-ci ci host-assurance --group ${{ matrix.group }}
-
-      - name: Report host cache footprint
-        if: always() && (matrix.group == 'domain' || matrix.group == 'app')
+  host-dev-app:
+    name: host-dev (app)
+    runs-on: ubuntu-24.04
+    needs: host-dev-app-shard
+    if: always()
+    steps:
+      - name: Require every app validation shard
         env:
-          HOST_TARGET: ${{ matrix.group == 'domain' && 'target/ci-host-domain/debug' || 'apps/mister/target/debug' }}
-        run: |
-          if [ -d "$HOST_TARGET" ]; then
-            kib="$(du -sk "$HOST_TARGET" | awk '{print $1}')"
-            printf 'Host build cache (%s): %s MiB\n' '${{ matrix.group }}' "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          SHARD_RESULT: ${{ needs.host-dev-app-shard.result }}
+        run: test "$SHARD_RESULT" = success
 
   host-dev:
     name: host-dev
     runs-on: ubuntu-24.04
-    needs: [host-dev-group, python-quality]
+    needs: [host-dev-group, host-dev-app, python-quality]
     if: always()
     steps:
       - name: Require every host validation group
         env:
           GROUP_RESULT: ${{ needs.host-dev-group.result }}
+          APP_RESULT: ${{ needs.host-dev-app.result }}
           PYTHON_RESULT: ${{ needs.python-quality.result }}
-        run: test "$GROUP_RESULT" = success && test "$PYTHON_RESULT" = success
+        run: test "$GROUP_RESULT" = success && test "$APP_RESULT" = success && test "$PYTHON_RESULT" = success
 
   python-quality:
     name: python-quality

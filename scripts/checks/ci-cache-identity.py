@@ -47,6 +47,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/platform/contracts/*/Cargo.toml",
     ),
     "host_build_cache": (
+        ".github/actions/host-validation/action.yml",
         "apps/mister/Cargo.lock",
         "apps/mister/Cargo.toml",
         "apps/mister/.cargo/config.toml",

@@ -1,0 +1,104 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Host validation
+description: Set up and execute one host assurance group or app shard
+inputs:
+  group:
+    description: Host assurance group
+    required: true
+  app-shard:
+    description: App assurance shard; empty runs the full group
+    default: ''
+  assets-ssh-key:
+    description: SSH key for the private app build assets
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Resolve private asset revision
+      if: inputs.group == 'app'
+      id: host-magik-assets-ref
+      shell: bash
+      run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout private build assets
+      if: inputs.group == 'app'
+      uses: actions/checkout@v7
+      with:
+        repository: NigelBreslaw/mister-magik-private-assets
+        ref: ${{ steps.host-magik-assets-ref.outputs.sha }}
+        path: private/magik-assets
+        ssh-key: ${{ inputs.assets-ssh-key }}
+
+    - name: Compute cache identities
+      if: inputs.group != 'static'
+      id: cache-id
+      shell: bash
+      run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+
+    - name: Install Rust toolchain
+      if: inputs.group != 'static'
+      working-directory: apps/mister
+      shell: bash
+      run: |
+        toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
+        test -n "$toolchain"
+        rustup default "$toolchain"
+        rustup show
+
+    - name: Cache cargo registry
+      if: inputs.group != 'static'
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_host }}
+        restore-keys: |
+          cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+
+    - name: Optimize rendering tests
+      if: inputs.group == 'domain' || inputs.group == 'app'
+      # Keep debug assertions and overflow checks. Optimize only the raster
+      # crate, avoiding the cold-build cost of optimizing all Slint dependencies.
+      shell: bash
+      run: |
+        mkdir -p .cargo
+        cat > .cargo/config.toml <<'EOF'
+        [profile.test.package.mister-magik-framebuffer-scenes]
+        opt-level = 1
+        EOF
+
+    - name: Cache host build outputs
+      if: inputs.group == 'domain' || inputs.group == 'app'
+      uses: actions/cache@v6
+      with:
+        path: |
+          ${{ inputs.group == 'domain' && 'target/ci-host-domain/debug' || 'apps/mister/target/debug' }}
+        # Cache a dependency baseline, as for ARM. Cargo revalidates checked-out
+        # sources; exact-only keys bound storage instead of rolling per commit.
+        key: target-host-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.group }}${{ inputs.app-shard != '' && format('-{0}', inputs.app-shard) || '' }}-test-scenes-opt1${{ inputs.group == 'app' && '-incremental' || '' }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_build_cache }}
+
+    - name: Full host validation (${{ inputs.group }})
+      shell: bash
+      env:
+        HOST_GROUP: ${{ inputs.group }}
+        APP_SHARD: ${{ inputs.app-shard }}
+      run: |
+        args=(--group "$HOST_GROUP")
+        if [ -n "$APP_SHARD" ]; then
+          args+=(--app-shard "$APP_SHARD")
+        fi
+        scripts/magik-ci ci host-assurance "${args[@]}"
+
+    - name: Report host cache footprint
+      if: always() && (inputs.group == 'domain' || inputs.group == 'app')
+      env:
+        HOST_TARGET: ${{ inputs.group == 'domain' && 'target/ci-host-domain/debug' || 'apps/mister/target/debug' }}
+      shell: bash
+      run: |
+        if [ -d "$HOST_TARGET" ]; then
+          kib="$(du -sk "$HOST_TARGET" | awk '{print $1}')"
+          printf 'Host build cache (%s): %s MiB\n' '${{ inputs.group }}' "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
+        fi
