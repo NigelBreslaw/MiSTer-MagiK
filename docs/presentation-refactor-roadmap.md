@@ -531,9 +531,21 @@ projection kernels are on the 60 fps budget.
    equivalence test as the guard. The rows and columns the card row owns are now one value,
    `CardRow` (see PR 17). Still to do: the card size, row centre and pitch, which the fixed canvas keeps
    in `slot_geometry` and the base poses and the responsive layout re-derives in `Layout::map_pose`.
-2. Make `Layout` able to express the fixed canvas's card geometry (180x252, its centre and pitch) and
-   assert the card row is pixel-identical to the fixed canvas's. Only then can the face and projection
-   code be shared for HDMI landscape without a visual change.
+2. **Revised after measuring (replaces "make `Layout` express the fixed canvas's geometry"):** the
+   geometry composition is already one pipeline: plan, optional pose mapping (`Layout::map_pose`, which
+   the fixed canvas simply skips), strips. Nothing is gained by teaching the mapping to be an identity.
+   What actually differs is the **face bake**. At the same 180x252 size, with the same source surface,
+   `native_surface` (the responsive path) and `surface` (the fixed path) disagree on 16-27% of the
+   pixels of a generic card, by up to 47 in a 6-bit channel (mean 4.5-7.8 per differing channel): the
+   responsive path redraws the silhouette, edge and rounded corners in destination space and
+   re-quantises with its own dither, instead of copying the baked frame. Artwork cards differ too, but
+   that comparison is not apples to apples (the fixed path's real quantisation is not what a scratch
+   test can reproduce from outside), so no number is claimed. Consequence: sharing the face bake for
+   HDMI landscape is not a refactor but a **choice of which renderer is right**, and either choice
+   changes visible pixels on the primary HDMI UI (card frame and corners). That needs a design
+   decision and a device look, not a host test; the pinned hashes will say exactly what changed.
+   Work that can still be done on the host first: a face-level comparison harness (compare `Face`
+   pixels, not scratch packings) so the decision is made on the real difference.
 3. Native-size `.cardtex` (encoder, regeneration in the assets repo, motion benchmark on the device).
 4. Unify chrome last, or keep `render_logical` as the HDMI landscape chrome indefinitely: it is not
    on the motion path, and it is the part where the two designs genuinely differ.
