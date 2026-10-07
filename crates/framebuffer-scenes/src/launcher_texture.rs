@@ -947,17 +947,19 @@ impl Texture {
 }
 
 pub(super) fn coverage(x: usize, y: usize, width: usize, height: usize) -> u32 {
+    let radius = crate::launcher::Frame::for_width(width).radius;
     let dx = x.min(width - 1 - x);
     let dy = y.min(height - 1 - y);
-    if dx >= 8 || dy >= 8 {
+    if dx >= radius || dy >= radius {
         return 255;
     }
+    let centre = (radius * 8) as i32;
     let mut inside = 0;
     for sy in 0..4 {
         for sx in 0..4 {
-            let a = (dx * 8 + sx * 2 + 1) as i32 - 64;
-            let b = (dy * 8 + sy * 2 + 1) as i32 - 64;
-            inside += u32::from(a * a + b * b <= 64 * 64);
+            let a = (dx * 8 + sx * 2 + 1) as i32 - centre;
+            let b = (dy * 8 + sy * 2 + 1) as i32 - centre;
+            inside += u32::from(a * a + b * b <= centre * centre);
         }
     }
     inside * 255 / 16

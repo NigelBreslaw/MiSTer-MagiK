@@ -543,6 +543,7 @@ pub(super) fn surface_sized(
     let ink = CREAM;
     #[cfg(feature = "launcher-profile")]
     let surface_pixels = crate::launcher_profile::span("prepare.surface_pixels");
+    let frame = Frame::for_width(width);
     for y in 0..height {
         for x in 0..width {
             if !rounded_contains(x, y, width, height) {
@@ -551,7 +552,7 @@ pub(super) fn surface_sized(
             let mut colour = framed_surface(card, base, trim, width, height, x, y);
             if icon.is_some()
                 && card.artwork.is_none()
-                && inside_inset(x * 8 + 4, y * 8 + 4, width, height, 8)
+                && inside_inset(x * 8 + 4, y * 8 + 4, width, height, frame.inner)
             {
                 colour = lit_body(card.colour, width, height, x, y);
             }
@@ -729,7 +730,7 @@ fn inside_inset(x: usize, y: usize, width: usize, height: usize, inset: usize) -
     if edge_x < inset * 8 || edge_y < inset * 8 {
         return false;
     }
-    let radius = 8_usize.saturating_sub(inset).max(4) * 8;
+    let radius = Frame::for_width(width).radius_at(inset) * 8;
     let dx = radius.saturating_sub(edge_x - inset * 8);
     let dy = radius.saturating_sub(edge_y - inset * 8);
     dx * dx + dy * dy <= radius * radius
@@ -748,11 +749,13 @@ fn framed_surface(
     // this same source pixel. Keep a conservative pair of rectangular bands:
     // each is wholly inside the inset-8 rounded rectangle, including sample
     // offsets 1..7. Corners and every frame boundary retain the sampled path.
+    let frame = Frame::for_width(width);
     let edge_x = x.min(width - 1 - x);
     let edge_y = y.min(height - 1 - y);
-    if edge_x >= 8
-        && edge_y >= 8
-        && (edge_x >= 12 || edge_y >= 12)
+    let band = frame.inner + frame.radius_at(frame.inner);
+    if edge_x >= frame.inner
+        && edge_y >= frame.inner
+        && (edge_x >= band || edge_y >= band)
         && let Some(pixels) = card.artwork
     {
         return pixels[y * width + x].0;
@@ -815,9 +818,10 @@ fn framed_sample(
             pixels[py * width + px].0
         },
     );
-    if !inside_inset(x, y, width, height, 3) {
+    let frame = Frame::for_width(width);
+    if !inside_inset(x, y, width, height, frame.rim) {
         mix_colour(trim, CREAM, 76)
-    } else if !inside_inset(x, y, width, height, 8) {
+    } else if !inside_inset(x, y, width, height, frame.inner) {
         // The complete inner stroke is one opaque ink. Artwork must not
         // contribute colour anywhere in the former shoulder or keyline bands.
         opaque_inner_stroke(mix_colour(trim, CREAM, 76))
@@ -955,6 +959,35 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn crt_sized_cards_draw_one_pixel_strokes_and_hdmi_keeps_its_frame() {
+        let rim = mix_colour(0x2a7f, CREAM, 76);
+        let stroke = opaque_inner_stroke(rim);
+        let art = vec![Rgb565Pixel(0x1234); 100 * 140];
+        let card = PreparedCard {
+            id: LauncherCardId::Consoles,
+            name: "X",
+            games: None,
+            colour: 0x2a7f,
+            name_mask: text_mask("X"),
+            games_mask: Vec::new(),
+            artwork: Some(&art),
+            rgb888: None,
+        };
+        // Mid-edge on a 100x140 card: one rim pixel, one stroke pixel, then art.
+        let row: Vec<u16> = (0..6)
+            .map(|x| framed_surface(&card, 0, 0x2a7f, 100, 140, x, 70))
+            .collect();
+        assert_eq!(row, [rim, stroke, 0x1234, 0x1234, 0x1234, 0x1234]);
+        // The corner is rounded: the extreme pixel is outside, the next row in is not.
+        assert!(!rounded_contains(0, 0, 100, 140));
+        assert!(rounded_contains(0, 2, 100, 140));
+        // The 180-wide frame is the HDMI one: rim 3, stroke from 8.
+        let hdmi = Frame::for_width(180);
+        assert_eq!((hdmi.rim, hdmi.inner, hdmi.radius), (3, 8, 8));
+        assert_eq!((hdmi.radius_at(3), hdmi.radius_at(8)), (5, 4));
     }
 
     #[test]
