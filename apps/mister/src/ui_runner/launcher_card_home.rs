@@ -1158,6 +1158,11 @@ impl LauncherCardHomeSession {
         &mut self,
         output: Rgb565OutputLayout,
     ) -> Option<DirectBands<'_>> {
+        // A level change fades the chrome without a new generation, and its
+        // frames are not the browse bands this rotates.
+        if self.trick.is_some() {
+            return None;
+        }
         let geometry = self.prepared.frame_preparer().geometry();
         let split = self.renderer.as_ref()?.rendered_split();
         let helper = self.renderer.as_ref()?.helper_pixels(self.last_request)?;
@@ -3004,6 +3009,36 @@ mod tests {
             assert!(session.trick.is_none());
             assert_eq!(session.frame.selected, 0);
         }
+    }
+
+    #[test]
+    fn a_portrait_level_change_never_presents_through_the_direct_bands() {
+        use mister_magik_framebuffer_scenes::OutputRotation;
+        let scene = LauncherScene::new(540, 960);
+        let output = Rgb565OutputLayout::new(540, 960, 960, OutputRotation::Clockwise90).unwrap();
+        let mut session = LauncherCardHomeSession::new(scene, snapshot(), 1, "21:37").unwrap();
+        session.update(scene, &snapshot(), 1, 1.0, "21:37", 0, true, None, None);
+        session.render();
+        assert!(session.can_render_direct());
+        session.update(
+            scene,
+            &consoles(),
+            0,
+            0.0,
+            "21:37",
+            16,
+            true,
+            None,
+            Some("menu:consoles"),
+        );
+        wait_trick_ready(&mut session, scene, &consoles(), 0, "21:37", 16);
+        session.update(scene, &consoles(), 0, 0.0, "21:37", 200, true, None, None);
+        assert!(session.is_level_trick_active());
+        assert!(!session.can_render_direct());
+        // Two bands now draw the trick, so the helper band matches the request:
+        // the trick check is what keeps its frames off the direct path.
+        session.render_direct_bands();
+        assert!(session.direct_physical_bands(output).is_none());
     }
 
     #[test]
