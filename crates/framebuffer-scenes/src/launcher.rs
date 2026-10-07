@@ -954,7 +954,8 @@ impl PreparedLauncher {
         // Every output bakes its faces through the same functions, at the size
         // it shows them: 180x252 on the HDMI landscape canvas, the card's own
         // size elsewhere, with the output's label fonts.
-        let (face_width, face_height) = responsive.map_or((180, 252), |layout| layout.face_size());
+        let (face_width, face_height) =
+            responsive.map_or((CARD_W, CARD_H), |layout| layout.face_size());
         let (face_typography, narrow_title) = match fonts
             .as_ref()
             .filter(|_| responsive.is_some_and(|layout| layout.bakes_own_size()))
@@ -1020,7 +1021,7 @@ impl PreparedLauncher {
                     card.name
                 };
                 // Prepared artwork is baked at 180x252; other sizes bake from the source.
-                let prepared_art = ((face_width, face_height) == (180, 252))
+                let prepared_art = ((face_width, face_height) == (CARD_W, CARD_H))
                     .then(|| loaded.as_mut().and_then(|source| source.prepared.take()))
                     .flatten();
                 let card = PreparedCard {
@@ -1037,7 +1038,7 @@ impl PreparedLauncher {
                             Artwork::Rgb565(items) => items.get(index),
                             Artwork::Rgb888(_) => None,
                         })
-                        .filter(|pixels| pixels.len() == 180 * card_height(180))
+                        .filter(|pixels| pixels.len() == CARD_W * CARD_H)
                         .copied(),
                     rgb888: loaded
                         .as_ref()
@@ -1108,7 +1109,7 @@ impl PreparedLauncher {
                 faces.source_retry = loaded.as_ref().is_some_and(|source| source.retry);
                 // Every projection is dithered. A reflection is 64 rows under a
                 // 252-row card; a smaller card keeps the same proportion.
-                let fade_rows = (64 * face_height / 252).clamp(2, 64);
+                let fade_rows = (64 * face_height / CARD_H).clamp(2, 64);
                 for face in [&mut faces.compact, &mut faces.detail]
                     .into_iter()
                     .chain(faces.back.as_mut())
@@ -1302,6 +1303,16 @@ pub(super) const fn card_height(width: usize) -> usize {
     width * 7 / 5
 }
 
+/// The HDMI landscape canvas's card, 180x252. Every output bakes this face
+/// (or one at its own size) and every other layout scales its poses from it.
+pub(super) const CARD_W: usize = 180;
+pub(super) const CARD_H: usize = card_height(CARD_W);
+/// Where the base canvas puts the card row: the left edge of the first nested
+/// card, the centre of the middle slot, and the centre line of the row.
+pub(super) const ROW_LEFT: i64 = 292;
+pub(super) const CENTRE_X: i64 = 610;
+pub(super) const CENTRE_Y: i64 = 284;
+
 fn slot_geometry(relative: isize) -> (i32, i32) {
     match relative {
         // Hidden return slots sit inside the outer visible card, not beyond
@@ -1310,7 +1321,7 @@ fn slot_geometry(relative: isize) -> (i32, i32) {
         ..=-3 => (356, 36),
         -2 => (356, 56),
         -1 => (466, 72),
-        0 => (610, 90),
+        0 => (CENTRE_X as i32, 90),
         1 => (754, 72),
         2 => (864, 56),
         _ => (864, 36),
@@ -1600,7 +1611,7 @@ fn continuous_geometry(
     let height = width * 7 / 5;
     crate::launcher_flip::Pose {
         x: centre - width / 2,
-        top: 284 * GEOMETRY_ONE - height / 2,
+        top: CENTRE_Y * GEOMETRY_ONE - height / 2,
         width,
         height,
         angle: slot_angle(relative)
@@ -2015,7 +2026,7 @@ pub(super) struct Frame {
 
 impl Frame {
     pub(super) const fn for_width(width: usize) -> Self {
-        if width >= 180 {
+        if width >= CARD_W {
             Self {
                 rim: 3,
                 inner: 8,
@@ -2048,7 +2059,7 @@ pub(super) fn rounded_contains(x: usize, y: usize, width: usize, height: usize) 
         return false;
     }
     let row = y.min(height - 1 - y);
-    if width < 180 {
+    if width < CARD_W {
         // Pixel centres inside the corner circle.
         let r = Frame::for_width(width).radius;
         let edge = x.min(width - 1 - x);

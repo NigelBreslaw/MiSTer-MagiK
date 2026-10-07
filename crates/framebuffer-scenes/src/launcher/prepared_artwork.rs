@@ -10,9 +10,9 @@ use crate::launcher_texture::{Level, Texture};
 #[cfg(feature = "prepared-artwork")]
 const MAGIC: &[u8; 8] = b"MGCART01";
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
-const W: usize = 180;
+const W: usize = super::CARD_W;
 #[cfg(feature = "prepared-artwork")]
-const H: usize = 252;
+const H: usize = super::CARD_H;
 
 pub struct PreparedArtwork {
     rgb: Vec<[u8; 3]>,
@@ -76,7 +76,7 @@ impl PreparedArtwork {
     /// Host-only generation. Published packs are little endian.
     #[cfg(feature = "prepared-artwork")]
     pub fn encode(source: &[u8], id: LauncherCardId, colour: u16) -> Vec<u8> {
-        let rgb = artwork::reduce_rgb888(source, 180, 252);
+        let rgb = artwork::reduce_rgb888(source, W, super::CARD_H);
         let reference = reference(&rgb);
         let card = PreparedCard {
             id,
@@ -184,7 +184,7 @@ impl PreparedArtwork {
                 continue;
             }
             let before = surface.clone();
-            artwork::draw_face_labels(surface, card, W, 252, index == 1, fonts, None);
+            artwork::draw_face_labels(surface, card, W, super::CARD_H, index == 1, fonts, None);
             face.texture
                 .apply_labels(&before, surface, &self.rgb, &reference);
             #[cfg(test)]
@@ -302,7 +302,7 @@ mod tests {
                     rgb888: Some(source),
                 };
                 for typography in [None, Some(fonts)] {
-                    let raw = artwork::faces_rgb888(&card, 180, 252, typography, None);
+                    let raw = artwork::faces_rgb888(&card, W, super::CARD_H, typography, None);
                     let packed = PreparedArtwork::decode(&bytes, card.id, card.colour)
                         .unwrap()
                         .faces(&card, typography);

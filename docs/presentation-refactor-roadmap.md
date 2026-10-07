@@ -509,6 +509,15 @@ effect.**
   compares each with the serial render. Still serial and on the Slint path: the trick's presentation on
   rotated and CRT outputs, and the CRT Arcade list, which have not been profiled.
 
+**PR 22 (in progress): the base card and its row are named once.**
+
+- The 180x252 base card and where the HDMI landscape canvas puts its row (`ROW_LEFT` 292, `CENTRE_X` 610,
+  `CENTRE_Y` 284) were bare numbers repeated across `responsive.rs` (pose mapping), `row.rs` (the nested
+  slots), `launcher.rs` (slot geometry, face bake, fade rows) and `artwork.rs` / `prepared_artwork.rs`
+  (the 2x2 reduction, back face, prepared bake). They are now `CARD_W`, `CARD_H`, `ROW_LEFT`,
+  `CENTRE_X` and `CENTRE_Y` in `launcher.rs`. No pixel changes: all pinned raster hashes pass unchanged.
+  This finishes Phase 3b step 1's "card size, row centre and pitch".
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

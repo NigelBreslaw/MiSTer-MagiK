@@ -5,21 +5,21 @@
 use super::*;
 use crate::launcher_flip::Pose;
 
-pub(super) const TILT: i64 = GEOMETRY_ONE * 14 / 180;
+pub(super) const TILT: i64 = GEOMETRY_ONE * 14 / CARD_W as i64;
 const BRIGHTNESS: [u32; 5] = [256, 184, 143, 108, 82];
 
 pub(super) fn slot(k: usize) -> Pose {
     let mut scale = GEOMETRY_ONE;
-    let mut left = 292 * GEOMETRY_ONE;
+    let mut left = ROW_LEFT * GEOMETRY_ONE;
     for _ in 0..k {
         left += 153 * scale;
         scale = scale * 9 / 10;
     }
     Pose {
         x: left,
-        top: 284 * GEOMETRY_ONE - 126 * scale,
-        width: 180 * scale,
-        height: 252 * scale,
+        top: CENTRE_Y * GEOMETRY_ONE - CARD_H as i64 / 2 * scale,
+        width: CARD_W as i64 * scale,
+        height: CARD_H as i64 * scale,
         angle: if k == 0 { 0 } else { TILT },
         brightness: BRIGHTNESS[k],
         clip: CardRow::canvas(true).clip,
