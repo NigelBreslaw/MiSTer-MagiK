@@ -170,10 +170,10 @@ fn random_walks_measure_what_composition_shows_for_every_chart_state() {
             ));
         }
     }
-    // Reaching these is what makes the assertions above mean something. The last
-    // is a finding, not a goal: the chart can be releasing (it asks for a live
-    // Slint raster) while composition shows the screensaver, which the loop's
-    // render ladder serves first, so the release waits for the screensaver.
+    // Reaching these is what makes the assertions above mean something. The
+    // screensaver pair is the documented rule (docs/architecture.md): the chart
+    // can be releasing while composition shows the screensaver, which the render
+    // ladder serves first, so the release waits for it and blocks nothing.
     for pair in [
         "Some(Navigation)/CapturePending + navigation-transition",
         "Some(Navigation)/CapturePending + navigation-destination",

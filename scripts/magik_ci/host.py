@@ -62,6 +62,7 @@ def commands(group: str) -> list[list[str]]:
             "card-axis-filter",
             "card-fast-quantisation",
             "card-axis-filter,card-fast-quantisation",
+            "prepared-artwork",
         ):
             result.append(
                 [

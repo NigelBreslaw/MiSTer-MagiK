@@ -283,6 +283,72 @@ mod tests {
         assert_eq!(chart.state(), FullScreenTransitionState::Live);
     }
 
+    /// The chart drawn in `docs/architecture.md` is the chart the code runs:
+    /// every state change an operation can make is drawn, and every drawn
+    /// edge is one the code can make.
+    #[test]
+    fn the_documented_chart_is_the_chart_the_code_runs() {
+        use FullScreenTransitionState::*;
+        use std::collections::BTreeSet;
+        const DOC: &str = include_str!("../../../../docs/architecture.md");
+        let block = DOC
+            .split("```mermaid")
+            .filter_map(|block| block.split("```").next())
+            .find(|block| block.contains("[*] --> Live"))
+            .expect("the transition chart is in the architecture doc");
+        let drawn: BTreeSet<(String, String)> = block
+            .lines()
+            .filter_map(|line| {
+                let edge = line.split_once(':').map_or(line, |(edge, _)| edge);
+                let (from, to) = edge.trim().split_once(" --> ")?;
+                (from != "[*]").then(|| (from.to_owned(), to.trim().to_owned()))
+            })
+            .collect();
+
+        // A capture must have been issued before it can complete.
+        let in_state = |state, issued: bool| {
+            let mut chart = FullScreenTransitionStateChart::default();
+            if state == Live {
+                return (chart, FullScreenTransitionGeneration(0));
+            }
+            let generation = chart.begin(FullScreenTransitionOwner::Navigation).unwrap();
+            if issued && state == CapturePending {
+                chart.take_controlled_capture(generation).unwrap();
+            }
+            if state == SnapshotLocked {
+                chart.take_controlled_capture(generation).unwrap();
+                chart.capture_completed(generation).unwrap();
+            } else if state == Releasing {
+                chart.release(generation).unwrap();
+            }
+            (chart, generation)
+        };
+        type Operation =
+            fn(&mut FullScreenTransitionStateChart, FullScreenTransitionGeneration) -> bool;
+        let operations: [Operation; 7] = [
+            |chart, _| chart.begin(FullScreenTransitionOwner::Orientation).is_ok(),
+            |chart, g| chart.take_controlled_capture(g).is_ok(),
+            |chart, g| chart.capture_completed(g).is_ok(),
+            |chart, g| chart.capture_deferred(g).is_ok(),
+            |chart, g| chart.release(g).is_ok(),
+            |chart, g| chart.live_frame_presented(g).is_ok(),
+            |chart, g| chart.retain_redraw(g).is_ok(),
+        ];
+        let mut runs = BTreeSet::new();
+        for from in [Live, CapturePending, SnapshotLocked, Releasing] {
+            for issued in [false, true] {
+                for operation in operations {
+                    let (mut chart, generation) = in_state(from, issued);
+                    operation(&mut chart, generation);
+                    if chart.state() != from {
+                        runs.insert((format!("{from:?}"), format!("{:?}", chart.state())));
+                    }
+                }
+            }
+        }
+        assert_eq!(drawn, runs, "docs/architecture.md and the chart disagree");
+    }
+
     #[test]
     fn the_generation_is_visible_only_to_the_owner_holding_it() {
         let mut chart = FullScreenTransitionStateChart::default();
