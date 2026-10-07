@@ -440,7 +440,7 @@ effect.**
 - `launcher/face_parity.rs` compares the fixed canvas's faces with the responsive layout's at the same
   size, per region (border ring, label band, interior), and pins the 27 current differences
   (`Layout::for_card_size` is a test-only constructor). A second test pins one relationship rather than a
-  count: the responsive compact face of an icon card is drawn in the detail colours. Results are in
+  count: the responsive compact face of a card without an icon (Arcade, Favourites, Settings) is drawn in the detail colours. Results are in
   Phase 3b above.
 
 ## Phased plan
@@ -547,13 +547,13 @@ projection kernels are on the 60 fps budget.
    180x252, 27 cases, pinned). Findings: (a) the border ring (outer 8 px) differs on 65-70% of its
    pixels for generic cards and on essentially all of them for artwork cards, so the frame is drawn
    differently; (b) about 2,000-5,300 interior pixels differ even for plain generic faces (not counting the
-   icon cards' compact faces, see (d)) and about 16,600 for artwork cards; (c) label bands differ (the title and count sit at different rows and with
+   compact faces of the cards without an icon, see (d)) and about 16,600 for artwork cards; (c) label bands differ (the title and count sit at different rows and with
    different spacing); (d) the largest single difference is a **state difference, not a quantisation
    one**: `native_surface` builds a generic card's body from the *detail* surface whatever face it is
-   for, so the responsive **compact** face of the icon cards (Arcade, Favourites, Settings) is drawn in
+   for, so the responsive **compact** face of the cards without an icon (Arcade, Favourites, Settings) is drawn in
    the selected-card colours: for Arcade it differs from the fixed detail face on about 11,000 pixels
-   but from the fixed compact face on about 41,000, because the fixed canvas draws the compact face dim. The collection
-   cards have nearly identical compact and detail bodies, so they show no such thing. Whether that is
+   but from the fixed compact face on about 41,000, because the fixed canvas draws the compact face dim. The cards
+   with an icon (Consoles, Computers, Handhelds) have nearly identical compact and detail bodies, so they show no such thing. Whether that is
    intended on CRT and portrait is for you to say; it is a visible difference between the two UIs today.
    Consequence: sharing the face bake for HDMI landscape is a **choice of which renderer is right**, and
    either choice changes visible pixels on the primary HDMI UI. The harness is the instrument for that

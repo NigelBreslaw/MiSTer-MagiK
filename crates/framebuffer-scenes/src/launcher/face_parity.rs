@@ -236,13 +236,14 @@ fn print_the_face_differences() {
 ///
 /// `native_surface` builds the body of a generic card from the *detail*
 /// surface whatever face it is for, so a responsive compact face of a card
-/// whose compact and detail bodies differ (the icon cards) is drawn in the
+/// whose compact and detail bodies differ (the cards without an icon: Arcade,
+/// Favourites, Settings, whose selected face is flooded with their colour) is drawn in the
 /// detail colours. Cards whose two bodies are nearly the same (the collection
 /// cards) show no such difference. This pins the relationship, not a count: if
 /// the responsive path starts to honour the compact body, the first assertion
 /// fails and says so.
 #[test]
-fn the_responsive_compact_face_of_an_icon_card_is_drawn_in_the_detail_colours() {
+fn the_responsive_compact_face_of_a_flooded_card_is_drawn_in_the_detail_colours() {
     for (id, name, games) in [
         (LauncherCardId::Arcade, "ARCADE", Some(1752)),
         (LauncherCardId::Favourites, "FAVOURITES", Some(126)),
