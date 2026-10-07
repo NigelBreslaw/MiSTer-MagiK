@@ -70,9 +70,8 @@ impl BodyCache {
         &mut self,
         card: &PreparedCard<'_>,
     ) -> Option<crate::launcher_flip::Face> {
-        has_back(card).then(|| {
-            crate::launcher_flip::Face::new(self.back(card).to_vec(), 180, card_height(180))
-        })
+        has_back(card)
+            .then(|| crate::launcher_flip::Face::new(self.back(card).to_vec(), CARD_W, CARD_H))
     }
 }
 
@@ -80,7 +79,7 @@ impl BodyCache {
 /// emblem in a diamond. Drawn over a generic card's own surface so the frame,
 /// corners and silhouette match its front exactly.
 fn back_surface(card: &PreparedCard<'_>) -> Vec<Rgb565Pixel> {
-    const W: usize = 180;
+    const W: usize = CARD_W;
     let height = card_height(W);
     let mut pixels = surface(card, W, false, None, false);
     let base = mix_colour(rgb(5, 8, 13), card.colour, 34);
@@ -290,7 +289,7 @@ impl SrgbTransfer {
 /// pixel covers, which at an exact 2:1 gives the same result.
 pub(super) fn reduce_rgb888(source: &[u8], width: usize, height: usize) -> Vec<[u8; 3]> {
     assert_eq!(source.len(), 360 * 504 * 3);
-    if (width, height) == (180, 252) {
+    if (width, height) == (CARD_W, CARD_H) {
         reduce_two_by_two(source)
     } else {
         reduce_area(source, width, height)
@@ -301,8 +300,8 @@ pub(super) fn reduce_rgb888(source: &[u8], width: usize, height: usize) -> Vec<[
 /// path, so it keeps its direct loop.
 fn reduce_two_by_two(source: &[u8]) -> Vec<[u8; 3]> {
     let transfer = srgb_transfer();
-    (0..252)
-        .flat_map(|y| (0..180).map(move |x| (x, y)))
+    (0..CARD_H)
+        .flat_map(|y| (0..CARD_W).map(move |x| (x, y)))
         .map(|(x, y)| {
             std::array::from_fn(|c| {
                 let i = (y * 2 * 360 + x * 2) * 3 + c;
@@ -428,8 +427,8 @@ fn reference_face_rgb888(
     let reduction = crate::launcher_profile::span("prepare.rgb888_linear_reduction");
     let source = card.rgb888.expect("validated RGB888 source");
     let transfer = srgb_transfer();
-    let rgb8: Vec<[u8; 3]> = (0..252)
-        .flat_map(|y| (0..180).map(move |x| (x, y)))
+    let rgb8: Vec<[u8; 3]> = (0..CARD_H)
+        .flat_map(|y| (0..CARD_W).map(move |x| (x, y)))
         .map(|(x, y)| {
             std::array::from_fn(|c| {
                 let mut sum = 0.0;
@@ -461,7 +460,7 @@ fn reference_face_rgb888(
         artwork: Some(&reference),
         rgb888: None,
     };
-    let mut face = face(&mapped, 180, detail, typography);
+    let mut face = face(&mapped, CARD_W, detail, typography);
     face.texture.retain_rgb8(&rgb8, &reference);
     face
 }

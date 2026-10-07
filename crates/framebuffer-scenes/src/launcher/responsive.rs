@@ -70,7 +70,7 @@ impl Layout {
         if self.card_h <= crate::launcher_flip::COLUMN_HEIGHT {
             (self.card_w, self.card_h)
         } else {
-            (180, super::card_height(180))
+            (super::CARD_W, super::CARD_H)
         }
     }
 
@@ -428,11 +428,11 @@ impl Layout {
     ) -> crate::launcher_flip::Pose {
         let mut pose = old;
         let clip = (self.margin_x, self.width - self.margin_x);
-        let width = old.width * self.card_w as i64 / 180;
-        let height = old.height * self.card_h as i64 / 252;
+        let width = old.width * self.card_w as i64 / CARD_W as i64;
+        let height = old.height * self.card_h as i64 / CARD_H as i64;
         if row {
             pose.x = self.margin_x as i64 * GEOMETRY_ONE
-                + (old.x - 292 * GEOMETRY_ONE) * self.card_w as i64 / 180;
+                + (old.x - ROW_LEFT * GEOMETRY_ONE) * self.card_w as i64 / CARD_W as i64;
             pose.top = self.centre_y as i64 * GEOMETRY_ONE - height / 2;
             if self.crt {
                 pose.brightness = row::crt_brightness(old.brightness);
@@ -440,7 +440,7 @@ impl Layout {
         } else {
             let near = self.card_w as i64 * 4 / 5;
             let far = (self.width - 2 * self.margin_x) as i64 / 2 - self.card_w as i64 * 31 / 100;
-            let x = old.x + old.width / 2 - 610 * GEOMETRY_ONE;
+            let x = old.x + old.width / 2 - CENTRE_X * GEOMETRY_ONE;
             let distance = x.abs();
             let mapped = if distance <= 144 * GEOMETRY_ONE {
                 distance * near / 144
@@ -448,7 +448,8 @@ impl Layout {
                 near * GEOMETRY_ONE + (distance - 144 * GEOMETRY_ONE) * (far - near) / 110
             };
             let centre = self.width as i64 * GEOMETRY_ONE / 2 + x.signum() * mapped;
-            let lift = (old.top + old.height / 2 - 284 * GEOMETRY_ONE) * self.card_h as i64 / 252;
+            let lift = (old.top + old.height / 2 - CENTRE_Y * GEOMETRY_ONE) * self.card_h as i64
+                / CARD_H as i64;
             pose.x = centre - width / 2;
             pose.top = self.centre_y as i64 * GEOMETRY_ONE + lift - height / 2;
         }
