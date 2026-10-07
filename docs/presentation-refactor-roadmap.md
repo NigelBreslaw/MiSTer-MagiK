@@ -462,6 +462,31 @@ effect.**
   they are larger than the old small CRT bitmap labels. `write_card_previews` (an ignored test) renders
   every output so the change can be looked at.
 
+**PR 20 (in progress): the shared card renderer bakes at the size each output shows its cards.**
+
+- Found on the device after PR 19: CRT cards lost fidelity and 240p landscape ran at about 30 fps.
+  Cause of the first: the shared 180x252 faces were resampled to the CRT card size (a second filtering
+  step) with the HDMI label style scaled up, where the old bake drew small bitmap titles on the output's
+  own pixel grid. Part of the second: larger faces on a path that only ever runs on one thread (below).
+- The HDMI landscape bake is now sized: `surface_sized`, `face_sized`, `faces_rgb888(w, h)` and
+  `reduce_rgb888(w, h)` replace the 180x252-only versions, and `Layout` supplies the card size and the
+  CRT label fonts (the scaled bitmap font, with the native-width font for titles the doubled cell cannot
+  fit). The artwork is reduced straight from the 360x504 source to the card size; at 180x252 the
+  reduction is the old 2x2 mean (a test proves the general area filter equals it at 2:1), so HDMI
+  landscape is bit-identical: its 20 card-row hashes and the first ten entries of all four
+  approved-raster tables are unchanged. Prepared `.cardtex` artwork is used at 180x252 only; the device
+  asks for it only for 960x540, and CRT and portrait load the source.
+- Symbol scales shrink to fit narrow cards (5 and 4 at 180 wide, as before). A generic card's reverse
+  stays 180x252.
+- Cost, host release, microseconds per flip frame: CRT 640x240 440 (before PR 19) / 526 (PR 19) / 430
+  now; CRT 640x288 542 / 618 / 528; CRT portrait 549 / 578 / 540. Resting frames stay 8-11% above the
+  original because every projection is dithered. `bench_card_row_render` (ignored) and
+  `write_card_previews` (ignored) reproduce the numbers and the images.
+- **Still open, and the main cause of the 30 fps:** on the device `ParallelLauncherRenderer` (a primary
+  and a helper thread, each drawing part of the carousel) is used only when the scene is exactly 960x540
+  HDMI landscape (`launcher_card_home.rs`, `render_parallel_frame`); CRT and portrait draw the whole
+  carousel on one thread. Next PR: make the tile path and the parallel renderer work for every output.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

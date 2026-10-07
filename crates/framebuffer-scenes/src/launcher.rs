@@ -730,14 +730,25 @@ impl LauncherFramePreparer {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bake_face(
     card: &PreparedCard<'_>,
     width: usize,
+    height: usize,
     selected: bool,
     typography: Option<LauncherTypography<'_>>,
+    narrow_title: Option<&BitmapFont>,
     cache: &mut artwork::BodyCache,
 ) -> crate::launcher_flip::Face {
-    artwork::face_cached(card, width, selected, typography, cache)
+    artwork::face_cached(
+        card,
+        width,
+        height,
+        selected,
+        typography,
+        narrow_title,
+        cache,
+    )
 }
 
 struct PreparedCard<'a> {
@@ -894,6 +905,16 @@ impl PreparedLauncher {
         });
         let responsive = responsive::Layout::for_level(scene, data.level.slides());
         let fonts = responsive.map(|layout| layout.fonts(typography));
+        // Every output bakes its faces through the same functions, at the size
+        // it shows them: 180x252 on the HDMI landscape canvas, the card's own
+        // size elsewhere, with the output's label fonts.
+        let (face_width, face_height) =
+            responsive.map_or((180, 252), |layout| (layout.card_w, layout.card_h));
+        let (face_typography, narrow_title) =
+            match fonts.as_ref().map(responsive::Fonts::for_labels) {
+                Some((labels, narrow)) => (Some(labels), narrow),
+                None => (typography, None),
+            };
         let pixel_count = if responsive.is_some() {
             scene.width * scene.height
         } else {
@@ -950,7 +971,10 @@ impl PreparedLauncher {
                 } else {
                     card.name
                 };
-                let prepared_art = loaded.as_mut().and_then(|source| source.prepared.take());
+                // Prepared artwork is baked at 180x252; other sizes bake from the source.
+                let prepared_art = ((face_width, face_height) == (180, 252))
+                    .then(|| loaded.as_mut().and_then(|source| source.prepared.take()))
+                    .flatten();
                 let card = PreparedCard {
                     id: card.id,
                     name,
@@ -992,7 +1016,13 @@ impl PreparedLauncher {
                 } else if card.rgb888.is_some() {
                     #[cfg(feature = "launcher-profile")]
                     let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
-                    let [compact, detail] = artwork::faces_rgb888(&card, typography);
+                    let [compact, detail] = artwork::faces_rgb888(
+                        &card,
+                        face_width,
+                        face_height,
+                        face_typography,
+                        narrow_title,
+                    );
                     CardFaces {
                         source_retry: false,
                         compact,
@@ -1005,17 +1035,31 @@ impl PreparedLauncher {
                     let _faces = crate::launcher_profile::span("prepare.initial_faces");
                     CardFaces {
                         source_retry: false,
-                        compact: bake_face(&card, 180, false, typography, &mut bodies),
-                        detail: bake_face(&card, 180, true, typography, &mut bodies),
+                        compact: bake_face(
+                            &card,
+                            face_width,
+                            face_height,
+                            false,
+                            face_typography,
+                            narrow_title,
+                            &mut bodies,
+                        ),
+                        detail: bake_face(
+                            &card,
+                            face_width,
+                            face_height,
+                            true,
+                            face_typography,
+                            narrow_title,
+                            &mut bodies,
+                        ),
                         back: bodies.back_face(&card),
                         slides: data.level.slides(),
                     }
                 };
                 faces.source_retry = loaded.as_ref().is_some_and(|source| source.retry);
-                // Every output shares these faces. Each is baked once at 180x252 and
-                // the projection scales it to the card's pose, so every projection
-                // is dithered. A reflection is 64 rows under a 252-row card; a
-                // smaller card keeps the same proportion.
+                // Every projection is dithered. A reflection is 64 rows under a
+                // 252-row card; a smaller card keeps the same proportion.
                 let fade_rows =
                     responsive.map_or(64, |layout| (64 * layout.card_h / 252).clamp(2, 64));
                 for face in [&mut faces.compact, &mut faces.detail]
@@ -2446,48 +2490,48 @@ mod tests {
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x01de40663697711d, 0xf8cd84aad96c6ec2, 0x510785231b4c077d, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0xdfa4872b2baf7994, 0x2d94a95f2e285101, 0xcaeb9d49054907c3, 0x4687b9f98929fc27,
-            0x88a45b3d7d8dc4b3, 0x36d9572edde4428b, 0x1a35bc5ccf9c4f82, 0x42509915f4f2f968, 0x569885b63ef6cc07,
-            0x569885b63ef6cc07, 0x73438c18dab1decd, 0x26fa8c97d2837420, 0x291fc2dd3a07db77, 0x88a45b3d7d8dc4b3,
-            0x8c9061a9bdd69a9a, 0x719ef415bada8cd7, 0x04bb4cb78ba97984, 0x47a470bccf735a88, 0x81c9ac2e027a863f,
-            0x81c9ac2e027a863f, 0x3d9ccfa26a0698db, 0x41182f332fc1e0f1, 0x0c988417cd6cefdf, 0x8c9061a9bdd69a9a,
-            0xca1f9b2f645a8a43, 0x6a0b92928e5632be, 0xb9c71e1d3f134b06, 0x878981643f8fac87, 0x9fbcf649cc549522,
-            0x9fbcf649cc549522, 0xdc7dbea4d88d769a, 0x219463b423282341, 0x1c56f7f767332cd7, 0xca1f9b2f645a8a43,
+            0xe99463293f8d6ae2, 0x564a35e20b961e2d, 0x267f4b8dcb919ebd, 0x414c148c37f63f71, 0xf2ccc280bbf36cfa,
+            0xf2ccc280bbf36cfa, 0x9fd8e7e99706e952, 0x4584ab3931057503, 0x1a7154ae62e74a7d, 0xe99463293f8d6ae2,
+            0x9064bd26dce17d47, 0x312220ae87347d6e, 0x0bd66dec7c94a8dc, 0x0616276d53daba0a, 0x5b2cdea94ccecf7a,
+            0x5b2cdea94ccecf7a, 0x33f801ee5fa976eb, 0x8b28f03532112732, 0x0e0a87d26cc74e66, 0x9064bd26dce17d47,
+            0x8f68b472aa3890a0, 0x98037568ba59fdf8, 0x2c716babb4b63a3c, 0x258c48ad6c9f74f7, 0x4db838d0ab8e4be3,
+            0x4db838d0ab8e4be3, 0xafd72ebf31d1ad7c, 0xc8d54eb5720afeb2, 0x4eb7c3993079ed64, 0x8f68b472aa3890a0,
         ];
         #[cfg(all(feature = "card-axis-filter", not(feature = "card-fast-quantisation")))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x9d2be33a3ca71867, 0x52234dbf6ae11548, 0x72d7e978eb358360, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0x00885c42b0b1224e, 0xb8afd0c2d7cf3b77, 0x094557929b2959f5, 0x4687b9f98929fc27,
-            0xf05385fa3097b843, 0xe8bc8b6accc8c589, 0x4a23d117b0a09d7b, 0x763a29b0fadd6325, 0x5b752c4e4acba8a0,
-            0x5b752c4e4acba8a0, 0xc58228ab07590c0a, 0xb4420e95e582f505, 0x955a78ca21100888, 0xf05385fa3097b843,
-            0xe61a6980fb509025, 0x0f1f3c64fb3bc6b0, 0x200eeebb6c572db0, 0x5b1c39f20f40c82e, 0x1c6e526e51d58afd,
-            0x1c6e526e51d58afd, 0x04578fe78f055cfb, 0x5fd703677ada3b61, 0x53b7cf5a0aa66ff4, 0xe61a6980fb509025,
-            0x09d4daf3b36132e7, 0xc0195724d9ecd6e5, 0x9c104545659738e1, 0x8b1a6868deecff3b, 0xc7e159cf2802b94b,
-            0xc7e159cf2802b94b, 0x8a94c1a3ea2ba62b, 0x7e0f1909c503094a, 0xb05472ea5042af21, 0x09d4daf3b36132e7,
+            0xe99463293f8d6ae2, 0xa12c6a59ad59d5c5, 0xc485f7ac5045d525, 0xf058a08feea6c577, 0xf2ccc280bbf36cfa,
+            0xf2ccc280bbf36cfa, 0xe1c0093eff8a2114, 0x1bbad37721146d83, 0x1df9684e815143fd, 0xe99463293f8d6ae2,
+            0x9064bd26dce17d47, 0x6504054bb10d2765, 0x2061e5b738a161a0, 0x7048e440e0210583, 0x5b2cdea94ccecf7a,
+            0x5b2cdea94ccecf7a, 0x3ee432dabb8d656d, 0x9ab590c5b233746e, 0x1fee56dd9c38daf4, 0x9064bd26dce17d47,
+            0x8f68b472aa3890a0, 0xd31e177812699575, 0x262299ee1f39bfe0, 0x63382864e33ebf07, 0x4db838d0ab8e4be3,
+            0x4db838d0ab8e4be3, 0xf5c3986808fd75f8, 0x522c06cf6c7f826a, 0xf7c97440c1623415, 0x8f68b472aa3890a0,
         ];
         #[cfg(all(not(feature = "card-axis-filter"), feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xa7cef90c802d6414, 0xea9b95bdbad042bb, 0x67a9abee891b4c1a, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x2cca0ac9cf164e40, 0xa430e84ae034b4bd, 0xb60e7727de597315, 0xd3ce5764e8c88bde,
-            0x866c5970e6c4e8d6, 0x22630b086d5dd725, 0x4a3c1259dd69599e, 0xc99e708f63049fd7, 0xb1d3aee63cf1c10f,
-            0xb1d3aee63cf1c10f, 0x14dc28759ebd3993, 0x2cf56d99baf64a02, 0x35dd69395ef5b57a, 0x866c5970e6c4e8d6,
-            0xd3d9435fc2ebdc65, 0x2704b3986e31ff95, 0x4a5d71e2e6bc121e, 0x7727e28c139f6eb4, 0xa95e4aef7de1bcb5,
-            0xa95e4aef7de1bcb5, 0x137ace44f04e894b, 0xa387c3b6e36e893b, 0x77e7f1ee5d540cd2, 0xd3d9435fc2ebdc65,
-            0x6dd01c9b29aa0d1e, 0x6a983d4a6ce048fe, 0x333fdb28c02489b8, 0xd32832c16e9b1607, 0x65c95e85bc5d0543,
-            0x65c95e85bc5d0543, 0x208d1063ebd93971, 0x4670e02591af16da, 0xcbde8e1f1858ea0f, 0x6dd01c9b29aa0d1e,
+            0xf857ed54ba3197d1, 0xe80277c83234ca1d, 0xb35d0cee37503fad, 0x5f1ce79ae45a81ee, 0x593208980032c68a,
+            0x593208980032c68a, 0xa9dd25c205405f42, 0xcba0ac78327f8008, 0x3b1441eaf526eb3d, 0xf857ed54ba3197d1,
+            0x0d162b5d41ffb7cf, 0xbf075ebb0df506cd, 0xd6fb447e35048072, 0x42f4c49b32b51bc2, 0x055fa747e041aabb,
+            0x055fa747e041aabb, 0xab1aabb9523a21f4, 0xe85cfc0a60a6cba7, 0xc61620e1efb7b99b, 0x0d162b5d41ffb7cf,
+            0x7c07676125de1e3a, 0x5cb0febd8ace99f9, 0x03265385f5225f79, 0x8da7684e673e44f2, 0x52bc777c57f6c6bf,
+            0x52bc777c57f6c6bf, 0x9d4a57586bf76f44, 0xd01ca8f8d250bfa4, 0x5cfb444cd0fc482f, 0x7c07676125de1e3a,
         ];
         #[cfg(all(feature = "card-axis-filter", feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xbe353139c21b115f, 0xefb5b4c5a8c033ac, 0x1dffc79049677eb6, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x223c8ad98be9529c, 0xc477be9f19c4cc32, 0xd9ec89c562a0692a, 0xd3ce5764e8c88bde,
-            0x225990ddbeec2afa, 0xc0ae1dc91f6d683c, 0x868a13f1d6d051d4, 0xa98c3a25c840f417, 0xa2013858592d8059,
-            0xa2013858592d8059, 0x8be18bd6dd56c0e0, 0xf75404f418d7ebc0, 0xb6790e61a1f38ebe, 0x225990ddbeec2afa,
-            0xb54e527092d8d77a, 0x5a4234eea0e114fa, 0x249185133cd97259, 0x9e28356292efe098, 0xb898fce983d3f4cd,
-            0xb898fce983d3f4cd, 0x27e6bdf1e6039a75, 0x06ce9b5f5045caeb, 0xc308d7bc3d4414bb, 0xb54e527092d8d77a,
-            0x3a66e2537dd1f7e1, 0xc93ce376e7dc28b6, 0x482e2443ce19fb9f, 0xf0a26d0d51a82473, 0x30f8b0864535150a,
-            0x30f8b0864535150a, 0x8876d7305a7d3796, 0x34e2f3040002cff2, 0x80e67776bf7f3512, 0x3a66e2537dd1f7e1,
+            0xf857ed54ba3197d1, 0xb8f8aedfd9631dbb, 0x195fee40db73d2e7, 0x7a1f9d819a794843, 0x593208980032c68a,
+            0x593208980032c68a, 0x088e75a6257fdde7, 0xdb82e968aa77ff1e, 0x4d8f392d9a180acb, 0xf857ed54ba3197d1,
+            0x0d162b5d41ffb7cf, 0xaeccaedb31be72b0, 0x5a2f29cd9ec89f68, 0x43cf31d67db9e1ff, 0x055fa747e041aabb,
+            0x055fa747e041aabb, 0x8f4aa1ea10dfd475, 0x031dbfafafcf0bb9, 0x18a5bc21ff031e12, 0x0d162b5d41ffb7cf,
+            0x7c07676125de1e3a, 0x99f92d47bc72d3e6, 0x0540c6969f31789b, 0x5fc89ae4d72e3f2e, 0x52bc777c57f6c6bf,
+            0x52bc777c57f6c6bf, 0xe1a41d06f2e0cc40, 0xf0f4dbb270b77a46, 0x917460c393fde7c8, 0x7c07676125de1e3a,
         ];
         assert_eq!(actual, REFERENCE, "Root raster: {actual:x?}");
     }
@@ -3080,55 +3124,55 @@ mod tests {
             ("hdmi-1280x720 nested right-mid", 0x16a61476e10090f2),
             ("hdmi-1280x720 nested right-late", 0xedc3687816f6ae9f),
             ("hdmi-1280x720 nested left-mid", 0x80966bbb01371184),
-            ("hdmi-portrait-540x960 root rest", 0xef78d78aecac8f19),
-            ("hdmi-portrait-540x960 root right-start", 0xcb72debe68827338),
-            ("hdmi-portrait-540x960 root right-mid", 0x426d744d6223fb5f),
-            ("hdmi-portrait-540x960 root right-late", 0xb43f80d9ef33802a),
-            ("hdmi-portrait-540x960 root left-mid", 0x6cdde20a166d7a40),
-            ("hdmi-portrait-540x960 nested rest", 0xba268aa9dc3d1db2),
+            ("hdmi-portrait-540x960 root rest", 0x2ee5bea1a8e68f4b),
+            ("hdmi-portrait-540x960 root right-start", 0x464aed8b929fe268),
+            ("hdmi-portrait-540x960 root right-mid", 0xa9019ddb7b4694ef),
+            ("hdmi-portrait-540x960 root right-late", 0x6b7da01699d77091),
+            ("hdmi-portrait-540x960 root left-mid", 0x535b6256572a01b0),
+            ("hdmi-portrait-540x960 nested rest", 0xe1b58d93e857eacf),
             (
                 "hdmi-portrait-540x960 nested right-start",
-                0x84822eb84b8ea837,
+                0xf09452c138e7b819,
             ),
-            ("hdmi-portrait-540x960 nested right-mid", 0x298359c35f34ff5d),
+            ("hdmi-portrait-540x960 nested right-mid", 0xa6b9f8bf5acfb628),
             (
                 "hdmi-portrait-540x960 nested right-late",
-                0x99a335752f1bc91a,
+                0x8f42dad3c9e34e7b,
             ),
-            ("hdmi-portrait-540x960 nested left-mid", 0xd6f3ce2f132b8de7),
-            ("crt-640x480 root rest", 0xfe9ae5ea30868d15),
-            ("crt-640x480 root right-start", 0xedba6bfd8b5156fa),
-            ("crt-640x480 root right-mid", 0x5c786745df3695d1),
-            ("crt-640x480 root right-late", 0x8ba3adfdcc3d854d),
-            ("crt-640x480 root left-mid", 0xb6b56daa8a2ed8bc),
-            ("crt-640x480 nested rest", 0x84a95c5b09406010),
-            ("crt-640x480 nested right-start", 0x2468d00d67298825),
-            ("crt-640x480 nested right-mid", 0x727120b1de42ebd8),
-            ("crt-640x480 nested right-late", 0x642d5ad38b26b9a2),
-            ("crt-640x480 nested left-mid", 0xffe8ea8798952f88),
-            ("crt-640x288 root rest", 0x813dd0da0aabd4e6),
-            ("crt-640x288 root right-start", 0x191ff7af4f449715),
-            ("crt-640x288 root right-mid", 0xd64ce860ebb528e6),
-            ("crt-640x288 root right-late", 0x550aae539ae6d093),
-            ("crt-640x288 root left-mid", 0xa7d10edca47a8d3e),
-            ("crt-640x288 nested rest", 0x0c9f533659a27793),
-            ("crt-640x288 nested right-start", 0x5d36b874728a6497),
-            ("crt-640x288 nested right-mid", 0x7baf78d37da37d95),
-            ("crt-640x288 nested right-late", 0xe3fa864ae7faa082),
-            ("crt-640x288 nested left-mid", 0x69abba8f636ac53c),
-            ("crt-portrait-480x640 root rest", 0x12f47dcb67eba657),
-            ("crt-portrait-480x640 root right-start", 0x1b19147019b19a78),
-            ("crt-portrait-480x640 root right-mid", 0x1bf18198c7cd46c6),
-            ("crt-portrait-480x640 root right-late", 0xf4fe7cfbe5bf3b93),
-            ("crt-portrait-480x640 root left-mid", 0x61592d8af5720eb4),
-            ("crt-portrait-480x640 nested rest", 0x0caacd5b3aa759eb),
+            ("hdmi-portrait-540x960 nested left-mid", 0x249d8a53803e8980),
+            ("crt-640x480 root rest", 0x61c15b1f521339d7),
+            ("crt-640x480 root right-start", 0x09c7d31d3dec06ce),
+            ("crt-640x480 root right-mid", 0x460e7e4c166cdb2a),
+            ("crt-640x480 root right-late", 0x3fcc6cca7f55c15b),
+            ("crt-640x480 root left-mid", 0x457de7051d1abacf),
+            ("crt-640x480 nested rest", 0x56a7fe6d90f67f56),
+            ("crt-640x480 nested right-start", 0x139a9c3f638e43d3),
+            ("crt-640x480 nested right-mid", 0xb6b9edd1257f7f33),
+            ("crt-640x480 nested right-late", 0xcdfbd974b812204c),
+            ("crt-640x480 nested left-mid", 0xd41a2651f94761c5),
+            ("crt-640x288 root rest", 0x526379536bf3c9c0),
+            ("crt-640x288 root right-start", 0xd8c55f60a2eb321c),
+            ("crt-640x288 root right-mid", 0x7bf2ffca9101ec28),
+            ("crt-640x288 root right-late", 0x42cd9f30d7935726),
+            ("crt-640x288 root left-mid", 0xe0e82b047820ebbd),
+            ("crt-640x288 nested rest", 0x12a295bc4f022cd3),
+            ("crt-640x288 nested right-start", 0x50581ca938cdfe98),
+            ("crt-640x288 nested right-mid", 0x441b4be30fdd5f96),
+            ("crt-640x288 nested right-late", 0x132cfcbdb386eaba),
+            ("crt-640x288 nested left-mid", 0x9993db1357110755),
+            ("crt-portrait-480x640 root rest", 0xff2d6141a61ffdfa),
+            ("crt-portrait-480x640 root right-start", 0xf123f1d6d117979b),
+            ("crt-portrait-480x640 root right-mid", 0xfd62eb9da1524ea1),
+            ("crt-portrait-480x640 root right-late", 0x763a277cc538178a),
+            ("crt-portrait-480x640 root left-mid", 0x43982818f49ab168),
+            ("crt-portrait-480x640 nested rest", 0x3913b8891d58a49e),
             (
                 "crt-portrait-480x640 nested right-start",
-                0x246fd20f9cfc2fea,
+                0xc8eb6cbde6bece7d,
             ),
-            ("crt-portrait-480x640 nested right-mid", 0x40a567523b89330b),
-            ("crt-portrait-480x640 nested right-late", 0xf8364d752e08cd04),
-            ("crt-portrait-480x640 nested left-mid", 0x30573b3f00e85e4d),
+            ("crt-portrait-480x640 nested right-mid", 0xa98170ccce29978d),
+            ("crt-portrait-480x640 nested right-late", 0xde159d55105031f0),
+            ("crt-portrait-480x640 nested left-mid", 0xb487d5d069649c03),
         ];
         let actual = card_row_hashes();
         let changed: Vec<_> = actual
@@ -3279,6 +3323,149 @@ mod tests {
                 }
                 std::fs::write(format!("{dir}/{name}-{frame_name}.ppm"), ppm).unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn every_card_bakes_at_the_size_each_output_shows_it() {
+        let source: Vec<u8> = (0..360 * 504 * 3)
+            .map(|i| ((i * 7 + i / 360) % 251) as u8)
+            .collect();
+        let ids = [
+            LauncherCardId::Arcade,
+            LauncherCardId::Consoles,
+            LauncherCardId::Computers,
+            LauncherCardId::Handhelds,
+            LauncherCardId::Favourites,
+            LauncherCardId::Settings,
+        ];
+        let cards: Vec<LauncherCard<'static>> = ids
+            .iter()
+            .map(|&id| LauncherCard {
+                id,
+                name: "SUPER NINTENDO",
+                games: Some(1234),
+                colour: LauncherCardStyle::root(id).colour,
+            })
+            .collect();
+        let images: Vec<&[u8]> = vec![source.as_slice(); cards.len()];
+        let nested = NestedLevel {
+            path: &["CONSOLES"],
+            games: 60,
+            children: 6,
+            children_label: "MAKERS",
+            detail: None,
+            accent: 0x2a7f,
+        };
+        for scene in [
+            LauncherScene::new(960, 540),
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(640, 480),
+            LauncherScene::crt(640, 240),
+            LauncherScene::crt(640, 288),
+            LauncherScene::crt(480, 640),
+            LauncherScene::crt(240, 640),
+            LauncherScene::crt(288, 640),
+        ] {
+            for level in [LauncherLevel::Root, LauncherLevel::Nested(nested)] {
+                let (width, height) = responsive::Layout::for_level(scene, level.slides())
+                    .map_or((180, 252), |layout| (layout.card_w, layout.card_h));
+                for artwork in [None, Some(Artwork::Rgb888(&images))] {
+                    let mut input = data();
+                    input.cards = &cards;
+                    input.level = level;
+                    let prepared = PreparedLauncher::new(scene, input, artwork, None);
+                    for faces in prepared.faces.iter() {
+                        for face in [&faces.compact, &faces.detail] {
+                            assert_eq!(
+                                (face.width, face.height),
+                                (width, height),
+                                "{}x{} {:?}",
+                                scene.width,
+                                scene.height,
+                                artwork.is_some()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Time `render_frame` across a full flip and at rest for each output, in
+    /// microseconds per frame. Run in release with real artwork:
+    /// `MAGIK_CARD_ART_DIR=... cargo test --release --lib bench_card_row_render -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark; prints timings"]
+    fn bench_card_row_render() {
+        let art: Vec<Vec<u8>> = std::env::var("MAGIK_CARD_ART_DIR")
+            .ok()
+            .map(|dir| {
+                let mut names: Vec<_> = std::fs::read_dir(dir)
+                    .unwrap()
+                    .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "rgb888"))
+                    .collect();
+                names.sort();
+                names
+                    .into_iter()
+                    .map(|path| std::fs::read(path).unwrap())
+                    .filter(|bytes| bytes.len() == 360 * 504 * 3)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        for (name, scene) in [
+            ("hdmi-960x540", LauncherScene::new(960, 540)),
+            ("hdmi-portrait-540x960", LauncherScene::new(540, 960)),
+            ("crt-640x480", LauncherScene::crt(640, 480)),
+            ("crt-640x240", LauncherScene::crt(640, 240)),
+            ("crt-640x288", LauncherScene::crt(640, 288)),
+            ("crt-portrait-480x640", LauncherScene::crt(480, 640)),
+        ] {
+            let images: Vec<&[u8]> = art.iter().map(Vec::as_slice).take(CARDS.len()).collect();
+            let mut prepared = if images.len() == CARDS.len() {
+                scene
+                    .prepare_initial_with_rgb888_artwork(data(), &images)
+                    .finish()
+            } else {
+                scene.prepare(data())
+            };
+            let frames: Vec<BrowseFrame> = (0..=30)
+                .map(|i| BrowseFrame {
+                    selected: 0,
+                    target: 1,
+                    phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                    direction: Some(BrowseDirection::Right),
+                    progress_millis: units * i / 30,
+                    duration_millis: units,
+                })
+                .collect();
+            for frame in &frames {
+                prepared.render_frame(*frame);
+            }
+            let mut flip = f64::MAX;
+            for _ in 0..6 {
+                let started = std::time::Instant::now();
+                for frame in &frames {
+                    prepared.render_frame(*frame);
+                }
+                flip = flip.min(started.elapsed().as_secs_f64() * 1e6 / frames.len() as f64);
+            }
+            let rest = BrowseFrame {
+                selected: 0,
+                target: 0,
+                phase: crate::launcher_navigation::BrowsePhase::Settled,
+                direction: None,
+                progress_millis: 0,
+                duration_millis: units,
+            };
+            let started = std::time::Instant::now();
+            for _ in 0..30 {
+                prepared.render_frame(rest);
+            }
+            let rest_us = started.elapsed().as_secs_f64() * 1e6 / 30.0;
+            println!("BENCH {name}: flip {flip:.0} us/frame, rest {rest_us:.0} us/frame");
         }
     }
 

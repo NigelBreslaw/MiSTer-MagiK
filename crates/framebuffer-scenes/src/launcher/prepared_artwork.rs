@@ -76,7 +76,7 @@ impl PreparedArtwork {
     /// Host-only generation. Published packs are little endian.
     #[cfg(feature = "prepared-artwork")]
     pub fn encode(source: &[u8], id: LauncherCardId, colour: u16) -> Vec<u8> {
-        let rgb = artwork::reduce_rgb888(source);
+        let rgb = artwork::reduce_rgb888(source, 180, 252);
         let reference = reference(&rgb);
         let card = PreparedCard {
             id,
@@ -184,7 +184,7 @@ impl PreparedArtwork {
                 continue;
             }
             let before = surface.clone();
-            artwork::draw_face_labels(surface, card, W, index == 1, fonts);
+            artwork::draw_face_labels(surface, card, W, 252, index == 1, fonts, None);
             face.texture
                 .apply_labels(&before, surface, &self.rgb, &reference);
             #[cfg(test)]
@@ -302,7 +302,7 @@ mod tests {
                     rgb888: Some(source),
                 };
                 for typography in [None, Some(fonts)] {
-                    let raw = artwork::faces_rgb888(&card, typography);
+                    let raw = artwork::faces_rgb888(&card, 180, 252, typography, None);
                     let packed = PreparedArtwork::decode(&bytes, card.id, card.colour)
                         .unwrap()
                         .faces(&card, typography);

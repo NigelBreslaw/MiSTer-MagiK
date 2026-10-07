@@ -9,15 +9,33 @@ use std::borrow::Cow;
 
 // CRT roles share one scaled font; HDMI borrows the supplied role fonts.
 pub(super) enum Fonts<'a> {
-    /// The route's scaled cell.
-    Uniform(Cow<'a, BitmapFont>),
+    /// The route's scaled cell, plus the same font at native width for
+    /// labels that would not fit the doubled cell.
+    Uniform(Cow<'a, BitmapFont>, Cow<'a, BitmapFont>),
     Roles(LauncherTypography<'a>),
 }
 
 impl Fonts<'_> {
+    /// The fonts the card labels are drawn with, and the narrower title font
+    /// for names the cell cannot fit, when this output has one.
+    pub(super) fn for_labels(&self) -> (LauncherTypography<'_>, Option<&BitmapFont>) {
+        match self {
+            Self::Uniform(font, narrow) => (
+                LauncherTypography {
+                    heading: font,
+                    number: font,
+                    metadata: font,
+                    fallback: font,
+                },
+                Some(narrow),
+            ),
+            Self::Roles(fonts) => (*fonts, None),
+        }
+    }
+
     fn get(&self, role: TextRole) -> &BitmapFont {
         match self {
-            Self::Uniform(font) => font,
+            Self::Uniform(font, _) => font,
             Self::Roles(fonts) => match role {
                 TextRole::Heading => fonts.heading,
                 TextRole::Number => fonts.number,
@@ -39,7 +57,7 @@ pub(super) struct Layout {
     top: usize,
     bottom: usize,
     pub card_h: usize,
-    card_w: usize,
+    pub card_w: usize,
     centre_y: usize,
     library_y: usize,
 }
@@ -127,11 +145,19 @@ impl Layout {
         let font = typography
             .map(|fonts| Cow::Borrowed(fonts.fallback))
             .unwrap_or_else(|| Cow::Owned(legacy_font()));
-        Fonts::Uniform(if (self.sx, self.sy) == (1, 1) {
-            font
+        let narrow = if self.sy == 1 {
+            font.clone()
         } else {
-            Cow::Owned(scale_font(&font, self.sx, self.sy))
-        })
+            Cow::Owned(scale_font(&font, 1, self.sy))
+        };
+        Fonts::Uniform(
+            if (self.sx, self.sy) == (1, 1) {
+                font
+            } else {
+                Cow::Owned(scale_font(&font, self.sx, self.sy))
+            },
+            narrow,
+        )
     }
 
     pub fn chrome(&self, pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, fonts: &Fonts<'_>) {
