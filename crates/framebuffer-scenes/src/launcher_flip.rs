@@ -95,7 +95,7 @@ impl Column {
 /// How a face quantises filtered samples to RGB565.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Dither {
-    /// Nearest RGB565 colour, without spatial dithering.
+    /// Truncate.
     Off,
     /// Ordered dither for every projection.
     Always,
@@ -924,58 +924,6 @@ fn reflected_texel(body: &[u32], row: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn flat_colours_remain_uniform_after_distance_and_angle_lighting() {
-        let rgb = [23u8, 77, 53];
-        let pixel = crate::dithered_image::quantise_nearest_rgb8(rgb);
-        let pixels = vec![pixel; 180 * 252];
-        let face = Face::with_rgb8(pixels.clone(), &vec![rgb; 180 * 252], &pixels, 180, 252);
-        let mut scratch = Scratch::new();
-        for (width, angle, brightness) in [
-            (180, 0, 256),
-            (162, 5097, 184),
-            (146, 5097, 143),
-            (131, 5097, 108),
-            (118, 5097, 82),
-        ] {
-            let height = width * 7 / 5;
-            let pose = Pose {
-                x: (610 - width / 2) * ONE,
-                top: (284 - height / 2) * ONE,
-                width: width * ONE,
-                height: height * ONE,
-                angle,
-                brightness,
-                clip: (296, 934),
-                body_clip: (296, 934),
-                vertical_clip: (120, 438, 495),
-            };
-            let mut output = vec![Rgb565Pixel(0); 960 * 540];
-            draw(
-                &mut output,
-                &face,
-                pose,
-                &mut scratch,
-                |p, _, _| p,
-                false,
-                None,
-            );
-            let light = diffuse_light(sin_cos(angle).1) * brightness / 256;
-            let expected = crate::dithered_image::quantise_nearest_rgb8(
-                rgb.map(|v| (u32::from(v) * light / 256) as u8),
-            );
-            for y in 274..294 {
-                for x in 600..620 {
-                    assert_eq!(
-                        output[y * 960 + x],
-                        expected,
-                        "width={width} brightness={brightness}"
-                    );
-                }
-            }
-        }
-    }
 
     #[test]
     fn hardware_geometry_quotient_matches_integer_truncation() {

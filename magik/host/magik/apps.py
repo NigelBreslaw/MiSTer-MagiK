@@ -62,8 +62,9 @@ def validate_renderer_context(context: object) -> None:
         "card_sampler": "independent-vertical-prefilter"
         if "card-axis-filter" in app.features
         else "current",
-        "card_quantiser": "nearest-rgb565",
-        "card_fast_quantisation_feature": "card-fast-quantisation" in app.features,
+        "card_quantiser": "centred-bayer-shifts"
+        if "card-fast-quantisation" in app.features
+        else "existing-bayer",
     }
     if not isinstance(context, dict) or any(
         context.get(k) != v for k, v in expected.items()

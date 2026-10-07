@@ -231,7 +231,7 @@ fn project_over_column_with_opaque(
                 source.get(r as usize).copied().unwrap_or(0)
             }
         };
-        destination[y * pitch] = over_nearest(
+        destination[y * pitch] = over(
             mix(get(row), get(row + 1), ((q & 65535) >> 8) as u32),
             destination[y * pitch],
         );
@@ -345,7 +345,7 @@ pub(super) fn project_flat(
                 }
             };
             let p = mix(get(row), get(row + 1), ((q & 65535) >> 8) as u32);
-            destination[y * pitch + x] = over_nearest(p, destination[y * pitch + x]);
+            destination[y * pitch + x] = over(p, destination[y * pitch + x]);
         }
     }
 }
@@ -1018,22 +1018,6 @@ pub(super) fn over(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)) as u16)
 }
 
-#[cfg(any(not(target_arch = "arm"), test))]
-#[inline]
-fn over_nearest(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
-    let alpha = sample >> 24;
-    if alpha == 0 {
-        return destination;
-    }
-    let bg = if alpha == 255 {
-        0
-    } else {
-        rgba(destination, 255 - alpha)
-    };
-    let channel = |shift: u32| (((sample >> shift) & 255) + ((bg >> shift) & 255)).min(255) as u8;
-    crate::dithered_image::quantise_nearest_rgb8([channel(0), channel(8), channel(16)])
-}
-
 fn opaque_bounds(height: usize, margin: usize) -> std::ops::Range<usize> {
     if margin < height.saturating_sub(margin) {
         margin..height - margin
@@ -1338,7 +1322,7 @@ mod tests {
                         let mut projected = vec![0; rows * 7];
                         project_column(&source, &mut projected, 7, 0, 0..rows, (origin, step));
                         for y in 0..rows {
-                            expected[y * 7] = over_nearest(projected[y * 7], expected[y * 7]);
+                            expected[y * 7] = over(projected[y * 7], expected[y * 7]);
                         }
                         project_over_column(&source, &mut actual, 7, rows, (origin, step));
                         assert_eq!(actual, expected);
@@ -1378,10 +1362,10 @@ mod tests {
                         );
                     }
                     for y in 0..rows {
-                        for x in 0..width {
-                            let i = y * pitch + x;
-                            expected[i] = over_nearest(rgba[i], expected[i]);
-                        }
+                        over_row(
+                            &mut expected[y * pitch..y * pitch + width],
+                            &rgba[y * pitch..y * pitch + width],
+                        );
                     }
                     project_flat(
                         &mut actual,

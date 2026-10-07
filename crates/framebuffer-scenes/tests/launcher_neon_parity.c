@@ -114,56 +114,7 @@ static int fast_quantisation_parity(void) {
   return 0;
 }
 #endif
-static uint16_t reference_nearest(uint32_t p, uint16_t dst) {
-  const unsigned shifts[] = {11, 5, 0}, maximum[] = {31, 63, 31};
-  unsigned alpha = p >> 24;
-  if (!alpha) return dst;
-  uint16_t packed = 0;
-  for (size_t c = 0; c < 3; ++c) {
-    unsigned value = ((p >> (c * 8)) & 255)
-                   + ((dst >> shifts[c]) & maximum[c]) * 255 / maximum[c] * (255-alpha) / 255;
-    if (value > 255) value = 255;
-    packed |= (uint16_t)(value * maximum[c] / 255.0 + 0.5) << shifts[c];
-  }
-  return packed;
-}
-
 int main(void) {
-  for (unsigned value = 0; value < 256; ++value) {
-    uint32_t pixels[2] = {0xff000000u | value | ((255-value)<<8) | (((value*97)&255)<<16),
-                         0xff000000u | (255-value) | (value<<8) | (((value*31)&255)<<16)};
-    uint32_t actual[2];
-    vst1_u32(actual, pack_opaque2(vld1_u32(pixels)));
-    for (size_t i=0;i<2;++i) {
-      if (actual[i] != reference_nearest(pixels[i],0) || over_pixel(pixels[i],0) != actual[i]) {
-        fputs("nearest packing mismatch\n",stderr); return 25;
-      }
-    }
-  }
-  for (size_t trial = 0; trial < 10000; ++trial) {
-    size_t height = 17+next()%64, rows = 1+next()%68, width = 1+next()%9, pitch = width+3, stride=height+3;
-    uint32_t source[9*84]; uint16_t actual[1024], expected[1024];
-    for (size_t i=0;i<width*stride;++i) {
-      unsigned alpha=trial%2 && i%stride>=8 && i%stride<height-8 ? 255 : next()%256;
-      source[i]=next()%(alpha+1)|(next()%(alpha+1))<<8|(next()%(alpha+1))<<16|alpha<<24;
-    }
-    for(size_t i=0;i<1024;++i)actual[i]=expected[i]=(uint16_t)next();
-    int32_t q=(int32_t)(next()%196609)-131072,step=1+next()%196608;
-    size_t columns = trial%2 ? width : 1;
-    for(size_t x=0;x<columns;++x)for(size_t y=0;y<rows;++y) {
-      int32_t position=q+(int32_t)y*step,r=position>>16;
-      uint32_t a=r>=0 && (size_t)r<height ? source[x*stride+r]:0;
-      uint32_t b=r+1>=0 && (size_t)(r+1)<height ? source[x*stride+r+1]:0;
-      size_t i=3+y*pitch+x;
-      expected[i]=reference_nearest(scalar(a,b,((uint32_t)position&65535)>>8),expected[i]);
-    }
-    if(trial%2)magik_launcher_flat(actual+3,pitch,source,stride,height,width,rows,q,step);
-    else magik_launcher_project_over_column(actual+3,pitch,source,height,rows,q,step,8,height-8);
-    if(memcmp(actual,expected,sizeof actual)) {
-      fprintf(stderr,"nearest projection mismatch %zu\n",trial); return 26;
-    }
-  }
-  puts("10000 nearest-colour flat/perspective projections match, including alpha, bounds, tails and gaps");
   for (size_t trial = 0; trial < 10000; ++trial) {
     size_t height = next() % 66, rows = next() % 68, pitch = 1 + next() % 7;
     uint16_t src[65], actual[480], expected[480];
