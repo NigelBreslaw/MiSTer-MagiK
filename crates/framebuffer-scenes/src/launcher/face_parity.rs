@@ -241,7 +241,8 @@ fn print_the_face_differences() {
 /// detail colours. Cards whose two bodies are nearly the same (the collection
 /// cards) show no such difference. This pins the relationship, not a count: if
 /// the responsive path starts to honour the compact body, the first assertion
-/// fails and says so.
+/// fails and says so. This is the fallback drawing for a card without artwork;
+/// with the artwork installed (as on a device) the two faces share one body.
 #[test]
 fn the_responsive_compact_face_of_a_flooded_card_is_drawn_in_the_detail_colours() {
     for (id, name, games) in [

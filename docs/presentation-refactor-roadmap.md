@@ -548,13 +548,14 @@ projection kernels are on the 60 fps budget.
    pixels for generic cards and on essentially all of them for artwork cards, so the frame is drawn
    differently; (b) about 2,000-5,300 interior pixels differ even for plain generic faces (not counting the
    compact faces of the cards without an icon, see (d)) and about 16,600 for artwork cards; (c) label bands differ (the title and count sit at different rows and with
-   different spacing); (d) the largest single difference is a **state difference, not a quantisation
-   one**: `native_surface` builds a generic card's body from the *detail* surface whatever face it is
-   for, so the responsive **compact** face of the cards without an icon (Arcade, Favourites, Settings) is drawn in
-   the selected-card colours: for Arcade it differs from the fixed detail face on about 11,000 pixels
-   but from the fixed compact face on about 41,000, because the fixed canvas draws the compact face dim. The cards
-   with an icon (Consoles, Computers, Handhelds) have nearly identical compact and detail bodies, so they show no such thing. Whether that is
-   intended on CRT and portrait is for you to say; it is a visible difference between the two UIs today.
+   different spacing); (d) for the **generic fallback** faces (cards drawn without their artwork), the responsive
+   **compact** face of the cards without an icon (Arcade, Favourites, Settings) is drawn in the detail
+   (selected-card) colours: `native_surface` builds a generic card's body from the *detail* surface
+   whatever face it is for, so for Arcade it is about 11,000 pixels from the fixed detail face but about
+   41,000 from the fixed compact face. **This is not what a device shows**: with the card artwork
+   installed there is no such gap (the artwork cases' compact and detail comparisons come out within a
+   percent of each other), and nobody has seen a card change brightness when selected. It is a property
+   of the fallback drawing only, recorded because the test pins it, not a defect to fix.
    Consequence: sharing the face bake for HDMI landscape is a **choice of which renderer is right**, and
    either choice changes visible pixels on the primary HDMI UI. The harness is the instrument for that
    decision; the pinned table will show exactly what a change moves. It is relative by design: a change
