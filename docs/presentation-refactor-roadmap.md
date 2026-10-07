@@ -426,6 +426,15 @@ effect.**
   splitting the carousel into tiles. The pinned test is off under the pixel-changing experiment
   features (`card-axis-filter`, `card-fast-quantisation`), which have their own output.
 
+**PR 17 (in progress): the card row's rows and columns are one value.**
+
+- `CardRow { rows, clip }` is what the card row owns of an output. The 960x540 canvas has named
+  constants for it (`ROWS` 120..495, `RIGHT` 934, `LEFT` 296, `LEFT_SLIDING` 268 for levels that slide
+  their cards) and `Layout::card_row()` derives one from its margins. `clear_card_rows` and
+  `draw_card_strips` take it, so the tile renderer, the frame renderer, the responsive layout and the
+  level trick all name the same thing; the level trick's own clear-and-strip loop (a fifth copy) is gone.
+  The base poses' clips and the sliding-row poses use the same constants. No pixel changes.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
@@ -519,9 +528,9 @@ projection kernels are on the 60 fps budget.
    clear-the-rows and draw-in-strips composition, four copies. They are now `clear_card_rows` and
    `draw_card_strips`, used by the HDMI landscape tile renderer, the whole-frame renderer, the
    responsive layout and the level trick, with 60 pinned raster hashes and a tile-versus-frame
-   equivalence test as the guard. Still to do: give both paths one geometry value (card size, row
-   centre, pitch, clip, rows) instead of constants spread over `slot_geometry`, `Layout::map_pose`
-   and the tile renderer's `120..495`.
+   equivalence test as the guard. The rows and columns the card row owns are now one value,
+   `CardRow` (see PR 17). Still to do: the card size, row centre and pitch, which the fixed canvas keeps
+   in `slot_geometry` and the base poses and the responsive layout re-derives in `Layout::map_pose`.
 2. Make `Layout` able to express the fixed canvas's card geometry (180x252, its centre and pitch) and
    assert the card row is pixel-identical to the fixed canvas's. Only then can the face and projection
    code be shared for HDMI landscape without a visual change.

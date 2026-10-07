@@ -22,9 +22,9 @@ pub(super) fn slot(k: usize) -> Pose {
         height: 252 * scale,
         angle: if k == 0 { 0 } else { TILT },
         brightness: BRIGHTNESS[k],
-        clip: (268, 934),
-        body_clip: (268, 934),
-        vertical_clip: (120, 438, 495),
+        clip: CardRow::canvas(true).clip,
+        body_clip: CardRow::canvas(true).clip,
+        vertical_clip: (CardRow::ROWS.0, 438, CardRow::ROWS.1),
     }
 }
 

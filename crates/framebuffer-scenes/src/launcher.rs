@@ -647,11 +647,8 @@ impl LauncherFramePreparer {
     }
 
     pub fn carousel_clip(&self) -> (usize, usize) {
-        if self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides) {
-            (268, 934)
-        } else {
-            (296, 934)
-        }
+        CardRow::canvas(self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides))
+            .clip
     }
     pub fn render_tile(
         &self,
@@ -690,18 +687,28 @@ impl LauncherFramePreparer {
         pixels: &mut [Rgb565Pixel],
         clip: (usize, usize),
     ) {
-        assert!(clip.0 >= self.carousel_clip().0 && clip.0 <= clip.1 && clip.1 <= 934);
+        assert!(clip.0 >= self.carousel_clip().0 && clip.0 <= clip.1 && clip.1 <= CardRow::RIGHT);
         {
             #[cfg(feature = "launcher-profile")]
             let _clear = crate::launcher_profile::span("flip.clear");
-            clear_card_rows(pixels, LOGICAL_WIDTH, (120, 495), clip);
+            clear_card_rows(
+                pixels,
+                LOGICAL_WIDTH,
+                CardRow::canvas(false).with_clip(clip),
+            );
         }
         if !self.faces.is_empty() {
             let plan = self.trick.map_or_else(
                 || build_carousel_plan(&self.faces, request.frame, self.cyclic),
                 |plan| plan.with_faces(&self.faces),
             );
-            draw_card_strips(pixels, LOGICAL_WIDTH, clip, &plan, scratch);
+            draw_card_strips(
+                pixels,
+                LOGICAL_WIDTH,
+                CardRow::canvas(false).with_clip(clip),
+                &plan,
+                scratch,
+            );
         }
     }
     /// Compact scratch for `render_tile` only, not whole-card preparation.
@@ -1128,8 +1135,10 @@ impl PreparedLauncher {
             clear_card_rows(
                 &mut self.logical,
                 LOGICAL_WIDTH,
-                (rect.y0, rect.y1),
-                (rect.x0, rect.x1),
+                CardRow {
+                    rows: (rect.y0, rect.y1),
+                    clip: (rect.x0, rect.x1),
+                },
             );
         }
         #[cfg(feature = "launcher-profile")]
@@ -1139,11 +1148,11 @@ impl PreparedLauncher {
             return;
         }
         let plan = build_carousel_plan(&self.faces, frame, self.cyclic);
-        let clip = (self.carousel_clip().0, 934);
+        let row = CardRow::canvas(false).with_clip((self.carousel_clip().0, CardRow::RIGHT));
         draw_card_strips(
             &mut self.logical,
             LOGICAL_WIDTH,
-            clip,
+            row,
             &plan,
             &mut self.flip_columns,
         );
@@ -1178,9 +1187,9 @@ impl PreparedLauncher {
     fn logical_damage(&self) -> [crate::Rgb565Rect; 1] {
         [crate::Rgb565Rect {
             x0: self.carousel_clip().0,
-            y0: 120,
-            x1: 934,
-            y1: 495,
+            y0: CardRow::ROWS.0,
+            x1: CardRow::RIGHT,
+            y1: CardRow::ROWS.1,
         }]
     }
 
@@ -1513,9 +1522,9 @@ fn continuous_geometry(
         angle: slot_angle(relative)
             + (slot_angle(destination) - slot_angle(relative)) * progress / GEOMETRY_ONE,
         brightness: 256,
-        clip: (296, 934),
-        body_clip: (296, 934),
-        vertical_clip: (120, 438, 495),
+        clip: CardRow::canvas(false).clip,
+        body_clip: CardRow::canvas(false).clip,
+        vertical_clip: (CardRow::ROWS.0, 438, CardRow::ROWS.1),
     }
 }
 
@@ -1620,9 +1629,11 @@ fn build_carousel_plan<'a>(
             let depth = GEOMETRY_ONE + local * sin / (cover.width * 4);
             let edge = (cover.x + cover.width / 2 + local * cos / depth) / GEOMETRY_ONE;
             if side > 0 {
-                pose.body_clip.0 = ((edge - 8).max(0) as usize).clamp(296, 934);
+                pose.body_clip.0 =
+                    ((edge - 8).max(0) as usize).clamp(CardRow::LEFT, CardRow::RIGHT);
             } else {
-                pose.body_clip.1 = ((edge + 8).max(0) as usize).clamp(296, 934);
+                pose.body_clip.1 =
+                    ((edge + 8).max(0) as usize).clamp(CardRow::LEFT, CardRow::RIGHT);
             }
         }
         let prominence = if *relative == 0 {
@@ -1687,31 +1698,67 @@ fn build_carousel_plan<'a>(
     CarouselPlan { items, row: false }
 }
 
-/// Clear the rows the card row owns, within `clip`. Everything the carousel
-/// draws (projected edges and reflections included) stays inside them, so the
-/// chrome around the row never needs restoring.
-fn clear_card_rows(
-    pixels: &mut [Rgb565Pixel],
-    stride: usize,
-    rows: (usize, usize),
-    clip: (usize, usize),
-) {
-    for y in rows.0..rows.1 {
-        pixels[y * stride + clip.0..y * stride + clip.1].fill(Rgb565Pixel(BACKGROUND));
+/// The part of an output the card row owns: the rows it clears and draws in,
+/// and the columns it is clipped to. Everything the carousel draws (projected
+/// edges and reflections included) stays inside it, so the chrome around the row
+/// never needs restoring. The 960x540 canvas has constants for it; the
+/// responsive layout derives one from its margins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CardRow {
+    pub rows: (usize, usize),
+    pub clip: (usize, usize),
+}
+
+impl CardRow {
+    /// The 960x540 canvas: the rows of the card row...
+    pub const ROWS: (usize, usize) = (120, 495);
+    /// ...the column where the carousel ends on the right...
+    pub const RIGHT: usize = 934;
+    /// ...and where it begins on the left, further left when cards slide
+    /// between slots (nested levels and the level trick).
+    pub const LEFT: usize = 296;
+    pub const LEFT_SLIDING: usize = 268;
+
+    /// The canvas card row for a level that does or does not slide its cards.
+    pub const fn canvas(sliding: bool) -> Self {
+        Self {
+            rows: Self::ROWS,
+            clip: (
+                if sliding {
+                    Self::LEFT_SLIDING
+                } else {
+                    Self::LEFT
+                },
+                Self::RIGHT,
+            ),
+        }
+    }
+
+    /// The same rows, narrowed to one tile's columns.
+    pub const fn with_clip(self, clip: (usize, usize)) -> Self {
+        Self { clip, ..self }
     }
 }
 
-/// Draw `plan` across `clip` in independent strips: each strip finishes every
-/// reflection before its bodies, then reuses the same cache-local scratch for
-/// the next. The one place the HDMI landscape and responsive layouts compose
-/// their card row.
+/// Clear the card row to the background.
+fn clear_card_rows(pixels: &mut [Rgb565Pixel], stride: usize, row: CardRow) {
+    for y in row.rows.0..row.rows.1 {
+        pixels[y * stride + row.clip.0..y * stride + row.clip.1].fill(Rgb565Pixel(BACKGROUND));
+    }
+}
+
+/// Draw `plan` across the card row's columns in independent strips: each strip
+/// finishes every reflection before its bodies, then reuses the same
+/// cache-local scratch for the next. The one place every layout composes its
+/// card row.
 fn draw_card_strips(
     pixels: &mut [Rgb565Pixel],
     stride: usize,
-    clip: (usize, usize),
+    row: CardRow,
     plan: &CarouselPlan<'_>,
     scratch: &mut [crate::launcher_flip::Scratch],
 ) {
+    let clip = row.clip;
     let width = crate::launcher_flip::STRIP_WIDTH;
     for left in (clip.0..clip.1).step_by(width) {
         draw_carousel_plan(
