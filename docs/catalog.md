@@ -26,6 +26,10 @@ Five collections have prepared adapters because their upstream shape is known:
 - Arcade combines Update_All metadata with installed MRA, core, and ROM
   validation. It also discovers supplemental MRAs and cores, including beta
   content, but an external-ROM MRA is never published without its required ROM.
+  Screenshot identities preserve existing metadata/archive keys, then use the
+  MRA's own setname for embedded-ROM games such as Pong and Breakout. An MRA
+  without a setname gets a namespaced core/filename key, independent of its
+  parent-family grouping. Missing artwork does not remove that identity.
 - Amiga uses AmigaVision metadata and falls back to installed custom content.
 - DOS uses the complete 0MHz inventory and falls back to installed custom
   content.

@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 15;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 16;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 const MAX_DISCOVERY_ENTRIES: usize = 4_000_000;
 const MAX_DISCOVERY_DEPTH: usize = 256;
@@ -839,12 +839,13 @@ fn scan_arcade_candidates(
                 game.category = metadata.category.clone();
                 game.players = metadata.players;
                 game.control = metadata.control.clone();
-                game.preview_asset_key =
-                    arcade_preview_asset_key(&metadata.identity_id, &metadata.family_id);
             }
-            if game.preview_asset_key.is_empty() {
-                game.preview_asset_key = arcade_requirement_preview_asset_key(&row.primary_rom);
-            }
+            game.preview_asset_key = arcade_screenshot_asset_key(
+                row.catalog_metadata.as_ref(),
+                &row.header,
+                &row.primary_rom,
+                &path,
+            );
             let identity_id =
                 arcade_identity_id(row.catalog_metadata.as_ref(), &row.header, &row.primary_rom);
             let family_id = row
@@ -910,20 +911,21 @@ fn scan_arcade_candidates(
             .catalog_metadata
             .as_ref()
             .map(|metadata| metadata.title.clone())
-            .or(inspection.header.name)
+            .or_else(|| inspection.header.name.clone())
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| display_name(&path));
         let mut game = direct_row("arcade", "Arcade", &path, title);
         if let Some(metadata) = &inspection.catalog_metadata {
-            game.preview_asset_key =
-                arcade_preview_asset_key(&metadata.identity_id, &metadata.family_id);
             game.category = metadata.category.clone();
             game.players = metadata.players;
             game.control = metadata.control.clone();
         }
-        if game.preview_asset_key.is_empty() {
-            game.preview_asset_key = arcade_requirement_preview_asset_key(&inspection.primary_rom);
-        }
+        game.preview_asset_key = arcade_screenshot_asset_key(
+            inspection.catalog_metadata.as_ref(),
+            &inspection.header,
+            &inspection.primary_rom,
+            &path,
+        );
         game.year = inspection
             .header
             .year
@@ -1619,6 +1621,47 @@ fn arcade_preview_asset_key(identity_id: &str, family_id: &str) -> String {
         family_id
     };
     key.trim().to_ascii_lowercase()
+}
+
+/// Preserve established pack keys; embedded-ROM MRAs still need screenshot identities.
+fn arcade_screenshot_asset_key(
+    metadata: Option<&crate::arcade_updater_index::ArcadeUpdaterCatalogMetadata>,
+    header: &crate::mra_header::MraHeader,
+    requirement: &PrimaryRomRequirement,
+    path: &Path,
+) -> String {
+    let key = metadata
+        .map(|metadata| arcade_preview_asset_key(&metadata.identity_id, &metadata.family_id))
+        .filter(|key| !key.is_empty())
+        .unwrap_or_else(|| arcade_requirement_preview_asset_key(requirement));
+    if !key.is_empty() {
+        return key;
+    }
+    if let Some(setname) = header
+        .setname
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        return setname.to_ascii_lowercase();
+    }
+    // A parent is a grouping hint, not proof that this game has its parent's picture.
+    let core = header
+        .rbf
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let name = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    format!(
+        "mra__{}__{}",
+        encode_component(&core),
+        encode_component(&name)
+    )
 }
 
 fn arcade_requirement_preview_asset_key(requirement: &PrimaryRomRequirement) -> String {
@@ -2414,6 +2457,167 @@ mod tests {
     }
 
     #[test]
+    fn embedded_arcade_screenshot_keys_work_on_parsed_and_updater_paths() {
+        for indexed in [false, true] {
+            let root = crate::test_support::unique_temp_dir("embedded-arcade-screenshot-keys");
+            fs::create_dir_all(root.join("_Arcade/cores")).unwrap();
+            fs::create_dir_all(root.join("mister-magik")).unwrap();
+            fs::write(
+                root.join("_Arcade/cores/EmbeddedCore_20261007.rbf"),
+                b"core",
+            )
+            .unwrap();
+            let mut rows = Vec::new();
+            for (title, setname, parent) in [
+                ("Breakout", "breakout", ""),
+                ("Pong", "pong", ""),
+                ("Puck Man", "puckman", ""),
+                ("Pac-Manic Miner", "", "puckman"),
+            ] {
+                let path = format!("_Arcade/{title}.mra");
+                let xml = format!(
+                    "<misterromdescription><name>{title}</name><rbf>EmbeddedCore</rbf><setname>{setname}</setname><parent>{parent}</parent><rom index=\"0\"><part>00</part></rom></misterromdescription>"
+                );
+                let inspection = crate::mra_header::inspect(xml.as_bytes()).unwrap();
+                assert_eq!(inspection.primary_rom, PrimaryRomRequirement::None);
+                fs::write(
+                    root.join(&path),
+                    if indexed {
+                        b"invalid XML".as_slice()
+                    } else {
+                        xml.as_bytes()
+                    },
+                )
+                .unwrap();
+                rows.push(crate::arcade_updater_index::ArcadeUpdaterRow {
+                    path,
+                    source_id: "distribution".to_string(),
+                    size: xml.len() as u64,
+                    md5: "c".repeat(32),
+                    header: inspection.header,
+                    primary_rom: inspection.primary_rom,
+                    catalog_metadata: inspection.catalog_metadata,
+                });
+            }
+            if indexed {
+                rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+                crate::arcade_updater_index::ArcadeUpdaterIndex {
+                    sources: [
+                        "alternatives",
+                        "arcade-offset",
+                        "coinop",
+                        "distribution",
+                        "jtcores",
+                    ]
+                    .into_iter()
+                    .map(|id| crate::arcade_updater_index::ArcadeUpdaterSource {
+                        id: id.to_string(),
+                        revision: "a".repeat(40),
+                        database_sha256: "b".repeat(64),
+                    })
+                    .collect(),
+                    rows,
+                }
+                .write(&root.join("mister-magik/arcade-updater-index-v1.lz4b"))
+                .unwrap();
+            }
+            let mut report = FastSourceSystemReport::default();
+            let scan = scan_arcade(&root, &mut report).unwrap();
+            assert_eq!(scan.games.len(), 3, "indexed={indexed}");
+            assert_eq!(scan.variants.len(), 1);
+            for (title, key) in [
+                ("Breakout", "breakout"),
+                ("Pong", "pong"),
+                ("Puck Man", "puckman"),
+            ] {
+                let game = scan.games.iter().find(|game| game.title == title).unwrap();
+                assert_eq!(game.preview_asset_key, key);
+                assert!(!game.has_preview); // Identity alone does not claim an image exists.
+            }
+            let variant = &scan.variants[0];
+            assert_eq!(variant.game.title, "Pac-Manic Miner");
+            assert_eq!(
+                variant.game.preview_asset_key,
+                "mra__embeddedcore__pac-manic%20miner"
+            );
+            assert_ne!(variant.game.preview_asset_key, "puckman");
+            assert_eq!(
+                variant.family_stable_key,
+                scan.games
+                    .iter()
+                    .find(|game| game.title == "Puck Man")
+                    .unwrap()
+                    .stable_key
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn arcade_screenshot_fallback_preserves_established_keys_and_distinct_mras() {
+        let header = crate::mra_header::MraHeader {
+            rbf: Some("ExampleCore".to_string()),
+            setname: Some("  Pong  ".to_string()),
+            parent: Some("wrong-picture".to_string()),
+            ..Default::default()
+        };
+        let path = Path::new("/media/fat/_Arcade/Pong.mra");
+        let metadata = crate::arcade_updater_index::ArcadeUpdaterCatalogMetadata {
+            identity_id: "clone".to_string(),
+            family_id: "existing-family".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            arcade_screenshot_asset_key(
+                Some(&metadata),
+                &header,
+                &PrimaryRomRequirement::None,
+                path
+            ),
+            "existing-family"
+        );
+        let archive = PrimaryRomRequirement::Archive {
+            namespace: RomNamespace::Mame,
+            setname: "Existing.zip".to_string(),
+        };
+        assert_eq!(
+            arcade_screenshot_asset_key(None, &header, &archive, path),
+            "existing"
+        );
+        assert_eq!(
+            arcade_screenshot_asset_key(None, &header, &PrimaryRomRequirement::None, path),
+            "pong"
+        );
+        let header = crate::mra_header::MraHeader {
+            setname: Some(" ".to_string()),
+            ..header
+        };
+        let first = arcade_screenshot_asset_key(
+            None,
+            &header,
+            &PrimaryRomRequirement::None,
+            Path::new("/media/fat/_Arcade/A B.mra"),
+        );
+        let second = arcade_screenshot_asset_key(
+            None,
+            &header,
+            &PrimaryRomRequirement::Ambiguous,
+            Path::new("/media/fat/_Arcade/A-B.mra"),
+        );
+        assert_ne!(first, second);
+        assert_eq!(
+            first,
+            arcade_screenshot_asset_key(
+                None,
+                &header,
+                &PrimaryRomRequirement::None,
+                Path::new("/media/usb0/_Arcade/A B.mra")
+            )
+        );
+        assert!(first.starts_with("mra__examplecore__"));
+    }
+
+    #[test]
     fn arcade_family_metadata_keeps_one_preferred_game_and_retains_variants() {
         let parent = direct_row(
             "arcade",
@@ -2852,7 +3056,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 15);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 16);
     }
 
     #[test]
