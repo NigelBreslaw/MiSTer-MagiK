@@ -1,5 +1,7 @@
 //! Opt-in application support shared by Mini-MagiK and MiSTer MagiK.
 //! The application supplies its own pixels and confirmed presentation counters.
+// The measurement window is one large `json!` object.
+#![recursion_limit = "256"]
 pub mod frame_evidence;
 pub mod measurement;
 mod preview;

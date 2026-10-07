@@ -145,6 +145,8 @@ struct Job {
     buffer: PreparedLauncherFrame,
     dispatched_at: Instant,
     split: usize,
+    /// Rotate the band into this output's scanout order after drawing it.
+    rotation: Option<crate::Rgb565OutputLayout>,
 }
 struct Ahead {
     preparer: LauncherFramePreparer,
@@ -181,6 +183,9 @@ pub struct ParallelLauncherRenderer {
     geometry: CarouselGeometry,
     retain_bands: bool,
     helper_unmerged: bool,
+    /// The scanout order the helper rotates its band into, if the output is
+    /// rotated, so the presenting thread does not.
+    rotation: Option<crate::Rgb565OutputLayout>,
 }
 fn copy_helper_band(
     destination: &mut [Rgb565Pixel],
@@ -225,9 +230,21 @@ impl ParallelLauncherRenderer {
                 while let Ok(mut job) = received.recv() {
                     let started_at = Instant::now();
                     let sample = ThreadSample::now(clocks);
-                    let right = job.preparer.carousel_clip().1;
+                    let geometry = job.preparer.geometry();
+                    let right = geometry.clip.1;
                     job.preparer
                         .render_tile(job.request, &mut job.buffer, (job.split, right));
+                    match job.rotation {
+                        // Only for a frame of the output it was requested for.
+                        Some(output)
+                            if (output.logical_width(), output.logical_height())
+                                == (geometry.stride, geometry.height) =>
+                        {
+                            job.buffer
+                                .rotate_band(output, geometry.rows, job.split, right);
+                        }
+                        _ => job.buffer.clear_rotated(),
+                    }
                     let (cpu_us, run_delay_us) = ThreadSample::now(clocks).since(sample);
                     let wall_us = micros(started_at);
                     let finished_at = Instant::now();
@@ -273,6 +290,7 @@ impl ParallelLauncherRenderer {
             geometry,
             retain_bands: false,
             helper_unmerged: false,
+            rotation: None,
         })
     }
     pub fn render(
@@ -321,6 +339,7 @@ impl ParallelLauncherRenderer {
                     buffer: self.helper.take().ok_or("helper output unavailable")?,
                     dispatched_at: Instant::now(),
                     split,
+                    rotation: self.rotation,
                 })
                 .map_err(|e| e.to_string())?;
         }
@@ -402,6 +421,8 @@ impl ParallelLauncherRenderer {
         self.storage_bytes = self.primary.storage_bytes() + helper.storage_bytes();
         self.helper = Some(helper);
         self.spare = None;
+        // The output changed: the presenting side asks for a rotation again.
+        self.rotation = None;
         self.split = initial_split(geometry);
         self.rendered_split = self.split;
         self.geometry = geometry;
@@ -440,6 +461,7 @@ impl ParallelLauncherRenderer {
             buffer,
             dispatched_at,
             split,
+            rotation: self.rotation,
         };
         if let Err(error) = sender.send(job) {
             let mut buffer = error.0.buffer;
@@ -490,6 +512,25 @@ impl ParallelLauncherRenderer {
     pub fn rendered_request(&self) -> Option<LauncherFrameRequest> {
         let primary = self.primary.request()?;
         (self.helper.as_ref()?.request() == Some(primary)).then_some(primary)
+    }
+
+    /// Have the helper rotate its band for `output` (or stop, for `None`).
+    /// Takes effect on the next job it is given.
+    pub fn set_rotation(&mut self, rotation: Option<crate::Rgb565OutputLayout>) {
+        self.rotation = rotation;
+    }
+
+    /// The helper's band for `request` already rotated for `output`, if the
+    /// helper did it at this split.
+    pub fn helper_rotated_pixels(
+        &self,
+        request: LauncherFrameRequest,
+        output: crate::Rgb565OutputLayout,
+    ) -> Option<&[Rgb565Pixel]> {
+        self.helper
+            .as_ref()
+            .filter(|buffer| buffer.request() == Some(request))
+            .and_then(|buffer| buffer.rotated_pixels(output, self.rendered_split))
     }
 
     pub fn helper_pixels(&self, request: LauncherFrameRequest) -> Option<&[Rgb565Pixel]> {
@@ -922,6 +963,75 @@ mod tests {
         finished
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("renderer failed or hung: its helper thread likely died");
+    }
+
+    /// A rotation requested for one output must never reach a frame of another
+    /// (the scene changed under it): the helper leaves the band unrotated
+    /// instead of panicking, and the frame still equals the serial one.
+    #[test]
+    fn a_rotation_for_another_output_never_panics_the_helper() {
+        use crate::{OutputRotation, Rgb565OutputLayout};
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+                id: LauncherCardId::Consoles,
+                name,
+                games: Some(12),
+                colour: 0x2a7f,
+            });
+            let data = LauncherData {
+                cards: &cards,
+                selected: 0,
+                library_games: 72,
+                collections: 6,
+                favourites: 1,
+                clock: "12:00",
+                level: LauncherLevel::Root,
+            };
+            let frame = BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: BrowsePhase::Flipping,
+                direction: Some(BrowseDirection::Right),
+                progress_millis: 23_000,
+                duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
+            };
+            let portrait = |rotation| Rgb565OutputLayout::new(540, 960, 960, rotation).unwrap();
+            // Landscape frames with a portrait rotation requested, then the other way.
+            for (scene, layout) in [
+                (
+                    LauncherScene::new(960, 540),
+                    portrait(OutputRotation::Clockwise90),
+                ),
+                (
+                    LauncherScene::new(540, 960),
+                    Rgb565OutputLayout::new(960, 540, 960, OutputRotation::CounterClockwise90)
+                        .unwrap(),
+                ),
+            ] {
+                let mut serial = scene.prepare(data);
+                let mut parallel = scene.prepare(data);
+                let mut renderer =
+                    ParallelLauncherRenderer::new(parallel.frame_preparer(), None, None)
+                        .expect("renderer");
+                renderer.set_rotation(Some(layout));
+                let request = LauncherFrameRequest {
+                    frame,
+                    timestamp_us: 0,
+                    generation: 1,
+                };
+                parallel
+                    .render_parallel_frame(&mut renderer, request)
+                    .unwrap();
+                serial.render_frame(frame);
+                assert!(parallel.pixels() == serial.pixels());
+                assert!(renderer.helper_rotated_pixels(request, layout).is_none());
+            }
+            let _ = done.send(());
+        });
+        finished
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the helper panicked or hung on a rotation for another output");
     }
 
     /// Serial and two-band microseconds per flip frame for each output:

@@ -1195,6 +1195,14 @@ impl LauncherCardHomeSession {
                 .is_none_or(|pending| pending.scene == self.scene)
     }
 
+    /// Have the helper rotate its band for this output, so the presenting
+    /// thread only rotates its own.
+    pub(super) fn set_output_layout(&mut self, output: Option<Rgb565OutputLayout>) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_rotation(output);
+        }
+    }
+
     /// The bands of the frame just rendered with `render_direct_bands`,
     /// rotated into scanout order. `None` if the helper band is not the
     /// current frame (the caller then falls back to the Slint path).
@@ -1258,7 +1266,18 @@ impl LauncherCardHomeSession {
             chrome_damage = Some(list);
         }
         rotate_rect(output, source, &mut physical.frame, bands[0]);
-        rotate_rect(output, helper, &mut physical.helper, bands[1]);
+        // The helper normally rotated its band when it drew it.
+        let helper = match self
+            .renderer
+            .as_ref()
+            .and_then(|renderer| renderer.helper_rotated_pixels(self.last_request, output))
+        {
+            Some(rotated) => rotated,
+            None => {
+                rotate_rect(output, helper, &mut physical.helper, bands[1]);
+                &physical.helper
+            }
+        };
         let damage = bands.map(|band| {
             let rect = output.logical_rect_to_physical(band);
             DirtyRect {
@@ -1270,7 +1289,7 @@ impl LauncherCardHomeSession {
         });
         Some(DirectBands {
             frame: &physical.frame,
-            helper: &physical.helper,
+            helper,
             damage,
             chrome_damage,
         })
@@ -2205,6 +2224,64 @@ mod tests {
             OutputRotation::CounterClockwise90,
         ] {
             let output = Rgb565OutputLayout::new(540, 960, 960, rotation).unwrap();
+            let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
+            serial.render_frame(frame);
+            let mut expected = vec![Rgb565Pixel(0); output.len()];
+            rotate_rect(
+                output,
+                serial.pixels(),
+                &mut expected,
+                Rgb565Rect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 540,
+                    y1: 960,
+                },
+            );
+            let bands = session.direct_physical_bands(output).expect("bands");
+            let mut composed = bands.frame.to_vec();
+            let rect = bands.damage[1];
+            for y in rect.y0..rect.y1 {
+                let range = y * 960 + rect.x0..y * 960 + rect.x1;
+                composed[range.clone()].copy_from_slice(&bands.helper[range]);
+            }
+            assert!(composed == expected, "{rotation:?}");
+        }
+    }
+
+    #[test]
+    fn the_helper_rotates_its_own_band_and_the_frame_is_unchanged() {
+        use mister_magik_framebuffer_scenes::OutputRotation;
+        let scene = LauncherScene::new(540, 960);
+        let level = snapshot();
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 1,
+            phase: BrowsePhase::Flipping,
+            direction: Some(BrowseDirection::Right),
+            progress_millis: 230,
+            duration_millis: 460,
+        };
+        for rotation in [
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let output = Rgb565OutputLayout::new(540, 960, 960, rotation).unwrap();
+            let mut session =
+                LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+            session.set_output_layout(Some(output));
+            session.update(scene, &level, 0, 0.5, "07:28", 230, true, Some(frame), None);
+            session.render_direct_bands();
+            // The helper rotated its band while it drew it.
+            assert!(
+                session
+                    .renderer
+                    .as_ref()
+                    .unwrap()
+                    .helper_rotated_pixels(session.last_request, output)
+                    .is_some(),
+                "{rotation:?}"
+            );
             let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
             serial.render_frame(frame);
             let mut expected = vec![Rgb565Pixel(0); output.len()];

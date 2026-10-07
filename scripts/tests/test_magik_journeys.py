@@ -111,6 +111,31 @@ def test_catalog_moves_at_either_boundary_and_restores_selection(
     assert state == {"selection": initial, "open": False}
 
 
+@pytest.mark.parametrize("dialog", [True, False])
+def test_orientation_change_only_keeps_when_the_dialog_is_up(
+    actions, monkeypatch, dialog
+):
+    # Choosing the current orientation shows no Keep/Revert dialog; a key sent
+    # anyway would land on the next setting (Reduce motion) and change it.
+    keys = []
+    monkeypatch.setattr(actions, "_open_settings_card", lambda _: None)
+    monkeypatch.setattr(actions, "_settings_open", lambda _: True)
+    monkeypatch.setattr(actions, "_focus_label", lambda *_: None)
+    monkeypatch.setattr(actions, "_press_key", lambda _, key: keys.append(key))
+    monkeypatch.setattr(
+        actions,
+        "_selected_labels",
+        lambda _: (
+            ["Screen orientation", "Revert 14"] if dialog else ["Screen orientation"]
+        ),
+    )
+    actions.set_screen_orientation(object(), "normal", sleep=lambda _: None)
+    # open the combo, to the top (3 ups), choose, [keep: down + enter], home
+    expected = ["\n", "", "", "", "\n"]
+    expected += ["", "\n"] if dialog else []
+    assert keys == [*expected, ""]
+
+
 def test_arcade_hub_needs_a_second_enter_to_reach_the_list(actions, monkeypatch):
     # The CRT and HDMI portrait show the Arcade hub first: the selection moves
     # off the Arcade card without the list appearing.
