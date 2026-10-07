@@ -529,6 +529,28 @@ effect.**
   they could not build and CI never enabled the feature. They use `02_consoles.rgb888` and CI's
   framebuffer-scenes step now runs them.
 
+**PR 24 (in progress): portrait level changes take the direct path, and the harness drives the CRT.**
+
+- A level change on HDMI portrait presents through the rotated bands like browsing does. Only the
+  chrome regions the level change fades are rotated and copied each frame; the card bands are the
+  two-band render from PR 21. Rotation uses the shared tiled/NEON kernel (`Rgb565SurfaceMut`), not a
+  per-pixel gather: the first version's gather was 19% of all samples and held the route at about
+  30 fps. One predicate, `can_render_direct`, now gates the direct path, the helper's render-ahead
+  and the bands, so portrait gets the same render-ahead as landscape instead of a lesser copy. Device,
+  HDMI portrait, Home to Consoles and back (`check animation-app`, route consoles): dropped frames 234
+  of 478 presentations before, 35 of 450 after. Per step that is 4, 11, 3 and 9 dropped of about 60
+  frames for the four level changes; the 72 presentations that still go through Slint are the hub and
+  games-list steps of the route, not card frames. What remains on a level change is the primary band
+  drawn on the main thread (render-ahead only hides the helper's band) and software integer division
+  in the shared projection (`__udivsi3`, 5% of samples).
+- `check journeys` could not open the Arcade list on CRT: the CRT shows the Arcade hub first, with GAMES
+  selected, so the list needs a second Enter (`_open_arcade_games`). Found with the framebuffer capture.
+  The journeys pass on CRT 240p.
+- New `check arcade-scroll` (and `--profile`) holds Down in the Arcade list for a measured window, via a
+  `launcher_hold_direction` option on the tooling measure request. CRT 240p: 481 presentations in 8 s
+  (60 fps), 0 dropped, 15.8 ms frame to present, 44% process CPU. The CRT Arcade list needs no direct
+  path.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

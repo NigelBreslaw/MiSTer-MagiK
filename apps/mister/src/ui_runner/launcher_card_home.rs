@@ -24,11 +24,62 @@ use mister_magik_framebuffer_scenes::launcher_navigation::{
 use mister_magik_framebuffer_scenes::launcher_parallel::{
     ParallelFrameTiming, ParallelLauncherRenderer,
 };
-use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565Pixel, Rgb565Rect};
+use mister_magik_framebuffer_scenes::{
+    Rgb565OutputLayout, Rgb565Pixel, Rgb565Rect, Rgb565SurfaceMut,
+};
 use std::sync::Arc;
 #[path = "launcher_card_preparation.rs"]
 mod preparation;
 use preparation::{HomePreparation, PreparedContent};
+
+/// Rotate a logical rectangle of `source` into the physical `destination` with
+/// the shared tiled (NEON where available) rotation kernel.
+fn rotate_rect(
+    output: Rgb565OutputLayout,
+    source: &[Rgb565Pixel],
+    destination: &mut [Rgb565Pixel],
+    rect: Rgb565Rect,
+) {
+    let mut surface = Rgb565SurfaceMut::new(destination, output)
+        .expect("a rotated buffer sized for its output layout");
+    assert!(surface.copy_rect_strided(
+        rect.x0,
+        rect.y0,
+        rect.width(),
+        rect.height(),
+        source,
+        output.logical_width(),
+        rect.x0,
+        rect.y0,
+    ));
+}
+
+/// The logical rectangles of chrome a level change fades, as the spans the
+/// native path copies coalesced into bands of 32 rows.
+fn level_chrome_rects(prepared: &PreparedLauncher, width: usize) -> Vec<Rgb565Rect> {
+    let mut bands: Vec<(usize, Rgb565Rect)> = Vec::new();
+    for (start, end) in prepared.level_chrome_copy_spans() {
+        let y = start / width;
+        let (x0, x1) = (start % width, (end - 1) % width + 1);
+        match bands.iter_mut().find(|(band, _)| *band == y / 32) {
+            Some((_, rect)) => {
+                rect.x0 = rect.x0.min(x0);
+                rect.x1 = rect.x1.max(x1);
+                rect.y1 = rect.y1.max(y + 1);
+            }
+            None => bands.push((
+                y / 32,
+                Rgb565Rect {
+                    x0,
+                    y0: y,
+                    x1,
+                    y1: y + 1,
+                },
+            )),
+        }
+    }
+    bands.into_iter().map(|(_, rect)| rect).collect()
+}
 
 /// A rotated output's physical copies of the card frame: the whole frame
 /// (chrome and the primary band) and the helper band, each in scanout order.
@@ -46,6 +97,8 @@ pub(super) struct DirectBands<'a> {
     pub frame: &'a [Rgb565Pixel],
     pub helper: &'a [Rgb565Pixel],
     pub damage: [DirtyRect; 2],
+    /// The rotated chrome a level change fades this frame; `None` outside one.
+    pub chrome_damage: Option<DirtyRectList>,
 }
 
 struct VisiblePrepared(Option<Box<PreparedLauncher>>);
@@ -862,7 +915,7 @@ impl LauncherCardHomeSession {
     /// Queue a helper band for exactly the next FrameClock step. Do not cross
     /// the preparation/swap or landing boundaries, where state may change.
     pub(super) fn prepare_helper_ahead(&mut self, next_ms: u64) {
-        if !self.can_render_native() || next_ms <= self.now_ms {
+        if !self.can_render_direct() || next_ms <= self.now_ms {
             return;
         }
         let Some(trick) = self.trick.as_ref() else {
@@ -911,7 +964,7 @@ impl LauncherCardHomeSession {
         visual_index: f32,
         nested_frame: Option<BrowseFrame>,
     ) {
-        if !self.can_render_native() || self.trick.is_some() || next_ms <= self.now_ms {
+        if !self.can_render_direct() || self.trick.is_some() || next_ms <= self.now_ms {
             return;
         }
         let frame = nested_frame.unwrap_or_else(|| {
@@ -1127,28 +1180,19 @@ impl LauncherCardHomeSession {
         self.invalidate_compositor();
         self.compositor_stale = true;
     }
-    pub(super) fn can_render_native(&self) -> bool {
+    /// Whether the card frame can go straight into the hidden scanout slot,
+    /// without a Slint raster, with its next frame rendered ahead: native HDMI
+    /// landscape and HDMI portrait, level changes included. One predicate gates
+    /// the direct path, the helper's render-ahead and the bands, so no output
+    /// runs a lesser copy of the same system.
+    pub(super) fn can_render_direct(&self) -> bool {
         self.active
-            && self.scene == LauncherScene::new(960, 540)
+            && (self.scene == LauncherScene::new(960, 540) || self.scene.is_hdmi_portrait())
             && self.renderer.is_some()
             && self
                 .pending
                 .as_ref()
                 .is_none_or(|pending| pending.scene == self.scene)
-    }
-    /// Whether the card frame can go straight into the hidden scanout slot,
-    /// without a Slint raster: native HDMI landscape, and HDMI portrait
-    /// outside a level change (its trick still renders on one thread).
-    pub(super) fn can_render_direct(&self) -> bool {
-        self.can_render_native()
-            || (self.active
-                && self.scene.is_hdmi_portrait()
-                && self.trick.is_none()
-                && self.renderer.is_some()
-                && self
-                    .pending
-                    .as_ref()
-                    .is_none_or(|pending| pending.scene == self.scene))
     }
 
     /// The bands of the frame just rendered with `render_direct_bands`,
@@ -1158,11 +1202,6 @@ impl LauncherCardHomeSession {
         &mut self,
         output: Rgb565OutputLayout,
     ) -> Option<DirectBands<'_>> {
-        // A level change fades the chrome without a new generation, and its
-        // frames are not the browse bands this rotates.
-        if self.trick.is_some() {
-            return None;
-        }
         let geometry = self.prepared.frame_preparer().geometry();
         let split = self.renderer.as_ref()?.rendered_split();
         let helper = self.renderer.as_ref()?.helper_pixels(self.last_request)?;
@@ -1188,7 +1227,8 @@ impl LauncherCardHomeSession {
         physical.helper.resize(output.len(), Rgb565Pixel(0));
         let source = self.prepared.pixels();
         if physical.chrome != Some((self.content_generation, output)) {
-            output.gather_logical_rect(
+            rotate_rect(
+                output,
                 source,
                 &mut physical.frame,
                 Rgb565Rect {
@@ -1200,8 +1240,25 @@ impl LauncherCardHomeSession {
             );
             physical.chrome = Some((self.content_generation, output));
         }
-        output.gather_logical_rect(source, &mut physical.frame, bands[0]);
-        output.gather_logical_rect(helper, &mut physical.helper, bands[1]);
+        // A level change fades parts of the chrome without a new generation:
+        // rotate and copy only those regions each frame.
+        let mut chrome_damage = None;
+        if self.trick.is_some() {
+            let mut list = DirtyRectList::new();
+            for rect in level_chrome_rects(&self.prepared, self.scene.width) {
+                rotate_rect(output, source, &mut physical.frame, rect);
+                let rect = output.logical_rect_to_physical(rect);
+                list.push(DirtyRect {
+                    x0: rect.x0,
+                    y0: rect.y0,
+                    x1: rect.x1,
+                    y1: rect.y1,
+                });
+            }
+            chrome_damage = Some(list);
+        }
+        rotate_rect(output, source, &mut physical.frame, bands[0]);
+        rotate_rect(output, helper, &mut physical.helper, bands[1]);
         let damage = bands.map(|band| {
             let rect = output.logical_rect_to_physical(band);
             DirtyRect {
@@ -1215,6 +1272,7 @@ impl LauncherCardHomeSession {
             frame: &physical.frame,
             helper: &physical.helper,
             damage,
+            chrome_damage,
         })
     }
 
@@ -1984,7 +2042,7 @@ mod tests {
         session.update(portrait, &level, 0, 0.0, "07:28", 16, false, None, None);
         let entered = entered_rx.recv_timeout(Duration::from_secs(5));
         let old_scene_offered = session.scene_ready(portrait);
-        let old_direct_offered = session.can_render_native();
+        let old_direct_offered = session.can_render_direct();
         let _ = release_tx.send(());
         assert!(entered.is_ok());
         assert!(!old_scene_offered);
@@ -2106,7 +2164,7 @@ mod tests {
         let mut serial = prepare(scene, &level, 1, "07:28", &session.fonts);
         serial.render_frame(session.frame);
         assert_eq!(session.render(), serial.pixels());
-        assert!(session.can_render_native());
+        assert!(session.can_render_direct());
         assert_eq!(session.current_request().timestamp_us, 32_000);
     }
 
@@ -2125,8 +2183,9 @@ mod tests {
             duration_millis: 460,
         };
         session.update(scene, &level, 0, 0.5, "07:28", 230, true, Some(frame), None);
-        assert!(session.can_render_direct() && !session.can_render_native());
-        // A level change starting on a rotated output has no native chrome spans.
+        assert!(session.can_render_direct());
+        // A level change on a rotated output has no native chrome spans; its
+        // whole-frame damage comes from the rotated bands.
         assert!(session.chrome_copy_damage(true).iter().next().is_none());
         session.render_direct_bands();
         // A new request (a level change starting after the render) leaves no
@@ -2149,7 +2208,8 @@ mod tests {
             let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
             serial.render_frame(frame);
             let mut expected = vec![Rgb565Pixel(0); output.len()];
-            output.gather_logical_rect(
+            rotate_rect(
+                output,
                 serial.pixels(),
                 &mut expected,
                 Rgb565Rect {
@@ -2223,8 +2283,8 @@ mod tests {
                 scene == LauncherScene::new(960, 540)
             );
             assert_eq!(
-                session.can_render_native(),
-                scene == LauncherScene::new(960, 540)
+                session.can_render_direct(),
+                scene == LauncherScene::new(960, 540) || scene.is_hdmi_portrait()
             );
             session.update(scene, &snapshot(), 0, 0.0, "07:29", 32, true, None, None);
             let expected = prepare(scene, &snapshot(), 0, "07:29", &session.fonts);
@@ -3013,7 +3073,7 @@ mod tests {
     }
 
     #[test]
-    fn a_portrait_level_change_never_presents_through_the_direct_bands() {
+    fn a_portrait_level_change_presents_through_the_rotated_bands() {
         use mister_magik_framebuffer_scenes::OutputRotation;
         let scene = LauncherScene::new(540, 960);
         let output = Rgb565OutputLayout::new(540, 960, 960, OutputRotation::Clockwise90).unwrap();
@@ -3033,13 +3093,59 @@ mod tests {
             Some("menu:consoles"),
         );
         wait_trick_ready(&mut session, scene, &consoles(), 0, "21:37", 16);
-        session.update(scene, &consoles(), 0, 0.0, "21:37", 200, true, None, None);
-        assert!(session.is_level_trick_active());
-        assert!(!session.can_render_direct());
-        // Two bands now draw the trick, so the helper band matches the request:
-        // the trick check is what keeps its frames off the direct path.
-        session.render_direct_bands();
-        assert!(session.direct_physical_bands(output).is_none());
+        // Several frames in a row: after the first, only the fading chrome is
+        // rotated again, so each frame must still equal the serial one.
+        for now in [200, 216, 232, 248] {
+            session.update(scene, &consoles(), 0, 0.0, "21:37", now, true, None, None);
+            assert!(session.is_level_trick_active());
+            assert!(session.can_render_direct());
+            session.render_direct_bands();
+            let trick = session.trick.as_ref().unwrap();
+            let elapsed = (session.now_ms - trick.started_ms) as u32;
+            assert!(
+                !trick.dealing && elapsed < LEVEL_TRICK_EDGE_MILLIS,
+                "a gather frame"
+            );
+            let mut expected = prepare(
+                scene,
+                &snapshot(),
+                trick.source_selected,
+                "21:37",
+                &session.fonts,
+            );
+            expected.render_level_gather_to(
+                trick.source_selected,
+                LevelChange::Descend,
+                elapsed,
+                trick.destination_slot,
+            );
+            let mut rotated = vec![Rgb565Pixel(0); output.len()];
+            rotate_rect(
+                output,
+                expected.pixels(),
+                &mut rotated,
+                Rgb565Rect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 540,
+                    y1: 960,
+                },
+            );
+            let bands = session.direct_physical_bands(output).expect("bands");
+            // The chrome the level change fades is copied, and only that.
+            let damage = bands.chrome_damage.as_ref().expect("fading chrome damage");
+            assert!(!damage.is_empty());
+            let mut composed = bands.frame.to_vec();
+            let rect = bands.damage[1];
+            for y in rect.y0..rect.y1 {
+                let range = y * 960 + rect.x0..y * 960 + rect.x1;
+                composed[range.clone()].copy_from_slice(&bands.helper[range]);
+            }
+            assert!(
+                composed == rotated,
+                "the rotated level-change frame at {now}"
+            );
+        }
     }
 
     #[test]
@@ -3063,7 +3169,7 @@ mod tests {
         wait_trick_ready(&mut session, scene, &consoles(), 0, "21:37", 16);
         assert!(session.is_animating());
         assert!(session.is_level_trick_active(), "input is held during it");
-        assert!(session.can_render_native());
+        assert!(session.can_render_direct());
         assert_eq!(session.compositor_copy_damage(true), None);
         let source_generation = session.current_request().generation;
         // The destination is ready before the gather begins.
@@ -3129,7 +3235,7 @@ mod tests {
         }
         assert!(session.trick.is_none());
         assert!(!session.is_level_trick_active());
-        assert!(session.can_render_native());
+        assert!(session.can_render_direct());
         assert_eq!(session.current_request().frame.selected, 0);
         assert_eq!(session.current_request().timestamp_us, now * 1_000);
         let mut expected = prepare(scene, &consoles(), 0, "21:37", &session.fonts);

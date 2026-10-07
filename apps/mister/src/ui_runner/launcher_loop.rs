@@ -7600,20 +7600,25 @@ pub(super) fn run_launcher_loop(
                 }
             }
             #[cfg(feature = "tooling")]
-            if let Some(held) = tooling
-                .as_mut()
-                .and_then(|session| session.carousel_hold_change())
-            {
+            if let Some(held) = tooling.as_mut().and_then(|session| session.hold_change()) {
                 ui_action_sequence = ui_action_sequence.saturating_add(1);
                 let captured_at_us = frame_now
                     .saturating_duration_since(start)
                     .as_micros()
                     .min(u64::MAX as u128) as u64;
                 if held {
-                    let [mut pressed, _] =
-                        LauncherUiAction::Navigate(slint_ui::launcher::NavigationDirection::Right)
-                            .input_pulse(ui_action_sequence, captured_at_us)
-                            .unwrap();
+                    let direction = match tooling.as_ref().map(|session| session.hold_direction()) {
+                        Some(mister_magik_tooling_support::HoldDirection::Down) => {
+                            slint_ui::launcher::NavigationDirection::Down
+                        }
+                        Some(mister_magik_tooling_support::HoldDirection::Up) => {
+                            slint_ui::launcher::NavigationDirection::Up
+                        }
+                        _ => slint_ui::launcher::NavigationDirection::Right,
+                    };
+                    let [mut pressed, _] = LauncherUiAction::Navigate(direction)
+                        .input_pulse(ui_action_sequence, captured_at_us)
+                        .unwrap();
                     pressed.source = crate::input_event::InputSourceId {
                         kind: crate::input_event::InputSourceKind::Automation,
                         instance: 0x43415244,
@@ -10160,7 +10165,7 @@ pub(super) fn run_launcher_loop(
                             f,
                             display_session,
                             cached,
-                            &chrome_damage,
+                            bands.chrome_damage.as_ref().unwrap_or(&chrome_damage),
                             [cached, helper],
                             bands.damage,
                             identity,

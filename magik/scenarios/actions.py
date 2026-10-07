@@ -636,6 +636,112 @@ def _focus_label(application, label, key, limit):
         raise AssertionError(f"{label!r} was not selectable within {limit} steps")
 
 
+def _open_arcade_games(application):
+    """Open the Arcade game list from the Arcade card.
+
+    Some routes (the CRT) show the Arcade hub first, which moves the selection
+    off the Arcade card without showing the list; the list then needs a second
+    Enter.
+    """
+    before = _selected_labels(application)
+    _press_key(application, "\n")
+    _wait(
+        lambda: (
+            _exists(application, "Arcade games")
+            or _selected_labels(application) != before
+        ),
+        "Arcade did not open",
+        timeout=10,
+    )
+    if not _exists(application, "Arcade games"):
+        _press_key(application, "\n")
+    _wait(
+        lambda: _exists(application, "Arcade games"),
+        "Arcade catalog did not open",
+        timeout=10,
+    )
+
+
+def _hold_in_arcade_list(agent, direction, seconds, sleep):
+    """Hold a direction through one device-timed window and return its metrics."""
+    agent._successful(
+        "measure",
+        {
+            "launcher_clock": "fixed",
+            "launcher_hold": True,
+            "launcher_hold_direction": direction,
+            "duration_ms": seconds * 1000,
+        },
+    )
+    try:
+        sleep(2 + seconds + 0.4)
+        return _completed_window_metrics(agent, sleep)
+    finally:
+        agent._successful("measure", {"launcher_hold": "release"})
+
+
+def launcher_arcade_scroll(
+    application,
+    agent,
+    *,
+    instrumented: bool = False,
+    raw_metrics_path: Path | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+):
+    """Hold Down in the Arcade list for a measured window, then return Home.
+
+    The window records presentations, drops and render timings like the card
+    carousel's. The selection ends deep in the list; it is not restored.
+    """
+    if application.first_window is None:
+        raise AssertionError("real launcher window is unavailable")
+    _press_key(application, "\uf729")
+    _wait(lambda: not _settings_open(application), "Home did not close Settings")
+    sleep(1)
+    _focus_label(application, "Arcade", "\uf703", 16)
+    _open_arcade_games(application)
+    sleep(1)
+    # HDMI portrait draws the list without exposing its selection.
+    started_at = one_element(application, "Arcade games").accessible_value
+    started_at = int(started_at) if started_at.isdigit() else None
+    previous = measurement_metrics(agent).get("window")
+    seconds = 10 if instrumented else 8
+    metrics = _hold_in_arcade_list(agent, "down", seconds, sleep)
+    try:
+        # Scroll back so the list is where the run found it.
+        _hold_in_arcade_list(agent, "up", seconds, sleep)
+        current = one_element(application, "Arcade games").accessible_value
+        if started_at is not None and int(current) > started_at:
+            raise AssertionError("the Arcade list did not scroll back to its start")
+    finally:
+        _press_key(application, "\uf729")
+    _wait(
+        lambda: not _exists(application, "Arcade games"),
+        "Home did not close the catalog",
+    )
+    if raw_metrics_path is not None:
+        raw_metrics_path.write_text(json.dumps(metrics, indent=2) + "\n")
+    if metrics.get("sha256") != agent.expected_sha256:
+        raise AssertionError("metrics belong to another application")
+    window = metrics.get("window")
+    if not isinstance(window, dict) or window.get("instrumented") is not instrumented:
+        raise AssertionError(
+            "real launcher returned no matching measurement window "
+            f"(device elapsed_ms={metrics.get('elapsed_ms')}, window={window!r})"
+        )
+    if not seconds * 1000 <= window.get("elapsed_ms", 0) <= (seconds + 1) * 1000:
+        raise AssertionError("arcade scroll measurement duration is invalid")
+    if isinstance(previous, dict) and window.get("start_ms", -1) <= previous.get(
+        "end_ms", -1
+    ):
+        raise AssertionError("measurement returned a previous window")
+    if window.get("evidence_error"):
+        raise AssertionError(window["evidence_error"])
+    if window.get("presentations", 0) <= 0:
+        raise AssertionError("arcade scrolling produced no measured presentations")
+    return {**window, "workload": "arcade-scroll-down"}
+
+
 def launcher_catalog(application, screenshot_path):
     """Use the installed Dev catalog; do not launch a core or mutate the catalog."""
     _press_key(application, "\uf729")
@@ -644,12 +750,7 @@ def launcher_catalog(application, screenshot_path):
     before = None
     reverse = None
     try:
-        _press_key(application, "\n")
-        _wait(
-            lambda: _exists(application, "Arcade games"),
-            "Arcade catalog did not open",
-            timeout=10,
-        )
+        _open_arcade_games(application)
         games = one_element(application, "Arcade games")
         if not games.accessible_enabled:
             raise AssertionError("Arcade catalog is disabled")

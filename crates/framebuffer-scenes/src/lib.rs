@@ -195,34 +195,6 @@ impl Rgb565OutputLayout {
         }
     }
 
-    /// Copy a logical rectangle of the row-major logical `source` into its
-    /// place in the physical `destination`. Along a physical row the source
-    /// index moves by one logical row per pixel, so the orientation is
-    /// resolved once per row rather than once per pixel.
-    pub fn gather_logical_rect<P: Copy>(
-        self,
-        source: &[P],
-        destination: &mut [P],
-        rect: Rgb565Rect,
-    ) {
-        let physical = self.logical_rect_to_physical(rect);
-        let width = self.logical_width as isize;
-        let step = match self.rotation {
-            OutputRotation::None => 1,
-            OutputRotation::Clockwise90 => -width,
-            OutputRotation::CounterClockwise90 => width,
-        };
-        for y in physical.y0..physical.y1 {
-            let (logical_x, logical_y) = self.physical_to_logical(physical.x0, y);
-            let mut index = (logical_y * self.logical_width + logical_x) as isize;
-            let row = y * self.physical_stride;
-            for pixel in &mut destination[row + physical.x0..row + physical.x1] {
-                *pixel = source[index as usize];
-                index += step;
-            }
-        }
-    }
-
     #[must_use]
     pub const fn logical_delta_to_physical(self, dx: isize, dy: isize) -> (isize, isize) {
         match self.rotation {
@@ -1188,40 +1160,6 @@ impl From<&str> for SceneError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn gathered_rectangles_match_the_scalar_mapping_in_every_rotation() {
-        for rotation in [
-            OutputRotation::None,
-            OutputRotation::Clockwise90,
-            OutputRotation::CounterClockwise90,
-        ] {
-            let layout = Rgb565OutputLayout::new(9, 7, 13, rotation).unwrap();
-            let source: Vec<_> = (0..9 * 7)
-                .map(|i| Rgb565Pixel((i * 73 + 5) as u16))
-                .collect();
-            let rect = Rgb565Rect {
-                x0: 2,
-                y0: 1,
-                x1: 8,
-                y1: 6,
-            };
-            let mut gathered = vec![Rgb565Pixel(0xffff); layout.len()];
-            layout.gather_logical_rect(&source, &mut gathered, rect);
-            for y in 0..7 {
-                for x in 0..9 {
-                    let (px, py) = layout.logical_to_physical(x, y);
-                    let inside = (rect.x0..rect.x1).contains(&x) && (rect.y0..rect.y1).contains(&y);
-                    let expected = if inside {
-                        source[y * 9 + x]
-                    } else {
-                        Rgb565Pixel(0xffff)
-                    };
-                    assert_eq!(gathered[py * 13 + px], expected, "{rotation:?} ({x}, {y})");
-                }
-            }
-        }
-    }
 
     #[test]
     fn rgb8_expansion_matches_all_colours_offsets_and_tails() {

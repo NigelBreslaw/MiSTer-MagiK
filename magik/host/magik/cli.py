@@ -54,6 +54,7 @@ CHECK_SCENARIOS = (
     "motion-taps-then-hold",
     "screensaver",
     "motion-fallback",
+    "arcade-scroll",
     "idle",
     "journeys",
     "animation-roundtrip",
@@ -485,6 +486,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
                 "motion",
                 "motion-rollover",
                 "motion-held",
+                "arcade-scroll",
                 "animation-roundtrip",
                 "animation-app",
             }

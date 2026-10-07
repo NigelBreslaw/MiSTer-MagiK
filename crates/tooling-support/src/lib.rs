@@ -52,6 +52,26 @@ impl CarouselSequence {
     }
 }
 
+/// The direction a requested hold presses: Right moves the card carousel, Down
+/// and Up scroll a list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HoldDirection {
+    #[default]
+    Right,
+    Down,
+    Up,
+}
+
+impl HoldDirection {
+    fn from_request(value: &serde_json::Value) -> Self {
+        match value.as_str() {
+            Some("down") => Self::Down,
+            Some("up") => Self::Up,
+            _ => Self::Right,
+        }
+    }
+}
+
 pub struct Session {
     pub metrics: PresentationMetrics,
     start: Instant,
@@ -65,8 +85,10 @@ pub struct Session {
     measurement_duration_ms: Option<u64>,
     clock_advanced: bool,
     force_card_fallback: bool,
-    carousel_hold_requested: bool,
-    carousel_hold_active: bool,
+    hold_requested: bool,
+    hold_active: bool,
+    /// The held direction: right (the carousel) or down/up (a list scrolling).
+    hold_direction: HoldDirection,
     carousel_sequence: Option<CarouselSequence>,
     carousel_taps_sent: u32,
     /// Whether windows record system scheduling evidence. Each snapshot scans
@@ -101,8 +123,9 @@ impl Session {
             measurement_duration_ms: None,
             clock_advanced: false,
             force_card_fallback: false,
-            carousel_hold_requested: false,
-            carousel_hold_active: false,
+            hold_requested: false,
+            hold_active: false,
+            hold_direction: HoldDirection::Right,
             carousel_sequence: None,
             carousel_taps_sent: 0,
             scheduling_evidence: true,
@@ -211,21 +234,26 @@ impl Session {
     pub fn card_fallback_forced(&self) -> bool {
         self.force_card_fallback
     }
+    /// The direction the requested hold presses.
+    pub fn hold_direction(&self) -> HoldDirection {
+        self.hold_direction
+    }
+
     /// Emit one logical press, then release on completion or explicit cancellation.
     /// A failed host cannot extend the hold beyond this bounded device window.
-    pub fn carousel_hold_change(&mut self) -> Option<bool> {
+    pub fn hold_change(&mut self) -> Option<bool> {
         let sequence_holding = self.carousel_sequence.is_some_and(|sequence| {
             let (start, end) = sequence.hold_window_ms();
             self.window_elapsed_ms()
                 .is_some_and(|elapsed| (start..end).contains(&elapsed))
         });
-        let requested = (self.carousel_hold_requested || sequence_holding)
+        let requested = (self.hold_requested || sequence_holding)
             && self.metrics.motion_started_ms.is_some()
             && self.metrics.window.is_none();
-        if requested == self.carousel_hold_active {
+        if requested == self.hold_active {
             return None;
         }
-        self.carousel_hold_active = requested;
+        self.hold_active = requested;
         Some(requested)
     }
 
@@ -276,7 +304,8 @@ impl Session {
                         .unwrap_or_default();
                 if value["launcher_hold"] == "release" {
                     std::fs::remove_file(&request).map_err(|e| e.to_string())?;
-                    self.carousel_hold_requested = false;
+                    self.hold_requested = false;
+                    self.hold_direction = HoldDirection::Right;
                     self.carousel_sequence = None;
                     self.screensaver_requested = false;
                 } else {
@@ -295,8 +324,9 @@ impl Session {
                     std::fs::remove_file(&request).map_err(|e| e.to_string())?;
                     self.screensaver_requested =
                         value["launcher_screensaver"].as_bool().unwrap_or(false);
-                    self.carousel_hold_requested =
-                        value["launcher_hold"].as_bool().unwrap_or(false);
+                    self.hold_requested = value["launcher_hold"].as_bool().unwrap_or(false);
+                    self.hold_direction =
+                        HoldDirection::from_request(&value["launcher_hold_direction"]);
                     self.carousel_sequence =
                         CarouselSequence::from_request(&value["launcher_sequence"]);
                     self.carousel_taps_sent = 0;
@@ -474,7 +504,7 @@ mod tests {
             std::env::temp_dir().join(format!("magik-invalid-evidence-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut session = test_session(root.clone());
-        session.carousel_hold_requested = true;
+        session.hold_requested = true;
         session.measurement_duration_ms = Some(8000);
         session.carousel_sequence = Some(CarouselSequence {
             taps: 2,
@@ -493,7 +523,7 @@ mod tests {
         session.last_request -= Duration::from_millis(101);
         assert!(session.tick(16, 8).is_err());
         assert!(request.exists());
-        assert!(session.carousel_hold_requested);
+        assert!(session.hold_requested);
         assert_eq!(session.measurement_duration_ms, Some(8000));
         assert_eq!(session.carousel_taps_sent, 1);
         assert_eq!(session.carousel_sequence.unwrap().taps, 2);
@@ -571,27 +601,28 @@ mod tests {
         .unwrap();
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
+        assert_eq!(session.hold_direction(), HoldDirection::Right);
         assert_eq!(session.measurement_duration_ms, Some(8000));
         assert_eq!(session.measurement_duration(true), 10_000);
-        assert_eq!(session.carousel_hold_change(), Some(true));
-        assert_eq!(session.carousel_hold_change(), None);
+        assert_eq!(session.hold_change(), Some(true));
+        assert_eq!(session.hold_change(), None);
         session.start -= Duration::from_secs(3);
         session.tick(16, 8).unwrap();
         session.start -= Duration::from_secs(5);
         assert!(!session.tick(16, 8).unwrap());
-        assert_eq!(session.carousel_hold_change(), None);
+        assert_eq!(session.hold_change(), None);
         // Cross the deadline deliberately: tick records actual elapsed time,
         // which also includes time spent running this test on the real clock.
         session.start -= Duration::from_millis(3001);
         assert!(session.tick(16, 8).unwrap());
-        assert_eq!(session.carousel_hold_change(), Some(false));
+        assert_eq!(session.hold_change(), Some(false));
         let window = session.metrics.window.as_ref().unwrap();
         assert_eq!(window["target_duration_ms"], 8000);
         assert!(window["elapsed_ms"].as_u64().unwrap() >= 8001);
 
-        session.carousel_hold_requested = true;
+        session.hold_requested = true;
         session.begin();
-        assert_eq!(session.carousel_hold_change(), Some(true));
+        assert_eq!(session.hold_change(), Some(true));
         let started = session.metrics.motion_started_ms;
         std::fs::write(
             root.join("measure-request"),
@@ -600,8 +631,25 @@ mod tests {
         .unwrap();
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
-        assert_eq!(session.carousel_hold_change(), Some(false));
+        assert_eq!(session.hold_change(), Some(false));
         assert_eq!(session.metrics.motion_started_ms, started);
+        // A list scroll holds Down, and a release clears the direction.
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"launcher_hold":true,"launcher_hold_direction":"down","duration_ms":8000}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert_eq!(session.hold_direction(), HoldDirection::Down);
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"launcher_hold":"release"}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert_eq!(session.hold_direction(), HoldDirection::Right);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -725,7 +773,7 @@ mod tests {
         // launcher must keep iterating so an idle loop cannot stall them.
         assert!(session.carousel_sequence_pending());
         assert!(!session.carousel_tap_due());
-        assert_eq!(session.carousel_hold_change(), None);
+        assert_eq!(session.hold_change(), None);
         let mut taps = 0;
         let mut hold_started_at = None;
         let mut hold_ended_at = None;
@@ -735,7 +783,7 @@ mod tests {
                     .saturating_sub(MEASUREMENT_WARMUP_MS + ms),
             );
             taps += u32::from(session.carousel_tap_due());
-            match session.carousel_hold_change() {
+            match session.hold_change() {
                 Some(true) => hold_started_at = Some(ms),
                 Some(false) => hold_ended_at = Some(ms),
                 None => {}
