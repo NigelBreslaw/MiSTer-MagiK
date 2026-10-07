@@ -31,6 +31,12 @@ texture set is introduced. The existing renderer still controls lighting,
 selection, native labels, counts and reflections. Light identities use a black
 metadata area to preserve native text contrast.
 
+Maker entries declare their solid SVG inks in `flat_colours`. After lighting,
+only exact, opaque matches to those inks are locked to the nearest RGB565
+colour. Every card still uses the dithering pipeline: other colours, gradients,
+translucent edges, photographs and reflection fades keep their existing
+dithering. Palettes do not apply to root or system artwork.
+
 `contains_name` in `index.json` suppresses the native card title only after a
 valid wordmark image loads. Icon-only marks retain the native company name;
 missing/invalid artwork always retains its generic title. Other manifest entries

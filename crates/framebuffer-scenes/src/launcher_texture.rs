@@ -5,6 +5,27 @@
 //! coverage before filtering, so transparent rounded corners cannot halo.
 use crate::Rgb565Pixel;
 
+pub(super) const MAX_FLAT_COLOURS: usize = 16;
+
+/// An explicitly declared vector ink after lighting. Only an exact opaque
+/// match is locked; mixed, translucent and unrelated samples still dither.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct FlatColour {
+    pub rgba: u32,
+    pub rgb565: u32,
+}
+impl FlatColour {
+    pub fn lit(rgb: [u8; 3], light: u32) -> Self {
+        let rgb = rgb.map(|v| (u32::from(v) * light / 256) as u8);
+        let channel = |v: u8, maximum: u32| (u32::from(v) * maximum + 127) / 255;
+        Self {
+            rgba: u32::from_le_bytes([rgb[0], rgb[1], rgb[2], 255]),
+            rgb565: channel(rgb[0], 31) << 11 | channel(rgb[1], 63) << 5 | channel(rgb[2], 31),
+        }
+    }
+}
+
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct Texture {
     pub(super) levels: Vec<Level>,
@@ -1036,6 +1057,7 @@ pub(super) fn project_card_over_column_quality(
     dithered: bool,
     origin: (usize, usize),
     margin: usize,
+    flat_colours: &[FlatColour],
 ) {
     if !dithered {
         return project_over_column_with_opaque(
@@ -1079,11 +1101,48 @@ pub(super) fn project_card_over_column_quality(
                 opaque_top: usize,
                 opaque_bottom: usize,
             );
+            #[cfg_attr(
+                feature = "card-fast-quantisation",
+                link_name = "magik_launcher_project_palette_fast_opaque"
+            )]
+            fn magik_launcher_project_palette_opaque(
+                out: *mut u16,
+                pitch: usize,
+                src: *const u32,
+                height: usize,
+                rows: usize,
+                q: i32,
+                step: i32,
+                x: usize,
+                y: usize,
+                opaque_top: usize,
+                opaque_bottom: usize,
+                flat: *const FlatColour,
+                flat_count: usize,
+            );
         }
         // SAFETY: output and coordinate progression checked above. Canonical card
         // columns use the selected filter's conservative opaque bounds; both
         // bilinear inputs must stay within that interval.
         unsafe {
+            if !flat_colours.is_empty() {
+                magik_launcher_project_palette_opaque(
+                    destination.as_mut_ptr().cast(),
+                    pitch,
+                    source.as_ptr(),
+                    source.len(),
+                    rows,
+                    sample.0,
+                    sample.1,
+                    origin.0,
+                    origin.1,
+                    opaque.start,
+                    opaque.end,
+                    flat_colours.as_ptr(),
+                    flat_colours.len(),
+                );
+                return;
+            }
             magik_launcher_project_dithered_opaque(
                 destination.as_mut_ptr().cast(),
                 pitch,
@@ -1111,8 +1170,13 @@ pub(super) fn project_card_over_column_quality(
                 .unwrap_or(0)
         };
         let p = mix(get(row), get(row + 1), ((q & 65535) >> 8) as u32);
-        destination[y * pitch] =
-            over_card_dithered(p, destination[y * pitch], origin.0, origin.1 + y);
+        destination[y * pitch] = over_card_with_flat_colours(
+            p,
+            destination[y * pitch],
+            origin.0,
+            origin.1 + y,
+            flat_colours,
+        );
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -1127,6 +1191,7 @@ pub(super) fn project_flat_quality(
     sample: (i32, i32),
     dithered: bool,
     origin: (usize, usize),
+    flat_colours: &[FlatColour],
 ) {
     if !dithered {
         return project_flat(
@@ -1172,6 +1237,25 @@ pub(super) fn project_flat_quality(
                 x: usize,
                 y: usize,
             );
+            #[cfg_attr(
+                feature = "card-fast-quantisation",
+                link_name = "magik_launcher_flat_palette_fast"
+            )]
+            fn magik_launcher_flat_palette(
+                out: *mut u16,
+                pitch: usize,
+                src: *const u32,
+                stride: usize,
+                height: usize,
+                width: usize,
+                rows: usize,
+                q: i32,
+                step: i32,
+                x: usize,
+                y: usize,
+                flat: *const FlatColour,
+                flat_count: usize,
+            );
         }
         assert!(
             sample.1 > 0
@@ -1180,6 +1264,24 @@ pub(super) fn project_flat_quality(
         // SAFETY: destination, source columns and coordinate progression checked above.
         // The kernel checks every vertical sample and handles incomplete four-pixel groups.
         unsafe {
+            if !flat_colours.is_empty() {
+                magik_launcher_flat_palette(
+                    destination.as_mut_ptr().cast(),
+                    pitch,
+                    source.as_ptr(),
+                    stride,
+                    height,
+                    width,
+                    rows,
+                    sample.0,
+                    sample.1,
+                    origin.0,
+                    origin.1,
+                    flat_colours.as_ptr(),
+                    flat_colours.len(),
+                );
+                return;
+            }
             magik_launcher_flat_dithered(
                 destination.as_mut_ptr().cast(),
                 pitch,
@@ -1207,6 +1309,7 @@ pub(super) fn project_flat_quality(
             (origin.0 + x, origin.1),
             // This scalar fallback checks alpha per pixel and has no opaque shortcut.
             0,
+            flat_colours,
         );
     }
 }
@@ -1220,6 +1323,24 @@ pub(crate) fn over_dithered(p: u32, destination: Rgb565Pixel, x: usize, y: usize
 #[cfg_attr(all(target_arch = "arm", not(test)), allow(dead_code))]
 fn over_card_dithered(p: u32, destination: Rgb565Pixel, x: usize, y: usize) -> Rgb565Pixel {
     over_quantised::<{ cfg!(feature = "card-fast-quantisation") }>(p, destination, x, y)
+}
+
+#[inline]
+#[cfg_attr(all(target_arch = "arm", not(test)), allow(dead_code))]
+fn over_card_with_flat_colours(
+    p: u32,
+    destination: Rgb565Pixel,
+    x: usize,
+    y: usize,
+    flat_colours: &[FlatColour],
+) -> Rgb565Pixel {
+    flat_colours
+        .iter()
+        .find(|colour| colour.rgba == p)
+        .map_or_else(
+            || over_card_dithered(p, destination, x, y),
+            |colour| Rgb565Pixel(colour.rgb565 as u16),
+        )
 }
 
 #[inline]
@@ -1247,6 +1368,53 @@ fn over_quantised<const FAST: bool>(
 mod tests {
     use super::*;
     #[test]
+    fn declared_opaque_inks_lock_after_lighting_but_other_samples_still_dither() {
+        let rgb = [23u8, 77, 53];
+        for light in [256, 184, 143, 108, 82] {
+            let ink = FlatColour::lit(rgb, light);
+            let lit = rgb.map(|v| u32::from(v) * light / 256);
+            for (channel, shift, maximum) in [(0, 11, 31), (1, 5, 63), (2, 0, 31)] {
+                let expected =
+                    (f64::from(lit[channel]) * f64::from(maximum) / 255.0).round() as u32;
+                assert_eq!((ink.rgb565 >> shift) & maximum, expected);
+            }
+            for y in 0..4 {
+                for x in 0..4 {
+                    assert_eq!(
+                        over_card_with_flat_colours(ink.rgba, Rgb565Pixel(0), x, y, &[ink]).0,
+                        ink.rgb565 as u16
+                    );
+                    for value in 0..=255u32 {
+                        let gradient = 0xff000000 | value | value << 8 | value << 16;
+                        assert_eq!(
+                            over_card_with_flat_colours(
+                                gradient,
+                                Rgb565Pixel(0x1234),
+                                x,
+                                y,
+                                &[ink]
+                            ),
+                            over_card_dithered(gradient, Rgb565Pixel(0x1234), x, y),
+                        );
+                    }
+                    let translucent = (ink.rgba & 0x00ffffff) | 254 << 24;
+                    assert_eq!(
+                        over_card_with_flat_colours(translucent, Rgb565Pixel(0x1234), x, y, &[ink]),
+                        over_card_dithered(translucent, Rgb565Pixel(0x1234), x, y),
+                    );
+                }
+            }
+        }
+        // An unregistered fractional colour continues to use different Bayer
+        // levels across the phase lattice; locking cannot turn dithering off.
+        let gradient = 0xff4d4d4d;
+        let samples: Vec<_> = (0..16)
+            .map(|i| over_card_with_flat_colours(gradient, Rgb565Pixel(0), i % 4, i / 4, &[]))
+            .collect();
+        assert!(samples.iter().any(|p| p != &samples[0]));
+    }
+
+    #[test]
     fn filtered_non_dithered_projection_uses_selected_margin() {
         let mut source = vec![rgba(Rgb565Pixel(0xffff), 128); 64];
         source[8] = rgba(Rgb565Pixel(0xffff), 255);
@@ -1263,6 +1431,7 @@ mod tests {
             false,
             (0, 0),
             24,
+            &[],
         );
         assert_eq!(actual, expected);
         assert_eq!(opaque_bounds(16, 8), 0..0);

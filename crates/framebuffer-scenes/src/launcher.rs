@@ -355,6 +355,8 @@ pub struct LauncherArtwork {
     pub retry: bool,
     /// The validated image contains its own wordmark; omit the duplicate title.
     pub contains_name: bool,
+    /// Explicit solid vector inks; absent for photographs and gradients.
+    pub flat_colours: Vec<[u8; 3]>,
 }
 
 /// Face cache for an immutable artwork/font context. Advance `asset_generation`
@@ -1115,6 +1117,9 @@ impl PreparedLauncher {
                     .chain(faces.back.as_mut())
                 {
                     face.dither = Dither::Always;
+                    if let Some(source) = &loaded {
+                        face.flat_colours.clone_from(&source.flat_colours);
+                    }
                     face.reflection_fade_rows = fade_rows;
                 }
                 Arc::new(faces)
@@ -2441,6 +2446,7 @@ mod tests {
                     pixels: Cow::Owned(vec![80; 360 * 504 * 3]),
                     retry: false,
                     contains_name: true,
+                    flat_colours: Vec::new(),
                 },
                 None,
                 &mut cache,
@@ -2461,6 +2467,7 @@ mod tests {
                     pixels: Cow::Owned(vec![80; 360 * 504 * 3]),
                     retry: false,
                     contains_name: false,
+                    flat_colours: Vec::new(),
                 },
                 None,
                 &mut LauncherFaceCache::default(),
@@ -2496,6 +2503,7 @@ mod tests {
                 },
                 retry: i == 1 && failing.get(),
                 contains_name: false,
+                flat_colours: Vec::new(),
             }
         };
         let scene = LauncherScene::new(960, 540);
@@ -2732,6 +2740,58 @@ mod tests {
                     .chain(faces.back.as_ref())
                 {
                     assert_eq!(face.dither, expected, "{}x{}", scene.width, scene.height);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn declared_inks_follow_loaded_artwork_without_disabling_dithering() {
+        let rgb = [23u8, 77, 53];
+        let source: Vec<u8> = rgb.into_iter().cycle().take(360 * 504 * 3).collect();
+        let card = LauncherCard {
+            id: LauncherCardId::Consoles,
+            name: "",
+            games: None,
+            colour: 0x2a7f,
+        };
+        for scene in [
+            LauncherScene::new(960, 540),
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(640, 240),
+            LauncherScene::crt(240, 640),
+        ] {
+            let mut prepared = scene
+                .prepare_initial_with_rgb888_loader_and_cache(
+                    LauncherData {
+                        cards: &[card],
+                        ..data()
+                    },
+                    &mut |_| LauncherArtwork {
+                        pixels: std::borrow::Cow::Owned(source.clone()),
+                        prepared: None,
+                        retry: false,
+                        contains_name: false,
+                        flat_colours: vec![rgb],
+                    },
+                    None,
+                    &mut LauncherFaceCache::default(),
+                    1,
+                )
+                .finish();
+            prepared.render_frame(settled_frame(0));
+            for faces in prepared.faces.iter() {
+                for face in [&faces.compact, &faces.detail] {
+                    assert_eq!(face.dither, Dither::Always);
+                    assert_eq!(face.flat_colours, vec![rgb]);
+                }
+            }
+            let rect = scene.slot_zero(false).rect();
+            let x = usize::from(rect.x + rect.width / 2);
+            let y = usize::from(rect.y + rect.height / 4);
+            for row in y..y + 4 {
+                for col in x..x + 4 {
+                    assert_eq!(prepared.pixels()[row * scene.width + col].0, 0x1a66);
                 }
             }
         }

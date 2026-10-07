@@ -1628,6 +1628,7 @@ mod tests {
                         pixels: std::borrow::Cow::Borrowed(&[]),
                         retry: true,
                         contains_name: false,
+                        flat_colours: Vec::new(),
                     },
                     Some(session.fonts.typography()),
                     &mut LauncherFaceCache::default(),

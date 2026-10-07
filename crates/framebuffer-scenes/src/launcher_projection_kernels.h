@@ -1,15 +1,15 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Intentionally instantiated twice: bindings choose the quantiser and compositor
+// Bindings choose the quantiser, optional flat inks and compositor
 // at compile time while geometry, bounds, phase alignment and tails stay shared.
-static inline uint16x4_t MAGIK_PACK_ROW4(uint32x4_t p,size_t x,size_t y) {
+static inline uint16x4_t MAGIK_PACK_ROW4(uint32x4_t p,size_t x,size_t y MAGIK_PALETTE_PARAMS) {
   uint16_t offsets[4];
   for(size_t j=0;j<4;++j) offsets[j]=(uint16_t)(256-image_threshold[y&3][(x+j)&3]);
   return MAGIK_PACK4(p,vld1_u16(offsets));
 }
 
 void MAGIK_COLUMN_KERNEL(uint16_t *out,size_t pitch,const uint32_t *src,
-    size_t height,size_t rows,int32_t q,int32_t step,size_t x,size_t y0) {
+    size_t height,size_t rows,int32_t q,int32_t step,size_t x,size_t y0 MAGIK_PALETTE_PARAMS) {
   size_t y=0;
   // Four vertical outputs fill every quantiser lane. The Bayer phase repeats
   // after four rows, so these offsets stay outside the interior loop.
@@ -93,20 +93,20 @@ void MAGIK_COLUMN_KERNEL(uint16_t *out,size_t pitch,const uint32_t *src,
 // the generic kernel above. Work out output intervals once, not per vector.
 void MAGIK_OPAQUE_KERNEL(uint16_t *out,size_t pitch,
     const uint32_t *src,size_t height,size_t rows,int32_t q,int32_t step,
-    size_t x,size_t y0,size_t opaque_top,size_t opaque_bottom) {
+    size_t x,size_t y0,size_t opaque_top,size_t opaque_bottom MAGIK_PALETTE_PARAMS) {
   if (!rows) return;
   if (step<=0 || opaque_top>=opaque_bottom || opaque_bottom>height ||
       (src[opaque_top]>>24)!=255 || (src[opaque_bottom-1]>>24)!=255) {
-    MAGIK_COLUMN_KERNEL(out,pitch,src,height,rows,q,step,x,y0);
+    MAGIK_COLUMN_KERNEL(out,pitch,src,height,rows,q,step,x,y0 MAGIK_PALETTE_ARGS);
     return;
   }
   size_t first=projected_row_boundary((int64_t)opaque_top<<16,q,step,rows);
   size_t end=projected_row_boundary((int64_t)(opaque_bottom-1)<<16,q,step,rows);
   if(first>=end) {
-    MAGIK_COLUMN_KERNEL(out,pitch,src,height,rows,q,step,x,y0);
+    MAGIK_COLUMN_KERNEL(out,pitch,src,height,rows,q,step,x,y0 MAGIK_PALETTE_ARGS);
     return;
   }
-  MAGIK_COLUMN_KERNEL(out,pitch,src,height,first,q,step,x,y0);
+  MAGIK_COLUMN_KERNEL(out,pitch,src,height,first,q,step,x,y0 MAGIK_PALETTE_ARGS);
   int32_t sample=(int32_t)((int64_t)q+(int64_t)first*step);
   uint16_t offsets[4];
   for(size_t j=0;j<4;++j)offsets[j]=(uint16_t)(256-image_threshold[(y0+first+j)&3][x&3]);
@@ -134,13 +134,13 @@ void MAGIK_OPAQUE_KERNEL(uint16_t *out,size_t pitch,
     out[y*pitch]=(uint16_t)vget_lane_u32(packed,0);
   }
   if(end<rows) MAGIK_COLUMN_KERNEL(out+end*pitch,pitch,src,height,rows-end,
-    (int32_t)((int64_t)q+(int64_t)end*step),step,x,y0+end);
+    (int32_t)((int64_t)q+(int64_t)end*step),step,x,y0+end MAGIK_PALETTE_ARGS);
 }
 
 // Flat cards use contiguous four-pixel stores, as in the production flat path.
 void MAGIK_FLAT_KERNEL(uint16_t *out, size_t pitch,
     const uint32_t *src, size_t stride, size_t height, size_t width,
-    size_t rows, int32_t q, int32_t step, size_t x0, size_t y0) {
+    size_t rows, int32_t q, int32_t step, size_t x0, size_t y0 MAGIK_PALETTE_PARAMS) {
   for (size_t y = 0; y < rows; ++y, q += step) {
     int32_t r = q >> 16;
     uint32_t w = ((uint32_t)q & 65535) >> 8;
@@ -156,7 +156,7 @@ void MAGIK_FLAT_KERNEL(uint16_t *out, size_t pitch,
         uint32x4_t alpha = vshrq_n_u32(p, 24);
         uint32x2_t m = vmin_u32(vget_low_u32(alpha), vget_high_u32(alpha));
         if (vget_lane_u32(m, 0) == 255 && vget_lane_u32(m, 1) == 255) {
-          vst1_u16(out + y * pitch + x, MAGIK_PACK_ROW4(p, x0 + x, y0 + y));
+          vst1_u16(out + y * pitch + x, MAGIK_PACK_ROW4(p, x0 + x, y0 + y MAGIK_PALETTE_ARGS));
         } else {
 #if MAGIK_VECTOR_ALPHA
           uint16_t offsets[4];

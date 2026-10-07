@@ -149,6 +149,43 @@ def artwork(key, mode):
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="360" height="504" viewBox="0 0 360 504">{body}</svg>'
 
 
+def flat_colour_palette(svg):
+    """Declare solid vector inks, excluding gradients and antialiased mixtures."""
+    colours = []
+
+    def colour(value):
+        if re.fullmatch(r"#[0-9a-fA-F]{3}", value):
+            rgb = [int(c * 2, 16) for c in value[1:]]
+        elif re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+            rgb = [int(value[i : i + 2], 16) for i in [1, 3, 5]]
+        elif match := re.fullmatch(
+            r"rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", value
+        ):
+            rgb = [int(v) for v in match.groups()]
+        else:
+            return
+        if max(rgb) <= 255 and rgb not in colours:
+            colours.append(rgb)
+
+    def visit(source):
+        for node in ET.fromstring(source).iter():
+            for field in ["fill", "stroke"]:
+                colour(node.get(field, ""))
+            style = node.get("style", "")
+            if node.tag.split("}")[-1] == "style":
+                style += node.text or ""
+            for ink in re.findall(r"(?:fill|stroke)\s*[:=]\s*[\"']?([^;\"'}]+)", style):
+                colour(ink.strip())
+            href = node.get("href", node.get("{http://www.w3.org/1999/xlink}href", ""))
+            if href.startswith("data:image/svg+xml;base64,"):
+                visit(base64.b64decode(href.split(",", 1)[1]))
+
+    visit(svg)
+    if len(colours) > 16:
+        raise ValueError("maker artwork exceeds the solid ink palette limit")
+    return ["#" + "".join(f"{v:02x}" for v in rgb) for rgb in colours]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--install", action="store_true")
@@ -202,6 +239,7 @@ def main():
                     "file": name,
                     "sha256": hashlib.sha256(pixels).hexdigest(),
                     "contains_name": BRANDS[key][2],
+                    "flat_colours": flat_colour_palette(artwork(key, "colour")),
                 }
         used = {s["file"] for s in manifest["cards"].values()}
         for name in old - used:

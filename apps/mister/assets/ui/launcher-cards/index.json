@@ -93,6 +93,10 @@
     "menu:computers:acorn": {
       "contains_name": true,
       "file": "brand-acorn.rgb888",
+      "flat_colours": [
+        "#174d35",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 47467,
         "file": "brand-acorn.2-edc6.cardtex",
@@ -103,6 +107,16 @@
     "menu:computers:apple": {
       "contains_name": false,
       "file": "brand-apple.rgb888",
+      "flat_colours": [
+        "#e7e2d3",
+        "#000000",
+        "#75bd21",
+        "#ffc728",
+        "#ff661c",
+        "#cf0f2b",
+        "#b01cab",
+        "#00a1de"
+      ],
       "prepared": {
         "bytes": 49710,
         "file": "brand-apple.2-edc6.cardtex",
@@ -113,6 +127,10 @@
     "menu:computers:atari": {
       "contains_name": false,
       "file": "brand-atari.rgb888",
+      "flat_colours": [
+        "#ac222c",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 45746,
         "file": "brand-atari.2-edc6.cardtex",
@@ -123,6 +141,12 @@
     "menu:computers:commodore": {
       "contains_name": false,
       "file": "brand-commodore.rgb888",
+      "flat_colours": [
+        "#e5d8bc",
+        "#000000",
+        "#002255",
+        "#ff0000"
+      ],
       "prepared": {
         "bytes": 52702,
         "file": "brand-commodore.2-edc6.cardtex",
@@ -133,6 +157,10 @@
     "menu:computers:dos-pc": {
       "contains_name": false,
       "file": "brand-dos-pc.rgb888",
+      "flat_colours": [
+        "#163d40",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 39368,
         "file": "brand-dos-pc.2-edc6.cardtex",
@@ -143,6 +171,11 @@
     "menu:computers:japanese": {
       "contains_name": false,
       "file": "brand-japanese.rgb888",
+      "flat_colours": [
+        "#e7e2d3",
+        "#000000",
+        "#d72336"
+      ],
       "prepared": {
         "bytes": 36644,
         "file": "brand-japanese.2-edc6.cardtex",
@@ -153,6 +186,10 @@
     "menu:computers:other": {
       "contains_name": false,
       "file": "brand-other.rgb888",
+      "flat_colours": [
+        "#322948",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 38136,
         "file": "brand-other.2-edc6.cardtex",
@@ -163,6 +200,14 @@
     "menu:computers:sinclair": {
       "contains_name": true,
       "file": "brand-sinclair.rgb888",
+      "flat_colours": [
+        "#000000",
+        "#ec282c",
+        "#ffd624",
+        "#67bd38",
+        "#079ec4",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 79981,
         "file": "brand-sinclair.2-edc6.cardtex",
@@ -173,6 +218,10 @@
     "menu:computers:tandy": {
       "contains_name": true,
       "file": "brand-tandy.rgb888",
+      "flat_colours": [
+        "#a32832",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 54441,
         "file": "brand-tandy.2-edc6.cardtex",
@@ -183,6 +232,10 @@
     "menu:consoles:atari": {
       "contains_name": false,
       "file": "brand-atari.rgb888",
+      "flat_colours": [
+        "#ac222c",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 54152,
         "file": "brand-atari.1-2a7f.cardtex",
@@ -193,6 +246,11 @@
     "menu:consoles:nec": {
       "contains_name": true,
       "file": "brand-nec.rgb888",
+      "flat_colours": [
+        "#1a328b",
+        "#1414a0",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 58997,
         "file": "brand-nec.1-2a7f.cardtex",
@@ -203,6 +261,11 @@
     "menu:consoles:nintendo": {
       "contains_name": true,
       "file": "brand-nintendo.rgb888",
+      "flat_colours": [
+        "#e60012",
+        "#939598",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 62919,
         "file": "brand-nintendo.1-2a7f.cardtex",
@@ -213,6 +276,10 @@
     "menu:consoles:other": {
       "contains_name": false,
       "file": "brand-other.rgb888",
+      "flat_colours": [
+        "#322948",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 37174,
         "file": "brand-other.1-2a7f.cardtex",
@@ -223,6 +290,11 @@
     "menu:consoles:sega": {
       "contains_name": true,
       "file": "brand-sega.rgb888",
+      "flat_colours": [
+        "#0060a8",
+        "#f7f1e4",
+        "#231f20"
+      ],
       "prepared": {
         "bytes": 71055,
         "file": "brand-sega.1-2a7f.cardtex",
@@ -233,6 +305,10 @@
     "menu:consoles:sony": {
       "contains_name": true,
       "file": "brand-sony.rgb888",
+      "flat_colours": [
+        "#17365c",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 62293,
         "file": "brand-sony.1-2a7f.cardtex",
@@ -243,6 +319,10 @@
     "menu:handhelds:atari": {
       "contains_name": false,
       "file": "brand-atari.rgb888",
+      "flat_colours": [
+        "#ac222c",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 54978,
         "file": "brand-atari.3-2df2.cardtex",
@@ -253,6 +333,10 @@
     "menu:handhelds:bandai": {
       "contains_name": true,
       "file": "brand-bandai.rgb888",
+      "flat_colours": [
+        "#ff0000",
+        "#ffffff"
+      ],
       "prepared": {
         "bytes": 60787,
         "file": "brand-bandai.3-2df2.cardtex",
@@ -263,6 +347,11 @@
     "menu:handhelds:nintendo": {
       "contains_name": true,
       "file": "brand-nintendo.rgb888",
+      "flat_colours": [
+        "#e60012",
+        "#939598",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 67381,
         "file": "brand-nintendo.3-2df2.cardtex",
@@ -273,6 +362,10 @@
     "menu:handhelds:other": {
       "contains_name": false,
       "file": "brand-other.rgb888",
+      "flat_colours": [
+        "#322948",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 37374,
         "file": "brand-other.3-2df2.cardtex",
@@ -283,6 +376,11 @@
     "menu:handhelds:sega": {
       "contains_name": true,
       "file": "brand-sega.rgb888",
+      "flat_colours": [
+        "#0060a8",
+        "#f7f1e4",
+        "#231f20"
+      ],
       "prepared": {
         "bytes": 72251,
         "file": "brand-sega.3-2df2.cardtex",
@@ -293,6 +391,12 @@
     "menu:handhelds:snk": {
       "contains_name": true,
       "file": "brand-snk.rgb888",
+      "flat_colours": [
+        "#0073bb",
+        "#0097e0",
+        "#0096df",
+        "#f7f1e4"
+      ],
       "prepared": {
         "bytes": 51994,
         "file": "brand-snk.3-2df2.cardtex",
