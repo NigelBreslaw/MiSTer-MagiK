@@ -551,6 +551,26 @@ effect.**
   (60 fps), 0 dropped, 15.8 ms frame to present, 44% process CPU. The CRT Arcade list needs no direct
   path.
 
+**PR 25 (in progress): the reflection fade is division-free for every card size.**
+
+- Found by reading the device profile of the HDMI portrait level change, then the code: the reflection
+  fade (`magik_launcher_prepare_reflection`) has a fast path only for 63 and 64 fade rows. PR 20 made
+  the fade proportional to the card height, so every CRT and portrait face (fewer than 63 rows) took the
+  slow path, which divided by a variable (`row * 63 / (fade_rows - 1)`) for every row of every column
+  on a Cortex-A9 with no hardware divide. HDMI landscape (64 rows) never did. The fade rows for
+  2..=62 are now a constant table, equal to the formula for every row; `launcher_neon_parity.c` checks
+  the table and 20000 whole reflections against the old division. HDMI landscape is untouched.
+- Measured on HDMI portrait (`check animation-app`, route consoles), the division disappears from the
+  profile (`__aeabi_uidiv` 5.5% of samples) and `prepare_reflection` drops from 5.5% to 4.9%; dropped
+  frames do not change (38 of 451 against 35 of 450), so this is not what limits a level change.
+- What does, from the same run (kept here for the next step): the frames that drop are the first frame
+  of each level change (about 24 ms on the main thread), and frames where a render-ahead job was
+  discarded because input changed the request (about 9 ms of helper work thrown away, producer 14 ms);
+  those are inherent to input and are the same on landscape. On the main thread the direct path itself
+  costs the rotation (14% of main-thread samples), the hidden-slot copy (6%), memcpy and bcmp (7%). A
+  scheduling experiment that gave the helper a larger band (subtracting its render-ahead lead when
+  balancing) halved the main thread's band time and did not reduce drops, so it was not kept.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

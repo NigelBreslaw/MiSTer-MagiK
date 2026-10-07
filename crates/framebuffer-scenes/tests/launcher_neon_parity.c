@@ -114,7 +114,60 @@ static int fast_quantisation_parity(void) {
   return 0;
 }
 #endif
+// The division the fade-row table replaced.
+static size_t reference_fade_row(size_t row, size_t fade_rows) {
+  size_t scaled;
+  if (fade_rows == 64)
+    scaled = row;
+  else if (fade_rows == 63)
+    scaled = row * 63 / 62;
+  else
+    scaled = row * 63 / (fade_rows - 1);
+  return scaled < 63 ? scaled : 63;
+}
+
+// The scalar reflection exactly as it was before the table: any fade_rows.
+static void reference_prepare_reflection(uint16_t *out, const uint32_t *body,
+                                         size_t height, size_t x,
+                                         size_t fade_rows) {
+  const size_t visible = height / 4 < 64 ? height / 4 : 64;
+  for (size_t row = 0; row < 64; ++row) {
+    const uint32_t pixel = row < visible ? body[height - 1 - row] : 0;
+    const size_t fade_row = reference_fade_row(row, fade_rows);
+    const uint32_t left = fade_row < 63 ? 63 - fade_row : 0;
+    const uint32_t alpha = 150 * left * left / (63 * 63);
+    const uint32_t threshold = reflection_bayer[fade_row & 3][x & 3] * 16 + 8;
+    const uint32_t red = (pixel & 255) >> 3;
+    const uint32_t green = ((pixel >> 8) & 255) >> 2;
+    const uint32_t blue = ((pixel >> 16) & 255) >> 3;
+#define REF_FADE(channel) \
+  (((channel) * alpha) / 256 + (((channel) * alpha) % 256 > threshold))
+    out[row] = (uint16_t)(REF_FADE(red) << 11 | REF_FADE(green) << 5 | REF_FADE(blue));
+#undef REF_FADE
+  }
+}
+
 int main(void) {
+  for (size_t fade_rows = 2; fade_rows <= 64; ++fade_rows)
+    for (size_t row = 0; row < 80; ++row)
+      if (reflection_fade_row(row, fade_rows) != reference_fade_row(row, fade_rows)) {
+        fprintf(stderr, "fade row mismatch %zu %zu\n", fade_rows, row);
+        return 30;
+      }
+  for (size_t trial = 0; trial < 20000; ++trial) {
+    const size_t height = 8 + next() % 300, x = next() % 960;
+    const size_t fade_rows = 2 + next() % 63;
+    uint32_t body[320];
+    uint16_t actual[64], expected[64];
+    for (size_t i = 0; i < height; ++i) body[i] = next();
+    magik_launcher_prepare_reflection(actual, body, height, x, fade_rows);
+    reference_prepare_reflection(expected, body, height, x, fade_rows);
+    if (memcmp(actual, expected, sizeof(actual))) {
+      fprintf(stderr, "reflection fade mismatch trial %zu fade_rows %zu\n", trial, fade_rows);
+      return 31;
+    }
+  }
+  puts("20000 reflection fades match the division formula for every fade size");
   for(size_t trial=0;trial<10000;++trial) {
     size_t height=17+next()%64,rows=1+next()%68,width=1+next()%9,pitch=width+3,stride=height+3;
     magik_flat_colour inks[2]={{0xff354d17,0x1a66},{0xffcceeff,0xff79}};
