@@ -145,9 +145,9 @@ and delivery when that exact Dev application is already running.
 `scripts/magik check arcade-scroll` measures the Arcade game list instead of the
 carousel: it opens Arcade (through the Arcade hub on routes that show one), holds
 Down for an eight-second window after two seconds of warmup, and returns Home.
-The selection ends deep in the list and is not restored. `--profile` takes the
+Afterwards it holds Up for the same time to scroll back. `--profile` takes the
 ten-second sampled diagnostic. On CRT 240p it records 481 presentations in eight
-seconds with no drops.
+seconds with no drops, and the same on HDMI portrait (480, no drops).
 
 `check motion` first runs a 12.5-second window that plays six right taps 250 ms
 apart, holds right for ten seconds and keeps one second for the release to

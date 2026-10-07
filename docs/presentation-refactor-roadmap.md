@@ -538,7 +538,11 @@ effect.**
   30 fps. One predicate, `can_render_direct`, now gates the direct path, the helper's render-ahead
   and the bands, so portrait gets the same render-ahead as landscape instead of a lesser copy. Device,
   HDMI portrait, Home to Consoles and back (`check animation-app`, route consoles): dropped frames 234
-  of 478 presentations before, 35 of 450 after.
+  of 478 presentations before, 35 of 450 after. Per step that is 4, 11, 3 and 9 dropped of about 60
+  frames for the four level changes; the 72 presentations that still go through Slint are the hub and
+  games-list steps of the route, not card frames. What remains on a level change is the primary band
+  drawn on the main thread (render-ahead only hides the helper's band) and software integer division
+  in the shared projection (`__udivsi3`, 5% of samples).
 - `check journeys` could not open the Arcade list on CRT: the CRT shows the Arcade hub first, with GAMES
   selected, so the list needs a second Enter (`_open_arcade_games`). Found with the framebuffer capture.
   The journeys pass on CRT 240p.

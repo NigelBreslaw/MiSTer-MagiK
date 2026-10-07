@@ -7600,23 +7600,21 @@ pub(super) fn run_launcher_loop(
                 }
             }
             #[cfg(feature = "tooling")]
-            if let Some(held) = tooling
-                .as_mut()
-                .and_then(|session| session.carousel_hold_change())
-            {
+            if let Some(held) = tooling.as_mut().and_then(|session| session.hold_change()) {
                 ui_action_sequence = ui_action_sequence.saturating_add(1);
                 let captured_at_us = frame_now
                     .saturating_duration_since(start)
                     .as_micros()
                     .min(u64::MAX as u128) as u64;
                 if held {
-                    let direction = if tooling
-                        .as_ref()
-                        .is_some_and(|session| session.carousel_hold_down())
-                    {
-                        slint_ui::launcher::NavigationDirection::Down
-                    } else {
-                        slint_ui::launcher::NavigationDirection::Right
+                    let direction = match tooling.as_ref().map(|session| session.hold_direction()) {
+                        Some(mister_magik_tooling_support::HoldDirection::Down) => {
+                            slint_ui::launcher::NavigationDirection::Down
+                        }
+                        Some(mister_magik_tooling_support::HoldDirection::Up) => {
+                            slint_ui::launcher::NavigationDirection::Up
+                        }
+                        _ => slint_ui::launcher::NavigationDirection::Right,
                     };
                     let [mut pressed, _] = LauncherUiAction::Navigate(direction)
                         .input_pulse(ui_action_sequence, captured_at_us)

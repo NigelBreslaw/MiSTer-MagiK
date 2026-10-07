@@ -639,14 +639,16 @@ def _focus_label(application, label, key, limit):
 def _open_arcade_games(application):
     """Open the Arcade game list from the Arcade card.
 
-    Some routes (the CRT) show the Arcade hub first, with GAMES selected; the
-    list then needs a second Enter.
+    Some routes (the CRT) show the Arcade hub first, which moves the selection
+    off the Arcade card without showing the list; the list then needs a second
+    Enter.
     """
+    before = _selected_labels(application)
     _press_key(application, "\n")
     _wait(
         lambda: (
             _exists(application, "Arcade games")
-            or "GAMES" in _selected_labels(application)
+            or _selected_labels(application) != before
         ),
         "Arcade did not open",
         timeout=10,
@@ -658,6 +660,24 @@ def _open_arcade_games(application):
         "Arcade catalog did not open",
         timeout=10,
     )
+
+
+def _hold_in_arcade_list(agent, direction, seconds, sleep):
+    """Hold a direction through one device-timed window and return its metrics."""
+    agent._successful(
+        "measure",
+        {
+            "launcher_clock": "fixed",
+            "launcher_hold": True,
+            "launcher_hold_direction": direction,
+            "duration_ms": seconds * 1000,
+        },
+    )
+    try:
+        sleep(2 + seconds + 0.4)
+        return _completed_window_metrics(agent, sleep)
+    finally:
+        agent._successful("measure", {"launcher_hold": "release"})
 
 
 def launcher_arcade_scroll(
@@ -680,28 +700,20 @@ def launcher_arcade_scroll(
     sleep(1)
     _focus_label(application, "Arcade", "\uf703", 16)
     _open_arcade_games(application)
-    _wait(
-        lambda: bool(one_element(application, "Arcade games").accessible_value),
-        "Arcade catalog has no active game",
-        timeout=10,
-    )
     sleep(1)
+    # HDMI portrait draws the list without exposing its selection.
+    started_at = one_element(application, "Arcade games").accessible_value
+    started_at = int(started_at) if started_at.isdigit() else None
     previous = measurement_metrics(agent).get("window")
     seconds = 10 if instrumented else 8
-    agent._successful(
-        "measure",
-        {
-            "launcher_clock": "fixed",
-            "launcher_hold": True,
-            "launcher_hold_direction": "down",
-            "duration_ms": seconds * 1000,
-        },
-    )
+    metrics = _hold_in_arcade_list(agent, "down", seconds, sleep)
     try:
-        sleep(2 + seconds + 0.4)
-        metrics = _completed_window_metrics(agent, sleep)
+        # Scroll back so the list is where the run found it.
+        _hold_in_arcade_list(agent, "up", seconds, sleep)
+        current = one_element(application, "Arcade games").accessible_value
+        if started_at is not None and int(current) > started_at:
+            raise AssertionError("the Arcade list did not scroll back to its start")
     finally:
-        agent._successful("measure", {"launcher_hold": "release"})
         _press_key(application, "\uf729")
     _wait(
         lambda: not _exists(application, "Arcade games"),
