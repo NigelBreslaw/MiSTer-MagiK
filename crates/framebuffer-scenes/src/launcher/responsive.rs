@@ -64,14 +64,20 @@ pub(super) struct Layout {
 
 impl Layout {
     /// The size faces are baked at: the card's own, unless it is taller than
-    /// the shared 180x252 face (a scratch column holds 272 rows), in which
-    /// case the HDMI face is baked and the projection scales it.
+    /// a scratch column, in which case the shared 180-wide HDMI face is baked
+    /// and the projection scales it.
     pub fn face_size(&self) -> (usize, usize) {
-        if self.card_h <= 252 {
+        if self.card_h <= crate::launcher_flip::COLUMN_HEIGHT {
             (self.card_w, self.card_h)
         } else {
-            (180, 252)
+            (180, super::card_height(180))
         }
+    }
+
+    /// Whether faces are baked at the card's own size (and so use its label
+    /// fonts) rather than the shared HDMI face.
+    pub fn bakes_own_size(&self) -> bool {
+        self.face_size() == (self.card_w, self.card_h)
     }
 
     pub fn for_level(scene: LauncherScene, nested: bool) -> Option<Self> {

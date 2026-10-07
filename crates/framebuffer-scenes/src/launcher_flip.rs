@@ -5,7 +5,7 @@
 //! inverse-column rasterizer. Pose/divisions are per column, never per pixel.
 use crate::Rgb565Pixel;
 const ONE: i64 = 65536;
-const COLUMN_HEIGHT: usize = 272;
+pub(super) const COLUMN_HEIGHT: usize = 272;
 pub(super) const STRIP_WIDTH: usize = 32;
 
 pub(super) struct Scratch {
