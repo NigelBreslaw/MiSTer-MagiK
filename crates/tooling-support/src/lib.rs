@@ -67,6 +67,8 @@ pub struct Session {
     force_card_fallback: bool,
     carousel_hold_requested: bool,
     carousel_hold_active: bool,
+    /// The held direction: down (a list scrolling) instead of right (the carousel).
+    carousel_hold_down: bool,
     carousel_sequence: Option<CarouselSequence>,
     carousel_taps_sent: u32,
     /// Whether windows record system scheduling evidence. Each snapshot scans
@@ -103,6 +105,7 @@ impl Session {
             force_card_fallback: false,
             carousel_hold_requested: false,
             carousel_hold_active: false,
+            carousel_hold_down: false,
             carousel_sequence: None,
             carousel_taps_sent: 0,
             scheduling_evidence: true,
@@ -211,6 +214,11 @@ impl Session {
     pub fn card_fallback_forced(&self) -> bool {
         self.force_card_fallback
     }
+    /// Whether the requested hold presses Down (scrolling a list), not Right.
+    pub fn carousel_hold_down(&self) -> bool {
+        self.carousel_hold_down
+    }
+
     /// Emit one logical press, then release on completion or explicit cancellation.
     /// A failed host cannot extend the hold beyond this bounded device window.
     pub fn carousel_hold_change(&mut self) -> Option<bool> {
@@ -277,6 +285,7 @@ impl Session {
                 if value["launcher_hold"] == "release" {
                     std::fs::remove_file(&request).map_err(|e| e.to_string())?;
                     self.carousel_hold_requested = false;
+                    self.carousel_hold_down = false;
                     self.carousel_sequence = None;
                     self.screensaver_requested = false;
                 } else {
@@ -297,6 +306,7 @@ impl Session {
                         value["launcher_screensaver"].as_bool().unwrap_or(false);
                     self.carousel_hold_requested =
                         value["launcher_hold"].as_bool().unwrap_or(false);
+                    self.carousel_hold_down = value["launcher_hold_direction"] == "down";
                     self.carousel_sequence =
                         CarouselSequence::from_request(&value["launcher_sequence"]);
                     self.carousel_taps_sent = 0;
@@ -571,6 +581,7 @@ mod tests {
         .unwrap();
         session.last_request -= Duration::from_millis(101);
         session.tick(16, 8).unwrap();
+        assert!(!session.carousel_hold_down());
         assert_eq!(session.measurement_duration_ms, Some(8000));
         assert_eq!(session.measurement_duration(true), 10_000);
         assert_eq!(session.carousel_hold_change(), Some(true));
@@ -602,6 +613,23 @@ mod tests {
         session.tick(16, 8).unwrap();
         assert_eq!(session.carousel_hold_change(), Some(false));
         assert_eq!(session.metrics.motion_started_ms, started);
+        // A list scroll holds Down, and a release clears the direction.
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"launcher_hold":true,"launcher_hold_direction":"down","duration_ms":8000}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert!(session.carousel_hold_down());
+        std::fs::write(
+            root.join("measure-request"),
+            r#"{"launcher_hold":"release"}"#,
+        )
+        .unwrap();
+        session.last_request -= Duration::from_millis(101);
+        session.tick(16, 8).unwrap();
+        assert!(!session.carousel_hold_down());
         std::fs::remove_dir_all(root).unwrap();
     }
 

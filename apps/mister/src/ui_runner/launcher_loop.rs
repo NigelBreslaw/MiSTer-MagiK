@@ -7610,10 +7610,17 @@ pub(super) fn run_launcher_loop(
                     .as_micros()
                     .min(u64::MAX as u128) as u64;
                 if held {
-                    let [mut pressed, _] =
-                        LauncherUiAction::Navigate(slint_ui::launcher::NavigationDirection::Right)
-                            .input_pulse(ui_action_sequence, captured_at_us)
-                            .unwrap();
+                    let direction = if tooling
+                        .as_ref()
+                        .is_some_and(|session| session.carousel_hold_down())
+                    {
+                        slint_ui::launcher::NavigationDirection::Down
+                    } else {
+                        slint_ui::launcher::NavigationDirection::Right
+                    };
+                    let [mut pressed, _] = LauncherUiAction::Navigate(direction)
+                        .input_pulse(ui_action_sequence, captured_at_us)
+                        .unwrap();
                     pressed.source = crate::input_event::InputSourceId {
                         kind: crate::input_event::InputSourceKind::Automation,
                         instance: 0x43415244,
@@ -10156,11 +10163,12 @@ pub(super) fn run_launcher_loop(
                         let (width, height) = (output.physical_width(), output.physical_height());
                         let cached = card_cached_frame_view(bands.frame, width, height);
                         let helper = card_cached_frame_view(bands.helper, width, height);
+                        let level_change_damage = bands.chrome_damage.map(DirtyRectList::from_one);
                         launcher_presenter.try_copy_direct_hidden_tiles(
                             f,
                             display_session,
                             cached,
-                            &chrome_damage,
+                            level_change_damage.as_ref().unwrap_or(&chrome_damage),
                             [cached, helper],
                             bands.damage,
                             identity,

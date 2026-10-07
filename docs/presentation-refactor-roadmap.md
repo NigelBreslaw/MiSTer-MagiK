@@ -529,6 +529,20 @@ effect.**
   they could not build and CI never enabled the feature. They use `02_consoles.rgb888` and CI's
   framebuffer-scenes step now runs them.
 
+**PR 24 (in progress): portrait level changes take the direct path, and the harness drives the CRT.**
+
+- A level change on HDMI portrait presents through the rotated bands like browsing does: the chrome
+  (which fades every frame of a level change) is rotated whole each frame and copied whole; the card
+  bands are the two-band render from PR 21. `direct_physical_bands` no longer refuses while a level
+  change plays; a test compares a gather frame with the serial render rotated.
+- `check journeys` could not open the Arcade list on CRT: the CRT shows the Arcade hub first, with GAMES
+  selected, so the list needs a second Enter (`_open_arcade_games`). Found with the framebuffer capture.
+  The journeys pass on CRT 240p.
+- New `check arcade-scroll` (and `--profile`) holds Down in the Arcade list for a measured window, via a
+  `launcher_hold_direction` option on the tooling measure request. CRT 240p: 481 presentations in 8 s
+  (60 fps), 0 dropped, 15.8 ms frame to present, 44% process CPU. The CRT Arcade list needs no direct
+  path.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

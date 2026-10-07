@@ -10,6 +10,7 @@ import pytest
 from actions import (
     launcher_smoke,
     launcher_idle,
+    launcher_arcade_scroll,
     launcher_motion,
     launcher_screensaver,
     launcher_navigation,
@@ -183,6 +184,29 @@ def test_motion_fallback(application_session):
     app, agent, run, _ = application_session
     result = launcher_motion(app, agent, force_fallback=True)
     append_event(run, {"phase": "motion-fallback", "outcome": "measured", **result})
+
+
+def test_arcade_scroll(application_session):
+    app, agent, run, _ = application_session
+    result = launcher_arcade_scroll(
+        app, agent, raw_metrics_path=run / "arcade-scroll-metrics.json"
+    )
+    append_event(run, {"phase": "arcade-scroll", "outcome": "measured", **result})
+
+
+@pytest.mark.magik_profile
+def test_arcade_scroll_profile(application_session):
+    app, agent, run, profile_id = application_session
+    result = launcher_arcade_scroll(app, agent, instrumented=True)
+    append_event(
+        run,
+        {
+            "phase": "arcade-scroll",
+            "outcome": "measured",
+            "profile_id": profile_id,
+            **result,
+        },
+    )
 
 
 @pytest.mark.magik_profile

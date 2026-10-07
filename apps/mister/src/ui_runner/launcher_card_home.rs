@@ -46,6 +46,8 @@ pub(super) struct DirectBands<'a> {
     pub frame: &'a [Rgb565Pixel],
     pub helper: &'a [Rgb565Pixel],
     pub damage: [DirtyRect; 2],
+    /// A level change fades the chrome every frame, so the whole frame is copied.
+    pub chrome_damage: Option<DirtyRect>,
 }
 
 struct VisiblePrepared(Option<Box<PreparedLauncher>>);
@@ -1137,13 +1139,12 @@ impl LauncherCardHomeSession {
                 .is_none_or(|pending| pending.scene == self.scene)
     }
     /// Whether the card frame can go straight into the hidden scanout slot,
-    /// without a Slint raster: native HDMI landscape, and HDMI portrait
-    /// outside a level change (its trick still renders on one thread).
+    /// without a Slint raster: native HDMI landscape and HDMI portrait, level
+    /// changes included.
     pub(super) fn can_render_direct(&self) -> bool {
         self.can_render_native()
             || (self.active
                 && self.scene.is_hdmi_portrait()
-                && self.trick.is_none()
                 && self.renderer.is_some()
                 && self
                     .pending
@@ -1158,11 +1159,6 @@ impl LauncherCardHomeSession {
         &mut self,
         output: Rgb565OutputLayout,
     ) -> Option<DirectBands<'_>> {
-        // A level change fades the chrome without a new generation, and its
-        // frames are not the browse bands this rotates.
-        if self.trick.is_some() {
-            return None;
-        }
         let geometry = self.prepared.frame_preparer().geometry();
         let split = self.renderer.as_ref()?.rendered_split();
         let helper = self.renderer.as_ref()?.helper_pixels(self.last_request)?;
@@ -1187,7 +1183,10 @@ impl LauncherCardHomeSession {
         physical.frame.resize(output.len(), Rgb565Pixel(0));
         physical.helper.resize(output.len(), Rgb565Pixel(0));
         let source = self.prepared.pixels();
-        if physical.chrome != Some((self.content_generation, output)) {
+        // A level change fades the chrome without a new generation: rotate all
+        // of it every frame while one plays.
+        let level_change = self.trick.is_some();
+        if level_change || physical.chrome != Some((self.content_generation, output)) {
             output.gather_logical_rect(
                 source,
                 &mut physical.frame,
@@ -1215,6 +1214,12 @@ impl LauncherCardHomeSession {
             frame: &physical.frame,
             helper: &physical.helper,
             damage,
+            chrome_damage: level_change.then_some(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: output.physical_width(),
+                y1: output.physical_height(),
+            }),
         })
     }
 
@@ -2125,7 +2130,8 @@ mod tests {
         };
         session.update(scene, &level, 0, 0.5, "07:28", 230, true, Some(frame), None);
         assert!(session.can_render_direct() && !session.can_render_native());
-        // A level change starting on a rotated output has no native chrome spans.
+        // A level change on a rotated output has no native chrome spans; its
+        // whole-frame damage comes from the rotated bands.
         assert!(session.chrome_copy_damage(true).iter().next().is_none());
         session.render_direct_bands();
         // A new request (a level change starting after the render) leaves no
@@ -3012,7 +3018,7 @@ mod tests {
     }
 
     #[test]
-    fn a_portrait_level_change_never_presents_through_the_direct_bands() {
+    fn a_portrait_level_change_presents_through_the_rotated_bands() {
         use mister_magik_framebuffer_scenes::OutputRotation;
         let scene = LauncherScene::new(540, 960);
         let output = Rgb565OutputLayout::new(540, 960, 960, OutputRotation::Clockwise90).unwrap();
@@ -3034,11 +3040,49 @@ mod tests {
         wait_trick_ready(&mut session, scene, &consoles(), 0, "21:37", 16);
         session.update(scene, &consoles(), 0, 0.0, "21:37", 200, true, None, None);
         assert!(session.is_level_trick_active());
-        assert!(!session.can_render_direct());
-        // Two bands now draw the trick, so the helper band matches the request:
-        // the trick check is what keeps its frames off the direct path.
+        assert!(session.can_render_direct());
         session.render_direct_bands();
-        assert!(session.direct_physical_bands(output).is_none());
+        let trick = session.trick.as_ref().unwrap();
+        let elapsed = (session.now_ms - trick.started_ms) as u32;
+        assert!(
+            !trick.dealing && elapsed < LEVEL_TRICK_EDGE_MILLIS,
+            "a gather frame"
+        );
+        let mut expected = prepare(
+            scene,
+            &snapshot(),
+            trick.source_selected,
+            "21:37",
+            &session.fonts,
+        );
+        expected.render_level_gather_to(
+            trick.source_selected,
+            LevelChange::Descend,
+            elapsed,
+            trick.destination_slot,
+        );
+        let mut rotated = vec![Rgb565Pixel(0); output.len()];
+        output.gather_logical_rect(
+            expected.pixels(),
+            &mut rotated,
+            Rgb565Rect {
+                x0: 0,
+                y0: 0,
+                x1: 540,
+                y1: 960,
+            },
+        );
+        let bands = session.direct_physical_bands(output).expect("bands");
+        // The chrome fades every frame of a level change, so all of it is copied.
+        let full = bands.chrome_damage.expect("whole-frame chrome damage");
+        assert_eq!((full.x1, full.y1), (960, 540));
+        let mut composed = bands.frame.to_vec();
+        let rect = bands.damage[1];
+        for y in rect.y0..rect.y1 {
+            let range = y * 960 + rect.x0..y * 960 + rect.x1;
+            composed[range.clone()].copy_from_slice(&bands.helper[range]);
+        }
+        assert!(composed == rotated, "the rotated level-change frame");
     }
 
     #[test]
