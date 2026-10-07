@@ -6180,7 +6180,6 @@ pub(super) fn run_launcher_loop(
             "animation_clock": {"mode":"vsync-locked-v1", "period_ns":frame_clock.period().as_nanos()},
             "card_sampler": if cfg!(feature = "card-axis-filter") { "independent-vertical-prefilter" } else { "current" },
             "card_quantiser": if cfg!(feature = "card-fast-quantisation") { "centred-bayer-shifts" } else { "existing-bayer" },
-            "card_flat_colour_lock": "declared-maker-inks",
             "native_device_plane": if !layout.is_portrait() && !ui.output_route().is_crt()
                 && (layout.logical_w(), layout.logical_h()) == (960, 540)
                 { "exposed-hdmi-v1" } else { "disabled" },

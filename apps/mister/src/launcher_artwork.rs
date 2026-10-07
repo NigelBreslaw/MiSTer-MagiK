@@ -190,6 +190,11 @@ impl<'a> Loader<'a> {
         else {
             return fallback(false);
         };
+        let flat_colours = entry
+            .flat_colours
+            .iter()
+            .filter_map(|v| flat_colour(v))
+            .collect();
         if let (Some((id, colour)), Some(prepared)) = (style, &entry.prepared) {
             let load = || -> Result<_, String> {
                 if !prepared.file.ends_with(".cardtex")
@@ -220,11 +225,7 @@ impl<'a> Loader<'a> {
                         pixels: Cow::Borrowed(&[]),
                         retry: false,
                         contains_name: entry.contains_name,
-                        flat_colours: entry
-                            .flat_colours
-                            .iter()
-                            .filter_map(|v| flat_colour(v))
-                            .collect(),
+                        flat_colours,
                     };
                 }
                 Err(error) => {
@@ -238,11 +239,7 @@ impl<'a> Loader<'a> {
                 pixels: Cow::Owned(bytes),
                 retry: false,
                 contains_name: entry.contains_name,
-                flat_colours: entry
-                    .flat_colours
-                    .iter()
-                    .filter_map(|v| flat_colour(v))
-                    .collect(),
+                flat_colours,
             },
             Err(error) => {
                 eprintln!("card artwork {key}: {error}; using fallback artwork");
@@ -404,6 +401,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(f.0.join("index.json")).unwrap()).unwrap();
         index["cards"]["snes"]["prepared"] =
             serde_json::json!({"file":"snes.cardtex", "bytes":prepared.len()});
+        index["cards"]["snes"]["flat_colours"] = serde_json::json!(["#535353"]);
         std::fs::write(f.0.join("index.json"), index.to_string()).unwrap();
         let scene = LauncherScene::new(960, 540);
         for count in [0, 99, u32::MAX] {

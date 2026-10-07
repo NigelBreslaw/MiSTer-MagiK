@@ -828,42 +828,39 @@ static inline uint16_t palette_pixel(uint32_t p,uint16_t dst,size_t x,size_t y,
 #undef MAGIK_PALETTE_ARGS
 #define MAGIK_PALETTE_PARAMS , const magik_flat_colour *flat, size_t flat_count
 #define MAGIK_PALETTE_ARGS , flat, flat_count
+#define MAGIK_PACK4(p,phase) palette_pack4(p,phase,flat,flat_count,MAGIK_PALETTE_FAST)
+#define MAGIK_PACK2(p,x,y) palette_pack2(p,x,y,flat,flat_count,MAGIK_PALETTE_FAST)
+#define MAGIK_PIXEL(p,dst,x,y) palette_pixel(p,dst,x,y,flat,flat_count,MAGIK_PALETTE_FAST)
+#define MAGIK_VECTOR_ALPHA 0
+
+#define MAGIK_PALETTE_FAST 0
 #define MAGIK_COLUMN_KERNEL magik_launcher_project_palette
 #define MAGIK_OPAQUE_KERNEL magik_launcher_project_palette_opaque
 #define MAGIK_FLAT_KERNEL magik_launcher_flat_palette
-#define MAGIK_PACK4(p,phase) palette_pack4(p,phase,flat,flat_count,0)
-#define MAGIK_PACK2(p,x,y) palette_pack2(p,x,y,flat,flat_count,0)
 #define MAGIK_PACK_ROW4 palette_row4
-#define MAGIK_PIXEL(p,dst,x,y) palette_pixel(p,dst,x,y,flat,flat_count,0)
-#define MAGIK_VECTOR_ALPHA 0
 #include "launcher_projection_kernels.h"
 #undef MAGIK_COLUMN_KERNEL
 #undef MAGIK_OPAQUE_KERNEL
 #undef MAGIK_FLAT_KERNEL
-#undef MAGIK_PACK4
-#undef MAGIK_PACK2
 #undef MAGIK_PACK_ROW4
-#undef MAGIK_PIXEL
-#undef MAGIK_VECTOR_ALPHA
+#undef MAGIK_PALETTE_FAST
 
 #ifdef MAGIK_FAST_QUANTISATION
+#define MAGIK_PALETTE_FAST 1
 #define MAGIK_COLUMN_KERNEL magik_launcher_project_palette_fast
 #define MAGIK_OPAQUE_KERNEL magik_launcher_project_palette_fast_opaque
 #define MAGIK_FLAT_KERNEL magik_launcher_flat_palette_fast
-#define MAGIK_PACK4(p,phase) palette_pack4(p,phase,flat,flat_count,1)
-#define MAGIK_PACK2(p,x,y) palette_pack2(p,x,y,flat,flat_count,1)
 #define MAGIK_PACK_ROW4 palette_row4_fast
-#define MAGIK_PIXEL(p,dst,x,y) palette_pixel(p,dst,x,y,flat,flat_count,1)
-#define MAGIK_VECTOR_ALPHA 0
 #include "launcher_projection_kernels.h"
 #undef MAGIK_COLUMN_KERNEL
 #undef MAGIK_OPAQUE_KERNEL
 #undef MAGIK_FLAT_KERNEL
+#undef MAGIK_PACK_ROW4
+#undef MAGIK_PALETTE_FAST
+#endif
 #undef MAGIK_PACK4
 #undef MAGIK_PACK2
-#undef MAGIK_PACK_ROW4
 #undef MAGIK_PIXEL
 #undef MAGIK_VECTOR_ALPHA
-#endif
 #undef MAGIK_PALETTE_PARAMS
 #undef MAGIK_PALETTE_ARGS
