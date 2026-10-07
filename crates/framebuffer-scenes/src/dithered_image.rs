@@ -4,6 +4,7 @@
 use crate::Rgb565Pixel;
 const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 /// Nearest representable RGB565 colour, independent of screen coordinates.
+#[cfg(any(not(target_arch = "arm"), test))]
 #[inline]
 pub(crate) fn quantise_nearest_rgb8(rgb: [u8; 3]) -> Rgb565Pixel {
     let channel = |value: u8, levels: u32| ((u32::from(value) * levels + 127) / 255) as u16;

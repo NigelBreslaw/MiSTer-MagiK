@@ -1018,6 +1018,7 @@ pub(super) fn over(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)) as u16)
 }
 
+#[cfg(any(not(target_arch = "arm"), test))]
 #[inline]
 fn over_nearest(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
     let alpha = sample >> 24;
