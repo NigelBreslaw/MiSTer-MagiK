@@ -644,8 +644,10 @@ def _open_arcade_games(application):
     """
     _press_key(application, "\n")
     _wait(
-        lambda: _exists(application, "Arcade games")
-        or "GAMES" in _selected_labels(application),
+        lambda: (
+            _exists(application, "Arcade games")
+            or "GAMES" in _selected_labels(application)
+        ),
         "Arcade did not open",
         timeout=10,
     )
