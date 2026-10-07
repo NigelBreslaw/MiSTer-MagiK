@@ -955,11 +955,14 @@ impl PreparedLauncher {
         // it shows them: 180x252 on the HDMI landscape canvas, the card's own
         // size elsewhere, with the output's label fonts.
         let (face_width, face_height) = responsive.map_or((180, 252), |layout| layout.face_size());
-        let (face_typography, narrow_title) =
-            match fonts.as_ref().map(responsive::Fonts::for_labels) {
-                Some((labels, narrow)) => (Some(labels), narrow),
-                None => (typography, None),
-            };
+        let (face_typography, narrow_title) = match fonts
+            .as_ref()
+            .filter(|_| responsive.is_some_and(|layout| layout.bakes_own_size()))
+            .map(responsive::Fonts::for_labels)
+        {
+            Some((labels, narrow)) => (Some(labels), narrow),
+            None => (typography, None),
+        };
         let pixel_count = if responsive.is_some() {
             scene.width * scene.height
         } else {
@@ -3579,7 +3582,7 @@ mod tests {
         for (width, height) in [(1080, 1920), (720, 1280)] {
             let scene = LauncherScene::new(width, height);
             let layout = responsive::Layout::for_level(scene, false).expect("portrait layout");
-            assert_eq!(layout.face_size().1.min(252), layout.face_size().1);
+            assert_eq!(layout.face_size(), (180, 252), "{width}x{height}");
             let mut prepared = scene.prepare(data());
             prepared.render_frame(BrowseFrame {
                 selected: 0,

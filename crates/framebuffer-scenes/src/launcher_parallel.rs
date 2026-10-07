@@ -299,6 +299,9 @@ impl ParallelLauncherRenderer {
             } else {
                 (0, None)
             };
+        if !helper_ahead {
+            self.fit_shape(preparer, geometry);
+        }
         let ahead = self.ahead.take();
         let helper_ahead_lead_us = ahead.as_ref().map_or(0, |ahead| {
             started
@@ -387,6 +390,23 @@ impl ParallelLauncherRenderer {
             split,
         })
     }
+    /// Rebuild the buffers when the output changed size (a rotated or resized
+    /// scene reuses this renderer). Nothing is in flight: any helper-ahead job
+    /// for another source has been retired.
+    fn fit_shape(&mut self, preparer: &LauncherFramePreparer, geometry: CarouselGeometry) {
+        if (self.geometry.stride, self.geometry.height) == (geometry.stride, geometry.height) {
+            return;
+        }
+        self.primary = preparer.new_direct_tile_buffer();
+        let helper = preparer.new_tile_buffer();
+        self.storage_bytes = self.primary.storage_bytes() + helper.storage_bytes();
+        self.helper = Some(helper);
+        self.spare = None;
+        self.split = initial_split(geometry);
+        self.rendered_split = self.split;
+        self.geometry = geometry;
+    }
+
     /// At most one future helper band is in flight. The current immutable
     /// pixels stay available; projection scratch moves to the spare buffer.
     pub fn prepare_helper_ahead(
@@ -399,7 +419,10 @@ impl ParallelLauncherRenderer {
         }
         let sender = self.requests.as_ref().ok_or("card renderer stopped")?;
         let helper = self.helper.as_mut().ok_or("helper output unavailable")?;
-        if helper.request().is_none() {
+        let geometry = preparer.geometry();
+        if helper.request().is_none()
+            || (self.geometry.stride, self.geometry.height) != (geometry.stride, geometry.height)
+        {
             return Ok(false);
         }
         let mut buffer = self.spare.take().unwrap_or_else(|| {
@@ -408,7 +431,7 @@ impl ParallelLauncherRenderer {
             buffer
         });
         buffer.swap_scratch(helper);
-        let (left, right) = preparer.carousel_clip();
+        let (left, right) = geometry.clip;
         let split = clamp_split(self.split, left, right);
         let dispatched_at = Instant::now();
         let job = Job {
@@ -823,6 +846,76 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// One renderer outlives a scene change (rotation or a new display mode):
+    /// it rebuilds its buffers for the new size and still matches serial.
+    #[test]
+    fn a_renderer_follows_the_scene_it_is_given() {
+        // A regression kills the helper and the primary then waits forever, so
+        // run on a thread and fail on a timeout instead of hanging CI.
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+                id: LauncherCardId::Consoles,
+                name,
+                games: Some(12),
+                colour: 0x2a7f,
+            });
+            let data = LauncherData {
+                cards: &cards,
+                selected: 0,
+                library_games: 72,
+                collections: 6,
+                favourites: 1,
+                clock: "12:00",
+                level: LauncherLevel::Root,
+            };
+            let first = LauncherScene::new(540, 960).prepare(data);
+            let mut renderer = ParallelLauncherRenderer::new(first.frame_preparer(), None, None)
+                .expect("renderer");
+            let frame = BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: BrowsePhase::Flipping,
+                direction: Some(BrowseDirection::Right),
+                progress_millis: 23_000,
+                duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
+            };
+            for (generation, scene) in [
+                LauncherScene::new(960, 540),
+                LauncherScene::crt(640, 240),
+                LauncherScene::new(540, 960),
+                LauncherScene::crt(480, 640),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut serial = scene.prepare(data);
+                let mut parallel = scene.prepare(data);
+                parallel
+                    .render_parallel_frame(
+                        &mut renderer,
+                        LauncherFrameRequest {
+                            frame,
+                            timestamp_us: 0,
+                            generation: generation as u64 + 1,
+                        },
+                    )
+                    .unwrap();
+                serial.render_frame(frame);
+                assert!(
+                    parallel.pixels() == serial.pixels(),
+                    "{}x{}",
+                    scene.width,
+                    scene.height
+                );
+            }
+            let _ = done.send(());
+        });
+        finished
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("renderer failed or hung: its helper thread likely died");
     }
 
     /// Serial and two-band microseconds per flip frame for each output:
