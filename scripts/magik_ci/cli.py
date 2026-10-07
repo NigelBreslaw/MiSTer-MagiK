@@ -98,6 +98,7 @@ def parser() -> argparse.ArgumentParser:
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
     assurance_scope.add_argument("--group", dest="host_group", choices=host.HOST_GROUPS)
+    assurance.add_argument("--app-shard", choices=host.APP_SHARDS)
     candidates = ci_sub.add_parser("platform-candidates")
     candidates.add_argument("artifacts", type=Path)
     candidates.add_argument("name")
@@ -270,7 +271,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = parser().parse_args()
+    argument_parser = parser()
+    args = argument_parser.parse_args()
     root = repository_root()
     if args.group == "neon-parity":
         from . import neon_parity
@@ -343,8 +345,10 @@ def main() -> int:
         quality.execute(root, args.checks)
     elif args.group == "ci":
         if args.command == "host-assurance":
+            if args.app_shard is not None and args.host_group != "app":
+                argument_parser.error("--app-shard requires --group app")
             if args.host_group:
-                host.execute(root, args.host_group)
+                host.execute(root, args.host_group, app_shard=args.app_shard)
             else:
                 metadata.host_assurance(args.paths)
         elif args.command == "platform-candidates":

@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
-from scripts.magik_ci import build, bundle, databases, metadata
+from scripts.magik_ci import build, bundle, cli, databases, host, metadata
 from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.cli import parser
-from scripts.magik_ci.host import HOST_GROUPS, commands
+from scripts.magik_ci.host import APP_SHARDS, HOST_GROUPS, commands
 from scripts.magik_ci.manifest import candidate_id, parse_fields, serialize
 from scripts.magik_ci.python_tests import SLOW_TEST
 from scripts.magik_ci.python_tests import commands as python_test_commands
@@ -464,6 +464,102 @@ with tempfile.TemporaryDirectory() as directory:
             ],
             commands("app"),
         )
+
+    def test_app_shards_preserve_every_validation_command_once(self) -> None:
+        partition = {shard: commands("app", app_shard=shard) for shard in APP_SHARDS}
+        self.assertCountEqual(
+            [tuple(command) for shard in partition.values() for command in shard],
+            [tuple(command) for command in commands("app")],
+        )
+        self.assertEqual(
+            {shard: len(selected) for shard, selected in partition.items()},
+            {"checks": 8, "ui": 2, "ui-preview": 1, "bench-scenes": 1},
+        )
+        for shard, features in (
+            ("ui", "ui"),
+            ("ui-preview", "ui-preview"),
+            ("bench-scenes", "ui,bench-scenes"),
+        ):
+            for command in partition[shard]:
+                self.assertEqual(command[:2], ["cargo", "test"])
+                self.assertEqual(command[command.index("--features") + 1], features)
+        self.assertTrue(any("--ignored" in command for command in partition["ui"]))
+        self.assertTrue(
+            any("media_http::tests" in command for command in partition["checks"])
+        )
+
+    def test_app_shard_execution_keeps_profiles_and_propagates_failures(self) -> None:
+        with patch.object(host.subprocess, "run") as run:
+            host.execute(Path("/fixture"), "app", app_shard="ui")
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            commands("app", app_shard="ui"),
+        )
+        for call in run.call_args_list:
+            self.assertTrue(call.kwargs["check"])
+            self.assertEqual(call.kwargs["env"]["CARGO_PROFILE_DEV_DEBUG"], "0")
+            self.assertEqual(call.kwargs["env"]["CARGO_PROFILE_TEST_DEBUG"], "0")
+        error = subprocess.CalledProcessError(1, "cargo")
+        with patch.object(host.subprocess, "run", side_effect=error):
+            with self.assertRaises(subprocess.CalledProcessError):
+                host.execute(Path("/fixture"), "app", app_shard="ui")
+        for group in HOST_GROUPS:
+            if group != "app":
+                with self.assertRaises(ValueError):
+                    commands(group, app_shard="ui")
+        with self.assertRaises(ValueError):
+            commands("app", app_shard="unknown")
+
+    def test_host_app_shard_cli_dispatch_and_invalid_scope(self) -> None:
+        argv = [
+            "magik-ci",
+            "ci",
+            "host-assurance",
+            "--group",
+            "app",
+            "--app-shard",
+            "ui",
+        ]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(cli.host, "execute") as execute_host,
+        ):
+            self.assertEqual(cli.main(), 0)
+        self.assertEqual(execute_host.call_args.args[1], "app")
+        self.assertEqual(execute_host.call_args.kwargs, {"app_shard": "ui"})
+        for scope in (["--group", "domain"], ["--paths", "scripts"]):
+            with patch.object(
+                sys,
+                "argv",
+                ["magik-ci", "ci", "host-assurance", *scope, "--app-shard", "ui"],
+            ):
+                with self.assertRaises(SystemExit) as error:
+                    cli.main()
+                self.assertEqual(error.exception.code, 2)
+
+    def test_host_app_workflow_requires_every_shard(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/rust-arm.yml").read_text()
+        shards = workflow.split("\n  host-dev-app-shard:\n", 1)[1].split(
+            "\n  host-dev-app:\n", 1
+        )[0]
+        self.assertIn(f"shard: [{', '.join(APP_SHARDS)}]", shards)
+        self.assertIn("fail-fast: false", shards)
+        self.assertIn("app-shard: ${{ matrix.shard }}", shards)
+        aggregate = workflow.split("\n  host-dev-app:\n", 1)[1].split(
+            "\n  host-dev:\n", 1
+        )[0]
+        self.assertIn("name: host-dev (app)", aggregate)
+        self.assertIn("needs: host-dev-app-shard", aggregate)
+        self.assertIn("if: always()", aggregate)
+        self.assertIn('test "$SHARD_RESULT" = success', aggregate)
+        gate = workflow.split("\n  host-dev:\n", 1)[1].split(
+            "\n  python-quality:\n", 1
+        )[0]
+        self.assertIn("needs: [host-dev-group, host-dev-app, python-quality]", gate)
+        self.assertIn('test "$APP_RESULT" = success', gate)
+        action = (root / ".github/actions/host-validation/action.yml").read_text()
+        self.assertIn("format('-{0}', inputs.app-shard)", action)
 
     def test_tools_assurance_runs_the_local_installer_after_manager_build(self) -> None:
         tools_commands = commands("tools")
