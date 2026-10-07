@@ -55,6 +55,7 @@ CHECK_SCENARIOS = (
     "screensaver",
     "motion-fallback",
     "arcade-scroll",
+    "set-orientation",
     "idle",
     "journeys",
     "animation-roundtrip",

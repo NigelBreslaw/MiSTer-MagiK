@@ -12,6 +12,7 @@ from actions import (
     launcher_idle,
     launcher_arcade_scroll,
     launcher_motion,
+    set_screen_orientation,
     launcher_screensaver,
     launcher_navigation,
     launcher_catalog,
@@ -184,6 +185,12 @@ def test_motion_fallback(application_session):
     app, agent, run, _ = application_session
     result = launcher_motion(app, agent, force_fallback=True)
     append_event(run, {"phase": "motion-fallback", "outcome": "measured", **result})
+
+
+def test_set_orientation(application_session):
+    app, _, run, _ = application_session
+    result = set_screen_orientation(app, os.environ.get("MAGIK_ORIENTATION", "normal"))
+    append_event(run, {"phase": "set-orientation", "outcome": "done", **result})
 
 
 def test_arcade_scroll(application_session):

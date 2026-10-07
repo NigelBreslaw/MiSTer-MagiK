@@ -10144,7 +10144,14 @@ pub(super) fn run_launcher_loop(
                 nav.acknowledge_home_level_transition();
             }
             let level_trick = session.is_level_trick_active();
+            session.set_output_layout(layout.is_portrait().then(|| layout.output_layout()));
+            #[cfg(feature = "tooling")]
+            let direct_started = Instant::now();
             session.render_direct_bands();
+            #[cfg(feature = "tooling")]
+            let direct_bands_us = direct_started.elapsed().as_micros() as u64;
+            #[cfg(feature = "tooling")]
+            let mut direct_rotate_us = 0;
             let request = session.current_request();
             let timing = session.last_timing();
             let chrome_damage = session.chrome_copy_damage(level_trick);
@@ -10156,7 +10163,14 @@ pub(super) fn run_launcher_loop(
             let copied = if layout.is_portrait() {
                 // Rotated output: the scanout slot is physical landscape, so
                 // present the frame and helper band already rotated into it.
-                match session.direct_physical_bands(output) {
+                #[cfg(feature = "tooling")]
+                let rotate_started = Instant::now();
+                let rotated = session.direct_physical_bands(output);
+                #[cfg(feature = "tooling")]
+                {
+                    direct_rotate_us = rotate_started.elapsed().as_micros() as u64;
+                }
+                match rotated {
                     Some(bands) => {
                         let (width, height) = (output.physical_width(), output.physical_height());
                         let cached = card_cached_frame_view(bands.frame, width, height);
@@ -10198,6 +10212,13 @@ pub(super) fn run_launcher_loop(
                     identity,
                 )
             };
+            #[cfg(feature = "tooling")]
+            if let Some(tooling) = tooling.as_mut() {
+                let counters = &mut tooling.metrics.counters;
+                counters.card_direct_bands_us += direct_bands_us;
+                counters.card_direct_rotate_us += direct_rotate_us;
+                counters.card_direct_total_us += direct_started.elapsed().as_micros() as u64;
+            }
             match copied {
                 Ok(Some(copy)) => {
                     frame_production_trace.class = FrameProductionClass::SynchronousAnimation;

@@ -571,6 +571,30 @@ effect.**
   scheduling experiment that gave the helper a larger band (subtracting its render-ahead lead when
   balancing) halved the main thread's band time and did not reduce drops, so it was not kept.
 
+**PR 26 (in progress): the helper rotates its own band; the direct path is measured.**
+
+- On a rotated output the helper thread now rotates its band into scanout order right after drawing it
+  (ahead of time with render-ahead), so the presenting thread rotates only its own band and the chrome a
+  level change fades. `ParallelLauncherRenderer::set_rotation` / `helper_rotated_pixels`; the session
+  falls back to rotating the band itself when the helper's does not match the output and split.
+- **A crash found and fixed in this PR's own first version:** changing the screen orientation made the
+  helper thread panic (`rotate_band`'s assert), and `panic = "abort"` turned that into
+  `LauncherCrashed`. A rotation requested for the old output reached a frame of the new one; both
+  orientations have 518,400 pixels, so a length check passed and only the later bounds check failed. The
+  helper now rotates only when the output's logical size equals the frame's, never panics (an unfit frame
+  is left unrotated), and the rotation is cleared when the renderer's output changes.
+  `a_rotation_for_another_output_never_panics_the_helper` renders landscape frames with a portrait
+  rotation requested and the reverse. The same class as the PR 21 renderer-resize crash: state that
+  outlives a scene change, on a helper thread.
+- New tooling counters `card_direct_bands_us`, `card_direct_rotate_us` and `card_direct_total_us` give the
+  presenting thread's time in the direct path per frame. HDMI portrait, Home to Consoles and back
+  (`check animation-app`, route consoles), per card frame: bands 8.3 ms, rotation 2.5 ms before and
+  1.6 ms after this change, hidden-slot copy 1.5 ms, direct block 12.4 ms before and 12.0 ms after.
+  HDMI landscape: bands 10.6 ms, copy 1.3 ms, direct block 12.0 ms; 12 of 560 presentations dropped.
+- `check set-orientation` (`MAGIK_ORIENTATION` = normal, clockwise or counterclockwise) switches the
+  screen orientation through Settings so a run can cover every output. Its first version pressed Keep
+  when no dialog was up and toggled Reduce motion on; it now presses Keep only when the dialog shows.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on

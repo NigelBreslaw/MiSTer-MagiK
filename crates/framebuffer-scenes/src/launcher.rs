@@ -610,6 +610,10 @@ pub struct PreparedLauncherFrame {
     request: Option<LauncherFrameRequest>,
     scratch: Vec<crate::launcher_flip::Scratch>,
     pixels: Vec<Rgb565Pixel>,
+    /// The band this frame drew, rotated into scanout order by the thread that
+    /// drew it, and the output and first column it was rotated for.
+    rotated: Vec<Rgb565Pixel>,
+    rotated_for: Option<(crate::Rgb565OutputLayout, usize)>,
 }
 
 impl PreparedLauncherFrame {
@@ -618,7 +622,60 @@ impl PreparedLauncherFrame {
             request: None,
             scratch: Vec::new(),
             pixels: vec![Rgb565Pixel(BACKGROUND); len],
+            rotated: Vec::new(),
+            rotated_for: None,
         }
+    }
+
+    /// Rotate the columns `split..right` of the card rows just drawn into
+    /// scanout order for `output`, with the shared tiled/NEON kernel. A frame
+    /// that does not fit `output` (the scene changed after the rotation was
+    /// requested) is left unrotated for the presenting thread to handle; this
+    /// runs on the helper thread and must never panic.
+    pub(super) fn rotate_band(
+        &mut self,
+        output: crate::Rgb565OutputLayout,
+        rows: (usize, usize),
+        split: usize,
+        right: usize,
+    ) {
+        self.rotated_for = None;
+        if output.logical_width() * output.logical_height() != self.pixels.len()
+            || split > right
+            || rows.0 > rows.1
+        {
+            return;
+        }
+        self.rotated.resize(output.len(), Rgb565Pixel(0));
+        let Ok(mut surface) = crate::Rgb565SurfaceMut::new(&mut self.rotated, output) else {
+            return;
+        };
+        if surface.copy_rect_strided(
+            split,
+            rows.0,
+            right - split,
+            rows.1 - rows.0,
+            &self.pixels,
+            output.logical_width(),
+            split,
+            rows.0,
+        ) {
+            self.rotated_for = Some((output, split));
+        }
+    }
+
+    /// Forget any rotated band: this frame was not rotated by its thread.
+    pub(super) fn clear_rotated(&mut self) {
+        self.rotated_for = None;
+    }
+
+    /// The rotated band, if this frame was rotated for `output` at `split`.
+    pub fn rotated_pixels(
+        &self,
+        output: crate::Rgb565OutputLayout,
+        split: usize,
+    ) -> Option<&[Rgb565Pixel]> {
+        (self.rotated_for == Some((output, split))).then_some(self.rotated.as_slice())
     }
 
     pub(super) fn swap_scratch(&mut self, other: &mut Self) {
@@ -632,7 +689,7 @@ impl PreparedLauncherFrame {
         self.request
     }
     pub fn storage_bytes(&self) -> usize {
-        self.pixels.capacity() * 2
+        (self.pixels.capacity() + self.rotated.capacity()) * 2
             + self
                 .scratch
                 .iter()
@@ -773,6 +830,8 @@ impl LauncherFramePreparer {
                 .map(|_| crate::launcher_flip::Scratch::strip_for(stride))
                 .collect(),
             pixels: Vec::new(),
+            rotated: Vec::new(),
+            rotated_for: None,
         }
     }
 }

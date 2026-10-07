@@ -680,6 +680,45 @@ def _hold_in_arcade_list(agent, direction, seconds, sleep):
         agent._successful("measure", {"launcher_hold": "release"})
 
 
+SCREEN_ORIENTATIONS = {"normal": 0, "clockwise": 1, "counterclockwise": 2}
+
+
+def set_screen_orientation(application, orientation, sleep=time.sleep):
+    """Choose a screen orientation in Settings and keep it.
+
+    The orientation combo lists Normal, Monitor right (clockwise) and Monitor
+    left (counterclockwise); the confirmation dialog defaults to Revert, so
+    Keep is one step down.
+    """
+    if orientation not in SCREEN_ORIENTATIONS:
+        raise ValueError(f"orientation must be one of {sorted(SCREEN_ORIENTATIONS)}")
+    _open_settings_card(application)
+    _wait(lambda: _settings_open(application), "Settings did not open")
+    sleep(2)
+    _focus_label(application, "Screen orientation", "\uf701", 8)
+    _press_key(application, "\n")
+    sleep(1)
+    for _ in range(3):  # to the top of the list, whichever option is current
+        _press_key(application, "\uf700")
+        sleep(0.5)
+    for _ in range(SCREEN_ORIENTATIONS[orientation]):
+        _press_key(application, "\uf701")
+        sleep(0.5)
+    _press_key(application, "\n")
+    sleep(3)
+    # A changed orientation is applied with a Keep/Revert countdown; keep it
+    # before the countdown reverts it. Choosing the current one shows no
+    # dialog, and a key then would change the setting below instead.
+    if any(label.startswith("Revert") for label in _selected_labels(application)):
+        _press_key(application, "\uf701")
+        sleep(0.5)
+        _press_key(application, "\n")
+        sleep(3)
+    _press_key(application, "\uf729")
+    sleep(2)
+    return {"workload": "set-screen-orientation", "orientation": orientation}
+
+
 def launcher_arcade_scroll(
     application,
     agent,
