@@ -11,13 +11,16 @@ struct Raster {
     reflection: Vec<Rgb565Pixel>,
     opaque: Vec<(u16, u16)>,
 }
+/// A body: the card, which face, and its size.
+type SurfaceKey = (LauncherCardId, u16, bool, usize, usize);
+
 /// Card bodies that do not depend on the label, shared by every generic card
 /// of a level. Drawing a body costs a 16-sample antialiased pass over every
 /// pixel; on the device that is most of a level change, so it runs once per
 /// distinct body rather than once per card and face.
 #[derive(Default)]
 pub(super) struct BodyCache {
-    surfaces: Vec<((LauncherCardId, u16, bool), Vec<Rgb565Pixel>)>,
+    surfaces: Vec<(SurfaceKey, Vec<Rgb565Pixel>)>,
     backs: Vec<((LauncherCardId, u16), Vec<Rgb565Pixel>)>,
 }
 
@@ -41,13 +44,21 @@ impl BodyCache {
         &self.backs[index].1
     }
 
-    fn surface(&mut self, card: &PreparedCard<'_>, detail: bool) -> &[Rgb565Pixel] {
-        let key = (card.id, card.colour, detail);
+    fn surface(
+        &mut self,
+        card: &PreparedCard<'_>,
+        width: usize,
+        height: usize,
+        detail: bool,
+    ) -> &[Rgb565Pixel] {
+        let key = (card.id, card.colour, detail, width, height);
         let index = match self.surfaces.iter().position(|(k, _)| *k == key) {
             Some(index) => index,
             None => {
-                self.surfaces
-                    .push((key, surface(card, 180, detail, None, false)));
+                self.surfaces.push((
+                    key,
+                    surface_sized(card, width, height, detail, None, None, false),
+                ));
                 self.surfaces.len() - 1
             }
         };
@@ -114,7 +125,8 @@ fn back_surface(card: &PreparedCard<'_>) -> Vec<Rgb565Pixel> {
 /// The card's title, and its game count on the focused face, in the
 /// production fonts. `stride` x `rows` is the pixel buffer being drawn into and
 /// `width` x `height` the card inside it. A title too wide for the card drops
-/// to the smaller metadata font rather than being clipped.
+/// to `narrow_title` when the output has one (the CRT's narrower cell), else to
+/// the smaller metadata font, rather than being clipped.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_card_labels(
     pixels: &mut [Rgb565Pixel],
@@ -125,6 +137,7 @@ pub(super) fn draw_card_labels(
     height: usize,
     detail: bool,
     fonts: LauncherTypography<'_>,
+    narrow_title: Option<&BitmapFont>,
 ) {
     #[cfg(feature = "launcher-profile")]
     let _labels = crate::launcher_profile::span("prepare.labels");
@@ -132,7 +145,7 @@ pub(super) fn draw_card_labels(
     let title = if heading.measure(card.name) + 12 <= width {
         heading
     } else {
-        fonts.font_for(TextRole::Metadata, card.name)
+        narrow_title.unwrap_or_else(|| fonts.font_for(TextRole::Metadata, card.name))
     };
     title.draw_centered(
         pixels,
@@ -157,16 +170,28 @@ pub(super) fn draw_card_labels(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_face_labels(
     pixels: &mut [Rgb565Pixel],
     card: &PreparedCard<'_>,
     width: usize,
+    height: usize,
     detail: bool,
     fonts: Option<LauncherTypography<'_>>,
+    narrow_title: Option<&BitmapFont>,
 ) {
-    let height = card_height(width);
     if let Some(fonts) = fonts {
-        draw_card_labels(pixels, width, height, card, width, height, detail, fonts);
+        draw_card_labels(
+            pixels,
+            width,
+            height,
+            card,
+            width,
+            height,
+            detail,
+            fonts,
+            narrow_title,
+        );
         return;
     }
     // Portable fallback uses the same glyph rectangles, clipped to the face
@@ -202,18 +227,20 @@ pub(super) fn draw_face_labels(
 
 /// `face`, reusing the label-free body when the card has no artwork and the
 /// production fonts draw the labels.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn face_cached(
     card: &PreparedCard<'_>,
     width: usize,
+    height: usize,
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
+    narrow_title: Option<&BitmapFont>,
     cache: &mut BodyCache,
 ) -> crate::launcher_flip::Face {
-    let (Some(fonts), 180, None) = (typography, width, card.artwork) else {
-        return face(card, width, detail, typography);
+    let (Some(fonts), None) = (typography, card.artwork) else {
+        return face_sized(card, width, height, detail, typography, narrow_title);
     };
-    let height = card_height(width);
-    let mut pixels = cache.surface(card, detail).to_vec();
+    let mut pixels = cache.surface(card, width, height, detail).to_vec();
     draw_card_labels(
         &mut pixels,
         width,
@@ -223,6 +250,7 @@ pub(super) fn face_cached(
         height,
         detail,
         fonts,
+        narrow_title,
     );
     crate::launcher_flip::Face::new(pixels, width, height)
 }
@@ -256,10 +284,24 @@ impl SrgbTransfer {
     }
 }
 
-pub(super) fn reduce_rgb888(source: &[u8]) -> Vec<[u8; 3]> {
+/// Area-average a 360x504 source down to `width` x `height` in linear light,
+/// returning eight-bit sRGB. At 180x252 every output pixel is the mean of a
+/// 2x2 block; other sizes weight each source pixel by how much of it the output
+/// pixel covers, which at an exact 2:1 gives the same result.
+pub(super) fn reduce_rgb888(source: &[u8], width: usize, height: usize) -> Vec<[u8; 3]> {
     assert_eq!(source.len(), 360 * 504 * 3);
+    if (width, height) == (180, 252) {
+        reduce_two_by_two(source)
+    } else {
+        reduce_area(source, width, height)
+    }
+}
+
+/// The HDMI landscape size: a 2x2 mean. This is the startup and level change
+/// path, so it keeps its direct loop.
+fn reduce_two_by_two(source: &[u8]) -> Vec<[u8; 3]> {
     let transfer = srgb_transfer();
-    let rgb8: Vec<[u8; 3]> = (0..252)
+    (0..252)
         .flat_map(|y| (0..180).map(move |x| (x, y)))
         .map(|(x, y)| {
             std::array::from_fn(|c| {
@@ -270,8 +312,6 @@ pub(super) fn reduce_rgb888(source: &[u8]) -> Vec<[u8; 3]> {
                     source[i + 360 * 3],
                     source[i + 360 * 3 + 3],
                 ];
-                // Constant channels need neither a gamma decode nor a binary
-                // search. This is exactly the same rounded sRGB result.
                 if values.iter().all(|&v| v == values[0]) {
                     return values[0];
                 }
@@ -282,17 +322,65 @@ pub(super) fn reduce_rgb888(source: &[u8]) -> Vec<[u8; 3]> {
                 transfer.encode(sum / 4.0)
             })
         })
-        .collect();
+        .collect()
+}
+
+/// Weight each source pixel by how much of the output pixel it covers.
+fn reduce_area(source: &[u8], width: usize, height: usize) -> Vec<[u8; 3]> {
+    let transfer = srgb_transfer();
+    // For one output index, the source indices it covers and their weights;
+    // the weights sum to one.
+    let spans = |output: usize, input: usize, count: usize| -> Vec<(usize, f64)> {
+        let from = output as f64 * input as f64 / count as f64;
+        let to = (output + 1) as f64 * input as f64 / count as f64;
+        let first = from.floor() as usize;
+        let last = (to.ceil() as usize).min(input);
+        (first..last)
+            .map(|index| {
+                let covered = (to.min((index + 1) as f64) - from.max(index as f64)).max(0.0);
+                (index, covered / (to - from))
+            })
+            .collect()
+    };
+    let columns: Vec<_> = (0..width).map(|x| spans(x, 360, width)).collect();
+    let rows: Vec<_> = (0..height).map(|y| spans(y, 504, height)).collect();
+    let mut rgb8 = Vec::with_capacity(width * height);
+    for row in &rows {
+        for column in &columns {
+            rgb8.push(std::array::from_fn(|c| {
+                let first = source[(row[0].0 * 360 + column[0].0) * 3 + c];
+                // Constant channels need neither a gamma decode nor a binary
+                // search. This is exactly the same rounded sRGB result.
+                if row.iter().all(|&(y, _)| {
+                    column
+                        .iter()
+                        .all(|&(x, _)| source[(y * 360 + x) * 3 + c] == first)
+                }) {
+                    return first;
+                }
+                let mut sum = 0.0;
+                for &(y, wy) in row {
+                    for &(x, wx) in column {
+                        sum += transfer.decode[source[(y * 360 + x) * 3 + c] as usize] * wy * wx;
+                    }
+                }
+                transfer.encode(sum)
+            }));
+        }
+    }
     rgb8
 }
 
 pub(super) fn faces_rgb888(
     card: &PreparedCard<'_>,
+    width: usize,
+    height: usize,
     typography: Option<LauncherTypography<'_>>,
+    narrow_title: Option<&BitmapFont>,
 ) -> [crate::launcher_flip::Face; 2] {
     #[cfg(feature = "launcher-profile")]
     let reduction = crate::launcher_profile::span("prepare.rgb888_linear_reduction");
-    let rgb8 = reduce_rgb888(card.rgb888.expect("validated RGB888 source"));
+    let rgb8 = reduce_rgb888(card.rgb888.expect("validated RGB888 source"), width, height);
     #[cfg(feature = "launcher-profile")]
     drop(reduction);
     let reference: Vec<_> = rgb8
@@ -314,8 +402,16 @@ pub(super) fn faces_rgb888(
     std::array::from_fn(|index| {
         #[cfg(feature = "launcher-profile")]
         let _face = crate::launcher_profile::span("prepare.rgb888_face");
-        let pixels = surface(&mapped, 180, index == 1, typography, true);
-        crate::launcher_flip::Face::with_rgb8(pixels, &rgb8, &reference, 180, 252)
+        let pixels = surface_sized(
+            &mapped,
+            width,
+            height,
+            index == 1,
+            typography,
+            narrow_title,
+            true,
+        );
+        crate::launcher_flip::Face::with_rgb8(pixels, &rgb8, &reference, width, height)
     })
 }
 
@@ -370,21 +466,35 @@ fn reference_face_rgb888(
     face
 }
 
+/// A 5:7 face `width` wide.
+#[cfg(test)]
 pub(super) fn face(
     card: &PreparedCard<'_>,
     width: usize,
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
+    face_sized(card, width, card_height(width), detail, typography, None)
+}
+
+pub(super) fn face_sized(
+    card: &PreparedCard<'_>,
+    width: usize,
+    height: usize,
+    detail: bool,
+    typography: Option<LauncherTypography<'_>>,
+    narrow_title: Option<&BitmapFont>,
+) -> crate::launcher_flip::Face {
     #[cfg(feature = "launcher-profile")]
     let _face = crate::launcher_profile::span("prepare.face");
     crate::launcher_flip::Face::new(
-        surface(card, width, detail, typography, true),
+        surface_sized(card, width, height, detail, typography, narrow_title, true),
         width,
-        card_height(width),
+        height,
     )
 }
 
+/// A 5:7 surface `width` wide.
 pub(super) fn surface(
     card: &PreparedCard<'_>,
     width: usize,
@@ -392,9 +502,30 @@ pub(super) fn surface(
     typography: Option<LauncherTypography<'_>>,
     labels: bool,
 ) -> Vec<Rgb565Pixel> {
+    surface_sized(
+        card,
+        width,
+        card_height(width),
+        detail,
+        typography,
+        None,
+        labels,
+    )
+}
+
+/// A card body `width` x `height`: frame, artwork or symbol, and optionally the
+/// labels. Every output draws its cards here, at the size it shows them.
+pub(super) fn surface_sized(
+    card: &PreparedCard<'_>,
+    width: usize,
+    height: usize,
+    detail: bool,
+    typography: Option<LauncherTypography<'_>>,
+    narrow_title: Option<&BitmapFont>,
+    labels: bool,
+) -> Vec<Rgb565Pixel> {
     #[cfg(feature = "launcher-profile")]
     let _surface = crate::launcher_profile::span("prepare.surface");
-    let height = card_height(width);
     let mut canvas = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
     let icon = category_icon(card.id);
     // Generic collection cards keep one dark tint of the collection colour on
@@ -412,6 +543,7 @@ pub(super) fn surface(
     let ink = CREAM;
     #[cfg(feature = "launcher-profile")]
     let surface_pixels = crate::launcher_profile::span("prepare.surface_pixels");
+    let frame = Frame::for_width(width);
     for y in 0..height {
         for x in 0..width {
             if !rounded_contains(x, y, width, height) {
@@ -420,7 +552,7 @@ pub(super) fn surface(
             let mut colour = framed_surface(card, base, trim, width, height, x, y);
             if icon.is_some()
                 && card.artwork.is_none()
-                && inside_inset(x * 8 + 4, y * 8 + 4, width, height, 8)
+                && inside_inset(x * 8 + 4, y * 8 + 4, width, height, frame.inner)
             {
                 colour = lit_body(card.colour, width, height, x, y);
             }
@@ -437,7 +569,8 @@ pub(super) fn surface(
                 0x7ffe, 0x4002, 0x5ffa, 0x5ffa, 0x4002, 0x6006, 0x2004, 0x27e4, 0x2424, 0x2424,
                 0x27e4, 0x2004, 0x300c, 0x7ffe, 0x4002, 0x47e2, 0x4422, 0x4422, 0x7ffe, 0x6006,
             ];
-            let scale = 4;
+            // 4 at 180 wide; smaller cards scale the cabinet to fit.
+            let scale = (width.saturating_sub(4) / 16).clamp(1, 4);
             let left = (width - 16 * scale) / 2;
             let top = height * 22 / 100;
             for (y, bits) in CABINET.iter().enumerate() {
@@ -456,7 +589,8 @@ pub(super) fn surface(
             }
         } else if let Some(bits) = icon {
             // The collection's pixel symbol with a shadow in its own colour.
-            let scale = 5;
+            // 5 at 180 wide; smaller cards scale the symbol to fit.
+            let scale = (width.saturating_sub(4) / 16).clamp(1, 5);
             let left = (width - 16 * scale) / 2;
             let top = height * 22 / 100;
             let shadow = mix_colour(card.colour, BACKGROUND, 150);
@@ -504,7 +638,15 @@ pub(super) fn surface(
         })
         .collect();
     if labels {
-        draw_face_labels(&mut pixels, card, width, detail, typography);
+        draw_face_labels(
+            &mut pixels,
+            card,
+            width,
+            height,
+            detail,
+            typography,
+            narrow_title,
+        );
     }
     pixels
 }
@@ -588,7 +730,7 @@ fn inside_inset(x: usize, y: usize, width: usize, height: usize, inset: usize) -
     if edge_x < inset * 8 || edge_y < inset * 8 {
         return false;
     }
-    let radius = 8_usize.saturating_sub(inset).max(4) * 8;
+    let radius = Frame::for_width(width).radius_at(inset) * 8;
     let dx = radius.saturating_sub(edge_x - inset * 8);
     let dy = radius.saturating_sub(edge_y - inset * 8);
     dx * dx + dy * dy <= radius * radius
@@ -607,11 +749,13 @@ fn framed_surface(
     // this same source pixel. Keep a conservative pair of rectangular bands:
     // each is wholly inside the inset-8 rounded rectangle, including sample
     // offsets 1..7. Corners and every frame boundary retain the sampled path.
+    let frame = Frame::for_width(width);
     let edge_x = x.min(width - 1 - x);
     let edge_y = y.min(height - 1 - y);
-    if edge_x >= 8
-        && edge_y >= 8
-        && (edge_x >= 12 || edge_y >= 12)
+    let band = frame.inner + frame.radius_at(frame.inner);
+    if edge_x >= frame.inner
+        && edge_y >= frame.inner
+        && (edge_x >= band || edge_y >= band)
         && let Some(pixels) = card.artwork
     {
         return pixels[y * width + x].0;
@@ -674,9 +818,10 @@ fn framed_sample(
             pixels[py * width + px].0
         },
     );
-    if !inside_inset(x, y, width, height, 3) {
+    let frame = Frame::for_width(width);
+    if !inside_inset(x, y, width, height, frame.rim) {
         mix_colour(trim, CREAM, 76)
-    } else if !inside_inset(x, y, width, height, 8) {
+    } else if !inside_inset(x, y, width, height, frame.inner) {
         // The complete inner stroke is one opaque ink. Artwork must not
         // contribute colour anywhere in the former shoulder or keyline bands.
         opaque_inner_stroke(mix_colour(trim, CREAM, 76))
@@ -796,6 +941,138 @@ fn surface_sample(base: u16, width: usize, x: usize, y: usize) -> u16 {
 mod tests {
     use super::*;
 
+    /// A 5x7 block font whose cells are `scale` pixels wide.
+    fn block_font(scale: usize) -> BitmapFont {
+        use crate::bitmap_text::BitmapGlyph;
+        BitmapFont {
+            ascent: 7,
+            descent: 0,
+            glyphs: (32..127)
+                .map(|c| BitmapGlyph {
+                    code_point: char::from_u32(c).unwrap(),
+                    left: 0,
+                    top: 7,
+                    width: 5 * scale,
+                    height: 7,
+                    advance: 6 * scale as i32,
+                    alpha: vec![255; 5 * scale * 7],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn crt_sized_cards_draw_two_pixel_strokes_and_hdmi_keeps_its_frame() {
+        let rim = mix_colour(0x2a7f, CREAM, 76);
+        let stroke = opaque_inner_stroke(rim);
+        let art = vec![Rgb565Pixel(0x1234); 100 * 140];
+        let card = PreparedCard {
+            id: LauncherCardId::Consoles,
+            name: "X",
+            games: None,
+            colour: 0x2a7f,
+            name_mask: text_mask("X"),
+            games_mask: Vec::new(),
+            artwork: Some(&art),
+            rgb888: None,
+        };
+        // Mid-edge on a 100x140 card: two rim pixels, two stroke pixels, then art.
+        let row: Vec<u16> = (0..6)
+            .map(|x| framed_surface(&card, 0, 0x2a7f, 100, 140, x, 70))
+            .collect();
+        assert_eq!(row, [rim, rim, stroke, stroke, 0x1234, 0x1234]);
+        // The corner is rounded: the extreme pixel is outside, the next row in is not.
+        assert!(!rounded_contains(0, 0, 100, 140));
+        assert!(rounded_contains(0, 2, 100, 140));
+        // The 180-wide frame is the HDMI one: rim 3, stroke from 8.
+        let hdmi = Frame::for_width(180);
+        assert_eq!((hdmi.rim, hdmi.inner, hdmi.radius), (3, 8, 8));
+        assert_eq!((hdmi.radius_at(3), hdmi.radius_at(8)), (5, 4));
+    }
+
+    #[test]
+    fn a_title_too_wide_for_the_doubled_cell_drops_to_the_narrow_font() {
+        let (wide, narrow) = (block_font(2), block_font(1));
+        let fonts = LauncherTypography {
+            heading: &wide,
+            number: &wide,
+            metadata: &wide,
+            fallback: &wide,
+        };
+        let card = PreparedCard {
+            id: LauncherCardId::Consoles,
+            name: "SUPER NINTENDO",
+            games: None,
+            colour: 0x2a7f,
+            name_mask: text_mask("SUPER NINTENDO"),
+            games_mask: Vec::new(),
+            artwork: None,
+            rgb888: None,
+        };
+        let (width, height) = (162, 226);
+        let extent = |narrow_title: Option<&BitmapFont>| {
+            let mut pixels = vec![Rgb565Pixel(0); width * height];
+            draw_card_labels(
+                &mut pixels,
+                width,
+                height,
+                &card,
+                width,
+                height,
+                false,
+                fonts,
+                narrow_title,
+            );
+            let columns: Vec<usize> = (0..width)
+                .filter(|&x| (0..height).any(|y| pixels[y * width + x].0 != 0))
+                .collect();
+            (*columns.first().unwrap(), *columns.last().unwrap())
+        };
+        // The doubled title (14 cells of 12 pixels) is wider than the card and
+        // runs off both edges; the narrow one sits inside with a margin.
+        let (left, right) = extent(None);
+        assert!(left == 0 && right == width - 1, "{left}..{right}");
+        let (left, right) = extent(Some(&narrow));
+        assert!(left >= 20 && right <= width - 20, "{left}..{right}");
+    }
+
+    #[test]
+    fn the_area_reduction_equals_the_two_by_two_mean_at_two_to_one() {
+        // Gradients with flat patches, so both the gamma path and the
+        // constant-colour shortcut are exercised.
+        let source: Vec<u8> = (0..360 * 504 * 3)
+            .map(|i| {
+                let (pixel, channel) = (i / 3, i % 3);
+                let (x, y) = (pixel % 360, pixel / 360);
+                if (x / 40 + y / 56) % 3 == 0 {
+                    [10, 120, 230][channel]
+                } else {
+                    ((x * 5 + y * 3 + channel * 41) % 256) as u8
+                }
+            })
+            .collect();
+        assert!(reduce_area(&source, 180, 252) == reduce_two_by_two(&source));
+    }
+
+    #[test]
+    fn the_area_reduction_keeps_flat_colour_and_the_mean_at_other_sizes() {
+        let flat = vec![77; 360 * 504 * 3];
+        for (width, height) in [(162, 226), (174, 146), (86, 200), (160, 224)] {
+            let reduced = reduce_rgb888(&flat, width, height);
+            assert_eq!(reduced.len(), width * height);
+            assert!(reduced.iter().all(|&pixel| pixel == [77, 77, 77]));
+        }
+        // A half-black, half-white source reduces to the linear-light mean at the
+        // seam and stays pure either side of it.
+        let split: Vec<u8> = (0..360 * 504 * 3)
+            .map(|i| if (i / 3) % 360 < 180 { 0 } else { 255 })
+            .collect();
+        let reduced = reduce_rgb888(&split, 162, 226);
+        assert_eq!(reduced[0], [0, 0, 0]);
+        assert_eq!(reduced[161], [255, 255, 255]);
+        assert_eq!(reduced[80], [0, 0, 0]);
+    }
+
     #[test]
     fn inner_stroke_is_opaque_and_independent_of_artwork() {
         let red = vec![Rgb565Pixel(rgb(255, 0, 0)); 180 * 252];
@@ -894,7 +1171,10 @@ mod tests {
             let mut card = test_card(0xa472);
             card.rgb888 = Some(source);
             for typography in [None, Some(fonts)] {
-                for (index, actual) in faces_rgb888(&card, typography).into_iter().enumerate() {
+                for (index, actual) in faces_rgb888(&card, 180, 252, typography, None)
+                    .into_iter()
+                    .enumerate()
+                {
                     let expected = reference_face_rgb888(&card, index == 1, typography);
                     assert_eq!(actual.pixels, expected.pixels);
                     assert!(

@@ -214,6 +214,12 @@ impl LauncherScene {
         }
     }
 
+    /// A portrait HDMI output, drawn rotated into the landscape scanout.
+    #[must_use]
+    pub const fn is_hdmi_portrait(self) -> bool {
+        !self.crt && self.height > self.width
+    }
+
     #[must_use]
     pub const fn uses_responsive_layout(self) -> bool {
         self.crt || self.height > self.width
@@ -605,11 +611,11 @@ pub struct PreparedLauncherFrame {
 }
 
 impl PreparedLauncherFrame {
-    pub(super) fn spare_pixels() -> Self {
+    fn spare_pixels(len: usize) -> Self {
         Self {
             request: None,
             scratch: Vec::new(),
-            pixels: vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT],
+            pixels: vec![Rgb565Pixel(BACKGROUND); len],
         }
     }
 
@@ -633,11 +639,22 @@ impl PreparedLauncherFrame {
     }
 }
 
+/// Where the card row sits in an output: what a tile renderer needs to split
+/// it into column bands and size its buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CarouselGeometry {
+    pub stride: usize,
+    pub height: usize,
+    pub rows: (usize, usize),
+    pub clip: (usize, usize),
+}
+
 #[derive(Clone)]
 pub struct LauncherFramePreparer {
     faces: Arc<Vec<Arc<CardFaces>>>,
     cyclic: bool,
     trick: Option<level_trick::TrickPlan>,
+    layout: Option<responsive::Layout>,
 }
 
 impl LauncherFramePreparer {
@@ -647,9 +664,36 @@ impl LauncherFramePreparer {
             && self.trick == other.trick
     }
 
+    pub fn geometry(&self) -> CarouselGeometry {
+        if let Some(layout) = &self.layout {
+            let row = layout.card_row();
+            let (stride, height) = layout.size();
+            return CarouselGeometry {
+                stride,
+                height,
+                rows: row.rows,
+                clip: row.clip,
+            };
+        }
+        let row = CardRow::canvas(
+            self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides),
+        );
+        CarouselGeometry {
+            stride: LOGICAL_WIDTH,
+            height: LOGICAL_HEIGHT,
+            rows: row.rows,
+            clip: row.clip,
+        }
+    }
+
     pub fn carousel_clip(&self) -> (usize, usize) {
-        CardRow::canvas(self.trick.is_some() || self.faces.first().is_some_and(|face| face.slides))
-            .clip
+        self.geometry().clip
+    }
+
+    /// A pixel buffer for the helper's next frame, sized for this output.
+    pub fn new_spare_buffer(&self) -> PreparedLauncherFrame {
+        let geometry = self.geometry();
+        PreparedLauncherFrame::spare_pixels(geometry.stride * geometry.height)
     }
     pub fn render_tile(
         &self,
@@ -676,7 +720,8 @@ impl LauncherFramePreparer {
         destination: &mut [Rgb565Pixel],
         clip: (usize, usize),
     ) {
-        assert!(destination.len() >= 960 * 540);
+        let geometry = self.geometry();
+        assert!(destination.len() >= geometry.stride * geometry.height);
         buffer.request = Some(request);
         self.render_tile_pixels(request, &mut buffer.scratch, destination, clip);
     }
@@ -688,56 +733,67 @@ impl LauncherFramePreparer {
         pixels: &mut [Rgb565Pixel],
         clip: (usize, usize),
     ) {
-        assert!(clip.0 >= self.carousel_clip().0 && clip.0 <= clip.1 && clip.1 <= CardRow::RIGHT);
+        let geometry = self.geometry();
+        assert!(clip.0 >= geometry.clip.0 && clip.0 <= clip.1 && clip.1 <= geometry.clip.1);
+        let row = CardRow {
+            rows: geometry.rows,
+            clip,
+        };
         {
             #[cfg(feature = "launcher-profile")]
             let _clear = crate::launcher_profile::span("flip.clear");
-            clear_card_rows(
-                pixels,
-                LOGICAL_WIDTH,
-                CardRow::canvas(false).with_clip(clip),
-            );
+            clear_card_rows(pixels, geometry.stride, row);
         }
         if !self.faces.is_empty() {
-            let plan = self.trick.map_or_else(
-                || build_carousel_plan(&self.faces, request.frame, self.cyclic),
-                |plan| plan.with_faces(&self.faces),
-            );
-            draw_card_strips(
-                pixels,
-                LOGICAL_WIDTH,
-                CardRow::canvas(false).with_clip(clip),
-                &plan,
-                scratch,
-            );
+            let plan = match &self.layout {
+                Some(layout) => layout.plan(&self.faces, request.frame, self.cyclic),
+                None => self.trick.map_or_else(
+                    || build_carousel_plan(&self.faces, request.frame, self.cyclic),
+                    |plan| plan.with_faces(&self.faces),
+                ),
+            };
+            draw_card_strips(pixels, geometry.stride, row, &plan, scratch);
         }
     }
     /// Compact scratch for `render_tile` only, not whole-card preparation.
     pub fn new_tile_buffer(&self) -> PreparedLauncherFrame {
         let mut buffer = self.new_direct_tile_buffer();
-        buffer.pixels = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let geometry = self.geometry();
+        buffer.pixels = vec![Rgb565Pixel(BACKGROUND); geometry.stride * geometry.height];
         buffer
     }
 
     pub(crate) fn new_direct_tile_buffer(&self) -> PreparedLauncherFrame {
+        let stride = self.geometry().stride;
         PreparedLauncherFrame {
             request: None,
             scratch: (0..CAROUSEL_CAPACITY)
-                .map(|_| crate::launcher_flip::Scratch::strip())
+                .map(|_| crate::launcher_flip::Scratch::strip_for(stride))
                 .collect(),
             pixels: Vec::new(),
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bake_face(
     card: &PreparedCard<'_>,
     width: usize,
+    height: usize,
     selected: bool,
     typography: Option<LauncherTypography<'_>>,
+    narrow_title: Option<&BitmapFont>,
     cache: &mut artwork::BodyCache,
 ) -> crate::launcher_flip::Face {
-    artwork::face_cached(card, width, selected, typography, cache)
+    artwork::face_cached(
+        card,
+        width,
+        height,
+        selected,
+        typography,
+        narrow_title,
+        cache,
+    )
 }
 
 struct PreparedCard<'a> {
@@ -801,6 +857,7 @@ impl PreparedLauncher {
             faces: self.faces.clone(),
             cyclic: self.cyclic,
             trick: None,
+            layout: self.responsive,
         }
     }
     pub fn shares_faces_with(&self, other: &Self) -> bool {
@@ -894,6 +951,15 @@ impl PreparedLauncher {
         });
         let responsive = responsive::Layout::for_level(scene, data.level.slides());
         let fonts = responsive.map(|layout| layout.fonts(typography));
+        // Every output bakes its faces through the same functions, at the size
+        // it shows them: 180x252 on the HDMI landscape canvas, the card's own
+        // size elsewhere, with the output's label fonts.
+        let (face_width, face_height) = responsive.map_or((180, 252), |layout| layout.face_size());
+        let (face_typography, narrow_title) =
+            match fonts.as_ref().map(responsive::Fonts::for_labels) {
+                Some((labels, narrow)) => (Some(labels), narrow),
+                None => (typography, None),
+            };
         let pixel_count = if responsive.is_some() {
             scene.width * scene.height
         } else {
@@ -950,7 +1016,10 @@ impl PreparedLauncher {
                 } else {
                     card.name
                 };
-                let prepared_art = loaded.as_mut().and_then(|source| source.prepared.take());
+                // Prepared artwork is baked at 180x252; other sizes bake from the source.
+                let prepared_art = ((face_width, face_height) == (180, 252))
+                    .then(|| loaded.as_mut().and_then(|source| source.prepared.take()))
+                    .flatten();
                 let card = PreparedCard {
                     id: card.id,
                     name,
@@ -992,7 +1061,13 @@ impl PreparedLauncher {
                 } else if card.rgb888.is_some() {
                     #[cfg(feature = "launcher-profile")]
                     let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
-                    let [compact, detail] = artwork::faces_rgb888(&card, typography);
+                    let [compact, detail] = artwork::faces_rgb888(
+                        &card,
+                        face_width,
+                        face_height,
+                        face_typography,
+                        narrow_title,
+                    );
                     CardFaces {
                         source_retry: false,
                         compact,
@@ -1005,19 +1080,32 @@ impl PreparedLauncher {
                     let _faces = crate::launcher_profile::span("prepare.initial_faces");
                     CardFaces {
                         source_retry: false,
-                        compact: bake_face(&card, 180, false, typography, &mut bodies),
-                        detail: bake_face(&card, 180, true, typography, &mut bodies),
+                        compact: bake_face(
+                            &card,
+                            face_width,
+                            face_height,
+                            false,
+                            face_typography,
+                            narrow_title,
+                            &mut bodies,
+                        ),
+                        detail: bake_face(
+                            &card,
+                            face_width,
+                            face_height,
+                            true,
+                            face_typography,
+                            narrow_title,
+                            &mut bodies,
+                        ),
                         back: bodies.back_face(&card),
                         slides: data.level.slides(),
                     }
                 };
                 faces.source_retry = loaded.as_ref().is_some_and(|source| source.retry);
-                // Every output shares these faces. Each is baked once at 180x252 and
-                // the projection scales it to the card's pose, so every projection
-                // is dithered. A reflection is 64 rows under a 252-row card; a
-                // smaller card keeps the same proportion.
-                let fade_rows =
-                    responsive.map_or(64, |layout| (64 * layout.card_h / 252).clamp(2, 64));
+                // Every projection is dithered. A reflection is 64 rows under a
+                // 252-row card; a smaller card keeps the same proportion.
+                let fade_rows = (64 * face_height / 252).clamp(2, 64);
                 for face in [&mut faces.compact, &mut faces.detail]
                     .into_iter()
                     .chain(faces.back.as_mut())
@@ -1083,13 +1171,19 @@ impl PreparedLauncher {
         renderer.merge_retained_helper(&mut self.logical);
     }
 
+    /// Whether the output is drawn straight into `pixels()`, so card bands can
+    /// be rendered in parallel: native 960x540 and every responsive layout.
+    pub fn supports_parallel(&self) -> bool {
+        self.responsive.is_some() || self.scene == LauncherScene::new(960, 540)
+    }
+
     pub fn render_parallel_frame(
         &mut self,
         renderer: &mut crate::launcher_parallel::ParallelLauncherRenderer,
         request: LauncherFrameRequest,
     ) -> Result<crate::launcher_parallel::ParallelFrameTiming, String> {
-        if self.scene != LauncherScene::new(960, 540) {
-            return Err("parallel cards require native geometry".into());
+        if !self.supports_parallel() {
+            return Err("parallel cards require native or responsive geometry".into());
         }
         renderer.render(&self.frame_preparer(), request, &mut self.logical)
     }
@@ -1904,11 +1998,64 @@ fn text_mask(text: &str) -> Vec<[u8; 7]> {
     text.chars().map(glyph).collect()
 }
 
+/// The stroke widths and corner radius of a card face, in pixels. The 180-wide
+/// HDMI face has a 3 pixel rim, an inner stroke at 8 and a radius of 8; cards
+/// narrower than that (CRT) draw two pixel strokes and a smaller radius.
+#[derive(Clone, Copy)]
+pub(super) struct Frame {
+    pub rim: usize,
+    pub inner: usize,
+    pub radius: usize,
+    /// The smallest radius an inner outline keeps as it nears the centre.
+    floor: usize,
+}
+
+impl Frame {
+    pub(super) const fn for_width(width: usize) -> Self {
+        if width >= 180 {
+            Self {
+                rim: 3,
+                inner: 8,
+                radius: 8,
+                floor: 4,
+            }
+        } else {
+            Self {
+                rim: 2,
+                inner: 4,
+                radius: 4,
+                floor: 2,
+            }
+        }
+    }
+
+    /// Corner radius of the outline `inset` pixels inside the silhouette.
+    pub(super) const fn radius_at(self, inset: usize) -> usize {
+        let radius = self.radius.saturating_sub(inset);
+        if radius > self.floor {
+            radius
+        } else {
+            self.floor
+        }
+    }
+}
+
 pub(super) fn rounded_contains(x: usize, y: usize, width: usize, height: usize) -> bool {
     if x >= width || y >= height {
         return false;
     }
     let row = y.min(height - 1 - y);
+    if width < 180 {
+        // Pixel centres inside the corner circle.
+        let r = Frame::for_width(width).radius;
+        let edge = x.min(width - 1 - x);
+        if row >= r || edge >= r {
+            return true;
+        }
+        let dx = (2 * r) as i64 - (2 * edge + 1) as i64;
+        let dy = (2 * r) as i64 - (2 * row + 1) as i64;
+        return dx * dx + dy * dy <= (4 * r * r) as i64;
+    }
     let inset = [5, 3, 2, 1, 1, 0, 0, 0].get(row).copied().unwrap_or(0);
     x >= inset && x + inset < width
 }
@@ -2446,48 +2593,48 @@ mod tests {
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x01de40663697711d, 0xf8cd84aad96c6ec2, 0x510785231b4c077d, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0xdfa4872b2baf7994, 0x2d94a95f2e285101, 0xcaeb9d49054907c3, 0x4687b9f98929fc27,
-            0x88a45b3d7d8dc4b3, 0x36d9572edde4428b, 0x1a35bc5ccf9c4f82, 0x42509915f4f2f968, 0x569885b63ef6cc07,
-            0x569885b63ef6cc07, 0x73438c18dab1decd, 0x26fa8c97d2837420, 0x291fc2dd3a07db77, 0x88a45b3d7d8dc4b3,
-            0x8c9061a9bdd69a9a, 0x719ef415bada8cd7, 0x04bb4cb78ba97984, 0x47a470bccf735a88, 0x81c9ac2e027a863f,
-            0x81c9ac2e027a863f, 0x3d9ccfa26a0698db, 0x41182f332fc1e0f1, 0x0c988417cd6cefdf, 0x8c9061a9bdd69a9a,
-            0xca1f9b2f645a8a43, 0x6a0b92928e5632be, 0xb9c71e1d3f134b06, 0x878981643f8fac87, 0x9fbcf649cc549522,
-            0x9fbcf649cc549522, 0xdc7dbea4d88d769a, 0x219463b423282341, 0x1c56f7f767332cd7, 0xca1f9b2f645a8a43,
+            0x1d8e5f16ba98c107, 0xd901bd2138ac1e56, 0xb9fab7f7778269d0, 0x28882b8f9e405f9e, 0xff957d853a6955df,
+            0xff957d853a6955df, 0x3bba4523bbf95dfd, 0x2bb7db83fd3dbea4, 0x8db7fe2a51ccbb4e, 0x1d8e5f16ba98c107,
+            0x429ff164c1e6503c, 0x6bdc37b4d365f9e6, 0xd645694a191228c5, 0x9cf9d1524f237448, 0x91613abda05c6985,
+            0x91613abda05c6985, 0xfee7320dd9d9d638, 0x292791385399fe6c, 0xbea73577d5c79117, 0x429ff164c1e6503c,
+            0xf4391645fe8dacff, 0x4ab6185785c0bfae, 0xd66ec3c477a220a2, 0x4b47dd731c349d98, 0x9509e8277cba470e,
+            0x9509e8277cba470e, 0xb64e00f604c97817, 0xd59b3a4c1a97b482, 0x6a131650ad1b6d83, 0xf4391645fe8dacff,
         ];
         #[cfg(all(feature = "card-axis-filter", not(feature = "card-fast-quantisation")))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x9d2be33a3ca71867, 0x52234dbf6ae11548, 0x72d7e978eb358360, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0x00885c42b0b1224e, 0xb8afd0c2d7cf3b77, 0x094557929b2959f5, 0x4687b9f98929fc27,
-            0xf05385fa3097b843, 0xe8bc8b6accc8c589, 0x4a23d117b0a09d7b, 0x763a29b0fadd6325, 0x5b752c4e4acba8a0,
-            0x5b752c4e4acba8a0, 0xc58228ab07590c0a, 0xb4420e95e582f505, 0x955a78ca21100888, 0xf05385fa3097b843,
-            0xe61a6980fb509025, 0x0f1f3c64fb3bc6b0, 0x200eeebb6c572db0, 0x5b1c39f20f40c82e, 0x1c6e526e51d58afd,
-            0x1c6e526e51d58afd, 0x04578fe78f055cfb, 0x5fd703677ada3b61, 0x53b7cf5a0aa66ff4, 0xe61a6980fb509025,
-            0x09d4daf3b36132e7, 0xc0195724d9ecd6e5, 0x9c104545659738e1, 0x8b1a6868deecff3b, 0xc7e159cf2802b94b,
-            0xc7e159cf2802b94b, 0x8a94c1a3ea2ba62b, 0x7e0f1909c503094a, 0xb05472ea5042af21, 0x09d4daf3b36132e7,
+            0x1d8e5f16ba98c107, 0xbd99c8fcfac38887, 0xa2c24c457df0b99e, 0xa18d5502ec398560, 0xff957d853a6955df,
+            0xff957d853a6955df, 0x914d5776f2c34827, 0x1b81e42214f785d6, 0xba1a93c8048a58eb, 0x1d8e5f16ba98c107,
+            0x429ff164c1e6503c, 0x43292a361f6b42cb, 0x396177d2b3f12264, 0xe2da0a59e9b4a2d3, 0x91613abda05c6985,
+            0x91613abda05c6985, 0x05891c964962df69, 0xc689ffd1d1dba015, 0x9b355449bf523113, 0x429ff164c1e6503c,
+            0xf4391645fe8dacff, 0x5d10177563d83b50, 0x6d5e61b8347b45c6, 0xd53e9d36895362d0, 0x9509e8277cba470e,
+            0x9509e8277cba470e, 0xf73a2a190f9940db, 0xdecf4c1c54442402, 0xd6c04fc4f78f1a75, 0xf4391645fe8dacff,
         ];
         #[cfg(all(not(feature = "card-axis-filter"), feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xa7cef90c802d6414, 0xea9b95bdbad042bb, 0x67a9abee891b4c1a, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x2cca0ac9cf164e40, 0xa430e84ae034b4bd, 0xb60e7727de597315, 0xd3ce5764e8c88bde,
-            0x866c5970e6c4e8d6, 0x22630b086d5dd725, 0x4a3c1259dd69599e, 0xc99e708f63049fd7, 0xb1d3aee63cf1c10f,
-            0xb1d3aee63cf1c10f, 0x14dc28759ebd3993, 0x2cf56d99baf64a02, 0x35dd69395ef5b57a, 0x866c5970e6c4e8d6,
-            0xd3d9435fc2ebdc65, 0x2704b3986e31ff95, 0x4a5d71e2e6bc121e, 0x7727e28c139f6eb4, 0xa95e4aef7de1bcb5,
-            0xa95e4aef7de1bcb5, 0x137ace44f04e894b, 0xa387c3b6e36e893b, 0x77e7f1ee5d540cd2, 0xd3d9435fc2ebdc65,
-            0x6dd01c9b29aa0d1e, 0x6a983d4a6ce048fe, 0x333fdb28c02489b8, 0xd32832c16e9b1607, 0x65c95e85bc5d0543,
-            0x65c95e85bc5d0543, 0x208d1063ebd93971, 0x4670e02591af16da, 0xcbde8e1f1858ea0f, 0x6dd01c9b29aa0d1e,
+            0xdcc543ef9215f322, 0x97e9939f8c9ba2e1, 0x5475222493c44834, 0x01e0288acdd11c4e, 0x1b7b9869f3976209,
+            0x1b7b9869f3976209, 0x5f008b75641ad106, 0x19c6ea7d2473b3d7, 0xcb368cd2c3662f96, 0xdcc543ef9215f322,
+            0xc0388fee60001b4e, 0xd53ec84822dee2c8, 0x0517a4afb5be4217, 0x57efdfac4f5cb651, 0x6133b3161113656f,
+            0x6133b3161113656f, 0x802b62a4a7a3ad35, 0x2873e0a0e45c9c6b, 0x48a5075d0f062401, 0xc0388fee60001b4e,
+            0xcb1d859d9d7fac3a, 0x9ab41e69d8d4d782, 0xae6fe0d2f0ed2c9a, 0x601c2b4be3468668, 0x0697ea514fac7afa,
+            0x0697ea514fac7afa, 0x80b220f84a7d3b55, 0x7434f7c1fb308a45, 0x629ff6ff230c37fb, 0xcb1d859d9d7fac3a,
         ];
         #[cfg(all(feature = "card-axis-filter", feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xbe353139c21b115f, 0xefb5b4c5a8c033ac, 0x1dffc79049677eb6, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x223c8ad98be9529c, 0xc477be9f19c4cc32, 0xd9ec89c562a0692a, 0xd3ce5764e8c88bde,
-            0x225990ddbeec2afa, 0xc0ae1dc91f6d683c, 0x868a13f1d6d051d4, 0xa98c3a25c840f417, 0xa2013858592d8059,
-            0xa2013858592d8059, 0x8be18bd6dd56c0e0, 0xf75404f418d7ebc0, 0xb6790e61a1f38ebe, 0x225990ddbeec2afa,
-            0xb54e527092d8d77a, 0x5a4234eea0e114fa, 0x249185133cd97259, 0x9e28356292efe098, 0xb898fce983d3f4cd,
-            0xb898fce983d3f4cd, 0x27e6bdf1e6039a75, 0x06ce9b5f5045caeb, 0xc308d7bc3d4414bb, 0xb54e527092d8d77a,
-            0x3a66e2537dd1f7e1, 0xc93ce376e7dc28b6, 0x482e2443ce19fb9f, 0xf0a26d0d51a82473, 0x30f8b0864535150a,
-            0x30f8b0864535150a, 0x8876d7305a7d3796, 0x34e2f3040002cff2, 0x80e67776bf7f3512, 0x3a66e2537dd1f7e1,
+            0xdcc543ef9215f322, 0xdf1c64781f3e2e07, 0xacf3142ac673e71b, 0x0f577961a759fdc8, 0x1b7b9869f3976209,
+            0x1b7b9869f3976209, 0xdf5fdad25676fb64, 0xb416fbb8265dc6d4, 0x13f492b007206b54, 0xdcc543ef9215f322,
+            0xc0388fee60001b4e, 0xaa93d9d0125dfde5, 0x180508b9cd143767, 0x214e090ab29ee6d1, 0x6133b3161113656f,
+            0x6133b3161113656f, 0xdc4e279e49035373, 0xba68976a38c2b38f, 0xd62a611eaef36d81, 0xc0388fee60001b4e,
+            0xcb1d859d9d7fac3a, 0xda0a7e717378c6fe, 0x22ee660a071146d9, 0x30610708794c90ea, 0x0697ea514fac7afa,
+            0x0697ea514fac7afa, 0x209cd0bf5bd6f14b, 0x574ac432b739a05e, 0x89e84dc4e8ea7d37, 0xcb1d859d9d7fac3a,
         ];
         assert_eq!(actual, REFERENCE, "Root raster: {actual:x?}");
     }
@@ -3080,55 +3227,55 @@ mod tests {
             ("hdmi-1280x720 nested right-mid", 0x16a61476e10090f2),
             ("hdmi-1280x720 nested right-late", 0xedc3687816f6ae9f),
             ("hdmi-1280x720 nested left-mid", 0x80966bbb01371184),
-            ("hdmi-portrait-540x960 root rest", 0xef78d78aecac8f19),
-            ("hdmi-portrait-540x960 root right-start", 0xcb72debe68827338),
-            ("hdmi-portrait-540x960 root right-mid", 0x426d744d6223fb5f),
-            ("hdmi-portrait-540x960 root right-late", 0xb43f80d9ef33802a),
-            ("hdmi-portrait-540x960 root left-mid", 0x6cdde20a166d7a40),
-            ("hdmi-portrait-540x960 nested rest", 0xba268aa9dc3d1db2),
+            ("hdmi-portrait-540x960 root rest", 0x3f90c4b7c55f4959),
+            ("hdmi-portrait-540x960 root right-start", 0x1887dc6cc10e8fd0),
+            ("hdmi-portrait-540x960 root right-mid", 0x6a206be4766d1e02),
+            ("hdmi-portrait-540x960 root right-late", 0x16e7c59131dd450b),
+            ("hdmi-portrait-540x960 root left-mid", 0x347b355b8ae1ced7),
+            ("hdmi-portrait-540x960 nested rest", 0xcd7bb98ac6536723),
             (
                 "hdmi-portrait-540x960 nested right-start",
-                0x84822eb84b8ea837,
+                0x2891e54318dc635c,
             ),
-            ("hdmi-portrait-540x960 nested right-mid", 0x298359c35f34ff5d),
+            ("hdmi-portrait-540x960 nested right-mid", 0x2ee3456dafd49f18),
             (
                 "hdmi-portrait-540x960 nested right-late",
-                0x99a335752f1bc91a,
+                0x3dac9a71ff54f4fa,
             ),
-            ("hdmi-portrait-540x960 nested left-mid", 0xd6f3ce2f132b8de7),
-            ("crt-640x480 root rest", 0xfe9ae5ea30868d15),
-            ("crt-640x480 root right-start", 0xedba6bfd8b5156fa),
-            ("crt-640x480 root right-mid", 0x5c786745df3695d1),
-            ("crt-640x480 root right-late", 0x8ba3adfdcc3d854d),
-            ("crt-640x480 root left-mid", 0xb6b56daa8a2ed8bc),
-            ("crt-640x480 nested rest", 0x84a95c5b09406010),
-            ("crt-640x480 nested right-start", 0x2468d00d67298825),
-            ("crt-640x480 nested right-mid", 0x727120b1de42ebd8),
-            ("crt-640x480 nested right-late", 0x642d5ad38b26b9a2),
-            ("crt-640x480 nested left-mid", 0xffe8ea8798952f88),
-            ("crt-640x288 root rest", 0x813dd0da0aabd4e6),
-            ("crt-640x288 root right-start", 0x191ff7af4f449715),
-            ("crt-640x288 root right-mid", 0xd64ce860ebb528e6),
-            ("crt-640x288 root right-late", 0x550aae539ae6d093),
-            ("crt-640x288 root left-mid", 0xa7d10edca47a8d3e),
-            ("crt-640x288 nested rest", 0x0c9f533659a27793),
-            ("crt-640x288 nested right-start", 0x5d36b874728a6497),
-            ("crt-640x288 nested right-mid", 0x7baf78d37da37d95),
-            ("crt-640x288 nested right-late", 0xe3fa864ae7faa082),
-            ("crt-640x288 nested left-mid", 0x69abba8f636ac53c),
-            ("crt-portrait-480x640 root rest", 0x12f47dcb67eba657),
-            ("crt-portrait-480x640 root right-start", 0x1b19147019b19a78),
-            ("crt-portrait-480x640 root right-mid", 0x1bf18198c7cd46c6),
-            ("crt-portrait-480x640 root right-late", 0xf4fe7cfbe5bf3b93),
-            ("crt-portrait-480x640 root left-mid", 0x61592d8af5720eb4),
-            ("crt-portrait-480x640 nested rest", 0x0caacd5b3aa759eb),
+            ("hdmi-portrait-540x960 nested left-mid", 0x790419b87b5d5114),
+            ("crt-640x480 root rest", 0xca705023a4192348),
+            ("crt-640x480 root right-start", 0x7f8ecb32cd74fff4),
+            ("crt-640x480 root right-mid", 0xfbd1ab84209ba722),
+            ("crt-640x480 root right-late", 0x631da8438ce2e681),
+            ("crt-640x480 root left-mid", 0xccc4e0e3e9f085bc),
+            ("crt-640x480 nested rest", 0xaa9ea010ae7046d3),
+            ("crt-640x480 nested right-start", 0x09980da561076410),
+            ("crt-640x480 nested right-mid", 0xbc69320851799ea1),
+            ("crt-640x480 nested right-late", 0xb0a93ffab295840c),
+            ("crt-640x480 nested left-mid", 0x19d85994f9938f29),
+            ("crt-640x288 root rest", 0x433713fe1cfdbfe0),
+            ("crt-640x288 root right-start", 0x76e8d39818a4848a),
+            ("crt-640x288 root right-mid", 0xdb6b87900f42d13e),
+            ("crt-640x288 root right-late", 0x0d0ac9575c0db1cb),
+            ("crt-640x288 root left-mid", 0x89b675772550ccd4),
+            ("crt-640x288 nested rest", 0xd50c93c5e15a7091),
+            ("crt-640x288 nested right-start", 0x2dfbcc4d7e379a11),
+            ("crt-640x288 nested right-mid", 0xe95eebe882ebd855),
+            ("crt-640x288 nested right-late", 0xd2c6d411bf73f639),
+            ("crt-640x288 nested left-mid", 0x6da8a068a6685bf0),
+            ("crt-portrait-480x640 root rest", 0xf2af231f49b06714),
+            ("crt-portrait-480x640 root right-start", 0x162d4d199521d705),
+            ("crt-portrait-480x640 root right-mid", 0xdcbf2ea60c141252),
+            ("crt-portrait-480x640 root right-late", 0x10f173090c708cac),
+            ("crt-portrait-480x640 root left-mid", 0x6d8813884cca9b3f),
+            ("crt-portrait-480x640 nested rest", 0xfe3526b6b27faab2),
             (
                 "crt-portrait-480x640 nested right-start",
-                0x246fd20f9cfc2fea,
+                0xc4a2762ae5848d20,
             ),
-            ("crt-portrait-480x640 nested right-mid", 0x40a567523b89330b),
-            ("crt-portrait-480x640 nested right-late", 0xf8364d752e08cd04),
-            ("crt-portrait-480x640 nested left-mid", 0x30573b3f00e85e4d),
+            ("crt-portrait-480x640 nested right-mid", 0x4eef80ee2f3c1001),
+            ("crt-portrait-480x640 nested right-late", 0xbd86f13e8728fcd6),
+            ("crt-portrait-480x640 nested left-mid", 0x5945b5550d957faf),
         ];
         let actual = card_row_hashes();
         let changed: Vec<_> = actual
@@ -3279,6 +3426,170 @@ mod tests {
                 }
                 std::fs::write(format!("{dir}/{name}-{frame_name}.ppm"), ppm).unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn every_card_bakes_at_the_size_each_output_shows_it() {
+        let source: Vec<u8> = (0..360 * 504 * 3)
+            .map(|i| ((i * 7 + i / 360) % 251) as u8)
+            .collect();
+        let ids = [
+            LauncherCardId::Arcade,
+            LauncherCardId::Consoles,
+            LauncherCardId::Computers,
+            LauncherCardId::Handhelds,
+            LauncherCardId::Favourites,
+            LauncherCardId::Settings,
+        ];
+        let cards: Vec<LauncherCard<'static>> = ids
+            .iter()
+            .map(|&id| LauncherCard {
+                id,
+                name: "SUPER NINTENDO",
+                games: Some(1234),
+                colour: LauncherCardStyle::root(id).colour,
+            })
+            .collect();
+        let images: Vec<&[u8]> = vec![source.as_slice(); cards.len()];
+        let nested = NestedLevel {
+            path: &["CONSOLES"],
+            games: 60,
+            children: 6,
+            children_label: "MAKERS",
+            detail: None,
+            accent: 0x2a7f,
+        };
+        for scene in [
+            LauncherScene::new(960, 540),
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(640, 480),
+            LauncherScene::crt(640, 240),
+            LauncherScene::crt(640, 288),
+            LauncherScene::crt(480, 640),
+            LauncherScene::crt(240, 640),
+            LauncherScene::crt(288, 640),
+        ] {
+            for level in [LauncherLevel::Root, LauncherLevel::Nested(nested)] {
+                let (width, height) = responsive::Layout::for_level(scene, level.slides())
+                    .map_or((180, 252), |layout| layout.face_size());
+                for artwork in [None, Some(Artwork::Rgb888(&images))] {
+                    let mut input = data();
+                    input.cards = &cards;
+                    input.level = level;
+                    let prepared = PreparedLauncher::new(scene, input, artwork, None);
+                    for faces in prepared.faces.iter() {
+                        for face in [&faces.compact, &faces.detail] {
+                            assert_eq!(
+                                (face.width, face.height),
+                                (width, height),
+                                "{}x{} {:?}",
+                                scene.width,
+                                scene.height,
+                                artwork.is_some()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Time `render_frame` across a full flip and at rest for each output, in
+    /// microseconds per frame. Run in release with real artwork:
+    /// `MAGIK_CARD_ART_DIR=... cargo test --release --lib bench_card_row_render -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark; prints timings"]
+    fn bench_card_row_render() {
+        let art: Vec<Vec<u8>> = std::env::var("MAGIK_CARD_ART_DIR")
+            .ok()
+            .map(|dir| {
+                let mut names: Vec<_> = std::fs::read_dir(dir)
+                    .unwrap()
+                    .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "rgb888"))
+                    .collect();
+                names.sort();
+                names
+                    .into_iter()
+                    .map(|path| std::fs::read(path).unwrap())
+                    .filter(|bytes| bytes.len() == 360 * 504 * 3)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        for (name, scene) in [
+            ("hdmi-960x540", LauncherScene::new(960, 540)),
+            ("hdmi-portrait-540x960", LauncherScene::new(540, 960)),
+            ("crt-640x480", LauncherScene::crt(640, 480)),
+            ("crt-640x240", LauncherScene::crt(640, 240)),
+            ("crt-640x288", LauncherScene::crt(640, 288)),
+            ("crt-portrait-480x640", LauncherScene::crt(480, 640)),
+        ] {
+            let images: Vec<&[u8]> = art.iter().map(Vec::as_slice).take(CARDS.len()).collect();
+            let mut prepared = if images.len() == CARDS.len() {
+                scene
+                    .prepare_initial_with_rgb888_artwork(data(), &images)
+                    .finish()
+            } else {
+                scene.prepare(data())
+            };
+            let frames: Vec<BrowseFrame> = (0..=30)
+                .map(|i| BrowseFrame {
+                    selected: 0,
+                    target: 1,
+                    phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                    direction: Some(BrowseDirection::Right),
+                    progress_millis: units * i / 30,
+                    duration_millis: units,
+                })
+                .collect();
+            for frame in &frames {
+                prepared.render_frame(*frame);
+            }
+            let mut flip = f64::MAX;
+            for _ in 0..6 {
+                let started = std::time::Instant::now();
+                for frame in &frames {
+                    prepared.render_frame(*frame);
+                }
+                flip = flip.min(started.elapsed().as_secs_f64() * 1e6 / frames.len() as f64);
+            }
+            let rest = BrowseFrame {
+                selected: 0,
+                target: 0,
+                phase: crate::launcher_navigation::BrowsePhase::Settled,
+                direction: None,
+                progress_millis: 0,
+                duration_millis: units,
+            };
+            let started = std::time::Instant::now();
+            for _ in 0..30 {
+                prepared.render_frame(rest);
+            }
+            let rest_us = started.elapsed().as_secs_f64() * 1e6 / 30.0;
+            println!("BENCH {name}: flip {flip:.0} us/frame, rest {rest_us:.0} us/frame");
+        }
+    }
+
+    /// A scene whose cards are taller than the shared 180x252 face still
+    /// bakes and renders: the face stays 180x252 and the projection scales it.
+    #[test]
+    fn large_portrait_scenes_bake_the_shared_face() {
+        for (width, height) in [(1080, 1920), (720, 1280)] {
+            let scene = LauncherScene::new(width, height);
+            let layout = responsive::Layout::for_level(scene, false).expect("portrait layout");
+            assert_eq!(layout.face_size().1.min(252), layout.face_size().1);
+            let mut prepared = scene.prepare(data());
+            prepared.render_frame(BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                direction: Some(BrowseDirection::Right),
+                progress_millis: crate::launcher_navigation::SPRING_POSITION_UNITS / 2,
+                duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
+            });
+            assert_eq!(prepared.pixels().len(), width * height);
         }
     }
 

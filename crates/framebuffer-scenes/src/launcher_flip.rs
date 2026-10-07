@@ -29,6 +29,7 @@ impl Scratch {
     pub fn new() -> Self {
         Self::sized(960, 960, COLUMN_HEIGHT)
     }
+    #[cfg(test)]
     pub fn strip() -> Self {
         Self::strip_for(960)
     }

@@ -120,8 +120,8 @@ fn card_direct_tile_damage(left: usize, level_trick: bool, split: usize) -> [Dir
 struct CardDirectEligibility {
     custom_home_active: bool,
     custom_home_needs_render: bool,
-    native_geometry: bool,
-    portrait: bool,
+    /// 960x540 landscape, or an HDMI portrait output (rotated into scanout).
+    direct_geometry: bool,
     full_frame_present: bool,
     launching: bool,
     screensaver_active: bool,
@@ -141,8 +141,7 @@ struct CardDirectEligibility {
 fn card_direct_hidden_eligible(input: CardDirectEligibility) -> bool {
     input.custom_home_active
         && input.custom_home_needs_render
-        && input.native_geometry
-        && !input.portrait
+        && input.direct_geometry
         && !input.full_frame_present
         && !input.launching
         && !input.screensaver_active
@@ -10088,8 +10087,8 @@ pub(super) fn run_launcher_loop(
         let card_motion_only = card_direct_hidden_eligible(CardDirectEligibility {
             custom_home_active,
             custom_home_needs_render,
-            native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
-            portrait: layout.is_portrait(),
+            direct_geometry: (layout.logical_w() == 960 && layout.logical_h() == 540)
+                || (layout.is_portrait() && !ui.output_route().is_crt()),
             full_frame_present,
             launching,
             screensaver_active: screensaver.active,
@@ -10113,10 +10112,10 @@ pub(super) fn run_launcher_loop(
             && custom_home_scene_ready
             && launcher_card_home
                 .as_ref()
-                .is_some_and(|session| session.can_render_native());
+                .is_some_and(|session| session.can_render_direct());
         if card_direct_path_eligible
             && let Some(session) = launcher_card_home.as_mut()
-            && session.can_render_native()
+            && session.can_render_direct()
         {
             // Pose time is the frame's animation time, so pacing waits and
             // repeated samples within a frame always agree.
@@ -10144,32 +10143,57 @@ pub(super) fn run_launcher_loop(
             let request = session.current_request();
             let timing = session.last_timing();
             let chrome_damage = session.chrome_copy_damage(level_trick);
-            let cached = card_cached_frame_view(
-                session.current_primary_pixels(),
-                layout.logical_w(),
-                layout.logical_h(),
+            let identity = mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
+                session.content_generation(),
+                request.generation,
             );
-            let helper = card_cached_frame_view(
-                session.current_helper_pixels(),
-                layout.logical_w(),
-                layout.logical_h(),
-            );
-            match launcher_presenter.try_copy_direct_hidden_tiles(
-                f,
-                display_session,
-                cached,
-                &chrome_damage,
-                [cached, helper],
-                card_direct_tile_damage(
-                    session.carousel_clip().0,
-                    level_trick,
-                    session.rendered_split(),
-                ),
-                mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity::new(
-                    session.content_generation(),
-                    request.generation,
-                ),
-            ) {
+            let output = layout.output_layout();
+            let copied = if layout.is_portrait() {
+                // Rotated output: the scanout slot is physical landscape, so
+                // present the frame and helper band already rotated into it.
+                match session.direct_physical_bands(output) {
+                    Some(bands) => {
+                        let (width, height) = (output.physical_width(), output.physical_height());
+                        let cached = card_cached_frame_view(bands.frame, width, height);
+                        let helper = card_cached_frame_view(bands.helper, width, height);
+                        launcher_presenter.try_copy_direct_hidden_tiles(
+                            f,
+                            display_session,
+                            cached,
+                            &chrome_damage,
+                            [cached, helper],
+                            bands.damage,
+                            identity,
+                        )
+                    }
+                    None => Ok(None),
+                }
+            } else {
+                let cached = card_cached_frame_view(
+                    session.current_primary_pixels(),
+                    layout.logical_w(),
+                    layout.logical_h(),
+                );
+                let helper = card_cached_frame_view(
+                    session.current_helper_pixels(),
+                    layout.logical_w(),
+                    layout.logical_h(),
+                );
+                launcher_presenter.try_copy_direct_hidden_tiles(
+                    f,
+                    display_session,
+                    cached,
+                    &chrome_damage,
+                    [cached, helper],
+                    card_direct_tile_damage(
+                        session.carousel_clip().0,
+                        level_trick,
+                        session.rendered_split(),
+                    ),
+                    identity,
+                )
+            };
+            match copied {
                 Ok(Some(copy)) => {
                     frame_production_trace.class = FrameProductionClass::SynchronousAnimation;
                     frame_production_trace.sequence = request.generation;
@@ -15398,8 +15422,7 @@ mod tests {
         CardDirectEligibility {
             custom_home_active: true,
             custom_home_needs_render: true,
-            native_geometry: true,
-            portrait: false,
+            direct_geometry: true,
             full_frame_present: false,
             launching: false,
             screensaver_active: false,
@@ -15438,7 +15461,7 @@ mod tests {
                 ..eligible_card_direct_input()
             },
             CardDirectEligibility {
-                portrait: true,
+                direct_geometry: false,
                 ..eligible_card_direct_input()
             },
             CardDirectEligibility {

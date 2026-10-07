@@ -9,15 +9,33 @@ use std::borrow::Cow;
 
 // CRT roles share one scaled font; HDMI borrows the supplied role fonts.
 pub(super) enum Fonts<'a> {
-    /// The route's scaled cell.
-    Uniform(Cow<'a, BitmapFont>),
+    /// The route's scaled cell, plus the same font at native width for
+    /// labels that would not fit the doubled cell.
+    Uniform(Cow<'a, BitmapFont>, Cow<'a, BitmapFont>),
     Roles(LauncherTypography<'a>),
 }
 
 impl Fonts<'_> {
+    /// The fonts the card labels are drawn with, and the narrower title font
+    /// for names the cell cannot fit, when this output has one.
+    pub(super) fn for_labels(&self) -> (LauncherTypography<'_>, Option<&BitmapFont>) {
+        match self {
+            Self::Uniform(font, narrow) => (
+                LauncherTypography {
+                    heading: font,
+                    number: font,
+                    metadata: font,
+                    fallback: font,
+                },
+                Some(narrow),
+            ),
+            Self::Roles(fonts) => (*fonts, None),
+        }
+    }
+
     fn get(&self, role: TextRole) -> &BitmapFont {
         match self {
-            Self::Uniform(font) => font,
+            Self::Uniform(font, _) => font,
             Self::Roles(fonts) => match role {
                 TextRole::Heading => fonts.heading,
                 TextRole::Number => fonts.number,
@@ -39,12 +57,23 @@ pub(super) struct Layout {
     top: usize,
     bottom: usize,
     pub card_h: usize,
-    card_w: usize,
+    pub card_w: usize,
     centre_y: usize,
     library_y: usize,
 }
 
 impl Layout {
+    /// The size faces are baked at: the card's own, unless it is taller than
+    /// the shared 180x252 face (a scratch column holds 272 rows), in which
+    /// case the HDMI face is baked and the projection scales it.
+    pub fn face_size(&self) -> (usize, usize) {
+        if self.card_h <= 252 {
+            (self.card_w, self.card_h)
+        } else {
+            (180, 252)
+        }
+    }
+
     pub fn for_level(scene: LauncherScene, nested: bool) -> Option<Self> {
         let mut layout = Self::for_scene(scene)?;
         if nested && layout.crt && layout.width > layout.height {
@@ -127,11 +156,19 @@ impl Layout {
         let font = typography
             .map(|fonts| Cow::Borrowed(fonts.fallback))
             .unwrap_or_else(|| Cow::Owned(legacy_font()));
-        Fonts::Uniform(if (self.sx, self.sy) == (1, 1) {
-            font
+        let narrow = if self.sy == 1 {
+            font.clone()
         } else {
-            Cow::Owned(scale_font(&font, self.sx, self.sy))
-        })
+            Cow::Owned(scale_font(&font, 1, self.sy))
+        };
+        Fonts::Uniform(
+            if (self.sx, self.sy) == (1, 1) {
+                font
+            } else {
+                Cow::Owned(scale_font(&font, self.sx, self.sy))
+            },
+            narrow,
+        )
     }
 
     pub fn chrome(&self, pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, fonts: &Fonts<'_>) {
@@ -332,13 +369,28 @@ impl Layout {
         if faces.is_empty() {
             return;
         }
+        self.draw_plan(pixels, &self.plan(faces, frame, cyclic), scratch);
+    }
+
+    /// The carousel for `frame`, mapped to this output's card geometry.
+    pub fn plan<'a>(
+        &self,
+        faces: &'a [Arc<CardFaces>],
+        frame: BrowseFrame,
+        cyclic: bool,
+    ) -> CarouselPlan<'a> {
         let mut plan = if self.crt && faces.first().is_some_and(|f| f.slides) {
             row::build_with_tilt(faces, frame, 0)
         } else {
             build_carousel_plan(faces, frame, cyclic)
         };
         self.map_plan(&mut plan);
-        self.draw_plan(pixels, &plan, scratch);
+        plan
+    }
+
+    /// The output's width and height in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        (self.width, self.height)
     }
 
     /// Carousel rows owned by the card renderer: cleared before every frame.

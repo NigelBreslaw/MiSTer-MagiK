@@ -462,6 +462,46 @@ effect.**
   they are larger than the old small CRT bitmap labels. `write_card_previews` (an ignored test) renders
   every output so the change can be looked at.
 
+**PR 20 (in progress): the shared card renderer bakes at the size each output shows its cards.**
+
+- Found on the device after PR 19: CRT cards lost fidelity and 240p landscape ran at about 30 fps.
+  Cause of the first: the shared 180x252 faces were resampled to the CRT card size (a second filtering
+  step) with the HDMI label style scaled up, where the old bake drew small bitmap titles on the output's
+  own pixel grid. Part of the second: larger faces on a path that only ever runs on one thread (below).
+- The HDMI landscape bake is now sized: `surface_sized`, `face_sized`, `faces_rgb888(w, h)` and
+  `reduce_rgb888(w, h)` replace the 180x252-only versions, and `Layout` supplies the card size and the
+  CRT label fonts (the scaled bitmap font, with the native-width font for titles the doubled cell cannot
+  fit). The artwork is reduced straight from the 360x504 source to the card size; at 180x252 the
+  reduction is the old 2x2 mean (a test proves the general area filter equals it at 2:1), so HDMI
+  landscape is bit-identical: its 20 card-row hashes and the first ten entries of all four
+  approved-raster tables are unchanged. Prepared `.cardtex` artwork is used at 180x252 only; the device
+  asks for it only for 960x540, and CRT and portrait load the source.
+- Symbol scales shrink to fit narrow cards (5 and 4 at 180 wide, as before). A generic card's reverse
+  stays 180x252.
+- Cost, host release, microseconds per flip frame: CRT 640x240 440 (before PR 19) / 526 (PR 19) / 430
+  now; CRT 640x288 542 / 618 / 528; CRT portrait 549 / 578 / 540. Resting frames stay 8-11% above the
+  original because every projection is dithered. `bench_card_row_render` (ignored) and
+  `write_card_previews` (ignored) reproduce the numbers and the images.
+- **Two bands on every output.** `ParallelLauncherRenderer` (a primary and a helper thread, each drawing
+  part of the carousel) used to run only for exactly 960x540 HDMI landscape. The tile path now takes its
+  geometry (stride, card rows, column clip) and responsive layout from the `LauncherFramePreparer`, so
+  CRT and portrait render in two bands too (`PreparedLauncher::supports_parallel`). The first split is
+  the native proportion of the carousel, and the minimum band shrinks on narrow carousels. A test
+  checks every responsive output, root and nested, against the serial render at three splits. Host
+  release, microseconds per flip frame, serial / two bands: CRT 640x240 437 / 252; 640x288 538 / 316;
+  640x480 721 / 409; CRT portrait 548 / 317; HDMI portrait 660 / 378; HDMI landscape 872 / 494
+  (`bench_parallel_card_row`). Still HDMI-only: level-change trick bands and helper render-ahead.
+- **HDMI portrait takes the direct path.** Device profile (portrait, before): 149 presentations in
+  5 s, 29 ms in the Slint raster (`BackgroundOverlayLines::process_line`, 42% of samples), the cards
+  about 35%, 151 dropped frames all attributed to Slint. Portrait never reached the direct path (it
+  was gated to 960x540 landscape), so each frame re-rastered the carousel through Slint, rotated, over a
+  home screen with no Slint content. The direct path now serves HDMI portrait outside a level change:
+  `LauncherCardHomeSession::direct_physical_bands` rotates the chrome (only when its content or the
+  rotation changes) and each band (`Rgb565OutputLayout::gather_logical_rect`) into scanout order, and
+  the presenter copies them like landscape tiles. Device, after: 300 presentations in 5 s, 0-1 dropped,
+  frame-to-present 16.0 ms (was 32.9), 299 of 300 delivered by the direct path. CRT, and portrait level
+  changes, still use the Slint path.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
