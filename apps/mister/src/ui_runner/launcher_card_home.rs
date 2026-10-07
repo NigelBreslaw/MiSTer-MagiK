@@ -33,16 +33,20 @@ mod preparation;
 use preparation::{HomePreparation, PreparedContent};
 
 /// Rotate a logical rectangle of `source` into the physical `destination` with
-/// the shared tiled (NEON where available) rotation kernel.
+/// the shared tiled (NEON where available) rotation kernel. `false` if the
+/// rectangle or buffers do not fit `output`; it never panics, because a layout
+/// that is stale for this frame must make the frame fall back, not abort the app.
+#[must_use]
 fn rotate_rect(
     output: Rgb565OutputLayout,
     source: &[Rgb565Pixel],
     destination: &mut [Rgb565Pixel],
     rect: Rgb565Rect,
-) {
-    let mut surface = Rgb565SurfaceMut::new(destination, output)
-        .expect("a rotated buffer sized for its output layout");
-    assert!(surface.copy_rect_strided(
+) -> bool {
+    let Ok(mut surface) = Rgb565SurfaceMut::new(destination, output) else {
+        return false;
+    };
+    surface.copy_rect_strided(
         rect.x0,
         rect.y0,
         rect.width(),
@@ -51,7 +55,7 @@ fn rotate_rect(
         output.logical_width(),
         rect.x0,
         rect.y0,
-    ));
+    )
 }
 
 /// The logical rectangles of chrome a level change fades, as the spans the
@@ -887,29 +891,42 @@ impl LauncherCardHomeSession {
         gather: bool,
     ) {
         let request = self.next_request(settled_frame(selected));
-        self.last_timing = if self.prepared.supports_parallel()
+        self.last_timing = None;
+        if self.prepared.supports_parallel()
             && let Some(renderer) = self.renderer.as_mut()
         {
-            Some(
-                if gather {
-                    self.prepared
-                        .render_level_gather_to_parallel(request, change, t, slot, renderer)
-                } else {
-                    self.prepared
-                        .render_level_deal_from_parallel(request, change, t, slot, renderer)
-                }
-                .expect("current level rendering failed"),
-            )
-        } else {
-            if gather {
+            let timing = if gather {
                 self.prepared
-                    .render_level_gather_to(selected, change, t, slot);
+                    .render_level_gather_to_parallel(request, change, t, slot, renderer)
             } else {
                 self.prepared
-                    .render_level_deal_from(selected, change, t, slot);
+                    .render_level_deal_from_parallel(request, change, t, slot, renderer)
+            };
+            match timing {
+                Ok(timing) => {
+                    self.last_timing = Some(timing);
+                    return;
+                }
+                Err(error) => self.stop_parallel_rendering(&error),
             }
-            None
-        };
+        }
+        if gather {
+            self.prepared
+                .render_level_gather_to(selected, change, t, slot);
+        } else {
+            self.prepared
+                .render_level_deal_from(selected, change, t, slot);
+        }
+    }
+
+    /// The two-thread renderer failed (its helper stopped, or a frame did not
+    /// match): keep going on one thread rather than abort. Cards render the
+    /// same pixels, only slower, and the direct path turns itself off.
+    fn stop_parallel_rendering(&mut self, error: &str) {
+        crate::ui_errln!("card renderer failed ({error}); rendering cards on one thread");
+        self.renderer = None;
+        self.last_rendered = None;
+        self.content_dirty = true;
     }
 
     /// Queue a helper band for exactly the next FrameClock step. Do not cross
@@ -1035,17 +1052,19 @@ impl LauncherCardHomeSession {
         }
         if self.last_rendered != Some((self.frame, self.content_generation)) {
             let request = self.next_request(self.frame);
+            self.last_timing = None;
             if self.prepared.supports_parallel()
                 && let Some(renderer) = self.renderer.as_mut()
             {
-                self.last_timing = Some(
-                    self.prepared
-                        .render_parallel_frame(renderer, request)
-                        .expect("current card rendering failed"),
-                );
+                match self.prepared.render_parallel_frame(renderer, request) {
+                    Ok(timing) => self.last_timing = Some(timing),
+                    Err(error) => {
+                        self.stop_parallel_rendering(&error);
+                        self.prepared.render_frame(self.frame);
+                    }
+                }
             } else {
                 self.prepared.render_frame(self.frame);
-                self.last_timing = None;
             }
             self.last_rendered = Some((self.frame, self.content_generation));
         } else {
@@ -1210,6 +1229,11 @@ impl LauncherCardHomeSession {
         &mut self,
         output: Rgb565OutputLayout,
     ) -> Option<DirectBands<'_>> {
+        // The output must be this scene's: a layout left over from another
+        // orientation can have the same pixel count and swapped dimensions.
+        if (output.logical_width(), output.logical_height()) != self.scene.size() {
+            return None;
+        }
         let geometry = self.prepared.frame_preparer().geometry();
         let split = self.renderer.as_ref()?.rendered_split();
         let helper = self.renderer.as_ref()?.helper_pixels(self.last_request)?;
@@ -1235,17 +1259,15 @@ impl LauncherCardHomeSession {
         physical.helper.resize(output.len(), Rgb565Pixel(0));
         let source = self.prepared.pixels();
         if physical.chrome != Some((self.content_generation, output)) {
-            rotate_rect(
-                output,
-                source,
-                &mut physical.frame,
-                Rgb565Rect {
-                    x0: 0,
-                    y0: 0,
-                    x1: output.logical_width(),
-                    y1: output.logical_height(),
-                },
-            );
+            let whole = Rgb565Rect {
+                x0: 0,
+                y0: 0,
+                x1: output.logical_width(),
+                y1: output.logical_height(),
+            };
+            if !rotate_rect(output, source, &mut physical.frame, whole) {
+                return None;
+            }
             physical.chrome = Some((self.content_generation, output));
         }
         // A level change fades parts of the chrome without a new generation:
@@ -1254,7 +1276,9 @@ impl LauncherCardHomeSession {
         if self.trick.is_some() {
             let mut list = DirtyRectList::new();
             for rect in level_chrome_rects(&self.prepared, self.scene.width) {
-                rotate_rect(output, source, &mut physical.frame, rect);
+                if !rotate_rect(output, source, &mut physical.frame, rect) {
+                    return None;
+                }
                 let rect = output.logical_rect_to_physical(rect);
                 list.push(DirtyRect {
                     x0: rect.x0,
@@ -1265,7 +1289,9 @@ impl LauncherCardHomeSession {
             }
             chrome_damage = Some(list);
         }
-        rotate_rect(output, source, &mut physical.frame, bands[0]);
+        if !rotate_rect(output, source, &mut physical.frame, bands[0]) {
+            return None;
+        }
         // The helper normally rotated its band when it drew it.
         let helper = match self
             .renderer
@@ -1274,7 +1300,9 @@ impl LauncherCardHomeSession {
         {
             Some(rotated) => rotated,
             None => {
-                rotate_rect(output, helper, &mut physical.helper, bands[1]);
+                if !rotate_rect(output, helper, &mut physical.helper, bands[1]) {
+                    return None;
+                }
                 &physical.helper
             }
         };
@@ -1319,18 +1347,18 @@ impl LauncherCardHomeSession {
         self.prepared.pixels()
     }
 
-    pub(super) fn current_helper_pixels(&self) -> &[Rgb565Pixel] {
+    /// The helper's band for the current request; `None` once the two-thread
+    /// renderer has been stopped.
+    pub(super) fn current_helper_pixels(&self) -> Option<&[Rgb565Pixel]> {
         self.renderer
             .as_ref()
             .and_then(|renderer| renderer.helper_pixels(self.last_request))
-            .expect("matching current helper band")
     }
 
-    pub(super) fn rendered_split(&self) -> usize {
+    pub(super) fn rendered_split(&self) -> Option<usize> {
         self.renderer
             .as_ref()
-            .expect("native renderer")
-            .rendered_split()
+            .map(|renderer| renderer.rendered_split())
     }
 
     #[cfg(feature = "tooling")]
@@ -2116,12 +2144,12 @@ mod tests {
                 let next_ms = (tick as u64 + 1) * 16;
                 let predicted = if tick == 4 { 2.1 } else { position };
                 let primary = session.current_primary_pixels().to_vec();
-                let helper = session.current_helper_pixels().to_vec();
+                let helper = session.current_helper_pixels().unwrap().to_vec();
                 let request = session.current_request();
                 session.prepare_browse_helper_ahead(next_ms, 0, predicted, None);
                 assert_eq!(session.current_request(), request);
                 assert!(session.current_primary_pixels() == primary);
-                assert!(session.current_helper_pixels() == helper);
+                assert!(session.current_helper_pixels() == Some(helper.as_slice()));
                 session.update(
                     scene, &level, 0, position, "07:28", next_ms, false, None, None,
                 );
@@ -2227,7 +2255,7 @@ mod tests {
             let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
             serial.render_frame(frame);
             let mut expected = vec![Rgb565Pixel(0); output.len()];
-            rotate_rect(
+            assert!(rotate_rect(
                 output,
                 serial.pixels(),
                 &mut expected,
@@ -2237,7 +2265,7 @@ mod tests {
                     x1: 540,
                     y1: 960,
                 },
-            );
+            ));
             let bands = session.direct_physical_bands(output).expect("bands");
             let mut composed = bands.frame.to_vec();
             let rect = bands.damage[1];
@@ -2285,7 +2313,7 @@ mod tests {
             let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
             serial.render_frame(frame);
             let mut expected = vec![Rgb565Pixel(0); output.len()];
-            rotate_rect(
+            assert!(rotate_rect(
                 output,
                 serial.pixels(),
                 &mut expected,
@@ -2295,7 +2323,7 @@ mod tests {
                     x1: 540,
                     y1: 960,
                 },
-            );
+            ));
             let bands = session.direct_physical_bands(output).expect("bands");
             let mut composed = bands.frame.to_vec();
             let rect = bands.damage[1];
@@ -2304,6 +2332,124 @@ mod tests {
                 composed[range.clone()].copy_from_slice(&bands.helper[range]);
             }
             assert!(composed == expected, "{rotation:?}");
+        }
+    }
+
+    /// The session across scene and orientation changes, in a seeded random
+    /// order: every output in turn, frames at rest and in motion, and direct
+    /// bands asked for with the right layout and with a layout left over from
+    /// another orientation. Nothing may panic, a frame always equals the
+    /// serial render for its scene, and bands exist only for the right layout.
+    #[test]
+    fn scene_and_orientation_walks_never_break_the_session() {
+        use mister_magik_framebuffer_scenes::OutputRotation;
+        let scenes = [
+            LauncherScene::new(960, 540),
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(640, 240),
+            LauncherScene::crt(480, 640),
+            LauncherScene::crt(640, 480),
+        ];
+        let moving = BrowseFrame {
+            selected: 0,
+            target: 1,
+            phase: BrowsePhase::Flipping,
+            direction: Some(BrowseDirection::Right),
+            progress_millis: 230,
+            duration_millis: 460,
+        };
+        let rotations = [
+            OutputRotation::None,
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ];
+        let mut state = 0x5CE7_E0F5_CA1E_D00Du64;
+        let mut below = |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % bound as u64) as usize
+        };
+        let level = snapshot();
+        let mut session =
+            LauncherCardHomeSession::new(scenes[0], level.clone(), 0, "07:28").unwrap();
+        let mut now = 100;
+        let (mut direct_checked, mut stale_refused) = (0, 0);
+        for step in 0..40 {
+            let scene = scenes[below(scenes.len())];
+            wait_content(&mut session, scene, &level, 0, "07:28");
+            now += 16;
+            let frame = if below(2) == 0 {
+                moving
+            } else {
+                settled_frame(0)
+            };
+            session.update(scene, &level, 0, 0.5, "07:28", now, true, Some(frame), None);
+            let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
+            serial.render_frame(frame);
+            assert!(session.render() == serial.pixels(), "step {step} {scene:?}");
+            if !session.can_render_direct() {
+                continue;
+            }
+            // The portrait layout and the landscape one: right for one scene
+            // each, a stale leftover for the others.
+            let rotation = rotations[1 + below(2)];
+            let own = Rgb565OutputLayout::new(540, 960, 960, rotation).unwrap();
+            let landscape = Rgb565OutputLayout::new(960, 540, 960, OutputRotation::None).unwrap();
+            let layouts = [own, landscape];
+            let layout = layouts[below(2)];
+            session.set_output_layout(Some(layout));
+            session.render_direct_bands();
+            let bands = session.direct_physical_bands(layout);
+            if (layout.logical_width(), layout.logical_height()) == scene.size()
+                && layout.rotation() != OutputRotation::None
+            {
+                direct_checked += 1;
+                assert!(bands.is_some(), "step {step}: bands for {scene:?}");
+            } else {
+                stale_refused += usize::from(bands.is_none());
+                if scene.size() != (layout.logical_width(), layout.logical_height()) {
+                    assert!(bands.is_none(), "step {step}: stale layout for {scene:?}");
+                }
+            }
+        }
+        assert!(
+            direct_checked > 0 && stale_refused > 0,
+            "{direct_checked} {stale_refused}"
+        );
+    }
+
+    /// A failed two-thread renderer (its helper stopped) must not abort the
+    /// app: cards keep rendering the same pixels on one thread, the direct
+    /// path turns itself off and the helper accessors report nothing.
+    #[test]
+    fn a_stopped_helper_degrades_to_one_thread_instead_of_aborting() {
+        for scene in [LauncherScene::new(960, 540), LauncherScene::new(540, 960)] {
+            let level = snapshot();
+            let mut session =
+                LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+            let frame = BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: BrowsePhase::Flipping,
+                direction: Some(BrowseDirection::Right),
+                progress_millis: 230,
+                duration_millis: 460,
+            };
+            session.update(scene, &level, 0, 0.5, "07:28", 230, true, Some(frame), None);
+            session.render_direct_bands();
+            assert!(session.can_render_direct() && session.current_helper_pixels().is_some());
+            session.renderer.as_mut().unwrap().stop();
+            session.update(scene, &level, 0, 0.6, "07:28", 246, true, Some(frame), None);
+            let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
+            serial.render_frame(frame);
+            session.last_rendered = None;
+            session.render_direct_bands();
+            assert!(session.renderer.is_none(), "{scene:?}");
+            assert!(!session.can_render_direct());
+            assert!(session.current_helper_pixels().is_none());
+            assert!(session.rendered_split().is_none());
+            assert!(session.current_primary_pixels() == serial.pixels());
         }
     }
 
@@ -2455,8 +2601,9 @@ mod tests {
         assert_eq!(session.last_timing().unwrap().merge_us, 0);
         let mut published = session.current_primary_pixels().to_vec();
         for y in 120..495 {
-            let range = y * 960 + session.rendered_split()..y * 960 + 934;
-            published[range.clone()].copy_from_slice(&session.current_helper_pixels()[range]);
+            let range = y * 960 + session.rendered_split().unwrap()..y * 960 + 934;
+            published[range.clone()]
+                .copy_from_slice(&session.current_helper_pixels().unwrap()[range]);
         }
         assert_eq!(published, captured);
         let generation = session.current_request().generation;
@@ -3197,7 +3344,7 @@ mod tests {
                 trick.destination_slot,
             );
             let mut rotated = vec![Rgb565Pixel(0); output.len()];
-            rotate_rect(
+            assert!(rotate_rect(
                 output,
                 expected.pixels(),
                 &mut rotated,
@@ -3207,7 +3354,7 @@ mod tests {
                     x1: 540,
                     y1: 960,
                 },
-            );
+            ));
             let bands = session.direct_physical_bands(output).expect("bands");
             // The chrome the level change fades is copied, and only that.
             let damage = bands.chrome_damage.as_ref().expect("fading chrome damage");
@@ -3256,11 +3403,11 @@ mod tests {
         assert_eq!(session.current_request().timestamp_us, 200_000);
         assert!(session.current_request().generation > source_generation);
         let current = session.current_request();
-        let helper = session.current_helper_pixels().to_vec();
+        let helper = session.current_helper_pixels().unwrap().to_vec();
         session.prepare_helper_ahead(216);
         assert_eq!(session.now_ms, 200);
         assert_eq!(session.current_request(), current);
-        assert_eq!(session.current_helper_pixels(), helper);
+        assert_eq!(session.current_helper_pixels(), Some(helper.as_slice()));
         assert!(session.is_level_trick_active());
         session.update(scene, &consoles(), 0, 0.0, "21:37", 216, true, None, None);
         let produced = session.render().to_vec();

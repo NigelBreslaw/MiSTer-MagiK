@@ -10188,29 +10188,31 @@ pub(super) fn run_launcher_loop(
                     None => Ok(None),
                 }
             } else {
-                let cached = card_cached_frame_view(
-                    session.current_primary_pixels(),
-                    layout.logical_w(),
-                    layout.logical_h(),
-                );
-                let helper = card_cached_frame_view(
-                    session.current_helper_pixels(),
-                    layout.logical_w(),
-                    layout.logical_h(),
-                );
-                launcher_presenter.try_copy_direct_hidden_tiles(
-                    f,
-                    display_session,
-                    cached,
-                    &chrome_damage,
-                    [cached, helper],
-                    card_direct_tile_damage(
-                        session.carousel_clip().0,
-                        level_trick,
-                        session.rendered_split(),
-                    ),
-                    identity,
-                )
+                match (session.current_helper_pixels(), session.rendered_split()) {
+                    (Some(helper_pixels), Some(split)) => {
+                        let cached = card_cached_frame_view(
+                            session.current_primary_pixels(),
+                            layout.logical_w(),
+                            layout.logical_h(),
+                        );
+                        let helper = card_cached_frame_view(
+                            helper_pixels,
+                            layout.logical_w(),
+                            layout.logical_h(),
+                        );
+                        launcher_presenter.try_copy_direct_hidden_tiles(
+                            f,
+                            display_session,
+                            cached,
+                            &chrome_damage,
+                            [cached, helper],
+                            card_direct_tile_damage(session.carousel_clip().0, level_trick, split),
+                            identity,
+                        )
+                    }
+                    // The two-thread renderer stopped: the Slint path presents.
+                    _ => Ok(None),
+                }
             };
             #[cfg(feature = "tooling")]
             if let Some(tooling) = tooling.as_mut() {

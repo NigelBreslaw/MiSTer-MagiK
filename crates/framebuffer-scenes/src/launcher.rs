@@ -214,6 +214,12 @@ impl LauncherScene {
         }
     }
 
+    /// The logical width and height of the scene.
+    #[must_use]
+    pub const fn size(self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
     /// A portrait HDMI output, drawn rotated into the landscape scanout.
     #[must_use]
     pub const fn is_hdmi_portrait(self) -> bool {
