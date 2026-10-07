@@ -476,6 +476,12 @@ impl ParallelLauncherRenderer {
         self.retain_bands = retain;
     }
 
+    /// Pin the next frame's boundary, to test every split.
+    #[cfg(test)]
+    pub(crate) fn set_split(&mut self, split: usize) {
+        self.split = split;
+    }
+
     pub const fn rendered_split(&self) -> usize {
         self.rendered_split
     }

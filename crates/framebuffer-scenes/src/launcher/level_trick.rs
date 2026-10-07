@@ -713,7 +713,14 @@ mod tests {
                     generation,
                 }
             };
-            for t in [1, EDGE_MILLIS / 2, EDGE_MILLIS - 1] {
+            let (left, right) = parallel_from.carousel_clip();
+            // Near each end and the middle: the device moves the boundary every frame.
+            let splits = [left + 96, (left + right) / 2, right - 96];
+            for (index, t) in [1, EDGE_MILLIS / 2, EDGE_MILLIS - 1]
+                .into_iter()
+                .enumerate()
+            {
+                renderer.set_split(splits[index]);
                 serial_from.render_level_gather_to(
                     3,
                     LevelChange::Descend,
@@ -734,11 +741,15 @@ mod tests {
                     "{scene:?} gather {t}"
                 );
             }
-            for t in [
+            for (index, t) in [
                 EDGE_MILLIS + 100,
                 LEVEL_TRICK_MILLIS / 2,
                 LEVEL_TRICK_MILLIS - 100,
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                renderer.set_split(splits[index]);
                 serial_to.render_level_deal_from(0, LevelChange::Descend, t, serial_to.slot_zero());
                 parallel_to
                     .render_level_deal_from_parallel(
