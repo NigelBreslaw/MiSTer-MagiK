@@ -36,6 +36,33 @@ def ready(**fields):
     return Envelope("test", "card-artwork-ready", "", fields), b""
 
 
+@pytest.mark.parametrize(
+    "palette",
+    [None, "red", ["#1000000"], [True], ["#1234"], ["#zzzzzz"], ["#000000"] * 17],
+)
+def test_invalid_flat_ink_palettes_are_rejected(tmp_path, palette):
+    root = fixture(tmp_path / "pack")
+    index = json.loads((root / "index.json").read_text())
+    index["cards"]["root:arcade"]["flat_colours"] = palette
+    (root / "index.json").write_text(json.dumps(index))
+    with pytest.raises(ValueError, match="flat colour palette"):
+        artwork.bundle(root)
+
+
+def test_flat_ink_metadata_is_retained_in_the_installed_index(tmp_path):
+    root = fixture(tmp_path / "pack")
+    index = json.loads((root / "index.json").read_text())
+    index["cards"]["root:arcade"]["flat_colours"] = ["#174d35", "#f7f1e4"]
+    (root / "index.json").write_text(json.dumps(index))
+    payload, _ = artwork.bundle(root)
+    length = struct.unpack(">I", payload[:4])[0]
+    packed_index = json.loads(payload[4 : 4 + length])
+    assert packed_index["cards"]["root:arcade"]["flat_colours"] == [
+        "#174d35",
+        "#f7f1e4",
+    ]
+
+
 def test_prepared_entries_are_bundled_once_and_validated(tmp_path):
     root = fixture(tmp_path / "pack")
     pixels = b"MGCART01" + bytes(32)

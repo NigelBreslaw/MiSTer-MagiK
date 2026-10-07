@@ -115,6 +115,48 @@ static int fast_quantisation_parity(void) {
 }
 #endif
 int main(void) {
+  for(size_t trial=0;trial<10000;++trial) {
+    size_t height=17+next()%64,rows=1+next()%68,width=1+next()%9,pitch=width+3,stride=height+3;
+    magik_flat_colour inks[2]={{0xff354d17,0x1a66},{0xffcceeff,0xff79}};
+    uint32_t src[9*84];uint16_t actual[1024],expected[1024];
+    for(size_t i=0;i<width*stride;++i) {
+      unsigned alpha=i%stride>=8 && i%stride<height-8 ? 255 : next()%256;
+      src[i]=next()%(alpha+1)|(next()%(alpha+1))<<8|(next()%(alpha+1))<<16|alpha<<24;
+      if(i%4<2)src[i]=inks[i%2].rgba;
+    }
+    for(size_t i=0;i<1024;++i)actual[i]=expected[i]=(uint16_t)next();
+    int32_t q=(int32_t)(next()%196609)-131072,step=1+next()%196608;
+    size_t count=trial%3?2:0,x0=next()%960,y0=next()%540;
+    size_t columns=trial%2?width:1;
+    for(size_t x=0;x<columns;++x)for(size_t y=0;y<rows;++y) {
+      int32_t sample=q+(int32_t)y*step,r=sample>>16;
+      uint32_t a=r>=0 && (size_t)r<height?src[x*stride+r]:0;
+      uint32_t b=r+1>=0 && (size_t)(r+1)<height?src[x*stride+r+1]:0;
+      uint32_t p=scalar(a,b,((uint32_t)sample&65535)>>8);
+      size_t i=3+y*pitch+x;
+      expected[i]=dither_pixel(p,expected[i],x0+x,y0+y);
+      for(size_t k=0;k<count;++k)if(p==inks[k].rgba)expected[i]=(uint16_t)inks[k].rgb565;
+    }
+    if(trial%2)magik_launcher_flat_palette(actual+3,pitch,src,stride,height,width,rows,q,step,x0,y0,inks,count);
+    else magik_launcher_project_palette_opaque(actual+3,pitch,src,height,rows,q,step,x0,y0,8,height-8,inks,count);
+    if(memcmp(actual,expected,sizeof actual)){fprintf(stderr,"palette mismatch %zu\n",trial);return 25;}
+#ifdef MAGIK_FAST_QUANTISATION
+    for(size_t i=0;i<1024;++i)actual[i]=expected[i]=(uint16_t)next();
+    for(size_t x=0;x<columns;++x)for(size_t y=0;y<rows;++y) {
+      int32_t sample=q+(int32_t)y*step,r=sample>>16;
+      uint32_t a=r>=0 && (size_t)r<height?src[x*stride+r]:0;
+      uint32_t b=r+1>=0 && (size_t)(r+1)<height?src[x*stride+r+1]:0;
+      uint32_t p=scalar(a,b,((uint32_t)sample&65535)>>8);
+      size_t i=3+y*pitch+x;
+      expected[i]=fast_dither_pixel(p,expected[i],x0+x,y0+y);
+      for(size_t k=0;k<count;++k)if(p==inks[k].rgba)expected[i]=(uint16_t)inks[k].rgb565;
+    }
+    if(trial%2)magik_launcher_flat_palette_fast(actual+3,pitch,src,stride,height,width,rows,q,step,x0,y0,inks,count);
+    else magik_launcher_project_palette_fast_opaque(actual+3,pitch,src,height,rows,q,step,x0,y0,8,height-8,inks,count);
+    if(memcmp(actual,expected,sizeof actual)){fprintf(stderr,"fast palette mismatch %zu\n",trial);return 26;}
+#endif
+  }
+  puts("10000 explicit-ink flat/perspective cases preserve dithering on all nonmatches and alpha edges");
   for (size_t trial = 0; trial < 10000; ++trial) {
     size_t height = next() % 66, rows = next() % 68, pitch = 1 + next() % 7;
     uint16_t src[65], actual[480], expected[480];

@@ -158,6 +158,7 @@ impl PreparedArtwork {
                 height: H,
                 reflection_fade_rows: 64,
                 dither: crate::launcher_flip::Dither::Always,
+                flat_colours: Vec::new(),
                 texture: Texture::from_levels(levels),
             });
             surfaces.push(surface);
@@ -234,6 +235,7 @@ mod tests {
                         prepared: None,
                         retry: false,
                         contains_name: false,
+                        flat_colours: Vec::new(),
                     },
                     None,
                     &mut raw_cache,
@@ -251,6 +253,7 @@ mod tests {
                         ),
                         retry: false,
                         contains_name: false,
+                        flat_colours: Vec::new(),
                     },
                     None,
                     &mut packed_cache,

@@ -53,6 +53,16 @@ def files_for(index):
         add(source, "rgb888", SOURCE_BYTES)
         if not isinstance(source.get("contains_name", False), bool):
             raise ValueError("invalid card artwork name policy")
+        palette = source.get("flat_colours", [])
+        if (
+            not isinstance(palette, list)
+            or len(palette) > 16
+            or any(
+                not isinstance(rgb, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", rgb)
+                for rgb in palette
+            )
+        ):
+            raise ValueError("invalid flat colour palette")
         prepared = source.get("prepared")
         if prepared is not None:
             if not isinstance(prepared, dict):

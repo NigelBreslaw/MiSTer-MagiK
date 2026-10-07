@@ -35,6 +35,8 @@ struct Source {
     #[serde(default)]
     contains_name: bool,
     #[serde(default)]
+    flat_colours: Vec<String>,
+    #[serde(default)]
     prepared: Option<PreparedSource>,
 }
 #[derive(Deserialize)]
@@ -68,6 +70,15 @@ fn built_in(key: &str) -> Option<&'static [u8]> {
         _ => return None,
     })
 }
+fn flat_colour(value: &str) -> Option<[u8; 3]> {
+    let value = value.strip_prefix('#')?;
+    if value.len() != 6 {
+        return None;
+    }
+    let value = u32::from_str_radix(value, 16).ok()?;
+    Some([(value >> 16) as u8, (value >> 8) as u8, value as u8])
+}
+
 fn index(root: &Path) -> std::io::Result<Index> {
     #[cfg(feature = "tooling")]
     let _index = mister_magik_framebuffer_scenes::launcher_profile::span("prepare.artwork_index");
@@ -78,6 +89,15 @@ fn index(root: &Path) -> std::io::Result<Index> {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "unsupported card artwork index",
+        ));
+    }
+    if index.cards.values().any(|source| {
+        source.flat_colours.len() > 16
+            || source.flat_colours.iter().any(|v| flat_colour(v).is_none())
+    }) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid flat colour palette",
         ));
     }
     Ok(index)
@@ -140,6 +160,7 @@ impl<'a> Loader<'a> {
             pixels: Cow::Borrowed(builtin.unwrap_or(&[])),
             retry,
             contains_name: false,
+            flat_colours: Vec::new(),
         };
         let index = self.index.get_or_insert_with(|| {
             let result = index(self.root);
@@ -169,6 +190,11 @@ impl<'a> Loader<'a> {
         else {
             return fallback(false);
         };
+        let flat_colours = entry
+            .flat_colours
+            .iter()
+            .filter_map(|v| flat_colour(v))
+            .collect();
         if let (Some((id, colour)), Some(prepared)) = (style, &entry.prepared) {
             let load = || -> Result<_, String> {
                 if !prepared.file.ends_with(".cardtex")
@@ -199,6 +225,7 @@ impl<'a> Loader<'a> {
                         pixels: Cow::Borrowed(&[]),
                         retry: false,
                         contains_name: entry.contains_name,
+                        flat_colours,
                     };
                 }
                 Err(error) => {
@@ -212,6 +239,7 @@ impl<'a> Loader<'a> {
                 pixels: Cow::Owned(bytes),
                 retry: false,
                 contains_name: entry.contains_name,
+                flat_colours,
             },
             Err(error) => {
                 eprintln!("card artwork {key}: {error}; using fallback artwork");
@@ -297,6 +325,7 @@ impl CardFaceCache {
                                 pixels: Cow::Borrowed(built_in(&normalized).unwrap_or(&[])),
                                 retry,
                                 contains_name: false,
+                                flat_colours: Vec::new(),
                             };
                         }
                         let native = scene == LauncherScene::new(960, 540);
@@ -372,6 +401,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(f.0.join("index.json")).unwrap()).unwrap();
         index["cards"]["snes"]["prepared"] =
             serde_json::json!({"file":"snes.cardtex", "bytes":prepared.len()});
+        index["cards"]["snes"]["flat_colours"] = serde_json::json!(["#535353"]);
         std::fs::write(f.0.join("index.json"), index.to_string()).unwrap();
         let scene = LauncherScene::new(960, 540);
         for count in [0, 99, u32::MAX] {

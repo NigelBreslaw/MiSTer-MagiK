@@ -17,10 +17,13 @@ pub(super) struct Scratch {
     reflection_ready: bool,
     blend: Vec<u32>,
     reflection_pixels: Vec<u16>,
+    flat_colours: [crate::launcher_texture::FlatColour; crate::launcher_texture::MAX_FLAT_COLOURS],
+    flat_colour_count: usize,
 }
 impl Scratch {
     pub fn storage_bytes(&self) -> usize {
-        self.texels.capacity() * 4
+        std::mem::size_of_val(&self.flat_colours)
+            + self.texels.capacity() * 4
             + self.columns.capacity() * std::mem::size_of::<Column>()
             + self.blend.capacity() * 4
             + self.reflection_pixels.capacity() * 2
@@ -49,6 +52,9 @@ impl Scratch {
             reflection_ready: false,
             blend: vec![0; column_height],
             reflection_pixels: vec![0; width * 64],
+            flat_colours: [crate::launcher_texture::FlatColour::default();
+                crate::launcher_texture::MAX_FLAT_COLOURS],
+            flat_colour_count: 0,
         }
     }
 }
@@ -108,12 +114,13 @@ pub(super) struct Face {
     pub height: usize,
     pub(super) reflection_fade_rows: usize,
     pub(super) dither: Dither,
+    pub(super) flat_colours: Vec<[u8; 3]>,
     pub(super) texture: crate::launcher_texture::Texture,
 }
 
 impl Face {
     pub fn storage_bytes(&self) -> usize {
-        self.texture.storage_bytes()
+        self.flat_colours.capacity() * 3 + self.texture.storage_bytes()
     }
     pub(super) fn with_rgb8(
         pixels: Vec<Rgb565Pixel>,
@@ -132,6 +139,7 @@ impl Face {
             reflection_fade_rows: 64,
             texture,
             dither: Dither::Off,
+            flat_colours: Vec::new(),
         }
     }
 
@@ -145,6 +153,7 @@ impl Face {
             reflection_fade_rows: 64,
             texture,
             dither: Dither::Off,
+            flat_colours: Vec::new(),
         }
     }
 }
@@ -460,6 +469,11 @@ fn render(
     if rebuild {
         scratch.source_occlusion = prepare_coverage;
         scratch.reflection_ready = false;
+        scratch.flat_colour_count = face.flat_colours.len();
+        assert!(scratch.flat_colour_count <= crate::launcher_texture::MAX_FLAT_COLOURS);
+        for (target, &rgb) in scratch.flat_colours.iter_mut().zip(&face.flat_colours) {
+            *target = crate::launcher_texture::FlatColour::lit(rgb, light);
+        }
     }
     scratch.key = Some(key);
     let columns = &mut scratch.columns;
@@ -713,6 +727,7 @@ fn render(
                 ),
                 face.dither == Dither::Always,
                 (active_left, active_top),
+                &scratch.flat_colours[..scratch.flat_colour_count],
             );
         } else {
             for (x, c) in columns
@@ -738,6 +753,7 @@ fn render(
                             face.dither == Dither::Always,
                             (x, top),
                             c.opaque_margin(),
+                            &scratch.flat_colours[..scratch.flat_colour_count],
                         );
                     }
                 };
@@ -924,6 +940,57 @@ fn reflected_texel(body: &[u32], row: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn declared_flat_inks_are_uniform_at_front_and_receded_slots_with_dithering_on() {
+        let rgb = [23u8, 77, 53];
+        let pixel = Rgb565Pixel(
+            (u16::from(rgb[0]) >> 3) << 11 | (u16::from(rgb[1]) >> 2) << 5 | u16::from(rgb[2]) >> 3,
+        );
+        let pixels = vec![pixel; 180 * 252];
+        let mut face = Face::with_rgb8(pixels.clone(), &vec![rgb; 180 * 252], &pixels, 180, 252);
+        face.dither = Dither::Always;
+        face.flat_colours.push(rgb);
+        let mut scratch = Scratch::new();
+        for (width, angle, brightness) in [
+            (180, 0, 256),
+            (162, 5097, 184),
+            (146, 5097, 143),
+            (131, 5097, 108),
+            (118, 5097, 82),
+        ] {
+            let height = width * 7 / 5;
+            let pose = Pose {
+                x: (610 - width / 2) * ONE,
+                top: (284 - height / 2) * ONE,
+                width: width * ONE,
+                height: height * ONE,
+                angle,
+                brightness,
+                clip: (296, 934),
+                body_clip: (296, 934),
+                vertical_clip: (120, 438, 495),
+            };
+            let mut output = vec![Rgb565Pixel(0); 960 * 540];
+            draw(
+                &mut output,
+                &face,
+                pose,
+                &mut scratch,
+                |p, _, _| p,
+                false,
+                None,
+            );
+            let light = diffuse_light(sin_cos(angle).1) * brightness / 256;
+            let expected =
+                Rgb565Pixel(crate::launcher_texture::FlatColour::lit(rgb, light).rgb565 as u16);
+            for y in 274..294 {
+                for x in 600..620 {
+                    assert_eq!(output[y * 960 + x], expected);
+                }
+            }
+            assert_eq!(face.dither, Dither::Always);
+        }
+    }
 
     #[test]
     fn hardware_geometry_quotient_matches_integer_truncation() {

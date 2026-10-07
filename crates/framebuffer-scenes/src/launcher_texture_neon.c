@@ -593,6 +593,8 @@ static size_t projected_row_boundary(int64_t boundary,int32_t q,int32_t step,siz
 }
 
 #define MAGIK_COLUMN_KERNEL magik_launcher_project_dithered
+#define MAGIK_PALETTE_PARAMS
+#define MAGIK_PALETTE_ARGS
 #define MAGIK_OPAQUE_KERNEL magik_launcher_project_dithered_opaque
 #define MAGIK_FLAT_KERNEL magik_launcher_flat_dithered
 #define MAGIK_PACK4 pack_dithered16
@@ -781,3 +783,84 @@ static uint16_t fast_dither_pixel(uint32_t p, uint16_t dst, size_t x, size_t y) 
 #undef MAGIK_PIXEL
 #undef MAGIK_VECTOR_ALPHA
 #endif
+
+typedef struct { uint32_t rgba, rgb565; } magik_flat_colour;
+
+static inline uint16x4_t palette_pack4(uint32x4_t p, uint16x4_t phase,
+    const magik_flat_colour *flat, size_t count, int fast) {
+  uint32x4_t mask=vdupq_n_u32(0), native=vdupq_n_u32(0);
+  for(size_t i=0;i<count;++i) {
+    uint32x4_t equal=vceqq_u32(p,vdupq_n_u32(flat[i].rgba));
+    mask=vorrq_u32(mask,equal);
+    native=vbslq_u32(equal,vdupq_n_u32(flat[i].rgb565),native);
+    uint32x2_t complete=vand_u32(vget_low_u32(mask),vget_high_u32(mask));
+    if(vget_lane_u32(complete,0)==UINT32_MAX && vget_lane_u32(complete,1)==UINT32_MAX)
+      return vmovn_u32(native);
+  }
+#ifdef MAGIK_FAST_QUANTISATION
+  uint16x4_t dithered=fast?pack_fast16(p,phase):pack_dithered16(p,phase);
+#else
+  (void)fast;
+  uint16x4_t dithered=pack_dithered16(p,phase);
+#endif
+  return vbsl_u16(vmovn_u32(mask),vmovn_u32(native),dithered);
+}
+
+static inline uint32x2_t palette_pack2(uint32x2_t p,size_t x,size_t y,
+    const magik_flat_colour *flat,size_t count,int fast) {
+  uint16_t offsets[4]={(uint16_t)(256-image_threshold[y&3][x&3]),
+    (uint16_t)(256-image_threshold[(y+1)&3][x&3]),0,0};
+  return vget_low_u32(vmovl_u16(palette_pack4(vcombine_u32(p,vdup_n_u32(0)),vld1_u16(offsets),flat,count,fast)));
+}
+
+static inline uint16_t palette_pixel(uint32_t p,uint16_t dst,size_t x,size_t y,
+    const magik_flat_colour *flat,size_t count,int fast) {
+  for(size_t i=0;i<count;++i)if(p==flat[i].rgba)return (uint16_t)flat[i].rgb565;
+#ifdef MAGIK_FAST_QUANTISATION
+  if(fast)return fast_dither_pixel(p,dst,x,y);
+#else
+  (void)fast;
+#endif
+  return dither_pixel(p,dst,x,y);
+}
+
+#undef MAGIK_PALETTE_PARAMS
+#undef MAGIK_PALETTE_ARGS
+#define MAGIK_PALETTE_PARAMS , const magik_flat_colour *flat, size_t flat_count
+#define MAGIK_PALETTE_ARGS , flat, flat_count
+#define MAGIK_PACK4(p,phase) palette_pack4(p,phase,flat,flat_count,MAGIK_PALETTE_FAST)
+#define MAGIK_PACK2(p,x,y) palette_pack2(p,x,y,flat,flat_count,MAGIK_PALETTE_FAST)
+#define MAGIK_PIXEL(p,dst,x,y) palette_pixel(p,dst,x,y,flat,flat_count,MAGIK_PALETTE_FAST)
+#define MAGIK_VECTOR_ALPHA 0
+
+#define MAGIK_PALETTE_FAST 0
+#define MAGIK_COLUMN_KERNEL magik_launcher_project_palette
+#define MAGIK_OPAQUE_KERNEL magik_launcher_project_palette_opaque
+#define MAGIK_FLAT_KERNEL magik_launcher_flat_palette
+#define MAGIK_PACK_ROW4 palette_row4
+#include "launcher_projection_kernels.h"
+#undef MAGIK_COLUMN_KERNEL
+#undef MAGIK_OPAQUE_KERNEL
+#undef MAGIK_FLAT_KERNEL
+#undef MAGIK_PACK_ROW4
+#undef MAGIK_PALETTE_FAST
+
+#ifdef MAGIK_FAST_QUANTISATION
+#define MAGIK_PALETTE_FAST 1
+#define MAGIK_COLUMN_KERNEL magik_launcher_project_palette_fast
+#define MAGIK_OPAQUE_KERNEL magik_launcher_project_palette_fast_opaque
+#define MAGIK_FLAT_KERNEL magik_launcher_flat_palette_fast
+#define MAGIK_PACK_ROW4 palette_row4_fast
+#include "launcher_projection_kernels.h"
+#undef MAGIK_COLUMN_KERNEL
+#undef MAGIK_OPAQUE_KERNEL
+#undef MAGIK_FLAT_KERNEL
+#undef MAGIK_PACK_ROW4
+#undef MAGIK_PALETTE_FAST
+#endif
+#undef MAGIK_PACK4
+#undef MAGIK_PACK2
+#undef MAGIK_PIXEL
+#undef MAGIK_VECTOR_ALPHA
+#undef MAGIK_PALETTE_PARAMS
+#undef MAGIK_PALETTE_ARGS
