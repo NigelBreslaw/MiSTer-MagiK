@@ -834,7 +834,7 @@ impl LauncherCardHomeSession {
         gather: bool,
     ) {
         let request = self.next_request(settled_frame(selected));
-        self.last_timing = if self.scene == LauncherScene::new(960, 540)
+        self.last_timing = if self.prepared.supports_parallel()
             && let Some(renderer) = self.renderer.as_mut()
         {
             Some(

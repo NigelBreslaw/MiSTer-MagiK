@@ -745,12 +745,12 @@ impl LauncherFramePreparer {
             clear_card_rows(pixels, geometry.stride, row);
         }
         if !self.faces.is_empty() {
-            let plan = match &self.layout {
-                Some(layout) => layout.plan(&self.faces, request.frame, self.cyclic),
-                None => self.trick.map_or_else(
-                    || build_carousel_plan(&self.faces, request.frame, self.cyclic),
-                    |plan| plan.with_faces(&self.faces),
-                ),
+            // A level-change plan already holds the output's own poses: mapping
+            // it again would move the hero at the swap.
+            let plan = match (&self.trick, &self.layout) {
+                (Some(plan), _) => plan.with_faces(&self.faces),
+                (None, Some(layout)) => layout.plan(&self.faces, request.frame, self.cyclic),
+                (None, None) => build_carousel_plan(&self.faces, request.frame, self.cyclic),
             };
             draw_card_strips(pixels, geometry.stride, row, &plan, scratch);
         }
