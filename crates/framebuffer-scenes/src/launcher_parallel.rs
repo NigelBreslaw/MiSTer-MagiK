@@ -179,6 +179,8 @@ pub struct ParallelLauncherRenderer {
     rendered_split: usize,
     /// The geometry of the last rendered frame, for merging retained bands.
     geometry: CarouselGeometry,
+    /// Output size the buffers were built for; a new scene rebuilds them.
+    shape: (usize, usize),
     retain_bands: bool,
     helper_unmerged: bool,
 }
@@ -271,6 +273,7 @@ impl ParallelLauncherRenderer {
             split: initial_split(geometry),
             rendered_split: initial_split(geometry),
             geometry,
+            shape: (geometry.stride, geometry.height),
             retain_bands: false,
             helper_unmerged: false,
         })
@@ -299,6 +302,9 @@ impl ParallelLauncherRenderer {
             } else {
                 (0, None)
             };
+        if !helper_ahead {
+            self.fit_shape(preparer);
+        }
         let ahead = self.ahead.take();
         let helper_ahead_lead_us = ahead.as_ref().map_or(0, |ahead| {
             started
@@ -387,6 +393,25 @@ impl ParallelLauncherRenderer {
             split,
         })
     }
+    /// Rebuild the buffers when the output changed size (a rotated or resized
+    /// scene reuses this renderer). Nothing is in flight: any helper-ahead job
+    /// for another source has been retired.
+    fn fit_shape(&mut self, preparer: &LauncherFramePreparer) {
+        let geometry = preparer.geometry();
+        if self.shape == (geometry.stride, geometry.height) {
+            return;
+        }
+        self.primary = preparer.new_direct_tile_buffer();
+        let helper = preparer.new_tile_buffer();
+        self.storage_bytes = self.primary.storage_bytes() + helper.storage_bytes();
+        self.helper = Some(helper);
+        self.spare = None;
+        self.shape = (geometry.stride, geometry.height);
+        self.split = initial_split(geometry);
+        self.rendered_split = self.split;
+        self.geometry = geometry;
+    }
+
     /// At most one future helper band is in flight. The current immutable
     /// pixels stay available; projection scratch moves to the spare buffer.
     pub fn prepare_helper_ahead(
@@ -399,7 +424,9 @@ impl ParallelLauncherRenderer {
         }
         let sender = self.requests.as_ref().ok_or("card renderer stopped")?;
         let helper = self.helper.as_mut().ok_or("helper output unavailable")?;
-        if helper.request().is_none() {
+        if helper.request().is_none()
+            || self.shape != (preparer.geometry().stride, preparer.geometry().height)
+        {
             return Ok(false);
         }
         let mut buffer = self.spare.take().unwrap_or_else(|| {
@@ -822,6 +849,68 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// One renderer outlives a scene change (rotation or a new display mode):
+    /// it rebuilds its buffers for the new size and still matches serial.
+    #[test]
+    fn a_renderer_follows_the_scene_it_is_given() {
+        let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+            id: LauncherCardId::Consoles,
+            name,
+            games: Some(12),
+            colour: 0x2a7f,
+        });
+        let data = LauncherData {
+            cards: &cards,
+            selected: 0,
+            library_games: 72,
+            collections: 6,
+            favourites: 1,
+            clock: "12:00",
+            level: LauncherLevel::Root,
+        };
+        let first = LauncherScene::new(540, 960).prepare(data);
+        let mut renderer =
+            ParallelLauncherRenderer::new(first.frame_preparer(), None, None).expect("renderer");
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 1,
+            phase: BrowsePhase::Flipping,
+            direction: Some(BrowseDirection::Right),
+            progress_millis: 23_000,
+            duration_millis: crate::launcher_navigation::SPRING_POSITION_UNITS,
+        };
+        for (generation, scene) in [
+            LauncherScene::new(960, 540),
+            LauncherScene::crt(640, 240),
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(480, 640),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let generation = generation as u64 + 1;
+            let mut serial = scene.prepare(data);
+            let mut parallel = scene.prepare(data);
+            parallel
+                .render_parallel_frame(
+                    &mut renderer,
+                    LauncherFrameRequest {
+                        frame,
+                        timestamp_us: 0,
+                        generation,
+                    },
+                )
+                .unwrap();
+            serial.render_frame(frame);
+            assert!(
+                parallel.pixels() == serial.pixels(),
+                "{}x{}",
+                scene.width,
+                scene.height
+            );
         }
     }
 

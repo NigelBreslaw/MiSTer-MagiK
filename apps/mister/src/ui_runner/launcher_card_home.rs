@@ -1073,7 +1073,11 @@ impl LauncherCardHomeSession {
         if !level_trick {
             return damage;
         }
-        assert_eq!(self.scene, LauncherScene::new(960, 540));
+        // Only the native canvas has level-trick chrome copy spans; a rotated
+        // output renders its level change on the Slint path.
+        if self.scene != LauncherScene::new(960, 540) {
+            return damage;
+        }
         // Coalesce sparse rows in bounded 32-row bands. Separate sidebar and
         // panel runs; native chrome geometry needs at most 19 rectangles.
         let mut pending: Option<((usize, bool), DirtyRect)> = None;
@@ -2116,6 +2120,8 @@ mod tests {
         };
         session.update(scene, &level, 0, 0.5, "07:28", 230, true, Some(frame), None);
         assert!(session.can_render_direct() && !session.can_render_native());
+        // A level change starting on a rotated output has no native chrome spans.
+        assert!(session.chrome_copy_damage(true).iter().next().is_none());
         session.render_direct_bands();
         for rotation in [
             OutputRotation::Clockwise90,
