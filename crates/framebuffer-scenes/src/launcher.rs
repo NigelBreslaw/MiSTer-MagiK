@@ -12,8 +12,6 @@ use crate::bitmap_text::BitmapFont;
 use crate::launcher_flip::Dither;
 use std::sync::Arc;
 mod artwork;
-#[cfg(test)]
-mod face_parity;
 mod level_trick;
 mod responsive;
 mod row;
@@ -301,8 +299,9 @@ impl LauncherScene {
         self.initial(data, Some(Artwork::Rgb565(artwork)), Some(typography))
     }
 
-    /// Prepare native responsive faces from 360x504 RGB888 source artwork.
-    /// Quantise only after destination-size filtering; scanout remains RGB565.
+    /// Prepare card faces from 360x504 RGB888 source artwork. Every output shares
+    /// one 180x252 face per card, which the projection scales to each output's
+    /// card size; scanout remains RGB565.
     pub fn prepare_initial_with_rgb888_artwork_and_typography(
         self,
         data: LauncherData<'_>,
@@ -945,18 +944,13 @@ impl PreparedLauncher {
 
                 let name = if loaded.as_ref().is_some_and(|source| {
                     source.contains_name
-                        && ((source.prepared.is_some() && responsive.is_none())
-                            || source.pixels.len() == 360 * 504 * 3)
+                        && (source.prepared.is_some() || source.pixels.len() == 360 * 504 * 3)
                 }) {
                     ""
                 } else {
                     card.name
                 };
-                let prepared_art = if responsive.is_none() {
-                    loaded.as_mut().and_then(|source| source.prepared.take())
-                } else {
-                    None
-                };
+                let prepared_art = loaded.as_mut().and_then(|source| source.prepared.take());
                 let card = PreparedCard {
                     id: card.id,
                     name,
@@ -995,7 +989,7 @@ impl PreparedLauncher {
                         back: None,
                         slides: data.level.slides(),
                     }
-                } else if card.rgb888.is_some() && responsive.is_none() {
+                } else if card.rgb888.is_some() {
                     #[cfg(feature = "launcher-profile")]
                     let _faces = crate::launcher_profile::span("prepare.rgb888_faces");
                     let [compact, detail] = artwork::faces_rgb888(&card, typography);
@@ -1009,32 +1003,27 @@ impl PreparedLauncher {
                 } else {
                     #[cfg(feature = "launcher-profile")]
                     let _faces = crate::launcher_profile::span("prepare.initial_faces");
-                    if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
-                        layout.faces(&card, fonts, &mut bodies, data.level.slides())
-                    } else {
-                        CardFaces {
-                            source_retry: false,
-                            compact: bake_face(&card, 180, false, typography, &mut bodies),
-                            detail: bake_face(&card, 180, true, typography, &mut bodies),
-                            back: bodies.back_face(&card),
-                            slides: data.level.slides(),
-                        }
+                    CardFaces {
+                        source_retry: false,
+                        compact: bake_face(&card, 180, false, typography, &mut bodies),
+                        detail: bake_face(&card, 180, true, typography, &mut bodies),
+                        back: bodies.back_face(&card),
+                        slides: data.level.slides(),
                     }
                 };
                 faces.source_retry = loaded.as_ref().is_some_and(|source| source.retry);
-                // Every face dithers its moving poses. Responsive (CRT and portrait)
-                // faces were already dithered once when baked, so their face-on
-                // resting projection stays exact.
-                let dither = if responsive.is_some() {
-                    Dither::MovingPoses
-                } else {
-                    Dither::Always
-                };
+                // Every output shares these faces. Each is baked once at 180x252 and
+                // the projection scales it to the card's pose, so every projection
+                // is dithered. A reflection is 64 rows under a 252-row card; a
+                // smaller card keeps the same proportion.
+                let fade_rows =
+                    responsive.map_or(64, |layout| (64 * layout.card_h / 252).clamp(2, 64));
                 for face in [&mut faces.compact, &mut faces.detail]
                     .into_iter()
                     .chain(faces.back.as_mut())
                 {
-                    face.dither = dither;
+                    face.dither = Dither::Always;
+                    face.reflection_fade_rows = fade_rows;
                 }
                 Arc::new(faces)
             })
@@ -1075,15 +1064,11 @@ impl PreparedLauncher {
                 6
             })
                 .map(|_| {
-                    if let Some(layout) = responsive {
-                        crate::launcher_flip::Scratch::sized(
-                            crate::launcher_flip::STRIP_WIDTH,
-                            scene.width,
-                            layout.card_h,
-                        )
+                    crate::launcher_flip::Scratch::strip_for(if responsive.is_some() {
+                        scene.width
                     } else {
-                        crate::launcher_flip::Scratch::strip()
-                    }
+                        LOGICAL_WIDTH
+                    })
                 })
                 .collect(),
         };
@@ -2461,48 +2446,48 @@ mod tests {
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x01de40663697711d, 0xf8cd84aad96c6ec2, 0x510785231b4c077d, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0xdfa4872b2baf7994, 0x2d94a95f2e285101, 0xcaeb9d49054907c3, 0x4687b9f98929fc27,
-            0xa3a21f881cbf4664, 0xfef51d36b8c21824, 0x280897d875ab263a, 0x8118a532cc198e5e, 0xaf5d68ee8ee3967a,
-            0xaf5d68ee8ee3967a, 0x8462d643dbb856e7, 0x230c8f2e842deb99, 0x114e9baef71de9e9, 0xa3a21f881cbf4664,
-            0xe9cf6da3375de669, 0x730f75e83d18691d, 0xa417c14b1fc44df2, 0x63dbf6e4dedf0746, 0xc786cc582e9d37d5,
-            0xc786cc582e9d37d5, 0x366b0289fa74114a, 0x463ab1ff5ef46b44, 0x89c9cef96d772fbd, 0xe9cf6da3375de669,
-            0x05f064e4433ecfff, 0xe6c79ba3506155a8, 0x7f32800560411bf6, 0x4f58fd6de56be674, 0xb2197e7c030baeaf,
-            0xb2197e7c030baeaf, 0x16729c7c019de07f, 0x4b715808b1d56531, 0x5f423f222c991daa, 0x05f064e4433ecfff,
+            0x88a45b3d7d8dc4b3, 0x36d9572edde4428b, 0x1a35bc5ccf9c4f82, 0x42509915f4f2f968, 0x569885b63ef6cc07,
+            0x569885b63ef6cc07, 0x73438c18dab1decd, 0x26fa8c97d2837420, 0x291fc2dd3a07db77, 0x88a45b3d7d8dc4b3,
+            0x8c9061a9bdd69a9a, 0x719ef415bada8cd7, 0x04bb4cb78ba97984, 0x47a470bccf735a88, 0x81c9ac2e027a863f,
+            0x81c9ac2e027a863f, 0x3d9ccfa26a0698db, 0x41182f332fc1e0f1, 0x0c988417cd6cefdf, 0x8c9061a9bdd69a9a,
+            0xca1f9b2f645a8a43, 0x6a0b92928e5632be, 0xb9c71e1d3f134b06, 0x878981643f8fac87, 0x9fbcf649cc549522,
+            0x9fbcf649cc549522, 0xdc7dbea4d88d769a, 0x219463b423282341, 0x1c56f7f767332cd7, 0xca1f9b2f645a8a43,
         ];
         #[cfg(all(feature = "card-axis-filter", not(feature = "card-fast-quantisation")))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x9d2be33a3ca71867, 0x52234dbf6ae11548, 0x72d7e978eb358360, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0x00885c42b0b1224e, 0xb8afd0c2d7cf3b77, 0x094557929b2959f5, 0x4687b9f98929fc27,
-            0xa3a21f881cbf4664, 0xf30858f191210220, 0x46c34199c6793773, 0x4bdac484e0fc474e, 0xaf5d68ee8ee3967a,
-            0xaf5d68ee8ee3967a, 0x419f80209fe256e7, 0x68155adb4065b614, 0x37b059c1682383b9, 0xa3a21f881cbf4664,
-            0xe9cf6da3375de669, 0x26e2b9a147a62d4a, 0x6bcd3cda29c00830, 0xfbcdd5738ae3435e, 0xc786cc582e9d37d5,
-            0xc786cc582e9d37d5, 0xb0558b05213a0fc6, 0xfa9d3103db322152, 0xfcdd5a98642a4af4, 0xe9cf6da3375de669,
-            0x05f064e4433ecfff, 0xb69eb98349911ee6, 0x9af5b5149ab523e0, 0x1d93c65f8e6513af, 0xb2197e7c030baeaf,
-            0xb2197e7c030baeaf, 0xe6f0c10553de8328, 0xb99d3aedca25975f, 0x74bf11d83730d174, 0x05f064e4433ecfff,
+            0xf05385fa3097b843, 0xe8bc8b6accc8c589, 0x4a23d117b0a09d7b, 0x763a29b0fadd6325, 0x5b752c4e4acba8a0,
+            0x5b752c4e4acba8a0, 0xc58228ab07590c0a, 0xb4420e95e582f505, 0x955a78ca21100888, 0xf05385fa3097b843,
+            0xe61a6980fb509025, 0x0f1f3c64fb3bc6b0, 0x200eeebb6c572db0, 0x5b1c39f20f40c82e, 0x1c6e526e51d58afd,
+            0x1c6e526e51d58afd, 0x04578fe78f055cfb, 0x5fd703677ada3b61, 0x53b7cf5a0aa66ff4, 0xe61a6980fb509025,
+            0x09d4daf3b36132e7, 0xc0195724d9ecd6e5, 0x9c104545659738e1, 0x8b1a6868deecff3b, 0xc7e159cf2802b94b,
+            0xc7e159cf2802b94b, 0x8a94c1a3ea2ba62b, 0x7e0f1909c503094a, 0xb05472ea5042af21, 0x09d4daf3b36132e7,
         ];
         #[cfg(all(not(feature = "card-axis-filter"), feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xa7cef90c802d6414, 0xea9b95bdbad042bb, 0x67a9abee891b4c1a, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x2cca0ac9cf164e40, 0xa430e84ae034b4bd, 0xb60e7727de597315, 0xd3ce5764e8c88bde,
-            0x894bea54aa9836d9, 0xa9542f4c893edf6e, 0xd00f7ba74da7f23f, 0xc90db7c08e8b7d36, 0x8cb97d71b576291e,
-            0x8cb97d71b576291e, 0x8e0599c022f7c66a, 0x220aa55a5bf3985c, 0xff691925f4a8aae2, 0x894bea54aa9836d9,
-            0x770dd2ef67cb6c6d, 0xd6bc2e159648a26b, 0x4607b9d9167ede78, 0xee5906843702bdce, 0x59c7656caf6975c7,
-            0x59c7656caf6975c7, 0x0dfcd84a3cea3bd1, 0x35e29c73b33f9a99, 0x1eac72acc2434f87, 0x770dd2ef67cb6c6d,
-            0x01835b8cc58f40e3, 0x7194de163e779a40, 0xb09cafaea111e878, 0x4ee964d3c599c1eb, 0x1c2d34df7305cc00,
-            0x1c2d34df7305cc00, 0xa9d8a77c8682ad63, 0x2da52633c18f31b4, 0x03bed3a550bbe6f3, 0x01835b8cc58f40e3,
+            0x866c5970e6c4e8d6, 0x22630b086d5dd725, 0x4a3c1259dd69599e, 0xc99e708f63049fd7, 0xb1d3aee63cf1c10f,
+            0xb1d3aee63cf1c10f, 0x14dc28759ebd3993, 0x2cf56d99baf64a02, 0x35dd69395ef5b57a, 0x866c5970e6c4e8d6,
+            0xd3d9435fc2ebdc65, 0x2704b3986e31ff95, 0x4a5d71e2e6bc121e, 0x7727e28c139f6eb4, 0xa95e4aef7de1bcb5,
+            0xa95e4aef7de1bcb5, 0x137ace44f04e894b, 0xa387c3b6e36e893b, 0x77e7f1ee5d540cd2, 0xd3d9435fc2ebdc65,
+            0x6dd01c9b29aa0d1e, 0x6a983d4a6ce048fe, 0x333fdb28c02489b8, 0xd32832c16e9b1607, 0x65c95e85bc5d0543,
+            0x65c95e85bc5d0543, 0x208d1063ebd93971, 0x4670e02591af16da, 0xcbde8e1f1858ea0f, 0x6dd01c9b29aa0d1e,
         ];
         #[cfg(all(feature = "card-axis-filter", feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xbe353139c21b115f, 0xefb5b4c5a8c033ac, 0x1dffc79049677eb6, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x223c8ad98be9529c, 0xc477be9f19c4cc32, 0xd9ec89c562a0692a, 0xd3ce5764e8c88bde,
-            0x894bea54aa9836d9, 0x718ec4a0237e3357, 0x581e8d415693322a, 0xa807b755f3257e35, 0x8cb97d71b576291e,
-            0x8cb97d71b576291e, 0xa9b50de28cfe8685, 0x4c898431e46984ad, 0x2ab8a331dccf997b, 0x894bea54aa9836d9,
-            0x770dd2ef67cb6c6d, 0x04b3a82dc0f9a64f, 0x5b99b9272cd6f2aa, 0xfe4a1413639e296b, 0x59c7656caf6975c7,
-            0x59c7656caf6975c7, 0xd946f64e7185a0e0, 0x84b5967c6ad423fb, 0x7cf79629415ee38e, 0x770dd2ef67cb6c6d,
-            0x01835b8cc58f40e3, 0x1de7c482fd4af7c3, 0x264835274b00ba2f, 0x592a09a382103d9f, 0x1c2d34df7305cc00,
-            0x1c2d34df7305cc00, 0xdd11fbe762e6be97, 0xd41fd59f8dadf2a3, 0xe7a463268ab42d90, 0x01835b8cc58f40e3,
+            0x225990ddbeec2afa, 0xc0ae1dc91f6d683c, 0x868a13f1d6d051d4, 0xa98c3a25c840f417, 0xa2013858592d8059,
+            0xa2013858592d8059, 0x8be18bd6dd56c0e0, 0xf75404f418d7ebc0, 0xb6790e61a1f38ebe, 0x225990ddbeec2afa,
+            0xb54e527092d8d77a, 0x5a4234eea0e114fa, 0x249185133cd97259, 0x9e28356292efe098, 0xb898fce983d3f4cd,
+            0xb898fce983d3f4cd, 0x27e6bdf1e6039a75, 0x06ce9b5f5045caeb, 0xc308d7bc3d4414bb, 0xb54e527092d8d77a,
+            0x3a66e2537dd1f7e1, 0xc93ce376e7dc28b6, 0x482e2443ce19fb9f, 0xf0a26d0d51a82473, 0x30f8b0864535150a,
+            0x30f8b0864535150a, 0x8876d7305a7d3796, 0x34e2f3040002cff2, 0x80e67776bf7f3512, 0x3a66e2537dd1f7e1,
         ];
         assert_eq!(actual, REFERENCE, "Root raster: {actual:x?}");
     }
@@ -2571,80 +2556,13 @@ mod tests {
         }
     }
 
-    /// Render `frame` with the production faces and with dithering forced off.
-    fn dithered_and_truncated(
-        scene: LauncherScene,
-        frame: BrowseFrame,
-    ) -> (Vec<Rgb565Pixel>, Vec<Rgb565Pixel>) {
-        let mut on = PreparedLauncher::new(scene, data(), None, None);
-        on.render_frame(frame);
-        let mut off = PreparedLauncher::new(scene, data(), None, None);
-        for faces in Arc::get_mut(&mut off.faces).expect("unshared faces") {
-            let faces = Arc::get_mut(faces).expect("unshared card");
-            for face in [&mut faces.compact, &mut faces.detail]
-                .into_iter()
-                .chain(faces.back.as_mut())
-            {
-                face.dither = Dither::Off;
-            }
-        }
-        off.render_frame(frame);
-        (on.pixels().to_vec(), off.pixels().to_vec())
-    }
-
     #[test]
-    fn native_scenes_dither_moving_cards_but_never_the_resting_selected_card() {
-        for scene in [
-            LauncherScene::new(540, 960),
-            LauncherScene::crt(640, 240),
-            LauncherScene::crt(240, 640),
-        ] {
-            let (width, height) = (scene.width, scene.height);
-            let label = format!("{width}x{height}");
-            let resting = BrowseFrame {
-                selected: 0,
-                target: 0,
-                phase: crate::launcher_navigation::BrowsePhase::Settled,
-                direction: None,
-                progress_millis: 0,
-                duration_millis: 0,
-            };
-            let (on, off) = dithered_and_truncated(scene, resting);
-            let slot = scene.slot_zero(false).rect();
-            let inside = |x: usize, y: usize| {
-                (usize::from(slot.x)..usize::from(slot.x + slot.width)).contains(&x)
-                    && (usize::from(slot.y)..usize::from(slot.y + slot.height)).contains(&y)
-            };
-            let mut neighbours_differ = false;
-            for y in 0..height {
-                for x in 0..width {
-                    let same = on[y * width + x] == off[y * width + x];
-                    assert!(same || !inside(x, y), "{label}: resting card pixel {x},{y}");
-                    neighbours_differ |= !same;
-                }
-            }
-            assert!(neighbours_differ, "{label}: receded cards are dithered");
-
-            let moving = BrowseFrame {
-                selected: 0,
-                target: 1,
-                phase: crate::launcher_navigation::BrowsePhase::Flipping,
-                direction: Some(BrowseDirection::Right),
-                progress_millis: 32768,
-                duration_millis: 65536,
-            };
-            let (on, off) = dithered_and_truncated(scene, moving);
-            assert_ne!(on, off, "{label}: moving cards are dithered");
-        }
-    }
-
-    #[test]
-    fn every_scene_dithers_moving_poses_and_native_scenes_keep_rest_exact() {
+    fn every_scene_dithers_every_projection() {
         for (scene, expected) in [
             (LauncherScene::new(960, 540), Dither::Always),
-            (LauncherScene::new(540, 960), Dither::MovingPoses),
-            (LauncherScene::crt(640, 240), Dither::MovingPoses),
-            (LauncherScene::crt(240, 640), Dither::MovingPoses),
+            (LauncherScene::new(540, 960), Dither::Always),
+            (LauncherScene::crt(640, 240), Dither::Always),
+            (LauncherScene::crt(240, 640), Dither::Always),
         ] {
             let prepared = PreparedLauncher::new(scene, data(), None, None);
             for faces in prepared.faces.iter() {
@@ -3162,55 +3080,55 @@ mod tests {
             ("hdmi-1280x720 nested right-mid", 0x16a61476e10090f2),
             ("hdmi-1280x720 nested right-late", 0xedc3687816f6ae9f),
             ("hdmi-1280x720 nested left-mid", 0x80966bbb01371184),
-            ("hdmi-portrait-540x960 root rest", 0xed43abe965c0d3dd),
-            ("hdmi-portrait-540x960 root right-start", 0xd73b9d48550436ef),
-            ("hdmi-portrait-540x960 root right-mid", 0x68a910516dbbb36f),
-            ("hdmi-portrait-540x960 root right-late", 0xc0b0410abc71a9b0),
-            ("hdmi-portrait-540x960 root left-mid", 0xf6c5a821a1a03078),
-            ("hdmi-portrait-540x960 nested rest", 0xc37cb1a714f1dca7),
+            ("hdmi-portrait-540x960 root rest", 0xef78d78aecac8f19),
+            ("hdmi-portrait-540x960 root right-start", 0xcb72debe68827338),
+            ("hdmi-portrait-540x960 root right-mid", 0x426d744d6223fb5f),
+            ("hdmi-portrait-540x960 root right-late", 0xb43f80d9ef33802a),
+            ("hdmi-portrait-540x960 root left-mid", 0x6cdde20a166d7a40),
+            ("hdmi-portrait-540x960 nested rest", 0xba268aa9dc3d1db2),
             (
                 "hdmi-portrait-540x960 nested right-start",
-                0x259e82e21f7ce878,
+                0x84822eb84b8ea837,
             ),
-            ("hdmi-portrait-540x960 nested right-mid", 0x6ca9cca4c8d60c51),
+            ("hdmi-portrait-540x960 nested right-mid", 0x298359c35f34ff5d),
             (
                 "hdmi-portrait-540x960 nested right-late",
-                0xbc120b705db8b750,
+                0x99a335752f1bc91a,
             ),
-            ("hdmi-portrait-540x960 nested left-mid", 0x7c970af2ba913c4c),
-            ("crt-640x480 root rest", 0x5374849f1687e2f6),
-            ("crt-640x480 root right-start", 0xba65fc0058d2391c),
-            ("crt-640x480 root right-mid", 0x27f7e6ca50e415fd),
-            ("crt-640x480 root right-late", 0x3375922f50469188),
-            ("crt-640x480 root left-mid", 0xe7c5571b5be82465),
-            ("crt-640x480 nested rest", 0xb8be79c1dd82963c),
-            ("crt-640x480 nested right-start", 0xed86cd2750a75a43),
-            ("crt-640x480 nested right-mid", 0x53d58b454734a351),
-            ("crt-640x480 nested right-late", 0x5f6d8940aae63396),
-            ("crt-640x480 nested left-mid", 0xd7396b8b595ed01d),
-            ("crt-640x288 root rest", 0x8bf80f2c151336d8),
-            ("crt-640x288 root right-start", 0x454de93834182ce1),
-            ("crt-640x288 root right-mid", 0xa0069821bed80939),
-            ("crt-640x288 root right-late", 0xe42329d517659fec),
-            ("crt-640x288 root left-mid", 0xfd6fcbcd131ca87a),
-            ("crt-640x288 nested rest", 0x6ffc5fc2502d2934),
-            ("crt-640x288 nested right-start", 0x53d5533dbf469d0c),
-            ("crt-640x288 nested right-mid", 0xe9ca455ee2880ca8),
-            ("crt-640x288 nested right-late", 0x4271b3444b81e9fa),
-            ("crt-640x288 nested left-mid", 0xff01e255a1814799),
-            ("crt-portrait-480x640 root rest", 0x59ed097dfee20a5f),
-            ("crt-portrait-480x640 root right-start", 0x4e33d8b9396ee748),
-            ("crt-portrait-480x640 root right-mid", 0x98cf84003a457b52),
-            ("crt-portrait-480x640 root right-late", 0x03c492a602313d40),
-            ("crt-portrait-480x640 root left-mid", 0x5716a7af51d83317),
-            ("crt-portrait-480x640 nested rest", 0xcfa7307702e9a6e7),
+            ("hdmi-portrait-540x960 nested left-mid", 0xd6f3ce2f132b8de7),
+            ("crt-640x480 root rest", 0xfe9ae5ea30868d15),
+            ("crt-640x480 root right-start", 0xedba6bfd8b5156fa),
+            ("crt-640x480 root right-mid", 0x5c786745df3695d1),
+            ("crt-640x480 root right-late", 0x8ba3adfdcc3d854d),
+            ("crt-640x480 root left-mid", 0xb6b56daa8a2ed8bc),
+            ("crt-640x480 nested rest", 0x84a95c5b09406010),
+            ("crt-640x480 nested right-start", 0x2468d00d67298825),
+            ("crt-640x480 nested right-mid", 0x727120b1de42ebd8),
+            ("crt-640x480 nested right-late", 0x642d5ad38b26b9a2),
+            ("crt-640x480 nested left-mid", 0xffe8ea8798952f88),
+            ("crt-640x288 root rest", 0x813dd0da0aabd4e6),
+            ("crt-640x288 root right-start", 0x191ff7af4f449715),
+            ("crt-640x288 root right-mid", 0xd64ce860ebb528e6),
+            ("crt-640x288 root right-late", 0x550aae539ae6d093),
+            ("crt-640x288 root left-mid", 0xa7d10edca47a8d3e),
+            ("crt-640x288 nested rest", 0x0c9f533659a27793),
+            ("crt-640x288 nested right-start", 0x5d36b874728a6497),
+            ("crt-640x288 nested right-mid", 0x7baf78d37da37d95),
+            ("crt-640x288 nested right-late", 0xe3fa864ae7faa082),
+            ("crt-640x288 nested left-mid", 0x69abba8f636ac53c),
+            ("crt-portrait-480x640 root rest", 0x12f47dcb67eba657),
+            ("crt-portrait-480x640 root right-start", 0x1b19147019b19a78),
+            ("crt-portrait-480x640 root right-mid", 0x1bf18198c7cd46c6),
+            ("crt-portrait-480x640 root right-late", 0xf4fe7cfbe5bf3b93),
+            ("crt-portrait-480x640 root left-mid", 0x61592d8af5720eb4),
+            ("crt-portrait-480x640 nested rest", 0x0caacd5b3aa759eb),
             (
                 "crt-portrait-480x640 nested right-start",
-                0xb27578dde09b6a5f,
+                0x246fd20f9cfc2fea,
             ),
-            ("crt-portrait-480x640 nested right-mid", 0x3e9b7960ad17b5e4),
-            ("crt-portrait-480x640 nested right-late", 0x5fcbe7a9e986f363),
-            ("crt-portrait-480x640 nested left-mid", 0xff35b6a5195839c2),
+            ("crt-portrait-480x640 nested right-mid", 0x40a567523b89330b),
+            ("crt-portrait-480x640 nested right-late", 0xf8364d752e08cd04),
+            ("crt-portrait-480x640 nested left-mid", 0x30573b3f00e85e4d),
         ];
         let actual = card_row_hashes();
         let changed: Vec<_> = actual
@@ -3280,6 +3198,86 @@ mod tests {
                         "{frame:?} splits {splits:?} row {y}"
                     );
                 }
+            }
+        }
+    }
+
+    /// Writes the launcher home screen of every output size, at rest and
+    /// mid-flip, as PPM files so a change to the card renderer can be looked at.
+    /// `MAGIK_CARD_PREVIEW_DIR` is the output directory; `MAGIK_CARD_ART_DIR`
+    /// holds 360x504 RGB888 artwork (`*.rgb888`), and without it the plain
+    /// fallback faces are drawn. Run with:
+    /// `MAGIK_CARD_PREVIEW_DIR=/tmp/cards cargo test --lib write_card_previews -- --ignored`
+    #[test]
+    #[ignore = "writes image files; set MAGIK_CARD_PREVIEW_DIR"]
+    fn write_card_previews() {
+        let dir = std::env::var("MAGIK_CARD_PREVIEW_DIR").expect("MAGIK_CARD_PREVIEW_DIR");
+        let art: Vec<Vec<u8>> = std::env::var("MAGIK_CARD_ART_DIR")
+            .ok()
+            .map(|dir| {
+                let mut names: Vec<_> = std::fs::read_dir(dir)
+                    .unwrap()
+                    .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "rgb888"))
+                    .collect();
+                names.sort();
+                names
+                    .into_iter()
+                    .map(|path| std::fs::read(path).unwrap())
+                    .filter(|bytes| bytes.len() == 360 * 504 * 3)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        for (name, scene) in [
+            ("hdmi-landscape-960x540", LauncherScene::new(960, 540)),
+            ("hdmi-portrait-540x960", LauncherScene::new(540, 960)),
+            ("crt-landscape-640x480", LauncherScene::crt(640, 480)),
+            ("crt-landscape-640x288", LauncherScene::crt(640, 288)),
+            ("crt-portrait-480x640", LauncherScene::crt(480, 640)),
+            ("crt-portrait-288x640", LauncherScene::crt(288, 640)),
+        ] {
+            let images: Vec<&[u8]> = art.iter().map(Vec::as_slice).take(CARDS.len()).collect();
+            let mut prepared = if images.len() == CARDS.len() {
+                scene
+                    .prepare_initial_with_rgb888_artwork(data(), &images)
+                    .finish()
+            } else {
+                scene.prepare(data())
+            };
+            for (frame_name, frame) in [
+                (
+                    "rest",
+                    BrowseFrame {
+                        selected: 0,
+                        target: 0,
+                        phase: crate::launcher_navigation::BrowsePhase::Settled,
+                        direction: None,
+                        progress_millis: 0,
+                        duration_millis: units,
+                    },
+                ),
+                (
+                    "flip",
+                    BrowseFrame {
+                        selected: 0,
+                        target: 1,
+                        phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                        direction: Some(BrowseDirection::Right),
+                        progress_millis: units / 2,
+                        duration_millis: units,
+                    },
+                ),
+            ] {
+                prepared.render_frame(frame);
+                let mut ppm = format!("P6\n{} {}\n255\n", scene.width, scene.height).into_bytes();
+                for pixel in prepared.pixels() {
+                    let v = pixel.0;
+                    ppm.push((((v >> 11) & 31) as u8) << 3 | ((v >> 13) & 7) as u8);
+                    ppm.push((((v >> 5) & 63) as u8) << 2 | ((v >> 9) & 3) as u8);
+                    ppm.push(((v & 31) as u8) << 3 | ((v >> 2) & 7) as u8);
+                }
+                std::fs::write(format!("{dir}/{name}-{frame_name}.ppm"), ppm).unwrap();
             }
         }
     }

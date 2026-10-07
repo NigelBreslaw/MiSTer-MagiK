@@ -588,6 +588,8 @@ impl Texture {
         Self::from_base(base, width, height)
     }
 
+    /// A texture with an explicit alpha plane, for the axis-filter tests.
+    #[cfg(all(test, feature = "card-axis-filter"))]
     pub fn with_alpha(pixels: &[Rgb565Pixel], alpha: &[u8], width: usize, height: usize) -> Self {
         assert_eq!(pixels.len(), width * height);
         assert_eq!(alpha.len(), pixels.len());

@@ -443,6 +443,25 @@ effect.**
   count: the responsive compact face of a card without an icon (Arcade, Favourites, Settings) is drawn in the detail colours. Results are in
   Phase 3b above.
 
+**PR 19 (in progress): every output uses the HDMI landscape card renderer.**
+
+- Decision (yours): CRT and portrait share the renderer optimised for HDMI landscape. Faces are baked
+  once per card at 180x252 (or taken from prepared `.cardtex` artwork) and the projection scales them
+  to each output's card size, which `Layout::map_pose` already did. `Layout::faces`, `native_surface`,
+  the native body cache, the narrow CRT font, `Dither::MovingPoses` and the face-parity harness are
+  deleted; the responsive path no longer has a face renderer of its own.
+- CRT and portrait now get the HDMI faces' prepared-artwork path and dither every projection.
+  A reflection stays a quarter of the card height: its fade is 64 rows under a 252-row card and
+  scales with the card on smaller outputs (without that, small cards showed an oversized reflection).
+- Measured: the 20 pinned card-row hashes for 960x540 and 1280x720 are unchanged, and so are the
+  first ten of the four approved-raster tables (HDMI landscape with real artwork); the 40 CRT and
+  portrait hashes changed on purpose. In the repository's visual baselines only `crt-home` and
+  `crt-240p-home` change on this machine (HDMI home and every other scene are identical to main);
+  those two need re-approving on a machine where the baselines match.
+- Visible: card titles and counts on CRT and portrait use the HDMI label style scaled to the card, so
+  they are larger than the old small CRT bitmap labels. `write_card_previews` (an ignored test) renders
+  every output so the change can be looked at.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
@@ -560,10 +579,13 @@ projection kernels are on the 60 fps budget.
    either choice changes visible pixels on the primary HDMI UI. The harness is the instrument for that
    decision; the pinned table will show exactly what a change moves. It is relative by design: a change
    to the shared `surface` moves both faces equally and is guarded by the pinned card-row hashes.
-3. Native-size `.cardtex` (encoder, regeneration in the assets repo, motion benchmark on the device).
+3. **Decided: one renderer for every output, the HDMI landscape one** (see PR 19). Native-size
+   `.cardtex` is no longer needed: every output uses the 180x252 faces (and `.cardtex` where supplied)
+   and the projection scales them.
 4. Unify chrome last, or keep `render_logical` as the HDMI landscape chrome indefinitely: it is not
    on the motion path, and it is the part where the two designs genuinely differ.
-5. Delete the fixed-canvas face path once nothing selects it.
+5. The responsive face bake (`Layout::faces`, `native_surface`, `Dither::MovingPoses`) is deleted
+   (PR 19). What remains of "the fixed canvas" is chrome and the 960x540 logical canvas.
 
 ### Phase 4: PresentationDirector and loop extraction
 

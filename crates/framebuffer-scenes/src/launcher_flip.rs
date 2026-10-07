@@ -27,13 +27,16 @@ impl Scratch {
     }
     #[cfg(test)]
     pub fn new() -> Self {
-        Self::with_width(960)
+        Self::sized(960, 960, COLUMN_HEIGHT)
     }
     pub fn strip() -> Self {
-        Self::with_width(STRIP_WIDTH)
+        Self::strip_for(960)
     }
-    fn with_width(width: usize) -> Self {
-        Self::sized(width, 960, COLUMN_HEIGHT)
+    /// A strip scratch for an output `screen_width` columns wide. Faces are
+    /// always baked at the shared size, so the column height does not depend on
+    /// the output.
+    pub fn strip_for(screen_width: usize) -> Self {
+        Self::sized(STRIP_WIDTH, screen_width, COLUMN_HEIGHT)
     }
     pub fn sized(width: usize, screen_width: usize, column_height: usize) -> Self {
         Self {
@@ -93,10 +96,6 @@ impl Column {
 pub(super) enum Dither {
     /// Truncate.
     Off,
-    /// Ordered dither for rotated poses; face-on poses (angle 0) project
-    /// undithered. Native faces are dithered once when baked, so a resting card
-    /// must reach the output without being resampled again.
-    MovingPoses,
     /// Ordered dither for every projection.
     Always,
 }
@@ -115,19 +114,6 @@ impl Face {
     pub fn storage_bytes(&self) -> usize {
         self.texture.storage_bytes()
     }
-    pub fn with_alpha(pixels: Vec<Rgb565Pixel>, alpha: &[u8], width: usize, height: usize) -> Self {
-        let texture = crate::launcher_texture::Texture::with_alpha(&pixels, alpha, width, height);
-        Self {
-            #[cfg(test)]
-            pixels,
-            width,
-            height,
-            reflection_fade_rows: (height / 4).clamp(2, 64),
-            texture,
-            dither: Dither::Off,
-        }
-    }
-
     pub(super) fn with_rgb8(
         pixels: Vec<Rgb565Pixel>,
         rgb8: &[[u8; 3]],
@@ -748,7 +734,7 @@ fn render(
                             target.pitch,
                             bottom - top,
                             (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
-                            face.dither != Dither::Off,
+                            face.dither == Dither::Always,
                             (x, top),
                             c.opaque_margin(),
                         );
@@ -1052,15 +1038,11 @@ mod tests {
     }
 
     #[test]
-    fn native_reflection_reaches_black_at_its_visible_end() {
+    fn reflection_reaches_black_at_its_visible_end_for_every_card_size() {
+        // Faces are baked once at 180x252; the pose scales them to each output.
         for height in [112, 134, 200, 252, 280] {
-            let face = Face::with_alpha(
-                vec![Rgb565Pixel(0xffff); 160 * height],
-                &vec![255; 160 * height],
-                160,
-                height,
-            );
-            let mut scratch = Scratch::sized(960, 960, height);
+            let face = Face::new(vec![Rgb565Pixel(0xffff); 160 * 252], 160, 252);
+            let mut scratch = Scratch::sized(960, 960, 252);
             let mut frame = vec![Rgb565Pixel(0); 960 * 540];
             let rows = std::cell::RefCell::new(Vec::new());
             draw(
@@ -1091,7 +1073,7 @@ mod tests {
             assert!(remainder.is_empty());
             for column in columns {
                 assert_eq!(column[0], 0);
-                assert_eq!(column[(height / 4).min(64) - 1], 63);
+                assert_eq!(column[63], 63);
                 assert!(column.windows(2).all(|pair| pair[0] <= pair[1]));
             }
         }
