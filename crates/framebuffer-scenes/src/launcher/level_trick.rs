@@ -145,8 +145,8 @@ impl PreparedLauncher {
         request: LauncherFrameRequest,
         plan: Option<TrickPlan>,
     ) -> Result<ParallelFrameTiming, String> {
-        if self.scene != LauncherScene::new(960, 540) {
-            return Err("parallel cards require native geometry".into());
+        if !self.supports_parallel() {
+            return Err("parallel cards require native or responsive geometry".into());
         }
         if let Some(plan) = plan {
             let mut preparer = self.frame_preparer();
@@ -677,6 +677,83 @@ mod tests {
                 hero_pose(to, from, LevelChange::Ascend, 460).angle,
                 -EDGE_ON
             );
+        }
+    }
+
+    /// Every output draws a level change in two bands, equal to the serial
+    /// render: gathering the source level and dealing the destination.
+    #[test]
+    fn level_change_bands_match_the_serial_render_on_every_output() {
+        use crate::launcher_parallel::ParallelLauncherRenderer;
+        let from_cards = cards(6);
+        let to_cards = cards(4);
+        for scene in [
+            LauncherScene::new(960, 540),
+            LauncherScene::crt(640, 240),
+            LauncherScene::crt(640, 288),
+            LauncherScene::crt(640, 480),
+            LauncherScene::crt(480, 640),
+            LauncherScene::new(540, 960),
+        ] {
+            let from_data = level(&from_cards, 3, &["CONSOLES"]);
+            let to_data = level(&to_cards, 0, &["CONSOLES", "NINTENDO"]);
+            let mut serial_from = scene.prepare(from_data);
+            let mut parallel_from = scene.prepare(from_data);
+            let mut serial_to = scene.prepare(to_data);
+            let mut parallel_to = scene.prepare(to_data);
+            let mut renderer =
+                ParallelLauncherRenderer::new(parallel_from.frame_preparer(), None, None)
+                    .expect("renderer");
+            let mut generation = 0;
+            let mut request = |selected: usize| {
+                generation += 1;
+                LauncherFrameRequest {
+                    frame: settled(selected),
+                    timestamp_us: 0,
+                    generation,
+                }
+            };
+            for t in [1, EDGE_MILLIS / 2, EDGE_MILLIS - 1] {
+                serial_from.render_level_gather_to(
+                    3,
+                    LevelChange::Descend,
+                    t,
+                    serial_from.slot_zero(),
+                );
+                parallel_from
+                    .render_level_gather_to_parallel(
+                        request(3),
+                        LevelChange::Descend,
+                        t,
+                        parallel_from.slot_zero(),
+                        &mut renderer,
+                    )
+                    .unwrap();
+                assert!(
+                    parallel_from.pixels() == serial_from.pixels(),
+                    "{scene:?} gather {t}"
+                );
+            }
+            for t in [
+                EDGE_MILLIS + 100,
+                LEVEL_TRICK_MILLIS / 2,
+                LEVEL_TRICK_MILLIS - 100,
+            ] {
+                serial_to.render_level_deal_from(0, LevelChange::Descend, t, serial_to.slot_zero());
+                parallel_to
+                    .render_level_deal_from_parallel(
+                        request(0),
+                        LevelChange::Descend,
+                        t,
+                        parallel_to.slot_zero(),
+                        &mut renderer,
+                    )
+                    .unwrap();
+                assert!(
+                    parallel_to.pixels() == serial_to.pixels(),
+                    "{scene:?} deal {t}"
+                );
+            }
         }
     }
 

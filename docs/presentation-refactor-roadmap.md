@@ -501,6 +501,13 @@ effect.**
   the presenter copies them like landscape tiles. Device, after: 300 presentations in 5 s, 0-1 dropped,
   frame-to-present 16.0 ms (was 32.9), 299 of 300 delivered by the direct path. CRT, and portrait level
   changes, still use the Slint path.
+- **Level changes in two bands on every output (PR 21).** The level-change card trick drew on one thread
+  everywhere except HDMI landscape. A level-change plan already holds the output's own poses, so the tile
+  renderer now draws it unmapped on a responsive layout (as the serial path does), and the gate on the
+  trick's parallel render is `supports_parallel` instead of "exactly 960x540". A test renders gather and
+  deal frames for six outputs (landscape, three CRT sizes, CRT portrait, HDMI portrait) in two bands and
+  compares each with the serial render. Still serial and on the Slint path: the trick's presentation on
+  rotated and CRT outputs, and the CRT Arcade list, which have not been profiled.
 
 ## Phased plan
 
