@@ -1996,7 +1996,7 @@ fn text_mask(text: &str) -> Vec<[u8; 7]> {
 
 /// The stroke widths and corner radius of a card face, in pixels. The 180-wide
 /// HDMI face has a 3 pixel rim, an inner stroke at 8 and a radius of 8; cards
-/// narrower than that (CRT) draw one pixel strokes and a smaller radius.
+/// narrower than that (CRT) draw two pixel strokes and a smaller radius.
 #[derive(Clone, Copy)]
 pub(super) struct Frame {
     pub rim: usize,
@@ -2017,8 +2017,8 @@ impl Frame {
             }
         } else {
             Self {
-                rim: 1,
-                inner: 2,
+                rim: 2,
+                inner: 4,
                 radius: 4,
                 floor: 2,
             }
@@ -2589,48 +2589,48 @@ mod tests {
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x01de40663697711d, 0xf8cd84aad96c6ec2, 0x510785231b4c077d, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0xdfa4872b2baf7994, 0x2d94a95f2e285101, 0xcaeb9d49054907c3, 0x4687b9f98929fc27,
-            0x016949a611d4e95e, 0x644dc9c3f171eda4, 0xe13bf398237dbbec, 0x4c88680c191d9a34, 0x55d0d8f7624f3edc,
-            0x55d0d8f7624f3edc, 0x74332124eb02748f, 0x81da20aa0d6ed144, 0x8fee2a31e65a6c64, 0x016949a611d4e95e,
-            0xe5c1e87bc62c78ea, 0x898352b9db3fe727, 0xd3a2dbb88a13fb0f, 0x31a41524dfa81eb8, 0x5ec2dd1988d85274,
-            0x5ec2dd1988d85274, 0x8c49ad71ce02fdc7, 0x7f9e97db0d9d1cda, 0xfb4f49bf01c8ba71, 0xe5c1e87bc62c78ea,
-            0xb688202358b4883e, 0xa93e33cc710f9a68, 0x2ad2df084a66cb8c, 0x0e10451a6269dbab, 0x347e62201e73b426,
-            0x347e62201e73b426, 0xf1341c8f0148ae83, 0x42ae216e88678827, 0x4145dc21b35a4cb8, 0xb688202358b4883e,
+            0x1d8e5f16ba98c107, 0xd901bd2138ac1e56, 0xb9fab7f7778269d0, 0x28882b8f9e405f9e, 0xff957d853a6955df,
+            0xff957d853a6955df, 0x3bba4523bbf95dfd, 0x2bb7db83fd3dbea4, 0x8db7fe2a51ccbb4e, 0x1d8e5f16ba98c107,
+            0x429ff164c1e6503c, 0x6bdc37b4d365f9e6, 0xd645694a191228c5, 0x9cf9d1524f237448, 0x91613abda05c6985,
+            0x91613abda05c6985, 0xfee7320dd9d9d638, 0x292791385399fe6c, 0xbea73577d5c79117, 0x429ff164c1e6503c,
+            0xf4391645fe8dacff, 0x4ab6185785c0bfae, 0xd66ec3c477a220a2, 0x4b47dd731c349d98, 0x9509e8277cba470e,
+            0x9509e8277cba470e, 0xb64e00f604c97817, 0xd59b3a4c1a97b482, 0x6a131650ad1b6d83, 0xf4391645fe8dacff,
         ];
         #[cfg(all(feature = "card-axis-filter", not(feature = "card-fast-quantisation")))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0x4687b9f98929fc27, 0x9d2be33a3ca71867, 0x52234dbf6ae11548, 0x72d7e978eb358360, 0xf154ac04f8082d34,
             0xf154ac04f8082d34, 0x00885c42b0b1224e, 0xb8afd0c2d7cf3b77, 0x094557929b2959f5, 0x4687b9f98929fc27,
-            0x016949a611d4e95e, 0x21ae3013e77e2858, 0x777dcd1db4ac42f4, 0x82889109578ce484, 0x55d0d8f7624f3edc,
-            0x55d0d8f7624f3edc, 0x2a554c18d63deb93, 0xed85b722060f3294, 0x5e9209198549b9d0, 0x016949a611d4e95e,
-            0xe5c1e87bc62c78ea, 0x847ef490edd6a21e, 0x653ce989c90f0ba1, 0x6dff33761565f77b, 0x5ec2dd1988d85274,
-            0x5ec2dd1988d85274, 0x52da88b326fcd99c, 0xa632b13f1fb58874, 0x275feceec3348f33, 0xe5c1e87bc62c78ea,
-            0xb688202358b4883e, 0x08da317df371d458, 0xb9fd758a2542f063, 0xc2f191cfdb9fd81d, 0x347e62201e73b426,
-            0x347e62201e73b426, 0x65e33313be5dcd2d, 0x5e3958ccfff82714, 0xab8079df92866230, 0xb688202358b4883e,
+            0x1d8e5f16ba98c107, 0xbd99c8fcfac38887, 0xa2c24c457df0b99e, 0xa18d5502ec398560, 0xff957d853a6955df,
+            0xff957d853a6955df, 0x914d5776f2c34827, 0x1b81e42214f785d6, 0xba1a93c8048a58eb, 0x1d8e5f16ba98c107,
+            0x429ff164c1e6503c, 0x43292a361f6b42cb, 0x396177d2b3f12264, 0xe2da0a59e9b4a2d3, 0x91613abda05c6985,
+            0x91613abda05c6985, 0x05891c964962df69, 0xc689ffd1d1dba015, 0x9b355449bf523113, 0x429ff164c1e6503c,
+            0xf4391645fe8dacff, 0x5d10177563d83b50, 0x6d5e61b8347b45c6, 0xd53e9d36895362d0, 0x9509e8277cba470e,
+            0x9509e8277cba470e, 0xf73a2a190f9940db, 0xdecf4c1c54442402, 0xd6c04fc4f78f1a75, 0xf4391645fe8dacff,
         ];
         #[cfg(all(not(feature = "card-axis-filter"), feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xa7cef90c802d6414, 0xea9b95bdbad042bb, 0x67a9abee891b4c1a, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x2cca0ac9cf164e40, 0xa430e84ae034b4bd, 0xb60e7727de597315, 0xd3ce5764e8c88bde,
-            0x36a0116474848740, 0x37972fb8f1cbbc4a, 0x319c3bc987be4420, 0xca0e23d1bc94958c, 0xb0e104b5f887af08,
-            0xb0e104b5f887af08, 0x698523ebf2c2c1e0, 0xdcda5b0c77b77802, 0x9d4e8e4cc3708d58, 0x36a0116474848740,
-            0xe7d8b1c00be51728, 0xdafb172b46cbb463, 0xa946c907031a0e41, 0x7873e8414a4de85e, 0x907f542d3f9fd1cc,
-            0x907f542d3f9fd1cc, 0x515c7e15c7860891, 0xe1f449500cf8734b, 0x90659f54d6e2bc4a, 0xe7d8b1c00be51728,
-            0xe4d5466b7299b7cb, 0x722d120ad85932ef, 0x06e2eb992a9017b0, 0x6b785816a384bb02, 0x0b6b374065cd9dd3,
-            0x0b6b374065cd9dd3, 0x893b3eb3c43b8d25, 0xbc5ce873fa070d96, 0xf287d78d7cf41ec3, 0xe4d5466b7299b7cb,
+            0xdcc543ef9215f322, 0x97e9939f8c9ba2e1, 0x5475222493c44834, 0x01e0288acdd11c4e, 0x1b7b9869f3976209,
+            0x1b7b9869f3976209, 0x5f008b75641ad106, 0x19c6ea7d2473b3d7, 0xcb368cd2c3662f96, 0xdcc543ef9215f322,
+            0xc0388fee60001b4e, 0xd53ec84822dee2c8, 0x0517a4afb5be4217, 0x57efdfac4f5cb651, 0x6133b3161113656f,
+            0x6133b3161113656f, 0x802b62a4a7a3ad35, 0x2873e0a0e45c9c6b, 0x48a5075d0f062401, 0xc0388fee60001b4e,
+            0xcb1d859d9d7fac3a, 0x9ab41e69d8d4d782, 0xae6fe0d2f0ed2c9a, 0x601c2b4be3468668, 0x0697ea514fac7afa,
+            0x0697ea514fac7afa, 0x80b220f84a7d3b55, 0x7434f7c1fb308a45, 0x629ff6ff230c37fb, 0xcb1d859d9d7fac3a,
         ];
         #[cfg(all(feature = "card-axis-filter", feature = "card-fast-quantisation"))]
         #[rustfmt::skip]
         const REFERENCE: [u64; 40] = [
             0xd3ce5764e8c88bde, 0xbe353139c21b115f, 0xefb5b4c5a8c033ac, 0x1dffc79049677eb6, 0x7e1400988e2a7fb4,
             0x7e1400988e2a7fb4, 0x223c8ad98be9529c, 0xc477be9f19c4cc32, 0xd9ec89c562a0692a, 0xd3ce5764e8c88bde,
-            0x36a0116474848740, 0x04bc4b803a85dac1, 0xdb341a79906b060b, 0xf64bbbd18c8586e8, 0xb0e104b5f887af08,
-            0xb0e104b5f887af08, 0xdf72e8be4535f340, 0x27d4b0a67f47d531, 0x212bb4c4f69edc83, 0x36a0116474848740,
-            0xe7d8b1c00be51728, 0xda8388eba8316b4d, 0x714bfbaad09ee472, 0x31d5acbf1b8eafba, 0x907f542d3f9fd1cc,
-            0x907f542d3f9fd1cc, 0x51d8d33679293029, 0x22b417850762f8d4, 0xa0d0ab3590e933e8, 0xe7d8b1c00be51728,
-            0xe4d5466b7299b7cb, 0x7470d59141a0348d, 0x718dc96e9a34b157, 0x612a1b55ebe8adcb, 0x0b6b374065cd9dd3,
-            0x0b6b374065cd9dd3, 0x9839c3d48cccb7fc, 0x37d3b436c37955b1, 0x2fce3b2f0fbc092d, 0xe4d5466b7299b7cb,
+            0xdcc543ef9215f322, 0xdf1c64781f3e2e07, 0xacf3142ac673e71b, 0x0f577961a759fdc8, 0x1b7b9869f3976209,
+            0x1b7b9869f3976209, 0xdf5fdad25676fb64, 0xb416fbb8265dc6d4, 0x13f492b007206b54, 0xdcc543ef9215f322,
+            0xc0388fee60001b4e, 0xaa93d9d0125dfde5, 0x180508b9cd143767, 0x214e090ab29ee6d1, 0x6133b3161113656f,
+            0x6133b3161113656f, 0xdc4e279e49035373, 0xba68976a38c2b38f, 0xd62a611eaef36d81, 0xc0388fee60001b4e,
+            0xcb1d859d9d7fac3a, 0xda0a7e717378c6fe, 0x22ee660a071146d9, 0x30610708794c90ea, 0x0697ea514fac7afa,
+            0x0697ea514fac7afa, 0x209cd0bf5bd6f14b, 0x574ac432b739a05e, 0x89e84dc4e8ea7d37, 0xcb1d859d9d7fac3a,
         ];
         assert_eq!(actual, REFERENCE, "Root raster: {actual:x?}");
     }
@@ -3223,55 +3223,55 @@ mod tests {
             ("hdmi-1280x720 nested right-mid", 0x16a61476e10090f2),
             ("hdmi-1280x720 nested right-late", 0xedc3687816f6ae9f),
             ("hdmi-1280x720 nested left-mid", 0x80966bbb01371184),
-            ("hdmi-portrait-540x960 root rest", 0x0fce3870c3293af6),
-            ("hdmi-portrait-540x960 root right-start", 0x9348a42bdf83234f),
-            ("hdmi-portrait-540x960 root right-mid", 0x3252227ffab54151),
-            ("hdmi-portrait-540x960 root right-late", 0x5bddf457bf9dd8aa),
-            ("hdmi-portrait-540x960 root left-mid", 0xcebbb42bcfc2ded9),
-            ("hdmi-portrait-540x960 nested rest", 0x08133beb12a5a70d),
+            ("hdmi-portrait-540x960 root rest", 0x3f90c4b7c55f4959),
+            ("hdmi-portrait-540x960 root right-start", 0x1887dc6cc10e8fd0),
+            ("hdmi-portrait-540x960 root right-mid", 0x6a206be4766d1e02),
+            ("hdmi-portrait-540x960 root right-late", 0x16e7c59131dd450b),
+            ("hdmi-portrait-540x960 root left-mid", 0x347b355b8ae1ced7),
+            ("hdmi-portrait-540x960 nested rest", 0xcd7bb98ac6536723),
             (
                 "hdmi-portrait-540x960 nested right-start",
-                0x60ee6763dec07074,
+                0x2891e54318dc635c,
             ),
-            ("hdmi-portrait-540x960 nested right-mid", 0x4b8cd580c715e05f),
+            ("hdmi-portrait-540x960 nested right-mid", 0x2ee3456dafd49f18),
             (
                 "hdmi-portrait-540x960 nested right-late",
-                0x665f0092d160bd47,
+                0x3dac9a71ff54f4fa,
             ),
-            ("hdmi-portrait-540x960 nested left-mid", 0xed4b20125f191d7c),
-            ("crt-640x480 root rest", 0x20e7048f0fce348a),
-            ("crt-640x480 root right-start", 0x832945526f533c9c),
-            ("crt-640x480 root right-mid", 0xe5ba00c34bae13ed),
-            ("crt-640x480 root right-late", 0x9eb336538becffc8),
-            ("crt-640x480 root left-mid", 0x3654eb1aece27ce1),
-            ("crt-640x480 nested rest", 0xca6cdf5a2ea84a15),
-            ("crt-640x480 nested right-start", 0x4d6a1af97625f177),
-            ("crt-640x480 nested right-mid", 0x3d9a24c94e9fdc7e),
-            ("crt-640x480 nested right-late", 0xa44c28419f9533a4),
-            ("crt-640x480 nested left-mid", 0x62e03da71830fb02),
-            ("crt-640x288 root rest", 0x850fe80dff7b19d2),
-            ("crt-640x288 root right-start", 0xb29458c43bca6954),
-            ("crt-640x288 root right-mid", 0x85d741a205a43790),
-            ("crt-640x288 root right-late", 0xbc8e1d791546c68b),
-            ("crt-640x288 root left-mid", 0xcb3f853bb50bca19),
-            ("crt-640x288 nested rest", 0xf0527986809d3f56),
-            ("crt-640x288 nested right-start", 0x732ebd232cf4418a),
-            ("crt-640x288 nested right-mid", 0x6a28817df95cab52),
-            ("crt-640x288 nested right-late", 0x47a4dba9f01a1de8),
-            ("crt-640x288 nested left-mid", 0x25f2f8b709493794),
-            ("crt-portrait-480x640 root rest", 0xeb2c9d447ac944df),
-            ("crt-portrait-480x640 root right-start", 0xe41994f16ffb96b7),
-            ("crt-portrait-480x640 root right-mid", 0x37a1970286f9fb6a),
-            ("crt-portrait-480x640 root right-late", 0x794076417e51f9dc),
-            ("crt-portrait-480x640 root left-mid", 0x1581ef07be84b0a8),
-            ("crt-portrait-480x640 nested rest", 0x4d78da059a71ba2f),
+            ("hdmi-portrait-540x960 nested left-mid", 0x790419b87b5d5114),
+            ("crt-640x480 root rest", 0xca705023a4192348),
+            ("crt-640x480 root right-start", 0x7f8ecb32cd74fff4),
+            ("crt-640x480 root right-mid", 0xfbd1ab84209ba722),
+            ("crt-640x480 root right-late", 0x631da8438ce2e681),
+            ("crt-640x480 root left-mid", 0xccc4e0e3e9f085bc),
+            ("crt-640x480 nested rest", 0xaa9ea010ae7046d3),
+            ("crt-640x480 nested right-start", 0x09980da561076410),
+            ("crt-640x480 nested right-mid", 0xbc69320851799ea1),
+            ("crt-640x480 nested right-late", 0xb0a93ffab295840c),
+            ("crt-640x480 nested left-mid", 0x19d85994f9938f29),
+            ("crt-640x288 root rest", 0x433713fe1cfdbfe0),
+            ("crt-640x288 root right-start", 0x76e8d39818a4848a),
+            ("crt-640x288 root right-mid", 0xdb6b87900f42d13e),
+            ("crt-640x288 root right-late", 0x0d0ac9575c0db1cb),
+            ("crt-640x288 root left-mid", 0x89b675772550ccd4),
+            ("crt-640x288 nested rest", 0xd50c93c5e15a7091),
+            ("crt-640x288 nested right-start", 0x2dfbcc4d7e379a11),
+            ("crt-640x288 nested right-mid", 0xe95eebe882ebd855),
+            ("crt-640x288 nested right-late", 0xd2c6d411bf73f639),
+            ("crt-640x288 nested left-mid", 0x6da8a068a6685bf0),
+            ("crt-portrait-480x640 root rest", 0xf2af231f49b06714),
+            ("crt-portrait-480x640 root right-start", 0x162d4d199521d705),
+            ("crt-portrait-480x640 root right-mid", 0xdcbf2ea60c141252),
+            ("crt-portrait-480x640 root right-late", 0x10f173090c708cac),
+            ("crt-portrait-480x640 root left-mid", 0x6d8813884cca9b3f),
+            ("crt-portrait-480x640 nested rest", 0xfe3526b6b27faab2),
             (
                 "crt-portrait-480x640 nested right-start",
-                0x32900da1355f1ab1,
+                0xc4a2762ae5848d20,
             ),
-            ("crt-portrait-480x640 nested right-mid", 0x036c9d3d07218c24),
-            ("crt-portrait-480x640 nested right-late", 0x5075426e801c4f2a),
-            ("crt-portrait-480x640 nested left-mid", 0x81962c0f6d274ab3),
+            ("crt-portrait-480x640 nested right-mid", 0x4eef80ee2f3c1001),
+            ("crt-portrait-480x640 nested right-late", 0xbd86f13e8728fcd6),
+            ("crt-portrait-480x640 nested left-mid", 0x5945b5550d957faf),
         ];
         let actual = card_row_hashes();
         let changed: Vec<_> = actual

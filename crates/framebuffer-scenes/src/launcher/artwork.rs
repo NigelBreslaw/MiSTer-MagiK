@@ -962,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn crt_sized_cards_draw_one_pixel_strokes_and_hdmi_keeps_its_frame() {
+    fn crt_sized_cards_draw_two_pixel_strokes_and_hdmi_keeps_its_frame() {
         let rim = mix_colour(0x2a7f, CREAM, 76);
         let stroke = opaque_inner_stroke(rim);
         let art = vec![Rgb565Pixel(0x1234); 100 * 140];
@@ -976,11 +976,11 @@ mod tests {
             artwork: Some(&art),
             rgb888: None,
         };
-        // Mid-edge on a 100x140 card: one rim pixel, one stroke pixel, then art.
+        // Mid-edge on a 100x140 card: two rim pixels, two stroke pixels, then art.
         let row: Vec<u16> = (0..6)
             .map(|x| framed_surface(&card, 0, 0x2a7f, 100, 140, x, 70))
             .collect();
-        assert_eq!(row, [rim, stroke, 0x1234, 0x1234, 0x1234, 0x1234]);
+        assert_eq!(row, [rim, rim, stroke, stroke, 0x1234, 0x1234]);
         // The corner is rounded: the extreme pixel is outside, the next row in is not.
         assert!(!rounded_contains(0, 0, 100, 140));
         assert!(rounded_contains(0, 2, 100, 140));
