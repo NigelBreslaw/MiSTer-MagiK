@@ -12271,21 +12271,21 @@ pub(super) fn run_launcher_loop(
         }
         if matches!(
             finish_presented_frame(FrameCloseout {
-                accepted_and_active_confirmed: accepted_and_active_confirmed,
+                accepted_and_active_confirmed,
                 benchmark_config: &benchmark_config,
                 bridge_models: &mut bridge_models,
                 composition_decision: &composition_decision,
-                confirmed_present_sequence: confirmed_present_sequence,
-                confirmed_presentation: confirmed_presentation,
+                confirmed_present_sequence,
+                confirmed_presentation,
                 director: &mut director,
                 f: &mut *f,
                 frame_accounting: &mut frame_accounting,
                 frame_clock: &mut frame_clock,
                 frames: &mut frames,
                 input_latency_lab: &mut input_latency_lab,
-                input_observation: input_observation,
-                latch_backend_active: latch_backend_active,
-                latch_trace_flush_deferred: latch_trace_flush_deferred,
+                input_observation,
+                latch_backend_active,
+                latch_trace_flush_deferred,
                 latch_v5_qualification: &mut latch_v5_qualification,
                 latency_critical_input_pending: &mut latency_critical_input_pending,
                 launcher_response_frame_stamp: &launcher_response_frame_stamp,
@@ -12296,26 +12296,26 @@ pub(super) fn run_launcher_loop(
                 orientation_benchmark_terminal_status_requested:
                     &mut orientation_benchmark_terminal_status_requested,
                 preview: &mut preview,
-                preview_presentation_commit: preview_presentation_commit,
+                preview_presentation_commit,
                 #[cfg(feature = "tooling")]
-                run_start: run_start,
-                runtime_status_sequence_before_frame: runtime_status_sequence_before_frame,
+                run_start,
+                runtime_status_sequence_before_frame,
                 scheduler: &scheduler,
                 scheduler_phase: &mut scheduler_phase,
                 screensaver_cpu_profile: &mut screensaver_cpu_profile,
-                selection_feedback_confirmed_at: selection_feedback_confirmed_at,
+                selection_feedback_confirmed_at,
                 selection_feedback_stamp: &selection_feedback_stamp,
                 settings_navigation_benchmark: &mut settings_navigation_benchmark,
                 settings_navigation_benchmark_completed_at:
                     &mut settings_navigation_benchmark_completed_at,
                 settings_navigation_status_baseline: &mut settings_navigation_status_baseline,
-                start: start,
+                start,
                 #[cfg(feature = "tooling")]
                 tooling: &mut tooling,
                 #[cfg(feature = "tooling")]
                 tooling_frame_evidence: &mut tooling_frame_evidence,
-                visible_frame_presented: visible_frame_presented,
-                window: &window,
+                visible_frame_presented,
+                window,
             }),
             FrameFlow::Break
         ) {
@@ -12460,7 +12460,7 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
     );
     if let Some(confirmed_at) = selection_feedback_confirmed_at {
         for confirmation in
-            bridge_models.confirm_selection_feedback(&selection_feedback_stamp, confirmed_at)
+            bridge_models.confirm_selection_feedback(selection_feedback_stamp, confirmed_at)
         {
             launcher_response_trace.record_feedback_confirmation(
                 &confirmation,
@@ -12569,7 +12569,7 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
         preview.confirm_presentation(commit);
     }
     let retired = director.on_presented(
-        &composition_decision,
+        composition_decision,
         PresentationOutcome::resolve(
             accepted_and_active_confirmed,
             confirmed_presentation,
@@ -12618,7 +12618,7 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
         if let Some(directory) = settings_navigation_benchmark_evidence_dir()
             && let Err(error) = write_settings_navigation_benchmark_completion(
                 &directory,
-                &settings_navigation_benchmark,
+                settings_navigation_benchmark,
                 *frames,
             )
         {
@@ -12660,7 +12660,7 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
         if let Some(directory) = settings_navigation_benchmark_evidence_dir()
             && let Err(error) = write_settings_navigation_benchmark_completion(
                 &directory,
-                &settings_navigation_benchmark,
+                settings_navigation_benchmark,
                 *frames,
             )
         {
@@ -12682,7 +12682,7 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
         if let Some(directory) = orientation_transition_benchmark_evidence_dir()
             && let Err(error) = write_orientation_transition_benchmark_completion(
                 &directory,
-                &orientation_benchmark,
+                orientation_benchmark,
                 *frames,
             )
         {
@@ -12727,7 +12727,7 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
         if let Some(directory) = orientation_transition_benchmark_evidence_dir()
             && let Err(error) = write_orientation_transition_benchmark_completion(
                 &directory,
-                &orientation_benchmark,
+                orientation_benchmark,
                 *frames,
             )
         {
