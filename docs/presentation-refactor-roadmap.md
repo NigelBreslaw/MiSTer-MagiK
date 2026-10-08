@@ -630,6 +630,17 @@ long-lived object built for one scene or orientation met a frame of another on a
 - **Not audited:** the Arcade list layers, the CRT backdrop worker and the particle systems across an
   orientation change while their screen is open.
 
+**PR 28 (in progress): Phase 2, 3 and 5 reconciled with what the code and PR 10 measured.**
+
+- Phase 5's recipe is written (the module doc of `transition_spec.rs`), because the protocol it
+  describes (`TransitionStart`, the director's operations, the scenario matrix) exists.
+- Phase 2's two remaining items are closed as not worth doing, with the reason recorded: folding the
+  timeline into the chart would change the render policy (PR 10), and a merged route table would only
+  wrap two lookups the loop consults on different branches.
+- Phase 3 keeps one open question that needs a device: whether the screensaver, startup reveal and card
+  level trick are transitions or composition states.
+- No code changed.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
@@ -652,25 +663,25 @@ See Progress.
 - Add a property-based sweep over random event sequences. This is the
   safety net for every later phase.
 
-### Phase 2: one transition protocol for navigation
+### Phase 2: one transition protocol for navigation (done, two items closed as not worth doing)
 
-- Introduce `TransitionSpec` / `TransitionRenderer`. Port super-scaler, device
-  card, system panel, settings slide/segmented, and settings cog behind one
-  `begin(spec)`.
-- Fold `NavigationTransitionController` phases into the shared transition
-  substate. `FullScreenTransitionStateChart` becomes the lifecycle owner, not
-  just a policy table.
-- `navigation_transition_for_intent` + `settings_page_transition` become a single
-  route-to-spec table.
+- Done: `TransitionStart` is the one way to start a navigation transition (PR 5, PR 6); the director
+  pairs the runtime with the chart (PR 10, PR 12).
+- Closed, not done: "fold `NavigationTransitionController` phases into the chart". PR 10 measured that
+  the chart's state is not a function of the timeline's phase (an immediate start plays Expand to
+  Settled while the chart is `CapturePending`), so folding would change the render policy.
+- Closed, not done: a single route-to-spec table. `navigation_transition_for_intent` reads the action,
+  `settings_page_transition` reads a screen pair after the tick, and the loop consults them on
+  different branches. A merged function would only wrap both.
 
-### Phase 3: move the other effects onto the protocol
+### Phase 3: move the other effects onto the protocol (orientation done, the rest open)
 
-- Orientation (fade/zoom), screensaver enter/exit crossfade, startup particle
-  morph (activating the unused `StartupReveal` / `Screensaver` owners), and
-  the card level trick.
-- The card level trick is the hardest because it presents straight into
-  scanout. It should still go through the chart as an owner with a
-  `CardBand` damage policy, so other transitions can see what's on screen.
+- Orientation already takes a chart owner and the director's begin, capture and end operations (PR 15).
+  Its renderer (wave and zoom, own damage and NEON kernels) is not a `TransitionRenderer` and gains
+  nothing from becoming one.
+- Open, needs a device to decide: whether the screensaver crossfade, the startup reveal and the card
+  level trick (which presents straight into scanout) are full-screen transitions at all, or composition
+  states that the chart should merely see.
 
 ### Phase 3b: one card pipeline for HDMI and CRT
 
@@ -796,7 +807,7 @@ What the walks in PR 10 and PR 11 say the director has to be (measured, not assu
   (the chart is deliberately not a composition input; see PR 13). Next: define what a releasing chart
   means per composition state.
 
-### Phase 5: a recipe for the next transition
+### Phase 5: a recipe for the next transition (written)
 
 Adding a full-screen transition should mean:
 
@@ -806,7 +817,7 @@ Adding a full-screen transition should mean:
 4. One row in the scenario matrix. The continuity, damage, reverse, cancel, and
    release tests then apply automatically.
 
-Document this in `apps/mister/src/ui_runner/AGENTS.md`.
+Documented in the module doc of `apps/mister/src/launcher_runtime/transition_spec.rs`.
 
 ## Risks and guardrails
 

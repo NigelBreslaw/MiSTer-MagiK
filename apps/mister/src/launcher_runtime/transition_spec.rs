@@ -9,6 +9,25 @@
 //! [`NavigationTransitionRuntime::begin`](super::navigation_transition::NavigationTransitionRuntime::begin)
 //! applies them the same way for all kinds. A new transition adds a constructor
 //! here, not another way to start.
+//!
+//! # Adding a navigation transition
+//!
+//! The chart (`FullScreenTransitionStateChart`) answers who may render; the timeline
+//! (`NavigationTransitionController`) answers how far the motion has got. They are independent
+//! axes (roadmap PR 10): add to the timeline side, never fold one into the other.
+//!
+//! 1. Name it: a `NavigationTransitionRoute` variant and `label()`. A card or list edge also needs
+//!    a `NavigationTransitionEdge` and a row in `navigation_transition_for_intent`
+//!    (`transition_plan.rs`). A Settings-family page needs a `settings_page_depth` and a
+//!    `settings_page_transition` row (`navigation_transition.rs`).
+//! 2. Geometry: a pure, tested function. It depends on the committed navigation state only.
+//! 3. Start: one constructor here, choosing the raster space, [`StartPolicy`] and assets.
+//! 4. Render: draw only, from the two snapshots and [`TransitionAssets`]; no allocation per frame.
+//! 5. Prove it: add the edge to `EDGES` in `transition_scenarios.rs`; its source, endpoint, reverse
+//!    and hygiene checks and the director walks then apply without new test code.
+//!
+//! An effect that is not navigation (orientation is the model) takes a chart owner and the
+//! director's begin, capture and end operations instead; it never starts the chart by hand.
 
 use super::navigation_transition::{
     NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionGeometry,
