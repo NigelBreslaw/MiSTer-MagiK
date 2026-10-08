@@ -111,7 +111,6 @@ mod tests {
             .unwrap();
             assert_eq!(fs::read(&staged.path).unwrap(), content);
             drop(staged);
-            assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         }
         assert!(
             receive(

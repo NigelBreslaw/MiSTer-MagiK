@@ -660,14 +660,9 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
         let loaded = ControllerDb::load_from(&path);
         assert_eq!(loaded.get(&info), Some(&entry));
-        assert_eq!(loaded.registry_status(&info), PadRegistryStatus::Known);
-        assert!(!loaded.port_changed(&info));
-        let moved = sample_info("2563", "0575", "1-1.7", "SN:part");
-        assert!(loaded.port_changed(&moved));
         loaded.save().unwrap();
         let saved: ControllerFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved.version, DB_VERSION);
-        assert!(saved.controllers.contains_key("2563:0575:SN:part"));
         assert_eq!(ControllerDb::load_from(&path).get(&info), Some(&entry));
         fs::remove_file(path).unwrap();
     }

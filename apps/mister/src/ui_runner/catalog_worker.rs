@@ -3367,17 +3367,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn duplicated_protocol_fd_is_close_on_exec() {
-        let source = std::fs::File::open("/dev/null").expect("open protocol source");
-        let duplicated = duplicate_protocol_fd(source.as_raw_fd());
-        let duplicated = duplicated.expect("duplicate protocol source");
-        let flags = unsafe { libc::fcntl(duplicated, libc::F_GETFD) };
-        assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
-        unsafe { libc::close(duplicated) };
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn duplicated_protocol_fd_does_not_cross_exec() {
         let (mut reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
         reader
@@ -3403,20 +3392,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn duplicated_protocol_fd_keeps_standard_descriptors_reserved() {
+    fn duplicated_protocol_fd_is_close_on_exec() {
         const CHILD: &str = "MISTER_TEST_PROTOCOL_FD_RESERVED";
         if std::env::var_os(CHILD).is_some() {
             // Only this isolated exec helper closes its own unused stdin.
             unsafe { libc::close(libc::STDIN_FILENO) };
             let duplicated = duplicate_protocol_fd(libc::STDOUT_FILENO).unwrap();
             assert!(duplicated > libc::STDERR_FILENO);
+            let flags = unsafe { libc::fcntl(duplicated, libc::F_GETFD) };
+            assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
             unsafe { libc::close(duplicated) };
             return;
         }
         let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "ui_runner::catalog_worker::tests::duplicated_protocol_fd_keeps_standard_descriptors_reserved", "--nocapture"])
+            .args([
+                "--exact",
+                "ui_runner::catalog_worker::tests::duplicated_protocol_fd_is_close_on_exec",
+                "--nocapture",
+            ])
             .env(CHILD, "1")
-            .status().unwrap();
+            .status()
+            .unwrap();
         assert!(status.success());
     }
 
