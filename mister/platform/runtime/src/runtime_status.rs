@@ -118,6 +118,7 @@ launcher_status_types! {
         preview_ready_monotonic_us: u64,
         first_correct_present_monotonic_us: u64,
         frame_budget: FrameBudgetStatus,
+        phase_profile: PhaseProfileStatus,
     }
     strings {
         build_package_version,
@@ -219,6 +220,47 @@ pub struct StartupIntroCadenceStatus {
     pub start: Option<PresentationTelemetrySnapshotStatus>,
     pub end: Option<PresentationTelemetrySnapshotStatus>,
     pub error: Option<String>,
+}
+
+/// Timing of one frame phase over a profile window, in microseconds.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PhaseStatStatus {
+    pub phase: &'static str,
+    pub count: u64,
+    pub mean_us: u64,
+    pub p50_us: u64,
+    pub p95_us: u64,
+    pub p99_us: u64,
+    pub max_us: u64,
+}
+
+/// Time one phase took inside a single slow frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PhaseTimeStatus {
+    pub phase: &'static str,
+    pub us: u32,
+}
+
+/// A slow frame's total and its time per phase.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct WorstFrameStatus {
+    pub total_us: u32,
+    pub phases: Vec<PhaseTimeStatus>,
+}
+
+/// Always-on per-phase frame timing for the latest closed window.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PhaseProfileStatus {
+    pub window_ms: u64,
+    pub produced: u64,
+    pub idle: u64,
+    pub yielded: u64,
+    pub abandoned: u64,
+    pub budget_us: u32,
+    pub over_budget: u64,
+    pub frame: PhaseStatStatus,
+    pub phases: Vec<PhaseStatStatus>,
+    pub worst: Vec<WorstFrameStatus>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -1013,6 +1055,7 @@ fn write_launcher_status_json_tail(
     field!("reveal_ms", status.reveal_ms);
     field!("input_enabled_ms", status.input_enabled_ms);
     field!("frame_budget", status.frame_budget);
+    field!("phase_profile", status.phase_profile);
     field!("rss_kb", current_rss_kb());
     field!("rss_hwm_kb", current_rss_hwm_kb());
     field!("status_publish_mode", "async");
@@ -1326,6 +1369,7 @@ fn launcher_status_value(
         "frame_budget".to_string(),
         frame_budget_status_value(&status.frame_budget),
     );
+    insert!("phase_profile", status.phase_profile);
     insert!("rss_kb", current_rss_kb());
     insert!("rss_hwm_kb", current_rss_hwm_kb());
 
@@ -2512,6 +2556,7 @@ mod tests {
             preview_ready_monotonic_us: 0,
             first_correct_present_monotonic_us: 0,
             frame_budget: FrameBudgetStatus::default(),
+            phase_profile: PhaseProfileStatus::default(),
         }
     }
 

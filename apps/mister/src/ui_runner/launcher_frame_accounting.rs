@@ -2676,6 +2676,7 @@ impl LauncherFrameAccounting {
             preview_ready_monotonic_us: return_session.preview_ready_monotonic_us,
             first_correct_present_monotonic_us: return_session.first_correct_present_monotonic_us,
             frame_budget,
+            phase_profile: super::phase_profile::latest(),
         });
         if screensaver_profile_state == "complete" && status_submitted {
             self.profile_completion_submitted = true;

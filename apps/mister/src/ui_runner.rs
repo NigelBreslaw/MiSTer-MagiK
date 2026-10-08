@@ -214,6 +214,7 @@ mod launcher_screensaver_pipeline;
 mod launcher_settings_pipeline;
 mod launcher_startup_intro;
 mod launcher_transition_start;
+mod phase_profile;
 #[cfg(feature = "ui-preview")]
 pub use launcher_transition_start::{
     TransitionInputs, TransitionSource, start_navigation_transition,
