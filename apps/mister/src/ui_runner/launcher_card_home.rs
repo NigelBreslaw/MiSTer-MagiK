@@ -1816,67 +1816,6 @@ mod tests {
     }
 
     #[test]
-    fn panicking_preparation_recovers_pending_and_trick_content_off_ui() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        for (motion, prefetch) in [(false, false), (true, false), (true, true)] {
-            let scene = LauncherScene::new(960, 540);
-            let root = snapshot();
-            let mut destination = consoles();
-            let mut session =
-                LauncherCardHomeSession::new(scene, root.clone(), 0, "07:28").unwrap();
-            session.update(scene, &root, 0, 0.0, "07:28", 0, motion, None, None);
-            let attempts = Arc::new(AtomicUsize::new(0));
-            let worker_attempts = Arc::clone(&attempts);
-            let ui_thread = std::thread::current().id();
-            session.preparation = HomePreparation::start(
-                Arc::clone(&session.fonts),
-                root.menu_id.clone(),
-                CardFaceCache::default(),
-                move |_| {
-                    assert_ne!(std::thread::current().id(), ui_thread);
-                    if worker_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        panic!("injected card preparation failure");
-                    }
-                },
-            )
-            .unwrap();
-            if prefetch {
-                session.prefetch(vec![destination.clone()]);
-            }
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let mut now = 16;
-            loop {
-                session.update(
-                    scene,
-                    &destination,
-                    0,
-                    0.0,
-                    "07:28",
-                    now,
-                    motion,
-                    None,
-                    Some("arcade"),
-                );
-                session.render();
-                if session.content_ready(scene, &destination) && session.trick.is_none() {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "panic stranded Home content");
-                now += 16;
-                std::thread::yield_now();
-            }
-            let expected = prepare(scene, &destination, 0, "07:28", &session.fonts);
-            assert_eq!(session.render(), expected.pixels());
-            destination.cards[0].games = Some(123);
-            wait_content(&mut session, scene, &destination, 0, "07:28");
-            let expected = prepare(scene, &destination, 0, "07:28", &session.fonts);
-            assert_eq!(session.render(), expected.pixels());
-            assert!(attempts.load(Ordering::SeqCst) >= 3);
-            assert!(session.preparation.ownership_is_bounded());
-        }
-    }
-
-    #[test]
     fn repeated_preparation_panic_is_reported_instead_of_hanging_or_retrying_forever() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1913,9 +1852,9 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             failure.downcast_ref::<&str>(),
-            Some(&"persistent preparation failure")
+            Some(&"card preparation worker panicked")
         );
-        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
         assert!(
             session
                 .preparation

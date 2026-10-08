@@ -706,4 +706,66 @@ mod tests {
         assert_eq!(destination[header_text_index], CRT_PRODUCT_HEADER_TEXT);
         assert_eq!(destination[footer_text_index], CRT_PRODUCT_FOOTER_TEXT);
     }
+
+    /// Orientation changes while a CRT backdrop stays open, as on the Arcade list.
+    /// Each frame is composed for its own layout with a destination sized from
+    /// that layout, so the backdrop's buffers must agree with every orientation's
+    /// physical geometry. PR 27 walked the card renderer, not this controller.
+    #[test]
+    fn orientation_walk_keeps_an_open_backdrop_on_its_layout() {
+        let source = BackdropSource {
+            key: "orientation-walk".to_string(),
+            epoch: 3,
+            words: Arc::from(vec![0xf81f_u16; 4]),
+            source_width: 2,
+            source_height: 2,
+            stride_pixels: 2,
+        };
+        let walk = [
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorCounterclockwise,
+            ScreenOrientation::Normal,
+        ];
+        for ini in [
+            "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
+        ] {
+            let display = UiDisplay::for_plan(
+                UiDisplayPlan::from_mister_ini_text(ini).expect("CRT display plan"),
+            );
+            let metrics = CrtUiMetrics::for_display(&display);
+            let mut controller =
+                CrtBackdropController::for_display(&display).expect("CRT backdrop");
+            for (index, orientation) in walk.into_iter().enumerate() {
+                let layout = UiLayoutGeometry::for_display(&display, orientation);
+                let arcade_layout = CrtArcadeLayout::for_layout(layout, metrics, false);
+                let output = layout.output_layout();
+                let mut destination =
+                    vec![Rgb565Pixel(0); output.physical_width() * output.physical_height()];
+                let frame = controller.compose(
+                    true,
+                    false,
+                    false,
+                    0,
+                    None,
+                    Some(source.clone()),
+                    Duration::from_millis(index as u64 * 16),
+                    &mut destination,
+                    layout,
+                    arcade_layout,
+                    metrics,
+                );
+                // Every frame here changes orientation, so each must repaint the
+                // whole backdrop rather than keep the previous orientation's pixels.
+                assert!(
+                    frame.full_damage,
+                    "orientation change {index} did not repaint the backdrop"
+                );
+            }
+        }
+    }
 }

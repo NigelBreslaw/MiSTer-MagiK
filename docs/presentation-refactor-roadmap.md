@@ -617,12 +617,17 @@ long-lived object built for one scene or orientation met a frame of another on a
   the serial render for its scene. Without the layout check it panics.
 - **Device matrix, no crash:** every orientation (normal, clockwise, counterclockwise) with HDMI 720p,
   768p, 1200p, 1536p, 1440p and 1080p, CRT 240p, 288p, 480p and 576p, at the home screen.
-- **Found, not changed: recovery that cannot run.** `launcher_card_preparation.rs` retries a failed face
-  build with a cold cache inside `catch_unwind`, and `preview_compositor.rs` wraps its worker the same
-  way, but with `panic = "abort"` neither ever sees a panic. The retry is dead code on the device. Whether
-  to run the device with `panic = "unwind"` (so a worker panic can be survived) is a product decision
-  with a wide effect: a panic on a catalog or media thread would then leave the app running without
-  that thread instead of restarting it.
+- **Fixed (PR 30): recovery that cannot run is deleted.** With `panic = "abort"` no `catch_unwind` on
+  the device ever sees a panic. Removed: the cold-cache retry and the outer `catch_unwind` in
+  `launcher_card_preparation.rs`, the panic wrapper around `preview_compositor.rs`'s worker, and the
+  `catch_unwind` in `controller-registry`'s writer drop guard. The preview compositor's `Err` path, which
+  is live, is unchanged. Unwinding builds (tests, the macOS preview) still need a worker panic to reach the
+  caller, so each worker now records its exit in a drop guard that runs only while panicking: the card
+  worker reports the panic once from `lock_state`, and the compositor disables itself. The device aborts
+  before either guard runs. The retry is gone on every build, so a face-build panic now fails the worker
+  instead of retrying once with a cold cache. The product decision to run the device with
+  `panic = "unwind"` stays open: it would let a worker panic be survived, but a panic on a catalog or
+  media thread would then leave the app running without that thread instead of restarting it.
 - **Checked and found sound:** the preview compositor (each request carries its layout and sizes its own
   buffers), screenshot-parade (asserts are test-only), the lab-only `ArcadeCardRenderer` (fixed
   960x540, never used by the launcher), the kernel asserts in `launcher_texture.rs` (every call is sized
@@ -640,6 +645,40 @@ long-lived object built for one scene or orientation met a frame of another on a
 - Phase 3 keeps one open question that needs a device: whether the screensaver, startup reveal and card
   level trick are transitions or composition states.
 - No code changed.
+
+**PR 30 (in progress): the crash-class leftovers, the open-screen walks, and the portrait drop cause.**
+
+- **Recovery deleted.** See the PR 27 entry above.
+- **Open screens, host.** New walk `orientation_walk_keeps_an_open_backdrop_on_its_layout` changes
+  orientation across frames on two CRT displays and sizes each destination from its own layout. It
+  shows the backdrop's buffers agree with every orientation's geometry. It does not check backdrop
+  pixels after rotation.
+- **Open screens, device.** Orientation is set in Settings on Home, so the Arcade list and the
+  screensaver cannot be open during an orientation change. The walk changes orientation at Home, then
+  runs `set-orientation`, `arcade-scroll` and `screensaver` at clockwise, counterclockwise and normal.
+  All passed; `restart_count` did not change. Not covered: particle systems across an orientation change
+  while the screensaver is open, since no input path reaches it.
+- **Portrait drops, measured.** `animation-roundtrip --frame-evidence phases`, three repetitions, 1080p
+  HDMI. The measured window includes the Home-to-Consoles level changes (Nintendo, SNES hub, Games list).
+  Before: 40 drops in 1,674 presentations. Of the 30 card drops, 15 carried discarded helper work, about
+  11 ms on average. `retire_ahead` blocked the UI thread until the discarded speculative band finished,
+  and the real band then rendered after it.
+- **Fix.** A cancel flag shared with the one job in flight. Setting it when a speculative band is
+  discarded stops the helper at its next 32-pixel strip, so the wait is one strip, not one band.
+  Test: `a_cancelled_band_stops_before_its_first_strip`.
+- **After the fix, portrait:** 31 drops in 1,675 presentations; discard-caused card drops 15 to 2; mean
+  discard time 11.1 ms to 4.3 ms. The total moved less than the mechanism predicted: 40 to 31 is about one
+  standard deviation for three repetitions, so the drop-rate gain is **not established** at this sample.
+- **Landscape:** 22 drops before, 25 after. Landscape had no discard-caused drops before, so the change
+  cannot reach them; the difference is inside the per-repetition spread (7, 8, 7 before; 10, 6, 9 after).
+- **Pre-existing failure on `main`, fixed here.** The `animation_time_sources` guard expected 1 wall-clock
+  read in `launcher_card_home.rs` (there are 2) and 21 in `navigation.rs` (there are 20). Both sets of
+  reads are timing telemetry, not animation positions, so the allowances were updated.
+- **Not done:** the portrait drops from system-panel and Games-list transitions (9 per run, in both
+  orientations, unchanged) are a separate transition cost. A ten-repetition A/B against a build from
+  `main` would settle the drop rate; it needs that build deployed.
+- **Open:** the crash with pid 29749 (signal 6) predates this deploy. Its report is over 8 KB, which the
+  device CLI cannot read, so its cause is unexplained.
 
 ## Phased plan
 

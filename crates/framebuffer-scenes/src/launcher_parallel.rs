@@ -8,7 +8,11 @@ use crate::{
     },
 };
 use std::{
-    sync::mpsc::{Receiver, SyncSender, sync_channel},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, SyncSender, sync_channel},
+    },
     thread::JoinHandle,
     time::Instant,
 };
@@ -147,6 +151,9 @@ struct Job {
     split: usize,
     /// Rotate the band into this output's scanout order after drawing it.
     rotation: Option<crate::Rgb565OutputLayout>,
+    /// Shared with the renderer. Set when the job is discarded, so the helper
+    /// stops at the next strip instead of finishing a band nobody will show.
+    cancel: Arc<AtomicBool>,
 }
 struct Ahead {
     preparer: LauncherFramePreparer,
@@ -186,6 +193,9 @@ pub struct ParallelLauncherRenderer {
     /// The scanout order the helper rotates its band into, if the output is
     /// rotated, so the presenting thread does not.
     rotation: Option<crate::Rgb565OutputLayout>,
+    /// The one job in flight shares this flag; it is cleared when a job is
+    /// dispatched and set when a speculative job is discarded.
+    cancel: Arc<AtomicBool>,
 }
 fn copy_helper_band(
     destination: &mut [Rgb565Pixel],
@@ -232,13 +242,19 @@ impl ParallelLauncherRenderer {
                     let sample = ThreadSample::now(clocks);
                     let geometry = job.preparer.geometry();
                     let right = geometry.clip.1;
-                    job.preparer
-                        .render_tile(job.request, &mut job.buffer, (job.split, right));
+                    let finished = job.preparer.render_tile_until(
+                        job.request,
+                        &mut job.buffer,
+                        (job.split, right),
+                        &job.cancel,
+                    );
                     match job.rotation {
-                        // Only for a frame of the output it was requested for.
+                        // Only for a frame of the output it was requested for,
+                        // and only a band that was not stopped.
                         Some(output)
-                            if (output.logical_width(), output.logical_height())
-                                == (geometry.stride, geometry.height) =>
+                            if finished
+                                && (output.logical_width(), output.logical_height())
+                                    == (geometry.stride, geometry.height) =>
                         {
                             job.buffer
                                 .rotate_band(output, geometry.rows, job.split, right);
@@ -291,6 +307,7 @@ impl ParallelLauncherRenderer {
             retain_bands: false,
             helper_unmerged: false,
             rotation: None,
+            cancel: Arc::new(AtomicBool::new(false)),
         })
     }
     pub fn render(
@@ -330,6 +347,7 @@ impl ParallelLauncherRenderer {
             .as_ref()
             .map_or_else(|| clamp_split(self.split, left, right), |ahead| ahead.split);
         if !helper_ahead {
+            self.cancel.store(false, Ordering::Relaxed);
             self.requests
                 .as_ref()
                 .ok_or("card renderer stopped")?
@@ -340,6 +358,7 @@ impl ParallelLauncherRenderer {
                     dispatched_at: Instant::now(),
                     split,
                     rotation: self.rotation,
+                    cancel: Arc::clone(&self.cancel),
                 })
                 .map_err(|e| e.to_string())?;
         }
@@ -455,6 +474,7 @@ impl ParallelLauncherRenderer {
         let (left, right) = geometry.clip;
         let split = clamp_split(self.split, left, right);
         let dispatched_at = Instant::now();
+        self.cancel.store(false, Ordering::Relaxed);
         let job = Job {
             preparer: preparer.clone(),
             request,
@@ -462,6 +482,7 @@ impl ParallelLauncherRenderer {
             dispatched_at,
             split,
             rotation: self.rotation,
+            cancel: Arc::clone(&self.cancel),
         };
         if let Err(error) = sender.send(job) {
             let mut buffer = error.0.buffer;
@@ -480,6 +501,8 @@ impl ParallelLauncherRenderer {
 
     fn retire_ahead(&mut self) -> Result<(u64, Option<u64>), String> {
         self.ahead.take();
+        // The helper stops at its next strip; waiting costs that strip, not the band.
+        self.cancel.store(true, Ordering::Relaxed);
         let mut completed = self.completions.recv().map_err(|error| error.to_string())?;
         #[cfg(feature = "launcher-profile")]
         if let Some(profile) = completed.profile {
@@ -1245,5 +1268,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A cancelled band stops before its first strip: it reports the stop and
+    /// leaves only the clear, which a fresh tile buffer already holds. A band
+    /// that is not cancelled is the same pixels `render_tile` draws.
+    #[test]
+    fn a_cancelled_band_stops_before_its_first_strip() {
+        let scene = LauncherScene::new(960, 540);
+        let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+            id: LauncherCardId::Consoles,
+            name,
+            games: Some(12),
+            colour: 0x2a7f,
+        });
+        let data = LauncherData {
+            cards: &cards,
+            selected: 0,
+            library_games: 72,
+            collections: 6,
+            favourites: 1,
+            clock: "12:00",
+            level: LauncherLevel::Root,
+        };
+        let preparer = scene.prepare(data).frame_preparer();
+        let request = LauncherFrameRequest {
+            frame: BrowseFrame {
+                selected: 0,
+                target: 0,
+                phase: BrowsePhase::Settled,
+                direction: None,
+                progress_millis: 0,
+                duration_millis: 180,
+            },
+            timestamp_us: 0,
+            generation: 1,
+        };
+        let clip = preparer.geometry().clip;
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let mut stopped = preparer.new_tile_buffer();
+        assert!(!preparer.render_tile_until(request, &mut stopped, clip, &cancelled));
+        let fresh = preparer.new_tile_buffer();
+        assert!(stopped.pixels() == fresh.pixels());
+
+        let live = std::sync::atomic::AtomicBool::new(false);
+        let mut completed = preparer.new_tile_buffer();
+        assert!(preparer.render_tile_until(request, &mut completed, clip, &live));
+        let mut reference = preparer.new_tile_buffer();
+        preparer.render_tile(request, &mut reference, clip);
+        assert!(completed.pixels() == reference.pixels());
     }
 }

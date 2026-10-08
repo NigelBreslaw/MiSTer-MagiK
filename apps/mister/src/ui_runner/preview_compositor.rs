@@ -14,7 +14,6 @@ use mister_magik_catalog::runtime_thread::{
 use mister_magik_framebuffer_scenes::{
     OutputRotation, Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut,
 };
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
@@ -100,6 +99,27 @@ struct SharedWorker {
     ready: Condvar,
 }
 
+/// Runs when the worker thread exits. A panic on an unwinding build disables the
+/// compositor, so the UI falls back instead of queueing work for a dead thread.
+/// The device aborts before this runs (`panic = "abort"`).
+struct WorkerExit(Arc<SharedWorker>);
+
+impl Drop for WorkerExit {
+    fn drop(&mut self) {
+        let panicked = std::thread::panicking();
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.worker_alive = false;
+        if panicked {
+            state.worker_errors = state.worker_errors.saturating_add(1);
+            state.disabled = true;
+        }
+    }
+}
+
 pub(super) struct PreviewCompositor {
     shared: Arc<SharedWorker>,
     thread: Option<JoinHandle<()>>,
@@ -116,18 +136,8 @@ impl PreviewCompositor {
         let thread = std::thread::Builder::new()
             .name("preview-compositor".to_string())
             .spawn(move || {
-                let panicked =
-                    catch_unwind(AssertUnwindSafe(|| run_worker(Arc::clone(&worker_shared))))
-                        .is_err();
-                let mut state = worker_shared
-                    .state
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                state.worker_alive = false;
-                if panicked {
-                    state.worker_errors = state.worker_errors.saturating_add(1);
-                    state.disabled = true;
-                }
+                let _exit = WorkerExit(Arc::clone(&worker_shared));
+                run_worker(worker_shared);
             })
             .map_err(|error| format!("start preview compositor: {error}"))?;
         Ok(Self {
