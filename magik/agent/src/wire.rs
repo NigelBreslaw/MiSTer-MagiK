@@ -142,9 +142,7 @@ mod tests {
         let body = b"\0binary\xffpayload";
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &envelope, body).unwrap();
-        let mut stream = bytes.clone();
-        stream.extend_from_slice(&bytes);
-        let mut reader = Cursor::new(stream);
+        let mut reader = Cursor::new(bytes.repeat(2));
         for _ in 0..2 {
             assert_eq!(
                 read_frame(&mut reader).unwrap(),

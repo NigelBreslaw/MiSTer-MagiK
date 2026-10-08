@@ -112,7 +112,7 @@ mod tests {
             assert_eq!(fs::read(&staged.path).unwrap(), content);
             drop(staged);
         }
-        assert!(
+        assert_eq!(
             receive(
                 &mut &content[..],
                 &root,
@@ -122,8 +122,8 @@ mod tests {
                 "wrong-digest"
             )
             .err()
-            .unwrap()
-            .contains("sha256 mismatch")
+            .as_deref(),
+            Some("sha256 mismatch")
         );
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         fs::remove_dir_all(root).unwrap();

@@ -34,7 +34,7 @@ required-features = ["asset-tools"]
 [[example]]
 name = "generate_magik_mask"
 path = "examples/generate_magik_mask.rs"
-required-features = ["asset-tools"]
+required-features = ["asset-tools", "ui"]
 
 [[bin]]
 name = "mister-magik-ui-preview"
