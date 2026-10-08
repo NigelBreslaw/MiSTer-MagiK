@@ -32,85 +32,55 @@ const BUCKETS: usize = OCTAVES * SUB_BUCKETS;
 /// Slowest frames kept per window for the breakdown lines.
 const WORST_FRAMES: usize = 3;
 
-/// The marks the launcher loop records, in execution order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LauncherFramePhase {
-    Begin,
-    StartupCatalogReplay,
-    LaunchRecoveryApplied,
-    PreInputMaintenance,
-    InputCaptured,
-    InputConsumed,
-    InputRouted,
-    Yielded,
-    IdleWait,
-    FullScreenTransition,
-    FramePlanned,
-    FrameSubmitted,
-    CompatibilityResolved,
-    PostSubmitAccounted,
-    ConfirmationInterrupted,
-    ActiveConfirmed,
-    ReadinessSourceAcknowledged,
-    FrameAccounted,
-    PresentationAcknowledged,
-    FrameFinished,
+macro_rules! phases {
+    ($($name:ident => $label:literal),+ $(,)?) => {
+        /// The marks the launcher loop records, in execution order.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(super) enum LauncherFramePhase {
+            $($name),+
+        }
+
+        const PHASE_COUNT: usize = [$(stringify!($name)),+].len();
+        const PHASES: [LauncherFramePhase; PHASE_COUNT] = [$(LauncherFramePhase::$name),+];
+
+        impl LauncherFramePhase {
+            fn index(self) -> usize {
+                self as usize
+            }
+
+            fn label(self) -> &'static str {
+                match self {
+                    $(Self::$name => $label),+
+                }
+            }
+        }
+    };
 }
 
-const PHASES: [LauncherFramePhase; 20] = [
-    LauncherFramePhase::Begin,
-    LauncherFramePhase::StartupCatalogReplay,
-    LauncherFramePhase::LaunchRecoveryApplied,
-    LauncherFramePhase::PreInputMaintenance,
-    LauncherFramePhase::InputCaptured,
-    LauncherFramePhase::InputConsumed,
-    LauncherFramePhase::InputRouted,
-    LauncherFramePhase::Yielded,
-    LauncherFramePhase::IdleWait,
-    LauncherFramePhase::FullScreenTransition,
-    LauncherFramePhase::FramePlanned,
-    LauncherFramePhase::FrameSubmitted,
-    LauncherFramePhase::CompatibilityResolved,
-    LauncherFramePhase::PostSubmitAccounted,
-    LauncherFramePhase::ConfirmationInterrupted,
-    LauncherFramePhase::ActiveConfirmed,
-    LauncherFramePhase::ReadinessSourceAcknowledged,
-    LauncherFramePhase::FrameAccounted,
-    LauncherFramePhase::PresentationAcknowledged,
-    LauncherFramePhase::FrameFinished,
-];
-const PHASE_COUNT: usize = PHASES.len();
+phases! {
+    Begin => "begin",
+    StartupCatalogReplay => "startup_catalog_replay",
+    LaunchRecoveryApplied => "launch_recovery_applied",
+    PreInputMaintenance => "pre_input",
+    InputCaptured => "input_captured",
+    InputConsumed => "input_consumed",
+    InputRouted => "input_routed",
+    Yielded => "yielded",
+    IdleWait => "idle_wait",
+    FullScreenTransition => "full_screen_transition",
+    FramePlanned => "frame_planned",
+    FrameSubmitted => "frame_submitted",
+    CompatibilityResolved => "compatibility_resolved",
+    PostSubmitAccounted => "post_submit_accounted",
+    ConfirmationInterrupted => "confirmation_interrupted",
+    ActiveConfirmed => "active_confirmed",
+    ReadinessSourceAcknowledged => "readiness_acknowledged",
+    FrameAccounted => "frame_accounted",
+    PresentationAcknowledged => "presentation_acknowledged",
+    FrameFinished => "frame_finished",
+}
 
 impl LauncherFramePhase {
-    fn index(self) -> usize {
-        self as usize
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Begin => "begin",
-            Self::StartupCatalogReplay => "startup_catalog_replay",
-            Self::LaunchRecoveryApplied => "launch_recovery_applied",
-            Self::PreInputMaintenance => "pre_input",
-            Self::InputCaptured => "input_captured",
-            Self::InputConsumed => "input_consumed",
-            Self::InputRouted => "input_routed",
-            Self::Yielded => "yielded",
-            Self::IdleWait => "idle_wait",
-            Self::FullScreenTransition => "full_screen_transition",
-            Self::FramePlanned => "frame_planned",
-            Self::FrameSubmitted => "frame_submitted",
-            Self::CompatibilityResolved => "compatibility_resolved",
-            Self::PostSubmitAccounted => "post_submit_accounted",
-            Self::ConfirmationInterrupted => "confirmation_interrupted",
-            Self::ActiveConfirmed => "active_confirmed",
-            Self::ReadinessSourceAcknowledged => "readiness_acknowledged",
-            Self::FrameAccounted => "frame_accounted",
-            Self::PresentationAcknowledged => "presentation_acknowledged",
-            Self::FrameFinished => "frame_finished",
-        }
-    }
-
     /// How a frame ends at this mark, if it does.
     fn ending(self) -> Option<FrameEnd> {
         match self {
