@@ -8,7 +8,6 @@ use mister_magik_framebuffer_scenes::launcher::{LauncherScene, PreparedLauncher}
 use mister_magik_framebuffer_scenes::launcher_parallel::ParallelLauncherRenderer;
 use std::{
     collections::VecDeque,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread::JoinHandle,
 };
@@ -38,11 +37,25 @@ struct State {
     stopped: bool,
     background_allowed: bool,
     busy: bool,
-    failure: Option<Box<dyn std::any::Any + Send>>,
+    /// Set by `ExitGuard` when the worker unwinds; reported once to the caller.
+    failed: bool,
     #[cfg(feature = "tooling")]
     preparation_profile: Vec<serde_json::Value>,
     #[cfg(feature = "tooling")]
     profile_overflow: usize,
+}
+/// Runs when the worker thread exits. Only a panic changes state: it stops the
+/// worker and records the failure for the caller. The device aborts before this
+/// runs (`panic = "abort"`), so it matters only on unwinding builds.
+struct ExitGuard(Arc<Shared>);
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.stopped = true;
+            state.failed = true;
+        }
+    }
 }
 struct Shared {
     state: Mutex<State>,
@@ -78,7 +91,7 @@ impl HomePreparation {
                 stopped: false,
                 background_allowed: true,
                 busy: false,
-                failure: None,
+                failed: false,
                 #[cfg(feature = "tooling")]
                 preparation_profile: Vec::new(),
                 #[cfg(feature = "tooling")]
@@ -90,173 +103,155 @@ impl HomePreparation {
         let worker = std::thread::Builder::new()
             .name("card-home-prepare".into())
             .spawn(move || {
-                let outcome = catch_unwind(AssertUnwindSafe(|| {
-                    use mister_magik_catalog::runtime_thread::{
-                        RuntimeThreadRole, apply_runtime_thread_policy,
-                    };
-                    apply_runtime_thread_policy(RuntimeThreadRole::SystemEntryPrepare);
-                    let mut caches = vec![(initial_level, initial_cache)];
-                    let mut retired = Vec::with_capacity(RETIRED + JOBS);
-                    loop {
-                        // Move cancellation and retirement onto this thread before
-                        // picking another job. The UI never drops a ready raster.
-                        let (request, stopped, renderer) = {
-                            let mut state = worker_shared
-                                .state
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            state.busy = false;
-                            loop {
-                                let cancelled = state
-                                    .ready
-                                    .iter()
-                                    .any(|(id, _)| !state.interested.contains(id));
-                                if state.stopped
-                                    || !state.retired.is_empty()
-                                    || state.retiring_renderer.is_some()
-                                    || state.pending.iter().any(|request| request.foreground || state.background_allowed)
-                                    || cancelled
-                                {
-                                    break;
-                                }
-                                state = worker_shared
-                                    .wake
-                                    .wait(state)
-                                    .unwrap_or_else(|e| e.into_inner());
-                            }
-                            std::mem::swap(&mut retired, &mut state.retired);
-                            let mut index = 0;
-                            while index < state.ready.len() {
-                                if state.stopped
-                                    || !state.interested.contains(&state.ready[index].0)
-                                {
-                                    retired.push(state.ready.swap_remove(index).1);
-                                } else {
-                                    index += 1;
-                                }
-                            }
-                            let request = if state.stopped { None } else {
-                                state.pending.iter().position(|request| request.foreground || state.background_allowed)
-                                    .and_then(|index| state.pending.remove(index))
-                            };
-                            let renderer = state.retiring_renderer.take();
-                            state.busy = request.is_some() || !retired.is_empty() || renderer.is_some();
-                            (request, state.stopped, renderer)
-                        };
-                        retired.clear();
-                        drop(renderer);
-                        if stopped {
-                            break;
-                        }
-                        let Some(request) = request else {
-                            continue;
-                        };
-                        if !worker_shared
+                let _exit = ExitGuard(Arc::clone(&worker_shared));
+                use mister_magik_catalog::runtime_thread::{
+                    RuntimeThreadRole, apply_runtime_thread_policy,
+                };
+                apply_runtime_thread_policy(RuntimeThreadRole::SystemEntryPrepare);
+                let mut caches = vec![(initial_level, initial_cache)];
+                let mut retired = Vec::with_capacity(RETIRED + JOBS);
+                loop {
+                    // Move cancellation and retirement onto this thread before
+                    // picking another job. The UI never drops a ready raster.
+                    let (request, stopped, renderer) = {
+                        let mut state = worker_shared
                             .state
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .interested
-                            .contains(&request.id)
-                        {
-                            continue;
-                        }
-                        let cache_index = match caches
-                            .iter()
-                            .position(|(menu, _)| menu == &request.level.menu_id)
-                        {
-                            Some(index) => index,
-                            None => {
-                                if caches.len() > ASIDE_LEVELS {
-                                    caches.remove(0);
-                                }
-                                caches.push((
-                                    request.level.menu_id.clone(),
-                                    CardFaceCache::default(),
-                                ));
-                                caches.len() - 1
+                            .unwrap_or_else(|e| e.into_inner());
+                        state.busy = false;
+                        loop {
+                            let cancelled = state
+                                .ready
+                                .iter()
+                                .any(|(id, _)| !state.interested.contains(id));
+                            if state.stopped
+                                || !state.retired.is_empty()
+                                || state.retiring_renderer.is_some()
+                                || state.pending.iter().any(|request| request.foreground || state.background_allowed)
+                                || cancelled
+                            {
+                                break;
                             }
-                        };
-                        #[cfg(feature = "tooling")]
-                        let profiling = mister_magik_framebuffer_scenes::launcher_profile::enabled();
-                        #[cfg(feature = "tooling")]
-                        let profile = profiling.then(|| {
-                            let _ = mister_magik_framebuffer_scenes::launcher_profile::take();
-                            (
-                                std::time::Instant::now(),
-                                crate::ui_runner::launcher_frame_accounting::cpu_thread_us(),
-                                crate::ui_runner::launcher_frame_accounting::thread_run_delay_us(),
-                            )
-                        });
-                        let mut cache = caches.remove(cache_index);
-                        let build = |face_cache: &mut CardFaceCache| {
-                            before_build(request.id);
-                            if request.retry_artwork {
-                                face_cache.retry_failed_artwork();
-                            }
-                            prepare_cached(
-                                request.scene,
-                                &request.level,
-                                request.selected,
-                                &request.clock,
-                                &fonts,
-                                face_cache,
-                            )
-                        };
-                        let prepared = match catch_unwind(AssertUnwindSafe(|| build(&mut cache.1)))
-                        {
-                            Ok(prepared) => prepared,
-                            Err(_) => {
-                                // A failed build may leave partially updated faces.
-                                // Retry once with cold state, still on this worker.
-                                cache.1 = CardFaceCache::default();
-                                build(&mut cache.1)
-                            }
-                        };
-                        caches.push(cache);
-                        #[cfg(feature = "tooling")]
-                        let profile = profile.map(|(started, cpu, delay)| {
-                            let cpu_end = crate::ui_runner::launcher_frame_accounting::cpu_thread_us();
-                            let delay_end = crate::ui_runner::launcher_frame_accounting::thread_run_delay_us();
-                            serde_json::json!({
-                                "id": request.id,
-                                "menu": request.level.menu_id,
-                                "cards": request.level.cards.len(),
-                                "queue_us": request.queued_at.map(|queued| started.saturating_duration_since(queued).as_micros() as u64),
-                                "wall_us": started.elapsed().as_micros() as u64,
-                                "cpu_us": cpu.zip(cpu_end).map(|(a,b)| b.saturating_sub(a)),
-                                "run_delay_us": delay.zip(delay_end).map(|(a,b)| b.saturating_sub(a)),
-                                "stages": mister_magik_framebuffer_scenes::launcher_profile::take(),
-                            })
-                        });
-                        let mut content = Some(Box::new(prepared));
-                        {
-                            let mut state = worker_shared
-                                .state
-                                .lock()
+                            state = worker_shared
+                                .wake
+                                .wait(state)
                                 .unwrap_or_else(|e| e.into_inner());
-                            if !state.stopped && state.interested.contains(&request.id) {
-                                state.ready.push((request.id, content.take().unwrap()));
-                            }
-                            #[cfg(feature = "tooling")]
-                            if let Some(profile) = profile {
-                                if state.preparation_profile.len() < 128 {
-                                    state.preparation_profile.push(profile);
-                                } else {
-                                    state.profile_overflow += 1;
-                                }
+                        }
+                        std::mem::swap(&mut retired, &mut state.retired);
+                        let mut index = 0;
+                        while index < state.ready.len() {
+                            if state.stopped
+                                || !state.interested.contains(&state.ready[index].0)
+                            {
+                                retired.push(state.ready.swap_remove(index).1);
+                            } else {
+                                index += 1;
                             }
                         }
-                        // A cancelled completion is destroyed on this worker.
-                        drop(content);
+                        let request = if state.stopped { None } else {
+                            state.pending.iter().position(|request| request.foreground || state.background_allowed)
+                                .and_then(|index| state.pending.remove(index))
+                        };
+                        let renderer = state.retiring_renderer.take();
+                        state.busy = request.is_some() || !retired.is_empty() || renderer.is_some();
+                        (request, state.stopped, renderer)
+                    };
+                    retired.clear();
+                    drop(renderer);
+                    if stopped {
+                        break;
                     }
-                }));
-                if let Err(failure) = outcome {
-                    let mut state = worker_shared
+                    let Some(request) = request else {
+                        continue;
+                    };
+                    if !worker_shared
                         .state
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    state.stopped = true;
-                    state.failure = Some(failure);
+                        .unwrap_or_else(|e| e.into_inner())
+                        .interested
+                        .contains(&request.id)
+                    {
+                        continue;
+                    }
+                    let cache_index = match caches
+                        .iter()
+                        .position(|(menu, _)| menu == &request.level.menu_id)
+                    {
+                        Some(index) => index,
+                        None => {
+                            if caches.len() > ASIDE_LEVELS {
+                                caches.remove(0);
+                            }
+                            caches.push((
+                                request.level.menu_id.clone(),
+                                CardFaceCache::default(),
+                            ));
+                            caches.len() - 1
+                        }
+                    };
+                    #[cfg(feature = "tooling")]
+                    let profiling = mister_magik_framebuffer_scenes::launcher_profile::enabled();
+                    #[cfg(feature = "tooling")]
+                    let profile = profiling.then(|| {
+                        let _ = mister_magik_framebuffer_scenes::launcher_profile::take();
+                        (
+                            std::time::Instant::now(),
+                            crate::ui_runner::launcher_frame_accounting::cpu_thread_us(),
+                            crate::ui_runner::launcher_frame_accounting::thread_run_delay_us(),
+                        )
+                    });
+                    let mut cache = caches.remove(cache_index);
+                    let build = |face_cache: &mut CardFaceCache| {
+                        before_build(request.id);
+                        if request.retry_artwork {
+                            face_cache.retry_failed_artwork();
+                        }
+                        prepare_cached(
+                            request.scene,
+                            &request.level,
+                            request.selected,
+                            &request.clock,
+                            &fonts,
+                            face_cache,
+                        )
+                    };
+                    let prepared = build(&mut cache.1);
+                    caches.push(cache);
+                    #[cfg(feature = "tooling")]
+                    let profile = profile.map(|(started, cpu, delay)| {
+                        let cpu_end = crate::ui_runner::launcher_frame_accounting::cpu_thread_us();
+                        let delay_end = crate::ui_runner::launcher_frame_accounting::thread_run_delay_us();
+                        serde_json::json!({
+                            "id": request.id,
+                            "menu": request.level.menu_id,
+                            "cards": request.level.cards.len(),
+                            "queue_us": request.queued_at.map(|queued| started.saturating_duration_since(queued).as_micros() as u64),
+                            "wall_us": started.elapsed().as_micros() as u64,
+                            "cpu_us": cpu.zip(cpu_end).map(|(a,b)| b.saturating_sub(a)),
+                            "run_delay_us": delay.zip(delay_end).map(|(a,b)| b.saturating_sub(a)),
+                            "stages": mister_magik_framebuffer_scenes::launcher_profile::take(),
+                        })
+                    });
+                    let mut content = Some(Box::new(prepared));
+                    {
+                        let mut state = worker_shared
+                            .state
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        if !state.stopped && state.interested.contains(&request.id) {
+                            state.ready.push((request.id, content.take().unwrap()));
+                        }
+                        #[cfg(feature = "tooling")]
+                        if let Some(profile) = profile {
+                            if state.preparation_profile.len() < 128 {
+                                state.preparation_profile.push(profile);
+                            } else {
+                                state.profile_overflow += 1;
+                            }
+                        }
+                    }
+                    // A cancelled completion is destroyed on this worker.
+                    drop(content);
                 }
             })
             .map_err(|e| format!("start card preparation worker: {e}"))?;
@@ -267,11 +262,11 @@ impl HomePreparation {
     }
     fn lock_state(&self) -> MutexGuard<'_, State> {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(failure) = state.failure.take() {
-            // A second panic (or another worker failure) must reach the caller,
-            // rather than leave a permanently pending ticket or accept more jobs.
+        if std::mem::take(&mut state.failed) {
+            // Report a worker panic once. Later calls see a stopped worker, rather
+            // than a permanently pending ticket or a job nobody will run.
             drop(state);
-            resume_unwind(failure);
+            panic!("card preparation worker panicked");
         }
         state
     }
@@ -422,7 +417,7 @@ impl HomePreparation {
     }
     #[cfg(test)]
     pub(super) fn has_failed(&self) -> bool {
-        self.shared.state.lock().unwrap().failure.is_some()
+        self.shared.state.lock().unwrap().failed
     }
     #[cfg(test)]
     pub(super) fn is_ready(&self, id: u64) -> bool {

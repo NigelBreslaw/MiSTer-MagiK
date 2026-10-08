@@ -1815,8 +1815,12 @@ mod tests {
         assert_eq!(session.artwork_retry_at, 9_000);
     }
 
+    /// Pending and trick content prepares on the worker, never the UI thread, in
+    /// every motion mode, settles to the expected pixels, re-prepares a changed
+    /// card, and keeps ownership bounded. It replaces the retry test's checks that
+    /// did not depend on a panic.
     #[test]
-    fn panicking_preparation_recovers_pending_and_trick_content_off_ui() {
+    fn pending_and_trick_content_prepares_off_ui_in_every_motion_mode() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         for (motion, prefetch) in [(false, false), (true, false), (true, true)] {
             let scene = LauncherScene::new(960, 540);
@@ -1834,9 +1838,7 @@ mod tests {
                 CardFaceCache::default(),
                 move |_| {
                     assert_ne!(std::thread::current().id(), ui_thread);
-                    if worker_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        panic!("injected card preparation failure");
-                    }
+                    worker_attempts.fetch_add(1, Ordering::SeqCst);
                 },
             )
             .unwrap();
@@ -1861,7 +1863,7 @@ mod tests {
                 if session.content_ready(scene, &destination) && session.trick.is_none() {
                     break;
                 }
-                assert!(Instant::now() < deadline, "panic stranded Home content");
+                assert!(Instant::now() < deadline, "Home content never settled");
                 now += 16;
                 std::thread::yield_now();
             }
@@ -1871,7 +1873,7 @@ mod tests {
             wait_content(&mut session, scene, &destination, 0, "07:28");
             let expected = prepare(scene, &destination, 0, "07:28", &session.fonts);
             assert_eq!(session.render(), expected.pixels());
-            assert!(attempts.load(Ordering::SeqCst) >= 3);
+            assert!(attempts.load(Ordering::SeqCst) >= 2);
             assert!(session.preparation.ownership_is_bounded());
         }
     }
@@ -1913,9 +1915,9 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             failure.downcast_ref::<&str>(),
-            Some(&"persistent preparation failure")
+            Some(&"card preparation worker panicked")
         );
-        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
         assert!(
             session
                 .preparation

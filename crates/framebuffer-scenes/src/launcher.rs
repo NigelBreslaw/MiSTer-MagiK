@@ -773,7 +773,26 @@ impl LauncherFramePreparer {
             ..
         } = buffer;
         *rendered_request = Some(request);
-        self.render_tile_pixels(request, scratch, pixels, clip);
+        self.render_tile_pixels(request, scratch, pixels, clip, None);
+    }
+
+    /// `render_tile`, but stops before the next card strip once `cancel` is set.
+    /// Returns `false` for a stopped band, which the caller must discard.
+    pub fn render_tile_until(
+        &self,
+        request: LauncherFrameRequest,
+        buffer: &mut PreparedLauncherFrame,
+        clip: (usize, usize),
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        let PreparedLauncherFrame {
+            request: rendered_request,
+            scratch,
+            pixels,
+            ..
+        } = buffer;
+        *rendered_request = Some(request);
+        self.render_tile_pixels(request, scratch, pixels, clip, Some(cancel))
     }
 
     /// Render a tile directly into a native 960x540 destination while keeping
@@ -788,7 +807,7 @@ impl LauncherFramePreparer {
         let geometry = self.geometry();
         assert!(destination.len() >= geometry.stride * geometry.height);
         buffer.request = Some(request);
-        self.render_tile_pixels(request, &mut buffer.scratch, destination, clip);
+        self.render_tile_pixels(request, &mut buffer.scratch, destination, clip, None);
     }
 
     fn render_tile_pixels(
@@ -797,7 +816,8 @@ impl LauncherFramePreparer {
         scratch: &mut [crate::launcher_flip::Scratch],
         pixels: &mut [Rgb565Pixel],
         clip: (usize, usize),
-    ) {
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> bool {
         let geometry = self.geometry();
         assert!(clip.0 >= geometry.clip.0 && clip.0 <= clip.1 && clip.1 <= geometry.clip.1);
         let row = CardRow {
@@ -809,16 +829,17 @@ impl LauncherFramePreparer {
             let _clear = crate::launcher_profile::span("flip.clear");
             clear_card_rows(pixels, geometry.stride, row);
         }
-        if !self.faces.is_empty() {
-            // A level-change plan already holds the output's own poses: mapping
-            // it again would move the hero at the swap.
-            let plan = match (&self.trick, &self.layout) {
-                (Some(plan), _) => plan.with_faces(&self.faces),
-                (None, Some(layout)) => layout.plan(&self.faces, request.frame, self.cyclic),
-                (None, None) => build_carousel_plan(&self.faces, request.frame, self.cyclic),
-            };
-            draw_card_strips(pixels, geometry.stride, row, &plan, scratch);
+        if self.faces.is_empty() {
+            return true;
         }
+        // A level-change plan already holds the output's own poses: mapping
+        // it again would move the hero at the swap.
+        let plan = match (&self.trick, &self.layout) {
+            (Some(plan), _) => plan.with_faces(&self.faces),
+            (None, Some(layout)) => layout.plan(&self.faces, request.frame, self.cyclic),
+            (None, None) => build_carousel_plan(&self.faces, request.frame, self.cyclic),
+        };
+        draw_card_strips_until(pixels, geometry.stride, row, &plan, scratch, cancel)
     }
     /// Compact scratch for `render_tile` only, not whole-card preparation.
     pub fn new_tile_buffer(&self) -> PreparedLauncherFrame {
@@ -1923,9 +1944,26 @@ fn draw_card_strips(
     plan: &CarouselPlan<'_>,
     scratch: &mut [crate::launcher_flip::Scratch],
 ) {
+    draw_card_strips_until(pixels, stride, row, plan, scratch, None);
+}
+
+/// `draw_card_strips`, stopping before the next strip once `cancel` is set. A
+/// stopped row is partial and returns `false`. Cancelling a discarded
+/// speculative band therefore costs at most one strip, not the whole band.
+fn draw_card_strips_until(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    row: CardRow,
+    plan: &CarouselPlan<'_>,
+    scratch: &mut [crate::launcher_flip::Scratch],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> bool {
     let clip = row.clip;
     let width = crate::launcher_flip::STRIP_WIDTH;
     for left in (clip.0..clip.1).step_by(width) {
+        if cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+            return false;
+        }
         draw_carousel_plan(
             pixels,
             stride,
@@ -1935,6 +1973,7 @@ fn draw_card_strips(
             (left, (left + width).min(clip.1)),
         );
     }
+    true
 }
 
 fn draw_carousel_plan(

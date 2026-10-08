@@ -385,7 +385,7 @@ fn run_owner(mut db: ControllerDb, shared: Arc<Shared>, initialize: impl FnOnce(
             }
             self.0.wake.notify_all();
             drop(pending);
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0.wake_ui)()));
+            (self.0.wake_ui)();
         }
     }
     let _exited = Exited(shared.clone());
