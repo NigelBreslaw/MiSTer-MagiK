@@ -291,17 +291,6 @@ These are historical qualification gaps from the migration, not a fresh device
 assessment. Close them only with evidence for an exact current candidate; the
 earlier measurements above do not qualify a later revision.
 
-## Next screensaver migration
-
-The existing 20-mode launcher screensaver remains application-owned in this
-phase. Its next safe migration uses the same seam: the production host loads
-archives/catalog entries and decodes assets, then passes owned RGB565 pixels and
-typed scene inputs into a portable scene. Archive traversal, catalog state,
-Slint state, route selection, and presentation do not move into the shared
-crate. No generic scene registry, scene graph, or cross-scene JSON schema is
-introduced.
-
-
 ## Intro asset regeneration
 
 The production intro generator remains a standalone binary. It no longer needs

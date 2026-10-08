@@ -65,3 +65,55 @@ shrink successive cards. They therefore retain vertical filtering; excluding tho
 face types would reintroduce aliasing. The current full-height representation costs
 approximately five times the horizontal-only pixel storage. Compact vertical mips
 remain a separate optimisation requiring new reconstruction kernels and measurements.
+
+## Complete animation round trips
+
+```sh
+scripts/magik check animation-roundtrip --installed-sha256 SHA
+scripts/magik check animation-roundtrip --profile --installed-sha256 SHA
+```
+
+By default, the unprofiled command runs three complete 45-second Root → Consoles → Nintendo
+→ SNES hub → Games → Root journeys, each with a fresh native Dev lease. Route
+steps wait at least two seconds and require fresh `ui_motion = false` metrics
+before advancing. Slow motion must settle within the bounded route window;
+elapsed wall time alone does not authorize the next input.
+
+Parent and candidate comparisons require matching build flags, affinity, assets,
+state and `vsync-locked-v1` frame-clock period. Keep wall-clock-animation results
+separate. CPU, measurement windows and supervision deadlines use real elapsed
+time. Moving CPU is process CPU per confirmed moving presentation, including
+background threads, sampled between loop boundaries from the published motion
+signal. It can lag a motion boundary by one loop; it is not per-kernel CPU or
+utilisation. Missing samples invalidate an average instead of becoming zero.
+
+The profile command runs one diagnostic route with CPU sampling and renderer
+stage spans inside the measurement window. Two-band stage wall totals are
+neither elapsed critical-path time nor stage CPU. Use per-band CPU/run-delay,
+producer/merge, hidden-copy and Slint raster evidence for attribution. Profile
+drop counts are not acceptance measurements. Raw logs, binaries and captures
+stay in ignored result directories; retained comparisons identify the exact
+artifact and measurement contract.
+
+CPU/storage experiments need native Cortex-A9 kernel or renderer measurements
+and repeated complete unprofiled routes. Scheduling/buffering trials additionally
+need controlled contention, physical Main/input, freshness and readiness
+evidence. Preserve exact scalar/ARM pixels, virtual-clock steps, landing/input
+ordering and preparation holds. Render-ahead cannot conceal inadequate sustained
+throughput. Lower kernel cost or fewer cache events alone does not establish
+zero-drop physical cadence.
+
+### Projected-compose fixture
+
+The projected compose experiment includes a standalone native C fixture in
+`crates/framebuffer-scenes/tests/launcher_column_bench.c`. Compile it as a
+separate translation unit alongside `launcher_texture_neon.c`, using the same
+`-O3 -std=c11 -mtune=cortex-a9 -mfpu=neon-vfpv3 -mfloat-abi=hard
+-ffp-contract=off` flags as the production build. Run the resulting executable
+through `MISTER_MAGIK2_PREBUILT_ARTIFACT=ABSOLUTE_PATH scripts/magik bench
+card-column-generic` and `card-column-opaque`. Both workloads compare full output
+before timing, then exercise a 32-column strip, four positive source strides and
+four clipped source starts against the same 960x540 destination. Each reports
+two wall-time and thread-CPU samples; repeat in reverse order to check drift.
+This isolates compose and excludes filtering, reflections, copy and presentation.
+Use the full application round trips to judge the effect on CPU and dropped frames.
