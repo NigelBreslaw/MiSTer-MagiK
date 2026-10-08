@@ -432,7 +432,7 @@ mod imp {
         // Stop delivery of SIGPROF before taking the pprof collector read lock. The
         // guard still owns the collected samples and its Drop implementation will
         // perform the normal handler/timer cleanup after report extraction.
-        let mut timer = libc::itimerval {
+        let timer = libc::itimerval {
             it_interval: libc::timeval {
                 tv_sec: 0,
                 tv_usec: 0,
@@ -443,7 +443,7 @@ mod imp {
             },
         };
         unsafe {
-            libc::setitimer(libc::ITIMER_PROF, &mut timer, std::ptr::null_mut());
+            libc::setitimer(libc::ITIMER_PROF, &timer, std::ptr::null_mut());
         }
         // The interval timer is process-wide, so blocking SIGPROF on this
         // finalizer thread does not stop a signal already queued for another

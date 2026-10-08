@@ -1077,11 +1077,11 @@ impl UiFrameTarget {
     }
 
     pub fn cached_frame_view(&self) -> CachedFrameView<'_> {
-        let height = if self.cached_stride == 0 {
-            0
-        } else {
-            self.cached.len() / self.cached_stride
-        };
+        let height = self
+            .cached
+            .len()
+            .checked_div(self.cached_stride)
+            .unwrap_or(0);
         CachedFrameView::new(&self.cached, self.cached_stride, height)
     }
 
@@ -1320,9 +1320,9 @@ mod tests {
         assert_eq!(target.compose_direct_preview_rect(rect(3, 1, 5, 3)), 2);
 
         let cached = target.cached_565();
-        assert_eq!(cached[1 * 6 + 2], Rgb565Pixel(0x0001));
-        assert_eq!(cached[1 * 6 + 3], Rgb565Pixel(0x1001));
-        assert_eq!(cached[1 * 6 + 4], Rgb565Pixel(0x1002));
+        assert_eq!(cached[6 + 2], Rgb565Pixel(0x0001));
+        assert_eq!(cached[6 + 3], Rgb565Pixel(0x1001));
+        assert_eq!(cached[6 + 4], Rgb565Pixel(0x1002));
         assert_eq!(cached[2 * 6 + 3], Rgb565Pixel(0x1004));
         assert_eq!(cached[2 * 6 + 4], Rgb565Pixel(0x1005));
         assert_eq!(cached[2 * 6 + 5], Rgb565Pixel(0x0001));
@@ -1330,35 +1330,28 @@ mod tests {
 
     #[test]
     fn direct_preview_can_be_composed_through_an_oriented_layout() {
-        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
-        let preview_rect = rect(0, 0, 3, 2);
-        let (preview, _) = target.direct_preview_565_rect_mut(preview_rect);
-        preview.copy_from_slice(&[
-            Rgb565Pixel(1),
-            Rgb565Pixel(2),
-            Rgb565Pixel(3),
-            Rgb565Pixel(4),
-            Rgb565Pixel(5),
-            Rgb565Pixel(6),
-        ]);
-        let output = Rgb565OutputLayout::new(
-            3,
-            2,
-            4,
-            mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
-        )
-        .unwrap();
-
-        assert_eq!(
-            target.compose_direct_preview_rect_oriented(preview_rect, output),
-            2
-        );
-        assert_eq!(target.cached_565()[2 * 4], Rgb565Pixel(1));
-        assert_eq!(target.cached_565()[1 * 4], Rgb565Pixel(2));
-        assert_eq!(target.cached_565()[0], Rgb565Pixel(3));
-        assert_eq!(target.cached_565()[2 * 4 + 1], Rgb565Pixel(4));
-        assert_eq!(target.cached_565()[1 * 4 + 1], Rgb565Pixel(5));
-        assert_eq!(target.cached_565()[1], Rgb565Pixel(6));
+        use mister_magik_framebuffer_scenes::OutputRotation;
+        for (rotation, expected) in [
+            (
+                OutputRotation::Clockwise90,
+                [4, 1, 0, 0, 5, 2, 0, 0, 6, 3, 0, 0],
+            ),
+            (
+                OutputRotation::CounterClockwise90,
+                [3, 6, 0, 0, 2, 5, 0, 0, 1, 4, 0, 0],
+            ),
+        ] {
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+            let preview_rect = rect(0, 0, 3, 2);
+            let (preview, _) = target.direct_preview_565_rect_mut(preview_rect);
+            preview.copy_from_slice(&[1, 2, 3, 4, 5, 6].map(Rgb565Pixel));
+            let output = Rgb565OutputLayout::new(3, 2, 4, rotation).unwrap();
+            assert_eq!(
+                target.compose_direct_preview_rect_oriented(preview_rect, output),
+                2
+            );
+            assert_eq!(target.cached_565(), expected.map(Rgb565Pixel));
+        }
     }
 
     #[test]

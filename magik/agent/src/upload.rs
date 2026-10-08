@@ -77,7 +77,7 @@ pub fn receive(
         digest.update(&buffer[..n]);
         remaining -= n;
     }
-    if hex(&digest.finalize()) != hash {
+    if !hex(&digest.finalize()).eq_ignore_ascii_case(hash) {
         return Err("sha256 mismatch".into());
     }
     output.sync_all().map_err(|e| e.to_string())?;
@@ -94,6 +94,41 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn upload_accepts_either_hex_case_and_rejects_a_wrong_digest() {
+        let root = std::env::temp_dir().join(format!("magik-hash-cases-{}", std::process::id()));
+        let content = b"verified upload bytes";
+        let hash = hex(&Sha256::digest(content));
+        for supplied in [hash.clone(), hash.to_ascii_uppercase()] {
+            let staged = receive(
+                &mut &content[..],
+                &root,
+                "probe",
+                &supplied,
+                content.len(),
+                "hash-case",
+            )
+            .unwrap();
+            assert_eq!(fs::read(&staged.path).unwrap(), content);
+            drop(staged);
+        }
+        assert_eq!(
+            receive(
+                &mut &content[..],
+                &root,
+                "probe",
+                &"0".repeat(64),
+                content.len(),
+                "wrong-digest"
+            )
+            .err()
+            .as_deref(),
+            Some("sha256 mismatch")
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn applications_publish_to_separate_fixed_slots() {
         let root = std::env::temp_dir().join(format!("magik-app-slots-{}", std::process::id()));

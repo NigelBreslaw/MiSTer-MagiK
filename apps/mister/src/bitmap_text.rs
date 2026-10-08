@@ -819,7 +819,7 @@ mod tests {
         assert_eq!((mask.width, mask.height, mask.stride), (624, 128, 624));
         assert_eq!(alpha_signature, 0x2654_8c31_ed92_3025);
         assert!(mask.alpha.iter().any(|alpha| *alpha >= 128));
-        assert!(mask.alpha.iter().any(|alpha| *alpha == 0));
+        assert!(mask.alpha.contains(&0));
     }
 
     #[test]

@@ -298,19 +298,19 @@ const _: () = {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FramebufferVarValidationError {
-    InvalidWidth {
+    Width {
         actual: u32,
         expected: usize,
     },
-    InvalidHeight {
+    Height {
         actual: usize,
         expected: usize,
     },
-    InvalidBitsPerPixel {
+    BitsPerPixel {
         actual: u32,
         expected: u32,
     },
-    InvalidChannelOffsets {
+    ChannelOffsets {
         red: u32,
         green: u32,
         blue: u32,
@@ -318,7 +318,7 @@ enum FramebufferVarValidationError {
         expected_green: u32,
         expected_blue: u32,
     },
-    InvalidChannelLengths {
+    ChannelLengths {
         red: u32,
         green: u32,
         blue: u32,
@@ -326,7 +326,7 @@ enum FramebufferVarValidationError {
         expected_green: u32,
         expected_blue: u32,
     },
-    InvalidMsbRight {
+    MsbRight {
         red: u32,
         green: u32,
         blue: u32,
@@ -336,20 +336,20 @@ enum FramebufferVarValidationError {
 impl std::fmt::Display for FramebufferVarValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidWidth { actual, expected } => {
+            Self::Width { actual, expected } => {
                 write!(f, "fb0 width is {actual}, need {expected}")
             }
-            Self::InvalidHeight { actual, expected } => {
+            Self::Height { actual, expected } => {
                 write!(f, "fb0 is {actual}px tall, need {expected}")
             }
-            Self::InvalidBitsPerPixel { actual, expected } => {
+            Self::BitsPerPixel { actual, expected } => {
                 write!(
                     f,
                     "fb0 is {actual}bpp, need {expected}bpp for {}",
                     production_label()
                 )
             }
-            Self::InvalidChannelOffsets {
+            Self::ChannelOffsets {
                 red,
                 green,
                 blue,
@@ -361,7 +361,7 @@ impl std::fmt::Display for FramebufferVarValidationError {
                 "fb0 channel offsets are r{red} g{green} b{blue}, expected r{expected_red} g{expected_green} b{expected_blue} for {}",
                 production_label()
             ),
-            Self::InvalidChannelLengths {
+            Self::ChannelLengths {
                 red,
                 green,
                 blue,
@@ -373,7 +373,7 @@ impl std::fmt::Display for FramebufferVarValidationError {
                 "fb0 channel lengths are r{red} g{green} b{blue}, expected r{expected_red} g{expected_green} b{expected_blue} for {}",
                 production_label()
             ),
-            Self::InvalidMsbRight { red, green, blue } => write!(
+            Self::MsbRight { red, green, blue } => write!(
                 f,
                 "fb0 RGB bitfields use msb_right r{red} g{green} b{blue}, expected all 0 for {}",
                 production_label()
@@ -471,19 +471,19 @@ fn validate_var_screeninfo_for_rgb565(
 ) -> Result<(), FramebufferVarValidationError> {
     let virt_h = (var.yres_virtual as usize).max(var.yres as usize);
     if var.xres > 0 && var.xres as usize != w {
-        return Err(FramebufferVarValidationError::InvalidWidth {
+        return Err(FramebufferVarValidationError::Width {
             actual: var.xres,
             expected: w,
         });
     }
     if virt_h > 0 && virt_h != h {
-        return Err(FramebufferVarValidationError::InvalidHeight {
+        return Err(FramebufferVarValidationError::Height {
             actual: virt_h,
             expected: h,
         });
     }
     if var.bits_per_pixel != 0 && var.bits_per_pixel != RGB565_BITS_PER_PIXEL {
-        return Err(FramebufferVarValidationError::InvalidBitsPerPixel {
+        return Err(FramebufferVarValidationError::BitsPerPixel {
             actual: var.bits_per_pixel,
             expected: RGB565_BITS_PER_PIXEL,
         });
@@ -494,7 +494,7 @@ fn validate_var_screeninfo_for_rgb565(
         var.red.length != 0 || var.green.length != 0 || var.blue.length != 0;
     if reports_channel_lengths {
         if (var.red.offset, var.green.offset, var.blue.offset) != expected_offsets {
-            return Err(FramebufferVarValidationError::InvalidChannelOffsets {
+            return Err(FramebufferVarValidationError::ChannelOffsets {
                 red: var.red.offset,
                 green: var.green.offset,
                 blue: var.blue.offset,
@@ -506,7 +506,7 @@ fn validate_var_screeninfo_for_rgb565(
 
         let expected_lengths = (5, 6, 5);
         if (var.red.length, var.green.length, var.blue.length) != expected_lengths {
-            return Err(FramebufferVarValidationError::InvalidChannelLengths {
+            return Err(FramebufferVarValidationError::ChannelLengths {
                 red: var.red.length,
                 green: var.green.length,
                 blue: var.blue.length,
@@ -518,7 +518,7 @@ fn validate_var_screeninfo_for_rgb565(
     }
 
     if var.red.msb_right != 0 || var.green.msb_right != 0 || var.blue.msb_right != 0 {
-        return Err(FramebufferVarValidationError::InvalidMsbRight {
+        return Err(FramebufferVarValidationError::MsbRight {
             red: var.red.msb_right,
             green: var.green.msb_right,
             blue: var.blue.msb_right,
@@ -642,7 +642,7 @@ impl MappedRgb565Framebuffer {
     #[allow(dead_code)]
     pub fn open_current_boot() -> io::Result<Self> {
         const RETRIES: u32 = 30;
-        let mut last_err = io::Error::new(io::ErrorKind::Other, "no attempt");
+        let mut last_err = io::Error::other("no attempt");
         for attempt in 0..RETRIES {
             boot_analytics::event("display_open_current_attempt", format!("attempt={attempt}"));
             std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 {
@@ -845,10 +845,8 @@ impl MappedRgb565Framebuffer {
         // SAFETY: fd refers to /dev/fb0 and var is a full-size repr(C)
         // framebuffer struct with a stable address for the duration of ioctl.
         let var_ok = unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } == 0;
-        if var_ok {
-            if let Err(e) = validate_var_screeninfo_for_rgb565(&var, w, h) {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()));
-            }
+        if var_ok && let Err(e) = validate_var_screeninfo_for_rgb565(&var, w, h) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()));
         }
         // SAFETY: fd refers to /dev/fb0 and fix is a full-size repr(C)
         // framebuffer struct with a stable address for the duration of ioctl.
@@ -882,10 +880,7 @@ impl MappedRgb565Framebuffer {
             unsafe {
                 libc::munmap(mem, map_len);
             }
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "fb0 mmap returned a null address",
-            ));
+            return Err(io::Error::other("fb0 mmap returned a null address"));
         }
         Ok(Self {
             mem: mem as *mut u8,
@@ -1516,7 +1511,7 @@ mod tests {
 
         assert_eq!(
             validate_var_screeninfo_for_rgb565(&var, 960, 540),
-            Err(FramebufferVarValidationError::InvalidChannelLengths {
+            Err(FramebufferVarValidationError::ChannelLengths {
                 red: 5,
                 green: 5,
                 blue: 5,
@@ -1534,7 +1529,7 @@ mod tests {
 
         assert_eq!(
             validate_var_screeninfo_for_rgb565(&var, 960, 540),
-            Err(FramebufferVarValidationError::InvalidMsbRight {
+            Err(FramebufferVarValidationError::MsbRight {
                 red: 0,
                 green: 0,
                 blue: 1,

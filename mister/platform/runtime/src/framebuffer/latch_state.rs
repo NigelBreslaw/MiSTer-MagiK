@@ -205,6 +205,8 @@ impl PhysicalLayerPublication {
         self.backing.backing.view()
     }
 
+    // Returning the original publication keeps the backing reusable without allocating.
+    #[allow(clippy::result_large_err)]
     pub fn try_into_backing(self) -> Result<PhysicalLayerBacking, Self> {
         let Self {
             role,
@@ -802,15 +804,11 @@ impl TwoBufferLatchState {
             slot.layers[PhysicalLayerRole::Arcade.index()],
             arcade.desired,
         );
-        if restore_preview {
-            if let Some(preview) = slot.layers[PhysicalLayerRole::Preview.index()] {
-                push_without_covered_rect(&mut restore_rects, preview.rect);
-            }
+        if restore_preview && let Some(preview) = slot.layers[PhysicalLayerRole::Preview.index()] {
+            push_without_covered_rect(&mut restore_rects, preview.rect);
         }
-        if restore_arcade {
-            if let Some(arcade) = slot.layers[PhysicalLayerRole::Arcade.index()] {
-                push_without_covered_rect(&mut restore_rects, arcade.rect);
-            }
+        if restore_arcade && let Some(arcade) = slot.layers[PhysicalLayerRole::Arcade.index()] {
+            push_without_covered_rect(&mut restore_rects, arcade.rect);
         }
 
         let preview_intersects_restore = layer_intersects_restore(preview.desired, &restore_rects);
@@ -1211,9 +1209,8 @@ mod tests {
         for rect in plan.restore_rects.iter() {
             for y in rect.y0..rect.y1 {
                 let row = y * WIDTH;
-                for x in rect.x0..rect.x1 {
-                    buffer[row + x] = cached[row + x];
-                }
+                buffer[row + rect.x0..row + rect.x1]
+                    .copy_from_slice(&cached[row + rect.x0..row + rect.x1]);
             }
         }
     }
@@ -1256,7 +1253,9 @@ mod tests {
         assert_eq!((width, height), (WIDTH, HEIGHT));
         assert_eq!(max, 255);
         values[4..]
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|rgb| {
                 let r = rgb[0].parse::<u8>().unwrap();
                 let g = rgb[1].parse::<u8>().unwrap();
@@ -1281,6 +1280,7 @@ mod tests {
             ))
             .unwrap();
         state.mark_post_success(first);
+        state.sync_hardware(Some(first.slot_index), 1, false, 0);
         let second = state
             .plan_next(publication_input(
                 Some(publication(PhysicalLayerRole::Preview, preview, 2)),
@@ -1288,6 +1288,7 @@ mod tests {
             ))
             .unwrap();
         state.mark_post_success(second);
+        state.sync_hardware(Some(second.slot_index), 2, false, 0);
 
         assert_eq!(
             state.retained_publication_generation(1, PhysicalLayerRole::Preview),
@@ -1548,6 +1549,7 @@ mod tests {
                 ))
                 .unwrap();
             state.mark_post_success(plan);
+            state.sync_hardware(Some(plan.slot_index), generation as u16, false, 0);
         }
         let failed = state
             .plan_next(publication_input(
@@ -1580,6 +1582,7 @@ mod tests {
                 ))
                 .unwrap();
             state.mark_post_success(plan);
+            state.sync_hardware(Some(plan.slot_index), generation as u16, false, 0);
         }
         let retired = state.plan_next(publication_input(None, None)).unwrap();
         state.mark_post_success(retired);
@@ -2331,7 +2334,7 @@ mod tests {
             update.write_rects().to_vec(),
             vec![
                 rect(18, 20, 20, 30),
-                rect(10, 20, 20, 23),
+                rect(10, 20, 18, 23),
                 rect(13, 23, 17, 25),
                 rect(11, 26, 15, 28),
             ]
@@ -2498,7 +2501,7 @@ mod tests {
             retired_other_slot
                 .restore_rects
                 .iter()
-                .any(|rect| rect == preview)
+                .any(|rect| rect == full())
         );
         assert_eq!(retired_other_slot.preview_state_after(), None);
     }

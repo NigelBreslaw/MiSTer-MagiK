@@ -70,11 +70,12 @@ impl FrameClock {
     /// and is dropped once a real frame is produced.
     pub fn advance_idle(&mut self, wall: Duration) {
         let total = self.idle_remainder.saturating_add(wall);
-        let periods = (total.as_nanos() / self.period.as_nanos()).min(u128::from(u32::MAX)) as u32;
-        self.idle_remainder = total.saturating_sub(self.period.saturating_mul(periods));
-        for _ in 0..periods {
-            self.step();
-        }
+        let remainder_ns = total.as_nanos() % self.period.as_nanos();
+        self.idle_remainder = Duration::new(
+            (remainder_ns / 1_000_000_000) as u64,
+            (remainder_ns % 1_000_000_000) as u32,
+        );
+        self.elapsed = self.elapsed.saturating_add(total - self.idle_remainder);
     }
 
     fn step(&mut self) {
@@ -85,6 +86,28 @@ impl FrameClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_wall_time_accounts_for_more_than_u32_max_periods() {
+        let period = Duration::from_nanos(1);
+        let mut clock = FrameClock::new(Instant::now(), period);
+        clock.advance_idle(Duration::from_secs(5));
+        assert_eq!(clock.elapsed(), Duration::from_secs(5));
+        assert_eq!(clock.elapsed_us(), 5_000_000);
+        assert_eq!(clock.period(), period);
+        clock.advance_idle(Duration::ZERO);
+        assert_eq!(clock.elapsed(), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn idle_wall_time_handles_duration_limits_without_wrapping() {
+        let period = Duration::new(u64::MAX / 2, 0);
+        let mut clock = FrameClock::new(Instant::now(), period);
+        clock.advance_idle(Duration::MAX);
+        assert_eq!(clock.elapsed(), period * 2);
+        clock.advance_idle(period);
+        assert_eq!(clock.elapsed(), Duration::MAX);
+    }
 
     #[test]
     fn every_frame_advances_by_exactly_one_period() {

@@ -14,8 +14,8 @@ Output SHA-256: 8f6a383c40cc2def7a592f0b5b31c72f48be452aa6214d258b5f3b9e793493af
 
 Regenerate from the repository root with the checked-in Rust toolchain:
 
-cargo run --locked --manifest-path apps/mister/Cargo.toml \
-  --example generate_magik_mask -- \
+scripts/cargo run --locked --manifest-path apps/mister/Cargo.toml \
+  --features asset-tools,ui --example generate_magik_mask -- \
   crates/particles/assets/magik-alpha-mask.bin
 
 The generated mask is derived from Press Start 2P and remains covered by the

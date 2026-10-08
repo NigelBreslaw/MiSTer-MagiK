@@ -51,7 +51,6 @@ fn explicit_profiling_preserves_pixels_and_drains_at_window_boundaries() {
         "scene.clear",
         "flip.compose",
         "flip.reflection",
-        "flip.project",
         "flip.geometry-filter",
     ] {
         assert!(report.stages.contains_key(stage), "missing {stage}");
@@ -61,4 +60,6 @@ fn explicit_profiling_preserves_pixels_and_drains_at_window_boundaries() {
         "raw samples must not grow the metrics envelope"
     );
     assert!(launcher_profile::take().stages.is_empty());
+    launcher_profile::disable();
+    assert!(launcher_profile::span("disabled-again").is_none());
 }

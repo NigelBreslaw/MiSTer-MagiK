@@ -497,7 +497,9 @@ fn migrate_v1_entries(old: HashMap<String, ControllerEntry>) -> HashMap<String, 
             Some(existing) => {
                 if entry.setup_complete && !existing.setup_complete {
                     *existing = entry;
-                } else if !entry.last_usb_port.is_empty() {
+                } else if entry.setup_complete == existing.setup_complete
+                    && !entry.last_usb_port.is_empty()
+                {
                     existing.last_usb_port = entry.last_usb_port.clone();
                 }
             }
@@ -608,6 +610,61 @@ mod tests {
             logical_id_from_v1_key("1-1.3:2563:0575:GH-SP-5027-1 A2"),
             Some("2563:0575:GH-SP-5027-1 A2".into())
         );
+    }
+
+    #[test]
+    fn v1_migration_keeps_completed_setup_and_its_confirmed_port() {
+        let info = sample_info("2563", "0575", "1-1.3", "SN");
+        // Exercise both merge orders regardless of HashMap's randomized order.
+        for completed_index in 0..2 {
+            let mut old = HashMap::from([
+                (
+                    "1-1.3:2563:0575:SN".into(),
+                    ControllerDb::default_entry(&info),
+                ),
+                (
+                    "1-1.7:2563:0575:SN".into(),
+                    ControllerDb::default_entry(&info),
+                ),
+            ]);
+            let keys: Vec<String> = old.keys().cloned().collect();
+            for (index, key) in keys.iter().enumerate() {
+                let entry = old.get_mut(key).unwrap();
+                entry.setup_complete = index == completed_index;
+                entry.label = if entry.setup_complete {
+                    "Confirmed"
+                } else {
+                    "Pending"
+                }
+                .into();
+                entry.last_usb_port = key.split(':').next().unwrap().into();
+            }
+            let confirmed = old[&keys[completed_index]].clone();
+            let migrated = migrate_v1_entries(old);
+            assert_eq!(migrated.len(), 1);
+            assert_eq!(migrated["2563:0575:SN"], confirmed);
+        }
+    }
+
+    #[test]
+    fn load_v1_file_migrates_identity_and_saves_current_version() {
+        let path = temp_path("v1-migration");
+        let info = sample_info("2563", "0575", "1-1.3", "SN:part");
+        let mut entry = ControllerDb::default_entry(&info);
+        entry.setup_complete = true;
+        entry.label = "Saved pad".into();
+        let file = ControllerFile {
+            version: 1,
+            controllers: HashMap::from([("1-1.3:2563:0575:SN:part".into(), entry.clone())]),
+        };
+        fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+        let loaded = ControllerDb::load_from(&path);
+        assert_eq!(loaded.get(&info), Some(&entry));
+        loaded.save().unwrap();
+        let saved: ControllerFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.version, DB_VERSION);
+        assert_eq!(ControllerDb::load_from(&path).get(&info), Some(&entry));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

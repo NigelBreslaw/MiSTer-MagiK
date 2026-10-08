@@ -685,9 +685,9 @@ impl PreviewScrollTrace {
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 impl PreviewScrollTraceRow {
     fn write_tsv(&self, out: &mut String) {
-        let _ = write!(
+        let _ = writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.frame,
             self.elapsed_us,
             self.loop_delta_us,
@@ -3042,6 +3042,34 @@ fn usize_to_u32_saturating(value: usize) -> u32 {
     value.min(u32::MAX as usize) as u32
 }
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+fn preview_scroll_trace_duration_from_env() -> Option<Duration> {
+    let secs = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_SECS")
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    (secs > 0).then(|| Duration::from_secs(secs))
+}
+
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
+    std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
+        .ok()
+        .and_then(|path| {
+            let file = std::fs::File::create(&path)
+                .map_err(|e| crate::ui_errln!("preview scroll trace: create {path} failed: {e}"))
+                .ok()?;
+            let mut file = BufWriter::with_capacity(64 * 1024, file);
+            file.write_all(
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_cards_adopted\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\tcrt_backdrop_prepare_us\tcrt_backdrop_prepare_pixels\tcrt_backdrop_blend_us\tcrt_backdrop_blend_pixels\n",
+            )
+            .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
+            .ok()?;
+            crate::ui_logln!("preview_scroll_trace={path}");
+            Some(PreviewScrollTrace::new(file))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3938,32 +3966,4 @@ mod tests {
         assert_eq!(status.slow_frames[0].warning_us, FRAME_CADENCE_WARNING_US);
         assert_eq!(status.slow_frames[0].over_budget_us, 0);
     }
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn preview_scroll_trace_duration_from_env() -> Option<Duration> {
-    let secs = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_SECS")
-        .ok()?
-        .parse::<u64>()
-        .ok()?;
-    (secs > 0).then(|| Duration::from_secs(secs))
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
-    std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
-        .ok()
-        .and_then(|path| {
-            let file = std::fs::File::create(&path)
-                .map_err(|e| crate::ui_errln!("preview scroll trace: create {path} failed: {e}"))
-                .ok()?;
-            let mut file = BufWriter::with_capacity(64 * 1024, file);
-            file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_cards_adopted\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\tcrt_backdrop_prepare_us\tcrt_backdrop_prepare_pixels\tcrt_backdrop_blend_us\tcrt_backdrop_blend_pixels\n",
-            )
-            .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
-            .ok()?;
-            crate::ui_logln!("preview_scroll_trace={path}");
-            Some(PreviewScrollTrace::new(file))
-        })
 }

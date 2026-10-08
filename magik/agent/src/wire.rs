@@ -110,3 +110,64 @@ mod desktop_fixture {
         assert!(body.is_empty());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn rejects_oversized_declarations_before_reading_or_allocating_the_payload() {
+        for (header, body, expected) in [
+            (MAX_HEADER_BYTES as u32 + 1, 0, FrameError::HeaderTooLarge),
+            (1, MAX_BODY_BYTES as u64 + 1, FrameError::BodyTooLarge),
+            (1, u64::MAX, FrameError::BodyTooLarge),
+        ] {
+            let mut bytes = header.to_be_bytes().to_vec();
+            bytes.extend_from_slice(&body.to_be_bytes());
+            let mut reader = Cursor::new(bytes);
+            assert_eq!(read_header(&mut reader), Err(expected));
+            assert_eq!(reader.position(), 12);
+        }
+    }
+
+    #[test]
+    fn nonempty_frames_round_trip_and_truncation_is_rejected_at_each_boundary() {
+        let envelope = Envelope {
+            id: "request".into(),
+            op: "artifact".into(),
+            token: "fixture".into(),
+            fields: serde_json::Map::from_iter([("extra".into(), serde_json::json!({"value":7}))]),
+        };
+        let body = b"\0binary\xffpayload";
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &envelope, body).unwrap();
+        let mut reader = Cursor::new(bytes.repeat(2));
+        for _ in 0..2 {
+            assert_eq!(
+                read_frame(&mut reader).unwrap(),
+                (envelope.clone(), body.to_vec())
+            );
+        }
+        assert_eq!(reader.position() as usize, bytes.len() * 2);
+        for length in [0, 11, 12, bytes.len() - body.len() - 1, bytes.len() - 1] {
+            assert!(matches!(
+                read_frame(&mut &bytes[..length]),
+                Err(FrameError::Io(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn malformed_or_incomplete_envelopes_are_rejected() {
+        for json in [b"{broken}".as_slice(), b"{}", b"[]"] {
+            let mut bytes = (json.len() as u32).to_be_bytes().to_vec();
+            bytes.extend_from_slice(&0_u64.to_be_bytes());
+            bytes.extend_from_slice(json);
+            assert!(matches!(
+                read_header(&mut bytes.as_slice()),
+                Err(FrameError::Json(_))
+            ));
+        }
+    }
+}

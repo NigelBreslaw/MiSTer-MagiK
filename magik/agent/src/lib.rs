@@ -461,12 +461,13 @@ impl Agent {
                 .fields
                 .get("sha256")
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
+                .unwrap_or("")
+                .to_ascii_lowercase();
             let staged = match upload::receive(
                 &mut wire::DeadlineReader { stream, deadline },
                 &self.install_root,
                 artifact,
-                hash,
+                &hash,
                 body_length,
                 &request.id,
             ) {
@@ -1820,7 +1821,8 @@ mod tests {
             id: "transfer".into(),
             op: "transfer-check".into(),
             token: "token".into(),
-            fields: serde_json::from_value(serde_json::json!({"sha256":hash})).unwrap(),
+            fields: serde_json::from_value(serde_json::json!({"sha256":hash.to_ascii_uppercase()}))
+                .unwrap(),
         };
         let mut client = TcpStream::connect(address).unwrap();
         client

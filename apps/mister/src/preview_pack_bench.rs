@@ -638,6 +638,8 @@ fn parse_pixels(
     Ok((width, height, decoded_bytes, checksum32(data)))
 }
 
+// Keep the measured decode phases explicit, matching successful rows.
+#[allow(clippy::too_many_arguments)]
 fn error_row(
     config: &Config,
     entry: &Entry,

@@ -1,12 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-pub use mister_magik_fb::framebuffer;
-
-#[path = "../src/bitmap_text.rs"]
-mod bitmap_text;
-
-use bitmap_text::{ConsoleFont, ConsoleTypeface};
+use mister_magik_fb::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use std::io::Write;
 use std::path::PathBuf;
 

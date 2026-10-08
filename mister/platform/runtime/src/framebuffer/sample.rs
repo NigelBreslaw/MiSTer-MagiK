@@ -200,10 +200,10 @@ impl<'a> Rgb565SampleView<'a> {
                 }
                 color_min = color_min.min(p);
                 color_max = color_max.max(p);
-                if let Some(prev) = prev {
-                    if color_distance(prev, p) > 96 {
-                        transitions += 1;
-                    }
+                if let Some(prev) = prev
+                    && color_distance(prev, p) > 96
+                {
+                    transitions += 1;
                 }
                 prev = Some(p);
                 hash = hash_sample(hash, p);
@@ -250,7 +250,7 @@ fn hash_sample(hash: u64, pixel_rgb888: u32) -> u64 {
 }
 
 fn pct(n: u32, d: u32) -> u32 {
-    if d == 0 { 0 } else { n.saturating_mul(100) / d }
+    n.saturating_mul(100).checked_div(d).unwrap_or(0)
 }
 
 fn color_distance(a: u32, b: u32) -> u32 {

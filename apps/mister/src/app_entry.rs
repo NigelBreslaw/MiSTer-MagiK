@@ -2349,10 +2349,7 @@ impl Fb0ByteRange {
             unsafe {
                 libc::munmap(mem, map_len);
             }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "fb0 range mmap returned null",
-            ));
+            return Err(std::io::Error::other("fb0 range mmap returned null"));
         }
         Ok(Self {
             mem: mem.cast::<u8>(),
@@ -2444,10 +2441,7 @@ impl ScanoutSlotsByteRange {
             unsafe {
                 libc::munmap(mem, len);
             }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "scanout-slot mmap returned null",
-            ));
+            return Err(std::io::Error::other("scanout-slot mmap returned null"));
         }
         Ok(Self {
             mem: mem.cast::<u8>(),

@@ -261,3 +261,114 @@ fn digest_hex(digest: Sha256) -> String {
     }
     output
 }
+
+#[cfg(all(test, feature = "builder"))]
+mod tests {
+    use super::*;
+    use crate::fast_five_catalog::{
+        FAST_FIVE_SNAPSHOT_SCHEMA, FAST_FIVE_SYSTEM_IDS, FastFiveSnapshot, FastFiveSystem,
+        publish_snapshot,
+    };
+    use crate::system_shard::SystemGame;
+
+    fn snapshot(populated: bool) -> FastFiveSnapshot {
+        FastFiveSnapshot {
+            schema: FAST_FIVE_SNAPSHOT_SCHEMA.into(),
+            source_fingerprint: "0".repeat(64),
+            systems: FAST_FIVE_SYSTEM_IDS
+                .into_iter()
+                .map(|id| FastFiveSystem {
+                    system_id: id.into(),
+                    display_title: id.into(),
+                    games: if populated {
+                        vec![SystemGame {
+                            stable_key: format!("{id}\u{1f}game"),
+                            title: "Test Game".into(),
+                            launch_ref: format!("/media/fat/games/{id}/Test.rom"),
+                            ..SystemGame::default()
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    variants: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn reports_real_empty_and_populated_catalogs_and_rejects_damaged_navpack() {
+        for populated in [false, true] {
+            let root = crate::test_support::unique_temp_dir("catalog-acceptance");
+            let limits = crate::shard_registry::production_registry_limits();
+            let published = publish_snapshot(&root, &snapshot(populated), limits).unwrap();
+            let games = if populated { 5 } else { 0 };
+            let registry = inspect_registry(&root).unwrap();
+            assert!(registry.ends_with(&format!(
+                "catalog_registry_summary_tsv\tvalid=1\tsystems=5\ttotal_games={games}\n"
+            )));
+            let systems: Vec<_> = registry
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("catalog_registry_system_tsv\tsystem=")
+                        .and_then(|line| line.split('\t').next())
+                })
+                .collect();
+            assert_eq!(systems, FAST_FIVE_SYSTEM_IDS);
+            crate::fast_catalog_refresh::publish_refresh_state(
+                &root,
+                1,
+                published.generation,
+                published.registry_fingerprint,
+                "test-builder".into(),
+                &[],
+            )
+            .unwrap();
+            let report = inspect_catalog(&root).unwrap();
+            assert_eq!(inspect_catalog(&root).unwrap(), report);
+            assert!(report.contains(&format!("\ttotal_games={games}\t")));
+            assert!(report.contains("catalog_v3_summary_tsv\tvalid=1\tschema=2"));
+            if populated {
+                assert_eq!(report.matches("catalog_v3_artifact_tsv").count(), 10);
+                let manifest = crate::shard_registry::read_latest_manifest(&root, limits).unwrap();
+                let navpack = manifest.systems[0].active.navpack.as_ref().unwrap();
+                let path = root.join(&navpack.path);
+                let mut bytes = std::fs::read(&path).unwrap();
+                bytes[0] ^= 0xff;
+                std::fs::write(path, bytes).unwrap();
+                assert!(inspect_catalog(&root).unwrap_err().contains("open system"));
+            } else {
+                assert!(!report.contains("catalog_v3_artifact_tsv"));
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_missing_catalog_and_refresh_bound_to_another_manifest() {
+        let root = crate::test_support::unique_temp_dir("catalog-acceptance-binding");
+        assert!(inspect_registry(&root).is_err());
+        assert!(inspect_catalog(&root).is_err());
+        let published = publish_snapshot(
+            &root,
+            &snapshot(false),
+            crate::shard_registry::production_registry_limits(),
+        )
+        .unwrap();
+        assert!(inspect_catalog(&root).is_err());
+        crate::fast_catalog_refresh::publish_refresh_state(
+            &root,
+            1,
+            published.generation,
+            "f".repeat(64),
+            "test-builder".into(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            inspect_catalog(&root).unwrap_err(),
+            "catalog source snapshot is not bound to the active manifest"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
