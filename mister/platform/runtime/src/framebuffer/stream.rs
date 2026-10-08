@@ -622,15 +622,15 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                 }
             }
             WorkerEvent::Timeout => {
-                if let Some(stream) = subscriber.as_mut() {
-                    if let Err(err) = write_heartbeat(stream) {
-                        crate::ui_errln!("framebuffer stream producer heartbeat failed: {err}");
-                        report_snapshot_metrics("heartbeat-failed");
-                        subscriber = None;
-                        SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
-                        NEEDS_KEYFRAME.store(true, Ordering::Release);
-                        clear_snapshot_requests();
-                    }
+                if let Some(stream) = subscriber.as_mut()
+                    && let Err(err) = write_heartbeat(stream)
+                {
+                    crate::ui_errln!("framebuffer stream producer heartbeat failed: {err}");
+                    report_snapshot_metrics("heartbeat-failed");
+                    subscriber = None;
+                    SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
+                    NEEDS_KEYFRAME.store(true, Ordering::Release);
+                    clear_snapshot_requests();
                 }
             }
             WorkerEvent::Disconnected => break,
@@ -823,11 +823,7 @@ fn report_snapshot_metrics(reason: &str) {
     refinement_late_samples.sort_unstable();
     let refinement_late_p95 = percentile_u64(&refinement_late_samples, 0.95);
     let refinement_late_max = refinement_late_samples.last().copied().unwrap_or(0);
-    let avg_raw = if frames == 0 {
-        0
-    } else {
-        metrics.raw_bytes / frames
-    };
+    let avg_raw = metrics.raw_bytes.checked_div(frames).unwrap_or(0);
     let coalesced = COALESCED_FRAMES
         .load(Ordering::Relaxed)
         .saturating_sub(metrics.coalesced_start);

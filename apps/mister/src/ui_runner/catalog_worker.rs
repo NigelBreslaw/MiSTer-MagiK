@@ -1214,7 +1214,8 @@ fn prepare_catalog_worker_protocol_output() -> Result<Box<dyn Write + Send>, Str
 
 #[cfg(unix)]
 fn duplicate_protocol_fd(fd: RawFd) -> Result<RawFd, String> {
-    let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    // Exec helpers may reopen standard I/O; keep the protocol outside those slots.
+    let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, libc::STDERR_FILENO + 1) };
     if duplicated < 0 {
         return Err(format!(
             "duplicate catalog worker protocol stream: {}",
@@ -3378,19 +3379,45 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn duplicated_protocol_fd_does_not_cross_exec() {
-        let source = std::fs::File::open("/dev/null").expect("open protocol source");
-        let duplicated =
-            duplicate_protocol_fd(source.as_raw_fd()).expect("duplicate protocol source");
+        let (mut reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let duplicated = duplicate_protocol_fd(writer.as_raw_fd()).unwrap();
         let fd = duplicated.to_string();
-        let status = Command::new("sh")
+        Command::new("sh")
             .arg("-c")
             .arg("eval 'printf x >&$1'")
             .arg("catalog-fd-check")
             .arg(&fd)
             .status()
             .expect("exec fd-check helper");
+        // A shell may reuse the descriptor number. Check the original socket,
+        // rather than treating a successful write to some other fd as a leak.
         unsafe { libc::close(duplicated) };
-        assert!(!status.success());
+        drop(writer);
+        let mut received = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut received).unwrap();
+        assert!(received.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicated_protocol_fd_keeps_standard_descriptors_reserved() {
+        const CHILD: &str = "MISTER_TEST_PROTOCOL_FD_RESERVED";
+        if std::env::var_os(CHILD).is_some() {
+            // Only this isolated exec helper closes its own unused stdin.
+            unsafe { libc::close(libc::STDIN_FILENO) };
+            let duplicated = duplicate_protocol_fd(libc::STDOUT_FILENO).unwrap();
+            assert!(duplicated > libc::STDERR_FILENO);
+            unsafe { libc::close(duplicated) };
+            return;
+        }
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "ui_runner::catalog_worker::tests::duplicated_protocol_fd_keeps_standard_descriptors_reserved", "--nocapture"])
+            .env(CHILD, "1")
+            .status().unwrap();
+        assert!(status.success());
     }
 
     #[test]

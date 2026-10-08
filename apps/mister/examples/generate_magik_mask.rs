@@ -3,6 +3,8 @@
 
 pub use mister_magik_fb::framebuffer;
 
+// This generator uses only the alpha-mask portion of the shared text renderer.
+#[allow(dead_code)]
 #[path = "../src/bitmap_text.rs"]
 mod bitmap_text;
 

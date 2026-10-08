@@ -247,7 +247,11 @@ mod tests {
         );
         assert_eq!(
             configured_path(None, "user-state.sqlite3"),
-            PathBuf::from(DEFAULT_USER_STATE_PATH)
+            PathBuf::from(if cfg!(feature = "development-layout") {
+                "/media/fat/mister-magik-dev/user-state.sqlite3"
+            } else {
+                DEFAULT_USER_STATE_PATH
+            })
         );
     }
 

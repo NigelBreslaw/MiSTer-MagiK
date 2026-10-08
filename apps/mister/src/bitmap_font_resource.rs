@@ -29,54 +29,135 @@ static BACTERIA_12_RESOURCE: &[u8] =
 static BACTERIA_12_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-16px.mmbf");
 static JERSEY_15_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey15-27px.mmbf");
+// Only standalone font generation may omit its generated inputs. UI and tests need real fonts.
 static JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static JERSEY_25_HUB_48_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-48px.mmbf");
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static JERSEY_25_HUB_64_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-64px.mmbf");
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static JERSEY_25_HUB_COUNT_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-52px.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static JERSEY_25_HUB_COUNT_RESOURCE: &[u8] = &[];
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static JERSEY_25_HUB_48_RESOURCE: &[u8] = &[];
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static JERSEY_25_HUB_64_RESOURCE: &[u8] = &[];
 
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-1x.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] = &[];
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static TERMINUS_8X14_NORMAL_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-2x.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static TERMINUS_8X14_NORMAL_RESOURCE: &[u8] = &[];
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static TERMINUS_8X14_BOLD_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-bold-2x.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static TERMINUS_8X14_BOLD_RESOURCE: &[u8] = &[];
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static SPLEEN_5X8_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-5x8-1x.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static SPLEEN_5X8_NATIVE_RESOURCE: &[u8] = &[];
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-5x8-2x.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] = &[];
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static SPLEEN_6X12_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-6x12-1x.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static SPLEEN_6X12_NATIVE_RESOURCE: &[u8] = &[];
-#[cfg(not(feature = "asset-tools"))]
+#[cfg(any(
+    not(feature = "asset-tools"),
+    test,
+    feature = "ui",
+    feature = "ui-preview"
+))]
 static SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-6x12-2x.mmbf");
-#[cfg(feature = "asset-tools")]
+#[cfg(all(
+    feature = "asset-tools",
+    not(any(test, feature = "ui", feature = "ui-preview"))
+))]
 static SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] = &[];
 
 #[derive(Clone, Debug, PartialEq)]

@@ -92,7 +92,7 @@ impl Document {
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
         let mut current = String::new();
         let mut first = None;
-        let mut saw_section = false;
+        let mut saw_section = section.is_empty();
         let mut insert_at = None;
 
         for (index, line) in self.lines.iter().enumerate() {
@@ -265,6 +265,27 @@ fn section_range(lines: &[String], section: &str) -> Option<std::ops::Range<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_global_keys_are_inserted_before_named_sections_without_an_empty_header() {
+        for (input, expected) in [
+            ("", "global=2"),
+            ("user=keep\n", "user=keep\nglobal=2\n"),
+            (
+                "; note\n[Menu]\nglobal=9\n",
+                "; note\nglobal=2\n[Menu]\nglobal=9\n",
+            ),
+        ] {
+            let mut document = Document::parse(input.as_bytes()).unwrap();
+            document.set("", "global", "2");
+            assert_eq!(document.render(), expected.as_bytes());
+            assert_eq!(document.effective_value("", "global").as_deref(), Some("2"));
+            assert_eq!(document.active_count("", "global"), 1);
+            let stable = document.render();
+            document.set("", "global", "2");
+            assert_eq!(document.render(), stable);
+        }
+    }
 
     #[test]
     fn effective_value_uses_last_active_assignment_across_repeated_sections() {

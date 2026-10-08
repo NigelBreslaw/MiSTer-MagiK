@@ -3251,7 +3251,7 @@ dependencies = [
  "mister-magik-screenshot-parade",
  "mister-magik-tooling-support",
  "mister-magik-ui",
- "pprof 0.15.0 (git+https://github.com/NigelBreslaw/pprof-rs?branch=armv7-itimer-abi)",
+ "pprof",
  "quick-xml 0.42.0",
  "serde",
  "serde_json",
@@ -3355,7 +3355,7 @@ name = "mister-magik-tooling-support"
 version = "0.1.0"
 dependencies = [
  "mister-magik-framebuffer-stream",
- "pprof 0.15.0 (git+https://github.com/NigelBreslaw/pprof-rs?rev=431b88c4fc67bef98126eaa8932287583d1a660e)",
+ "pprof",
  "serde_json",
  "slint",
 ]
@@ -4202,27 +4202,6 @@ dependencies = [
  "serde_core",
  "writeable",
  "zerovec",
-]
-
-[[package]]
-name = "pprof"
-version = "0.15.0"
-source = "git+https://github.com/NigelBreslaw/pprof-rs?branch=armv7-itimer-abi#431b88c4fc67bef98126eaa8932287583d1a660e"
-dependencies = [
- "aligned-vec",
- "backtrace",
- "cfg-if",
- "findshlibs",
- "inferno",
- "libc",
- "log",
- "nix 0.26.4",
- "once_cell",
- "smallvec",
- "spin 0.10.1",
- "symbolic-demangle",
- "tempfile",
- "thiserror 2.0.20",
 ]
 
 [[package]]
