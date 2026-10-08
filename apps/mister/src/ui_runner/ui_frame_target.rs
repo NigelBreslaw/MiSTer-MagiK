@@ -441,6 +441,7 @@ pub(super) fn arcade_list_needs_forced_redraw(
         || slint_dirty.is_some_and(|rect| rect.intersection(renderer.dirty_rect()).is_some())
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
     FrameRect {
         x0: rect.x0 as u32,
@@ -473,10 +474,6 @@ pub(super) const fn slint_rendering_rotation(orientation: ScreenOrientation) -> 
 mod tests {
     use super::*;
     use crate::ui_display::{UI_FB_H, UI_FB_W};
-
-    fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {
-        DirtyRect { x0, y0, x1, y1 }
-    }
 
     #[test]
     fn monitor_orientation_maps_to_the_inverse_slint_buffer_rotation() {

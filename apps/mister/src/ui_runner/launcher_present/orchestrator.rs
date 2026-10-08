@@ -15,10 +15,12 @@ enum LauncherPresenterState<L> {
     Frozen { failure: LatchFailure },
 }
 
+#[cfg(test)]
 fn presenter_state_uses_latch<L>(state: &LauncherPresenterState<L>) -> bool {
     matches!(state, LauncherPresenterState::Latch(_))
 }
 
+#[cfg(test)]
 fn direct_hidden_framebuffer_geometry_available(ui: &UiDisplay) -> bool {
     ui.render_w() == ui.fb_w() && ui.render_h() == ui.fb_h() && !ui.output_route().is_crt()
 }
@@ -631,19 +633,6 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             && startup_intro_native_hidden_geometry_available(ui)
     }
 
-    pub(in crate::ui_runner) fn try_issue_hidden_slot_render_grant(
-        &mut self,
-        hardware: &mut Fpga,
-        display: &mut LauncherDisplaySession,
-    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
-        match &mut self.state {
-            LauncherPresenterState::Latch(latch) => {
-                latch.try_issue_hidden_slot_render_grant(hardware, display)
-            }
-            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
-        }
-    }
-
     pub(in crate::ui_runner) fn try_render_direct_hidden_frame<R>(
         &mut self,
         hardware: &mut Fpga,
@@ -739,6 +728,7 @@ impl<L> LauncherPresenter<L> {
         matches!(self.state, LauncherPresenterState::Frozen { .. })
     }
 
+    #[cfg(test)]
     pub(in crate::ui_runner) fn failure_transitions(&self) -> u64 {
         self.recovery.failure_transitions
     }

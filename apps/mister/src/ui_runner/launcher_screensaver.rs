@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Shared with the preview binary through the `production_launcher_screensaver` re-export.
-#![allow(dead_code)]
+// `LauncherScreensaver` itself is the preview's: the device renders its screensaver through
+// `launcher_screensaver_pipeline`, so that type is compiled only with `ui-preview`.
 
 #[cfg(not(target_os = "macos"))]
 use super::*;
@@ -13,9 +14,10 @@ use mister_magik_framebuffer_scenes::{
     Rgb565OutputLayout, Rgb565Pixel as SharedRgb565Pixel, SceneGeometry,
 };
 use mister_magik_screenshot_parade::{
-    LiveScreenshotConfig, LiveScreenshotParade, ScreenshotBuffer, ScreenshotParade,
-    ScreenshotParadeConfig, ScreenshotParadeStats,
+    LiveScreenshotConfig, LiveScreenshotParade, ScreenshotBuffer, ScreenshotParadeStats,
 };
+#[cfg(feature = "ui-preview")]
+use mister_magik_screenshot_parade::{ScreenshotParade, ScreenshotParadeConfig};
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::Rgb565Pixel;
 #[cfg(test)]
@@ -27,6 +29,7 @@ use std::sync::mpsc::{self, Receiver};
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "ui-preview")]
 pub struct LauncherScreensaver {
     parade: Option<ScreenshotParade>,
     startup_started_at: Option<Instant>,
@@ -38,12 +41,24 @@ pub struct ScreensaverRenderTrace {
     pub(super) renderer: &'static str,
     pub(super) archive_poll_us: u128,
     pub(super) card_adopt_us: u128,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) cards_adopted: usize,
     pub(super) parade_advance_us: u128,
     pub(super) background_us: u128,
     pub(super) draw_order_us: u128,
     pub(super) tile_blit_us: u128,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) cards_drawn: usize,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) cards_culled: usize,
     pub(super) raster_held_cards: usize,
     pub(super) raster_moved_cards: usize,
@@ -71,6 +86,7 @@ pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverRe
     }
 }
 
+#[cfg(feature = "ui-preview")]
 fn log_shared_parade_stats(parade: &ScreenshotParade) {
     let stats = parade.stats();
     let scale_average_us = stats.scale_total_us / u128::from(stats.scale_count.max(1));
@@ -100,6 +116,7 @@ fn log_shared_parade_stats(parade: &ScreenshotParade) {
     );
 }
 
+#[cfg(feature = "ui-preview")]
 fn slint_rgb565_as_shared_mut(destination: &mut [Rgb565Pixel]) -> &mut [SharedRgb565Pixel] {
     // SAFETY: both RGB565 pixel types are transparent `u16` wrappers with equal
     // size/alignment, and the mutable slice retains the input slice's lifetime.
@@ -164,6 +181,7 @@ impl ScreenshotBuffer for LauncherScreenshotBuffer {
 
 pub(crate) type LauncherScreenshotRuntime = LiveScreenshotParade<LauncherScreenshotBuffer>;
 
+#[cfg(feature = "ui-preview")]
 impl LauncherScreensaver {
     pub fn render_at(
         &mut self,
@@ -208,31 +226,24 @@ impl LauncherScreensaver {
         trace
     }
 
-    pub fn is_loading_archive(&self) -> bool {
-        false
-    }
-
+    // Used by the macOS preview binary through `production_launcher_screensaver`,
+    // which only exists on macOS; on other hosts nothing reaches them.
+    #[cfg(target_os = "macos")]
     pub fn active_card_count(&self) -> usize {
         self.parade
             .as_ref()
             .map_or(0, ScreenshotParade::active_card_count)
     }
 
+    #[cfg(target_os = "macos")]
     pub fn has_pending_card_work(&self) -> bool {
         self.parade
             .as_ref()
             .is_some_and(ScreenshotParade::has_pending_work)
     }
-
-    pub fn preparation_slack(
-        &self,
-    ) -> Option<Arc<mister_magik_screenshot_parade::PreparationSlack>> {
-        self.parade
-            .as_ref()
-            .and_then(ScreenshotParade::preparation_slack)
-    }
 }
 
+#[cfg(feature = "ui-preview")]
 impl LauncherScreensaver {
     pub fn from_archive_path(
         path: &std::path::Path,
@@ -483,6 +494,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "ui-preview")]
     #[test]
     fn public_archive_constructor_runs_the_production_parade() {
         let path = std::env::temp_dir().join(format!(
@@ -499,6 +511,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    #[cfg(feature = "ui-preview")]
     fn write_single_image_archive(path: &std::path::Path) {
         let name = b"fixture.rgb565";
         let width = 2_u32;

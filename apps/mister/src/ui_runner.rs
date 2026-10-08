@@ -31,9 +31,8 @@ use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::crt_arcade_overlay::CrtArcadeOverlayState;
 use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
-use crate::frame_profile::FrameRect;
 #[cfg(not(mister_ui_scope_launcher))]
-use crate::frame_profile::{FrameProfiler, FrameSample, VideoFrameProfile};
+use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::preview_state::{
@@ -111,24 +110,16 @@ fn launcher_startup_orientation(
 }
 
 mod arcade_drawer;
-// These leaf modules retain alternate benchmark, recovery, and diagnostic
-// routes that are deliberately compiled into the full device graph. Keep the
-// lint exception at the ownership leaf instead of the application root.
-#[allow(dead_code)]
 mod catalog_worker;
 pub(crate) use catalog_worker::run_catalog_worker_child;
 #[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
-#[allow(dead_code)]
 mod crt_backdrop_controller;
 mod crt_trial_loop;
 pub(crate) mod latch_v5_qualification;
-#[allow(dead_code)]
 mod launch_handoff_session;
 mod launcher_automation;
-#[allow(dead_code)]
 pub(crate) mod launcher_bench;
-#[allow(dead_code)]
 mod launcher_bridge;
 mod launcher_card_home;
 #[cfg(feature = "ui-preview")]
@@ -202,30 +193,23 @@ impl NativeCardPreview {
 }
 
 mod launcher_catalog_publication_test;
-#[allow(dead_code)]
 mod launcher_catalog_session;
-#[allow(dead_code)]
 mod launcher_compositor;
 mod launcher_confirmation;
 #[doc(hidden)]
-#[allow(dead_code)]
 pub mod launcher_display_session;
 mod launcher_execution_trace;
-#[allow(dead_code)]
 mod launcher_frame_accounting;
 #[cfg(test)]
 mod launcher_frame_pipeline;
 pub(crate) mod launcher_gui_profile;
 mod launcher_input_latency_lab;
-#[allow(dead_code)]
 mod launcher_loop;
 mod launcher_pacing;
 mod launcher_present;
 mod launcher_readiness;
-#[allow(dead_code)]
 mod launcher_scheduler;
 pub(crate) mod launcher_screensaver;
-#[allow(dead_code)]
 mod launcher_screensaver_pipeline;
 mod launcher_settings_pipeline;
 mod launcher_startup_intro;
@@ -234,18 +218,14 @@ mod launcher_transition_start;
 pub use launcher_transition_start::{
     TransitionInputs, TransitionSource, start_navigation_transition,
 };
-#[allow(dead_code)]
 mod launcher_worker_intents;
 mod preview_compositor;
-#[allow(dead_code)]
 mod raw565_preview_renderer;
-#[allow(dead_code)]
 mod screenshot_media_update_session;
 #[cfg(not(mister_ui_scope_launcher))]
 mod tear_pattern_loop;
 #[doc(hidden)]
 pub mod ui_boot;
-#[allow(dead_code)]
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 mod update_checker;

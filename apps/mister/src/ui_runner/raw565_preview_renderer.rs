@@ -133,14 +133,6 @@ fn raw_preview_scaled_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Optio
     (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
 }
 
-#[cfg(mister_bench_scenes)]
-pub(super) fn hash2_u8(x: usize, y: usize) -> u8 {
-    let mut v = (x as u32).wrapping_mul(0x45d9f3b) ^ (y as u32).wrapping_mul(0x119de1f3);
-    v ^= v >> 16;
-    v = v.wrapping_mul(0x45d9f3b);
-    (v >> 24) as u8
-}
-
 struct Raw565View<'a> {
     pixels: &'a [Rgb565Pixel],
     stride_pixels: usize,
@@ -232,14 +224,6 @@ impl FadeWorkStats {
             path,
             pixels: rect.width().saturating_mul(rect.rows() as usize),
             rows: rect.rows() as usize,
-        }
-    }
-
-    fn empty(path: PreviewFadePath) -> Self {
-        Self {
-            path,
-            pixels: 0,
-            rows: 0,
         }
     }
 }
@@ -357,20 +341,6 @@ fn preview_fade_fast_path_enabled() -> bool {
 
 fn preview_fade_fast_path_enabled_value(value: Option<&str>) -> bool {
     !matches!(value, Some("0" | "off" | "false" | "no" | "legacy"))
-}
-
-#[cfg(mister_bench_scenes)]
-pub(super) fn triangle_wave_u8(x: usize, phase: u8) -> u8 {
-    let v = ((x as u32).wrapping_mul(13).wrapping_add(phase as u32)) & 0xff;
-    let v = if v < 128 { v } else { 255 - v };
-    (v * 2).min(255) as u8
-}
-
-#[cfg(mister_bench_scenes)]
-pub(super) fn plasma_gate(x: usize, y: usize, phase: u8) -> u8 {
-    let a = triangle_wave_u8(x / 3 + y / 7, phase);
-    let b = triangle_wave_u8(x / 9 + y / 2, phase.wrapping_mul(3));
-    ((a as u16 + b as u16) / 2) as u8
 }
 
 fn blit_preview_frame_565_cut(

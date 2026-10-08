@@ -179,18 +179,42 @@ fn benchmark_flag(value: &str) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LauncherBenchScenario {
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     Idle,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     PreviewIdle,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     HomeNav,
     HomeRepeatHold,
     QuickTap,
     RapidTaps,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     HeldScroll,
     HumanTurboHold,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     TurboHold,
     PreviewStepHold,
     ModelSync,
     LaunchHandoff,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     ScreensaverShow,
 }
 

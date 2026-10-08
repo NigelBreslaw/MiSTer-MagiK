@@ -91,6 +91,7 @@ fn oriented_preview_cache_token(
 }
 
 impl<'a> LayerTarget<'a> {
+    #[cfg(test)]
     pub(super) fn new(target: &'a mut UiFrameTarget, ui: &'a UiDisplay) -> Self {
         Self {
             target,
@@ -339,6 +340,7 @@ impl<'a> LayerTarget<'a> {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn render_black(&mut self) -> DirtyRect {
         self.target.cached_565_mut().fill(Rgb565Pixel(0));
         DirtyRect {
@@ -374,10 +376,6 @@ impl<'a> LayerTarget<'a> {
             cached[row + rect.x0..row + rect.x1].fill(Rgb565Pixel(0));
         }
         rect
-    }
-
-    pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
-        restore_cached_565(self.target, snapshot)
     }
 
     pub(super) fn restore_presentation_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {

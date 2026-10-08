@@ -17,6 +17,8 @@ pub(crate) struct RenderedScreensaverFrame {
     pub(crate) trace: ScreensaverRenderTrace,
 }
 
+// A frame is the common result; boxing it would add an allocation per frame.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum RenderAheadPoll {
     Frame(RenderedScreensaverFrame),
     Empty,
@@ -24,7 +26,6 @@ pub(crate) enum RenderAheadPoll {
     SequenceFailure {
         expected_tick: u64,
         actual_tick: u64,
-        frame: RenderedScreensaverFrame,
     },
 }
 
@@ -67,14 +68,6 @@ impl ScreensaverRenderAhead {
             LiveScreenshotPoll::SequenceFailure(failure) => RenderAheadPoll::SequenceFailure {
                 expected_tick: failure.expected_tick,
                 actual_tick: failure.actual_tick,
-                frame: RenderedScreensaverFrame {
-                    pixels: Vec::new(),
-                    sequence: failure.actual_tick,
-                    completed_at: Instant::now(),
-                    render_wall_us: 0,
-                    active_cards: 0,
-                    trace: ScreensaverRenderTrace::default(),
-                },
             },
         }
     }

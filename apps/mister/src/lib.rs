@@ -198,14 +198,9 @@ pub mod ui_display;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod ui_preview_fixtures;
 #[cfg(feature = "ui")]
-#[cfg_attr(
-    any(
-        test,
-        mister_ui_scope_launcher,
-        not(all(target_os = "linux", target_arch = "arm"))
-    ),
-    allow(dead_code)
-)]
+// The production scope is checked for dead code; the developer-only `all` scope
+// compiles extra modules that only some tools use.
+#[cfg_attr(not(mister_ui_scope_launcher), allow(dead_code))]
 #[doc(hidden)]
 pub mod ui_runner;
 #[cfg(any(feature = "ui", feature = "ui-preview", test))]

@@ -115,6 +115,10 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) visual_index: f32,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub(super) home_trace: LauncherHomeFrameTrace,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) search_index_state: &'static str,
     pub(super) startup_start: Instant,
     pub(super) startup_monotonic_us: u64,
@@ -150,6 +154,7 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
     pub(super) main_present_hidden_publish_us: u128,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub(super) main_present_hidden_copied_bytes: usize,
     pub(super) main_present_hidden_invalid_bytes: usize,
     pub(super) main_present_hidden_rect_count: u32,
@@ -179,10 +184,22 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) vsync_accepted_hit_age_us: u64,
     pub(super) frame_start_phase_us: u64,
     pub(super) present_phase_us: u128,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) home_pan_present_active: bool,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) home_horizontal_input_held: bool,
     pub(super) redraw_pending: bool,
     pub(super) wake_reasons_bits: u64,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) arcade_update_label: ArcadeUpdateTrace,
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
@@ -192,7 +209,6 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) frame_production_trace: FrameProductionTrace,
     pub(super) screensaver_render_trace: ScreensaverRenderTrace,
     pub(super) status_write_due: bool,
-    pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
     pub(super) clock_update_due: bool,
     pub(super) clock_update_us: u128,
@@ -303,7 +319,6 @@ pub(super) struct LauncherFrameRenderData {
 
 pub(super) struct LauncherFrameStatusData {
     pub(super) status_write_due: bool,
-    pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
     pub(super) clock_update_due: bool,
     pub(super) clock_update_us: u128,
@@ -322,6 +337,10 @@ pub(super) struct LauncherFrameCpuTrace {
 
 pub(super) struct LauncherFrameFinishTraceTiming {
     pub(super) runtime_status_write_us: u128,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     runtime_status_write_deferred: bool,
     pub(super) frame_finish_us: u128,
 }
@@ -415,7 +434,6 @@ impl LauncherFrameSnapshotBuilder {
             frame_production_trace: self.render.frame_production_trace,
             screensaver_render_trace: self.render.screensaver_render_trace,
             status_write_due: self.status.status_write_due,
-            status_string_copy_us: self.status.status_string_copy_us,
             status_string_copy_bytes: self.status.status_string_copy_bytes,
             clock_update_due: self.status.clock_update_due,
             clock_update_us: self.status.clock_update_us,
@@ -982,6 +1000,10 @@ pub(super) struct LauncherCustomDrawTrace {
         crate::arcade_list_renderer::PersistentArcadeCompositionTrace,
     pub(super) portrait_arcade_list_pixels: u64,
     pub(super) portrait_arcade_list_bytes: u64,
+    #[cfg_attr(
+        not(any(feature = "bench-tools", feature = "diagnostics")),
+        allow(dead_code)
+    )]
     pub(super) preview_blit_us: u128,
     pub(super) portrait_preview_rotation_pixels: u64,
     pub(super) portrait_preview_blend_pixels: u64,
@@ -2352,6 +2374,7 @@ impl LauncherFrameAccounting {
             });
     }
 
+    #[cfg(test)]
     fn current_frame_budget_status(&self) -> runtime_status::FrameBudgetStatus {
         self.frame_budget_status_with_samples(
             self.frame_analytics_samples.clone(),
@@ -3457,7 +3480,6 @@ mod tests {
             frame_production_trace: FrameProductionTrace::default(),
             screensaver_render_trace: ScreensaverRenderTrace::default(),
             status_write_due: false,
-            status_string_copy_us: 10,
             status_string_copy_bytes: 128,
             clock_update_due: false,
             clock_update_us: 0,
@@ -3567,7 +3589,6 @@ mod tests {
             },
             status: LauncherFrameStatusData {
                 status_write_due: frame.status_write_due,
-                status_string_copy_us: frame.status_string_copy_us,
                 status_string_copy_bytes: frame.status_string_copy_bytes,
                 clock_update_due: frame.clock_update_due,
                 clock_update_us: frame.clock_update_us,

@@ -3753,6 +3753,7 @@ impl LauncherInputScriptDriver {
     }
 }
 
+#[cfg(test)]
 fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
     let mut state = PadState::default();
     set(&mut state);
@@ -4764,6 +4765,7 @@ impl ScreensaverControl {
         self.timeline.begin(now);
     }
 
+    #[cfg(test)]
     fn is_preview(&self) -> bool {
         self.preview_active
     }
@@ -10492,7 +10494,6 @@ pub(super) fn run_launcher_loop(
                 RenderAheadPoll::SequenceFailure {
                     expected_tick,
                     actual_tick,
-                    frame: _,
                 } => {
                     crate::ui_errln!(
                         "screensaver: strict render-ahead sequence failure expected_tick={} actual_tick={}",
@@ -12380,7 +12381,6 @@ pub(super) fn run_launcher_loop(
             presentation,
             status: LauncherFrameStatusData {
                 status_write_due,
-                status_string_copy_us,
                 status_string_copy_bytes,
                 clock_update_due,
                 clock_update_us,
@@ -14429,7 +14429,6 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
-                load_us: _,
                 source,
                 durable,
                 generation_fingerprint,
@@ -17448,17 +17447,6 @@ mod tests {
         );
     }
 
-    fn unique_temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "mister-magik-{label}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
-
     fn catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {
         let mut games = Vec::new();
         let mut systems = Vec::new();
@@ -18000,12 +17988,12 @@ mod tests {
         );
         retain_startup_intro_catalog_ui_intent(
             &mut replay,
-            LauncherWorkerUiIntent::HideCatalogBackgroundScan,
+            LauncherWorkerUiIntent::ClearCatalogScan,
         );
 
         assert!(matches!(
             replay,
-            Some(LauncherWorkerUiIntent::HideCatalogBackgroundScan)
+            Some(LauncherWorkerUiIntent::ClearCatalogScan)
         ));
     }
 

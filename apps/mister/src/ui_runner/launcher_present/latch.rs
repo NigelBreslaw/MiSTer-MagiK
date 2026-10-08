@@ -14,10 +14,11 @@
 use super::super::*;
 use crate::ui_runner::launcher_readiness::SourceFrameEvidence;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
+#[cfg(test)]
+use mister_magik_fb::framebuffer::full_frame_latch::LatchCompletion;
 use mister_magik_fb::framebuffer::full_frame_latch::{
-    LatchCompletion, LatchCopyResult, LatchPostRequest, LogicalStatusReadBudget,
-    latch_status_read_failure, post_confirm_prepared_frame, read_status_sample,
-    rejected_wire_diagnostics,
+    LatchCopyResult, LatchPostRequest, LogicalStatusReadBudget, latch_status_read_failure,
+    post_confirm_prepared_frame, read_status_sample, rejected_wire_diagnostics,
 };
 #[cfg(test)]
 use mister_magik_fb::framebuffer::full_frame_latch::{
@@ -29,6 +30,7 @@ use mister_magik_fb::latch_readiness::{
     LatchFailure, LatchFailureReason, LatchFailureStage, LatchWireDecision,
 };
 use mister_magik_framebuffer_scenes::retained_tiles::{RetainedTileSlots, TileImageIdentity};
+#[cfg(test)]
 use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -51,7 +53,9 @@ pub(crate) struct CompletedHiddenFrame {
 
 pub(crate) struct DirectHiddenFrameCopy {
     pub(crate) completed: CompletedHiddenFrame,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub(crate) copy: LatchCopyResult,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub(crate) copy_us: u64,
 }
 
@@ -566,6 +570,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.width == self.render_width && self.height == self.render_height
     }
 
+    #[cfg(test)]
     pub(in crate::ui_runner) fn try_issue_hidden_slot_render_grant<H: LatchHardware>(
         &mut self,
         hardware: &mut H,
@@ -1308,6 +1313,7 @@ impl From<crate::fpga::LatchedFbufStatus> for LatchSafetyProjection {
     }
 }
 
+#[cfg(test)]
 fn wait_for_latch_completion_with(
     mut read_status: impl FnMut() -> io::Result<crate::fpga::LatchedFbufStatus>,
     posted_sequence: u16,
@@ -1360,7 +1366,7 @@ fn wait_for_latch_completion_with(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 fn thread_cpu_us() -> Option<u64> {
     let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) };
@@ -1376,11 +1382,12 @@ fn thread_cpu_us() -> Option<u64> {
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(test, not(target_os = "linux")))]
 fn thread_cpu_us() -> Option<u64> {
     None
 }
 
+#[cfg(test)]
 fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
     start
         .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))

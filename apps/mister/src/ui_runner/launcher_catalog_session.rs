@@ -34,7 +34,6 @@ pub(super) enum CatalogSessionEffect {
     StartupEvent(CatalogSessionEvent),
     UseCatalog {
         catalog: ArcadeCatalog,
-        load_us: u64,
         source: CatalogSource,
         durable: bool,
         generation_fingerprint: Option<String>,
@@ -610,7 +609,6 @@ impl LauncherCatalogSession {
             );
             effects.push(CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
-                load_us,
                 source,
                 durable: !durable_save_pending,
                 generation_fingerprint,
@@ -824,7 +822,6 @@ mod tests {
                         LauncherWorkerUiIntent::CatalogScan(_) => "catalog-scan",
                         LauncherWorkerUiIntent::ClearCatalogScan => "clear-catalog-scan",
                         LauncherWorkerUiIntent::ShowCatalogBackgroundScan => "show-background-scan",
-                        LauncherWorkerUiIntent::HideCatalogBackgroundScan => "hide-background-scan",
                         LauncherWorkerUiIntent::InfoDatabaseBuild(_) => "info-database-build",
                         LauncherWorkerUiIntent::MediaProgress { .. } => "media-progress",
                         LauncherWorkerUiIntent::None => "none",
