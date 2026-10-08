@@ -43,6 +43,7 @@ use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
 use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
@@ -11464,241 +11465,84 @@ pub(super) fn run_launcher_loop(
             Default::default()
         };
         if latch_trace_flush_deferred {
-            let finish_timing = frame_accounting.finish_frame_before_trace(
-                &presented_frame,
-                &nav,
-                &pad,
-                &catalog,
-                catalog_ready,
-                catalog_session.refresh_done(),
-                launching,
-                scheduler.visible_loading_title(&loading_title),
-                catalog_scan_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_title.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_detail.as_str())
-                    .unwrap_or(""),
-                catalog_scan_percent,
+            let ControlFlow::Continue(LatchWaitOutcome {
+                finish_timing,
+                #[cfg(feature = "tooling")]
+                wait_start,
+                pace,
+                wait_done,
+                readiness_post,
+                ..
+            }) = post_accounting_and_latch_wait(LatchWait {
+                card_direct_frame_rendered,
+                #[cfg(feature = "tooling")]
+                card_work_timing,
+                catalog: &catalog,
                 catalog_background_scan_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_message.as_str())
-                    .unwrap_or(""),
-                confirm_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_title.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_message.as_str())
-                    .unwrap_or(""),
+                catalog_ready,
+                catalog_scan_percent,
+                catalog_scan_visible,
+                catalog_session: &catalog_session,
+                composition_decision: &composition_decision,
                 confirm_selected,
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_left_label.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_right_label.as_str())
-                    .unwrap_or(""),
+                confirm_visible,
+                confirmed_presentation: &mut confirmed_presentation,
+                #[cfg(feature = "tooling")]
+                custom_draw_done,
+                #[cfg(feature = "tooling")]
+                custom_draw_start,
+                director: &mut director,
+                display_session: &mut *display_session,
+                f: &mut *f,
+                frame_accounting: &mut frame_accounting,
+                frame_analytics_mode,
+                frame_clock,
+                #[cfg(feature = "tooling")]
+                frame_t1,
+                #[cfg(feature = "tooling")]
+                frame_t2,
+                #[cfg(feature = "tooling")]
+                frame_t3,
+                #[cfg(feature = "tooling")]
+                frame_t4,
+                gui_profiling: &gui_profiling,
+                input_observation,
+                launch_return_session: &launch_return_session,
                 launcher_bench_scenario,
-                start_screen,
+                launcher_card_home: &mut launcher_card_home,
+                launcher_presenter: &mut launcher_presenter,
+                launcher_response_frame_stamp: &launcher_response_frame_stamp,
+                launcher_response_trace: &mut launcher_response_trace,
+                launching,
+                lifecycle: &lifecycle,
+                loading_title: &loading_title,
                 lock_screen,
-                display_session.reassert_count(),
-                display_session.last_reassert_frame(),
-                display_session.last_reassert_ok(),
-                display_session.last_reassert_error(),
-                lifecycle.startup_status(),
-                &launch_return_session,
-            );
-            record_launcher_frame_phase!(LauncherFramePhase::PostSubmitAccounted);
-            // Latch mode posts the hidden buffer first, then spends the slack before
-            // vblank on normal per-frame accounting. The final wait is only the
-            // pacing boundary for the next frame.
-            if card_direct_frame_rendered
-                && visible_frame_presented
-                && let Some(session) = launcher_card_home.as_mut()
-            {
-                let mut next_clock = frame_clock;
-                next_clock.advance();
-                if session.is_level_trick_active() {
-                    session.prepare_helper_ahead(next_clock.elapsed_us() / 1_000);
-                } else {
-                    let (selected, visual_index) =
-                        nav.home_card_visual_prediction(next_clock.now());
-                    session.prepare_browse_helper_ahead(
-                        next_clock.elapsed_us() / 1_000,
-                        selected,
-                        visual_index,
-                        nav.home_card_browse_prediction(next_clock.now()),
-                    );
-                }
-            }
-            let wait_start = Instant::now();
-            scheduler_phase = launcher_response_trace
-                .record_scheduler_interval("post-submit-accounting", scheduler_phase);
-            let interruptible_home_wait = can_preempt_home_latch_wait(
-                nav.screen,
-                launcher_response_frame_stamp.is_some(),
-                !selection_feedback_stamp.entries.is_empty(),
-                director.navigation.is_active()
-                    || director.orientation.is_active()
-                    || !director.chart.is_live(),
-                screensaver.active,
-                composition_decision.state != UiCompositionState::FullSlint
-                    || composition_decision.retirement_generation.is_some(),
-                preview_presentation_commit.is_some(),
-                startup_intro_frame_posted,
-            );
-            let pace = match pacer.wait_interruptible(|| {
-                interruptible_home_wait
-                    && matches!(
-                        pad.wait_for_input(input_observation, Duration::ZERO),
-                        crate::input_hub::InputWaitOutcome::Changed
-                    )
-            }) {
-                VsyncWaitOutcome::Pace(pace) => pace,
-                VsyncWaitOutcome::Interrupted => {
-                    launcher_response_trace.record_lab(Some(serde_json::json!({
-                        "phase": "latch-wait-interrupted-input",
-                        "interrupted_at_us": crate::input_hub::monotonic_us(),
-                        "posted_sequence": presented_frame.main_present_sequence,
-                    })));
-                    let _ = launcher_response_trace.record_scheduler_interval(
-                        "latch-confirmation-wait-interrupted",
-                        scheduler_phase,
-                    );
-                    record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
-                    request_launcher_redraw!();
-                    record_launcher_frame_phase!(LauncherFramePhase::Yielded);
-                    #[cfg(feature = "tooling")]
-                    if let Some(mut frame) = tooling_frame_evidence.take()
-                        && let Some(session) = tooling.as_mut()
-                        && session.frame_evidence_active()
-                    {
-                        let started = Instant::now();
-                        frame.outcome = "superseded-before-confirmation";
-                        frame.slot = presented_frame.main_present_buffer;
-                        frame.copied_bytes =
-                            presented_frame.main_present_hidden_copied_bytes as u64;
-                        frame.finish_us = duration_us(run_start, started);
-                        frame.record.reason = "post replaced before vsync; not a counted drop";
-                        frame.record.work = card_work_timing;
-                        frame.record.timeline = Some(
-                            mister_magik_tooling_support::measurement::FramePhaseTimeline {
-                                frame_begin_us: frame.begin_us,
-                                render_start_us: duration_us(run_start, frame_t1),
-                                render_end_us: duration_us(run_start, frame_t2),
-                                custom_draw_start_us: duration_us(run_start, custom_draw_start),
-                                custom_draw_end_us: duration_us(run_start, custom_draw_done),
-                                present_start_us: duration_us(run_start, frame_t3),
-                                post_returned_us: duration_us(run_start, frame_t4),
-                                confirmation_wait_start_us: duration_us(run_start, wait_start),
-                                posted_sequence: presented_frame.main_present_sequence,
-                                post_pending_sequence: presented_frame
-                                    .main_present_post_pending_sequence,
-                                post_pending: presented_frame.main_present_post_pending,
-                                ..Default::default()
-                            },
-                        );
-                        session.record_frame_evidence(frame, started);
-                    }
-                    // No vsync has passed, so the next frame reuses this frame's
-                    // time and replaces the posted one in the same refresh slot.
-                    continue 'launcher;
-                }
-            };
-            let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
-            let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
-            let completion_poll_pmu = gui_profiling.span("gui.latch.completion-polling");
-            let completion = wait_for_latch_completion(
-                f,
-                presented_frame.main_present_sequence,
-                completion_remaining,
-            );
-            drop(completion_poll_pmu);
-            let wait_done = Instant::now();
-            #[cfg(feature = "tooling")]
-            super::launcher_frame_accounting::capture_evidence_cpu(
-                &mut tooling_frame_evidence,
-                5,
+                nav: &nav,
+                pacer: &mut pacer,
+                pad: &pad,
+                presented_frame: &mut presented_frame,
+                preview_presentation_commit: &preview_presentation_commit,
+                #[cfg(feature = "tooling")]
                 run_start,
-            );
-            scheduler_phase = launcher_response_trace
-                .record_scheduler_interval("latch-confirmation-wait", scheduler_phase);
-            let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
-            let wait_trace = LauncherPacingTrace::from_pace_with_present_phase(
-                Some(&pace),
-                presented_frame.frame_start_phase_us,
-                pacer.period_us(),
-                presented_frame.present_phase_us,
-            );
-            presented_frame.frame_t4 = wait_done;
-            presented_frame.post_present_wait_us = post_wait_us;
-            presented_frame.vsync_us_override = Some(post_wait_us);
-            presented_frame.cpu_t4 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
-            presented_frame.vsync_source = wait_trace.vsync_source;
-            presented_frame.vsync_period_us = wait_trace.vsync_period_us;
-            presented_frame.vsync_miss_streak = wait_trace.vsync_miss_streak;
-            presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
-            presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
-            presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
-            #[cfg(feature = "tooling")]
-            if let Some(frame) = tooling_frame_evidence.as_mut() {
-                frame.slot = presented_frame.main_present_buffer;
-                frame.copied_bytes = presented_frame.main_present_hidden_copied_bytes as u64;
-                frame.full_seed = presented_frame.main_present_hidden_full_copy;
-            }
-            let mut readiness_post = None;
-            match completion {
-                Ok(completion) => {
-                    let status = completion.status;
-                    #[cfg(feature = "tooling")]
-                    if let Some(session) = tooling.as_mut() {
-                        if let Some(previous) = tooling_reject_baseline {
-                            session.metrics.counters.rejections +=
-                                u64::from(status.reject_count.wrapping_sub(previous));
-                        }
-                        tooling_reject_baseline = Some(status.reject_count);
-                    }
-                    readiness_post = Some(super::launcher_readiness::ConfirmedLatchPost {
-                        sequence: status.active_sequence,
-                        route_epoch: status.active_route_epoch,
-                        slot: presented_frame.main_present_buffer,
-                        receipt_crc: presented_frame.main_present_receipt_crc,
-                        active_base: status.active_base,
-                        width: status.active_width,
-                        height: status.active_height,
-                        stride: status.active_stride,
-                    });
-                    presented_frame.main_present_active_sequence = status.active_sequence;
-                    presented_frame.main_present_pending = status.pending();
-                    presented_frame.main_present_flip_count = status.flip_count;
-                    presented_frame.main_present_drop_count = status.drop_count;
-                    presented_frame.main_present_completion_poll_count = completion.poll_count;
-                    presented_frame.main_present_completion_poll_wall_us = completion.wall_us;
-                    presented_frame.main_present_completion_poll_cpu_us = completion.cpu_us;
-                    confirmed_presentation = PresentationOutcome::Confirmed {
-                        sequence: status.active_sequence,
-                        slot: presented_frame.main_present_buffer,
-                        route_epoch: status.active_route_epoch,
-                    };
-                }
-                Err(failure) => {
-                    director.presentation_failed(&composition_decision);
-                    launcher_presenter.fail_latch_completion(failure);
-                    if let Some(failure) = launcher_presenter.latch_failure() {
-                        frame_accounting.record_latch_failure(failure);
-                    }
-                    presented_frame.main_present_active_sequence = 0;
-                    presented_frame.main_present_pending = true;
-                }
-            }
+                scheduler: &scheduler,
+                scheduler_phase: &mut scheduler_phase,
+                screensaver: &screensaver,
+                selection_feedback_stamp: &selection_feedback_stamp,
+                start_screen,
+                startup_intro_frame_posted,
+                status_text: &status_text,
+                #[cfg(feature = "tooling")]
+                tooling: &mut tooling,
+                #[cfg(feature = "tooling")]
+                tooling_frame_evidence: &mut tooling_frame_evidence,
+                #[cfg(feature = "tooling")]
+                tooling_reject_baseline: &mut tooling_reject_baseline,
+                visible_frame_presented,
+                window,
+            })
+            else {
+                continue 'launcher;
+            };
             accepted_and_active_confirmed = presented_frame.main_present_sequence != 0
                 && presented_frame.main_present_active_sequence
                     == presented_frame.main_present_sequence
@@ -12749,6 +12593,393 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
     let _ = launcher_response_trace.record_scheduler_interval("frame-tail", *scheduler_phase);
     record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
     FrameFlow::Continue
+}
+
+/// What the latch post accounting, the vblank wait and the completion check read and update.
+struct LatchWait<'a> {
+    card_direct_frame_rendered: bool,
+    #[cfg(feature = "tooling")]
+    card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
+    catalog: &'a ArcadeCatalog,
+    catalog_background_scan_visible: bool,
+    catalog_ready: bool,
+    catalog_scan_percent: i32,
+    catalog_scan_visible: bool,
+    catalog_session: &'a LauncherCatalogSession,
+    composition_decision: &'a UiCompositionDecision,
+    confirm_selected: i32,
+    confirm_visible: bool,
+    confirmed_presentation: &'a mut PresentationOutcome,
+    #[cfg(feature = "tooling")]
+    custom_draw_done: Instant,
+    #[cfg(feature = "tooling")]
+    custom_draw_start: Instant,
+    director: &'a mut PresentationDirector,
+    display_session: &'a mut LauncherDisplaySession,
+    f: &'a mut Fpga,
+    frame_accounting: &'a mut LauncherFrameAccounting,
+    frame_analytics_mode: FrameAnalyticsMode,
+    frame_clock: mister_magik_core::frame_clock::FrameClock,
+    #[cfg(feature = "tooling")]
+    frame_t1: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t2: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t3: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t4: Instant,
+    gui_profiling: &'a GuiProfilingController,
+    input_observation: crate::input_hub::InputObservation,
+    launch_return_session: &'a LaunchReturnSession,
+    launcher_bench_scenario: Option<LauncherBenchScenario>,
+    launcher_card_home:
+        &'a mut Option<crate::ui_runner::launcher_card_home::LauncherCardHomeSession>,
+    launcher_presenter: &'a mut LauncherPresenter,
+    launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
+    launcher_response_trace: &'a mut LauncherResponseTrace,
+    launching: bool,
+    lifecycle: &'a LauncherLifecycle,
+    loading_title: &'a String,
+    lock_screen: Option<Screen>,
+    nav: &'a LauncherNav,
+    pacer: &'a mut VsyncPacer,
+    pad: &'a PadPool,
+    presented_frame: &'a mut LauncherPresentedFrame,
+    preview_presentation_commit: &'a Option<crate::preview_state::PreviewPresentationCommit>,
+    #[cfg(feature = "tooling")]
+    run_start: Instant,
+    scheduler: &'a LauncherScheduler,
+    scheduler_phase: &'a mut LauncherResponseSchedulerBoundary,
+    screensaver: &'a ScreensaverControl,
+    selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
+    start_screen: Screen,
+    startup_intro_frame_posted: bool,
+    status_text: &'a Option<LauncherStatusTextSnapshot>,
+    #[cfg(feature = "tooling")]
+    tooling: &'a mut Option<mister_magik_tooling_support::Session>,
+    #[cfg(feature = "tooling")]
+    tooling_frame_evidence:
+        &'a mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    #[cfg(feature = "tooling")]
+    tooling_reject_baseline: &'a mut Option<u16>,
+    visible_frame_presented: bool,
+    window: &'a Rc<MisterSoftwareWindow>,
+}
+
+/// What the wait hands to the confirmed-present accounting.
+struct LatchWaitOutcome {
+    finish_timing: LauncherFrameFinishTraceTiming,
+    #[cfg(feature = "tooling")]
+    wait_start: Instant,
+    pace: mister_magik_fb::framebuffer::vsync::VsyncPace,
+    wait_done: Instant,
+    readiness_post: Option<crate::ui_runner::launcher_readiness::ConfirmedLatchPost>,
+}
+
+/// Accounts the posted frame, waits out the refresh for the latch completion and records the
+/// confirmation; `Break` means input arrived during the wait and the frame is superseded.
+fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWaitOutcome> {
+    let LatchWait {
+        card_direct_frame_rendered,
+        #[cfg(feature = "tooling")]
+        card_work_timing,
+        catalog,
+        catalog_background_scan_visible,
+        catalog_ready,
+        catalog_scan_percent,
+        catalog_scan_visible,
+        catalog_session,
+        composition_decision,
+        confirm_selected,
+        confirm_visible,
+        confirmed_presentation,
+        #[cfg(feature = "tooling")]
+        custom_draw_done,
+        #[cfg(feature = "tooling")]
+        custom_draw_start,
+        director,
+        display_session,
+        f,
+        frame_accounting,
+        frame_analytics_mode,
+        frame_clock,
+        #[cfg(feature = "tooling")]
+        frame_t1,
+        #[cfg(feature = "tooling")]
+        frame_t2,
+        #[cfg(feature = "tooling")]
+        frame_t3,
+        #[cfg(feature = "tooling")]
+        frame_t4,
+        gui_profiling,
+        input_observation,
+        launch_return_session,
+        launcher_bench_scenario,
+        launcher_card_home,
+        launcher_presenter,
+        launcher_response_frame_stamp,
+        launcher_response_trace,
+        launching,
+        lifecycle,
+        loading_title,
+        lock_screen,
+        nav,
+        pacer,
+        pad,
+        presented_frame,
+        preview_presentation_commit,
+        #[cfg(feature = "tooling")]
+        run_start,
+        scheduler,
+        scheduler_phase,
+        screensaver,
+        selection_feedback_stamp,
+        start_screen,
+        startup_intro_frame_posted,
+        status_text,
+        #[cfg(feature = "tooling")]
+        tooling,
+        #[cfg(feature = "tooling")]
+        tooling_frame_evidence,
+        #[cfg(feature = "tooling")]
+        tooling_reject_baseline,
+        visible_frame_presented,
+        window,
+    } = ctx;
+    let finish_timing = frame_accounting.finish_frame_before_trace(
+        presented_frame,
+        nav,
+        pad,
+        catalog,
+        catalog_ready,
+        catalog_session.refresh_done(),
+        launching,
+        scheduler.visible_loading_title(loading_title),
+        catalog_scan_visible,
+        status_text
+            .as_ref()
+            .map(|text| text.catalog_scan_title.as_str())
+            .unwrap_or(""),
+        status_text
+            .as_ref()
+            .map(|text| text.catalog_scan_detail.as_str())
+            .unwrap_or(""),
+        catalog_scan_percent,
+        catalog_background_scan_visible,
+        status_text
+            .as_ref()
+            .map(|text| text.catalog_scan_message.as_str())
+            .unwrap_or(""),
+        confirm_visible,
+        status_text
+            .as_ref()
+            .map(|text| text.confirm_title.as_str())
+            .unwrap_or(""),
+        status_text
+            .as_ref()
+            .map(|text| text.confirm_message.as_str())
+            .unwrap_or(""),
+        confirm_selected,
+        status_text
+            .as_ref()
+            .map(|text| text.confirm_left_label.as_str())
+            .unwrap_or(""),
+        status_text
+            .as_ref()
+            .map(|text| text.confirm_right_label.as_str())
+            .unwrap_or(""),
+        launcher_bench_scenario,
+        start_screen,
+        lock_screen,
+        display_session.reassert_count(),
+        display_session.last_reassert_frame(),
+        display_session.last_reassert_ok(),
+        display_session.last_reassert_error(),
+        lifecycle.startup_status(),
+        launch_return_session,
+    );
+    record_launcher_frame_phase!(LauncherFramePhase::PostSubmitAccounted);
+    // Latch mode posts the hidden buffer first, then spends the slack before
+    // vblank on normal per-frame accounting. The final wait is only the
+    // pacing boundary for the next frame.
+    if card_direct_frame_rendered
+        && visible_frame_presented
+        && let Some(session) = launcher_card_home.as_mut()
+    {
+        let mut next_clock = frame_clock;
+        next_clock.advance();
+        if session.is_level_trick_active() {
+            session.prepare_helper_ahead(next_clock.elapsed_us() / 1_000);
+        } else {
+            let (selected, visual_index) = nav.home_card_visual_prediction(next_clock.now());
+            session.prepare_browse_helper_ahead(
+                next_clock.elapsed_us() / 1_000,
+                selected,
+                visual_index,
+                nav.home_card_browse_prediction(next_clock.now()),
+            );
+        }
+    }
+    let wait_start = Instant::now();
+    *scheduler_phase = launcher_response_trace
+        .record_scheduler_interval("post-submit-accounting", *scheduler_phase);
+    let interruptible_home_wait = can_preempt_home_latch_wait(
+        nav.screen,
+        launcher_response_frame_stamp.is_some(),
+        !selection_feedback_stamp.entries.is_empty(),
+        director.navigation.is_active()
+            || director.orientation.is_active()
+            || !director.chart.is_live(),
+        screensaver.active,
+        composition_decision.state != UiCompositionState::FullSlint
+            || composition_decision.retirement_generation.is_some(),
+        preview_presentation_commit.is_some(),
+        startup_intro_frame_posted,
+    );
+    let pace = match pacer.wait_interruptible(|| {
+        interruptible_home_wait
+            && matches!(
+                pad.wait_for_input(input_observation, Duration::ZERO),
+                crate::input_hub::InputWaitOutcome::Changed
+            )
+    }) {
+        VsyncWaitOutcome::Pace(pace) => pace,
+        VsyncWaitOutcome::Interrupted => {
+            launcher_response_trace.record_lab(Some(serde_json::json!({
+                "phase": "latch-wait-interrupted-input",
+                "interrupted_at_us": crate::input_hub::monotonic_us(),
+                "posted_sequence": presented_frame.main_present_sequence,
+            })));
+            let _ = launcher_response_trace
+                .record_scheduler_interval("latch-confirmation-wait-interrupted", *scheduler_phase);
+            record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
+            window.request_redraw();
+            record_launcher_frame_phase!(LauncherFramePhase::Yielded);
+            #[cfg(feature = "tooling")]
+            if let Some(mut frame) = tooling_frame_evidence.take()
+                && let Some(session) = tooling.as_mut()
+                && session.frame_evidence_active()
+            {
+                let started = Instant::now();
+                frame.outcome = "superseded-before-confirmation";
+                frame.slot = presented_frame.main_present_buffer;
+                frame.copied_bytes = presented_frame.main_present_hidden_copied_bytes as u64;
+                frame.finish_us = duration_us(run_start, started);
+                frame.record.reason = "post replaced before vsync; not a counted drop";
+                frame.record.work = card_work_timing;
+                frame.record.timeline = Some(
+                    mister_magik_tooling_support::measurement::FramePhaseTimeline {
+                        frame_begin_us: frame.begin_us,
+                        render_start_us: duration_us(run_start, frame_t1),
+                        render_end_us: duration_us(run_start, frame_t2),
+                        custom_draw_start_us: duration_us(run_start, custom_draw_start),
+                        custom_draw_end_us: duration_us(run_start, custom_draw_done),
+                        present_start_us: duration_us(run_start, frame_t3),
+                        post_returned_us: duration_us(run_start, frame_t4),
+                        confirmation_wait_start_us: duration_us(run_start, wait_start),
+                        posted_sequence: presented_frame.main_present_sequence,
+                        post_pending_sequence: presented_frame.main_present_post_pending_sequence,
+                        post_pending: presented_frame.main_present_post_pending,
+                        ..Default::default()
+                    },
+                );
+                session.record_frame_evidence(frame, started);
+            }
+            // No vsync has passed, so the next frame reuses this frame's
+            // time and replaces the posted one in the same refresh slot.
+            return ControlFlow::Break(());
+        }
+    };
+    let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
+    let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
+    let completion_poll_pmu = gui_profiling.span("gui.latch.completion-polling");
+    let completion = wait_for_latch_completion(
+        f,
+        presented_frame.main_present_sequence,
+        completion_remaining,
+    );
+    drop(completion_poll_pmu);
+    let wait_done = Instant::now();
+    #[cfg(feature = "tooling")]
+    super::launcher_frame_accounting::capture_evidence_cpu(tooling_frame_evidence, 5, run_start);
+    *scheduler_phase = launcher_response_trace
+        .record_scheduler_interval("latch-confirmation-wait", *scheduler_phase);
+    let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
+    let wait_trace = LauncherPacingTrace::from_pace_with_present_phase(
+        Some(&pace),
+        presented_frame.frame_start_phase_us,
+        pacer.period_us(),
+        presented_frame.present_phase_us,
+    );
+    presented_frame.frame_t4 = wait_done;
+    presented_frame.post_present_wait_us = post_wait_us;
+    presented_frame.vsync_us_override = Some(post_wait_us);
+    presented_frame.cpu_t4 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
+    presented_frame.vsync_source = wait_trace.vsync_source;
+    presented_frame.vsync_period_us = wait_trace.vsync_period_us;
+    presented_frame.vsync_miss_streak = wait_trace.vsync_miss_streak;
+    presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
+    presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
+    presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
+    #[cfg(feature = "tooling")]
+    if let Some(frame) = tooling_frame_evidence.as_mut() {
+        frame.slot = presented_frame.main_present_buffer;
+        frame.copied_bytes = presented_frame.main_present_hidden_copied_bytes as u64;
+        frame.full_seed = presented_frame.main_present_hidden_full_copy;
+    }
+    let mut readiness_post = None;
+    match completion {
+        Ok(completion) => {
+            let status = completion.status;
+            #[cfg(feature = "tooling")]
+            if let Some(session) = tooling.as_mut() {
+                if let Some(previous) = *tooling_reject_baseline {
+                    session.metrics.counters.rejections +=
+                        u64::from(status.reject_count.wrapping_sub(previous));
+                }
+                *tooling_reject_baseline = Some(status.reject_count);
+            }
+            readiness_post = Some(super::launcher_readiness::ConfirmedLatchPost {
+                sequence: status.active_sequence,
+                route_epoch: status.active_route_epoch,
+                slot: presented_frame.main_present_buffer,
+                receipt_crc: presented_frame.main_present_receipt_crc,
+                active_base: status.active_base,
+                width: status.active_width,
+                height: status.active_height,
+                stride: status.active_stride,
+            });
+            presented_frame.main_present_active_sequence = status.active_sequence;
+            presented_frame.main_present_pending = status.pending();
+            presented_frame.main_present_flip_count = status.flip_count;
+            presented_frame.main_present_drop_count = status.drop_count;
+            presented_frame.main_present_completion_poll_count = completion.poll_count;
+            presented_frame.main_present_completion_poll_wall_us = completion.wall_us;
+            presented_frame.main_present_completion_poll_cpu_us = completion.cpu_us;
+            *confirmed_presentation = PresentationOutcome::Confirmed {
+                sequence: status.active_sequence,
+                slot: presented_frame.main_present_buffer,
+                route_epoch: status.active_route_epoch,
+            };
+        }
+        Err(failure) => {
+            director.presentation_failed(composition_decision);
+            launcher_presenter.fail_latch_completion(failure);
+            if let Some(failure) = launcher_presenter.latch_failure() {
+                frame_accounting.record_latch_failure(failure);
+            }
+            presented_frame.main_present_active_sequence = 0;
+            presented_frame.main_present_pending = true;
+        }
+    }
+    ControlFlow::Continue(LatchWaitOutcome {
+        finish_timing,
+        #[cfg(feature = "tooling")]
+        wait_start,
+        pace,
+        wait_done,
+        readiness_post,
+    })
 }
 
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
