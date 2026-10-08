@@ -632,7 +632,7 @@ long-lived object built for one scene or orientation met a frame of another on a
 
 **PR 28 (in progress): Phase 2, 3 and 5 reconciled with what the code and PR 10 measured.**
 
-- Phase 5's recipe is written (`apps/mister/src/ui_runner/AGENTS.md`), because the protocol it
+- Phase 5's recipe is written (the module doc of `transition_spec.rs`), because the protocol it
   describes (`TransitionStart`, the director's operations, the scenario matrix) exists.
 - Phase 2's two remaining items are closed as not worth doing, with the reason recorded: folding the
   timeline into the chart would change the render policy (PR 10), and a merged route table would only
@@ -817,7 +817,7 @@ Adding a full-screen transition should mean:
 4. One row in the scenario matrix. The continuity, damage, reverse, cancel, and
    release tests then apply automatically.
 
-Documented in `apps/mister/src/ui_runner/AGENTS.md` ("Adding a full-screen navigation transition").
+Documented in the module doc of `apps/mister/src/launcher_runtime/transition_spec.rs`.
 
 ## Risks and guardrails
 
