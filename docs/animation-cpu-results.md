@@ -1,11 +1,10 @@
 # Animation CPU campaign results
 
-These hardware results were collected before PR #216's app-wide frame clock.
-The branch is now rebased onto `d3dd4522b`; no post-rebase device comparison has
-been collected. Late frames now slow motion instead of skipping ahead in time,
-so do not treat the numbers below as results for the current branch. Fresh
-parent/candidate runs must share the vsync-locked clock and settled-input route
-contract documented in `animation-cpu-campaign.md`.
+This is dated experiment evidence. The initial comparisons precede PR #216's
+app-wide frame clock; sections beginning with the fresh frame-clock baseline
+use `vsync-locked-v1`. Each comparison qualifies only its stated artifacts and
+measurement contract. Current reproduction and acceptance rules live in
+[benchmarking](benchmarking.md#complete-animation-round-trips).
 
 The campaign uses the merged reporting contract and the complete 45-second
 Root → Consoles → Nintendo → SNES hub → Games → Root route. Every route below
@@ -117,7 +116,7 @@ Local trial source and evidence remain ignored in
 `outputs/animation-cpu-round-2/fused-*` and `filter-*`.
 The reflection reordering trial measured a small native kernel gain but remains
 unqualified on the complete route. Further campaign items remain in
-`animation-cpu-campaign.md`.
+[benchmarking](benchmarking.md#complete-animation-round-trips).
 
 ## Helper real-time scheduling — removed after audit
 
@@ -255,13 +254,8 @@ activity at observation, not proven cause. Latch rejections were zero; posted
 and flipped counts matched in every route. Full-frame fallback copies still
 occurred and the route reached all expected endpoints.
 
-Next experiments remain one-frame-ahead tricks (#14), then a fresh scheduler
-comparison against sparse copy with explicit policy activation evidence. Neither
-has a post-frame-clock verdict. Buffering must preserve every virtual-clock
-step and visible landing/input ordering, including preparation holds; it must
-not conceal insufficient sustained throughput. The old sparse-copy A/B remains
-historical; the new clean baseline establishes its current cost but does not
-isolate its causal saving under the new clock.
+The old sparse-copy A/B remains historical; this clean baseline establishes
+its cost under the new clock but does not isolate its causal saving.
 
 
 ## Device-reveal attribution after merge removal (`817f57bd9`)
@@ -356,9 +350,8 @@ wall times are not stage CPU estimates, and their drops are not acceptance runs.
 
 The goal remains perfect moving-refresh cadence throughout the launcher and
 subviews. No animation steps, durations, source artwork or drop gates were
-changed. Roughly 21 drops per route remain. The next work must address card tail
-scheduling/render-ahead and cold destination/endpoint Slint preparation; cheaper
-steady-state reveal drawing does not resolve those first-frame costs.
+changed. These runs retain roughly 21 drops per route; cheaper steady-state
+reveal drawing does not resolve first-frame costs.
 
 
 ## Locked-trick helper render-ahead — kept (`608d86c2d`)
@@ -423,10 +416,8 @@ A useful residual: all retained card drop records in the three candidate routes
 have `helper_ahead = false`. No record attributes a miss to a reused ahead band.
 The remaining card observations cluster at ordinary browsing and the first
 frames of hierarchy changes; system transitions and the endpoint Slint raster
-also remain. This narrows the next action: cold source/destination preparation
-and ordinary-browse scheduling matter more than adding another primary worker
-to the already clean sampled interior trick frames. It does not prove those
-causes or exclude a problem outside the sampled routes.
+also remain in these runs. This does not prove their causes or exclude a
+problem outside the sampled routes.
 
 
 ## Complete cold-frame attribution (`097410dc6`)

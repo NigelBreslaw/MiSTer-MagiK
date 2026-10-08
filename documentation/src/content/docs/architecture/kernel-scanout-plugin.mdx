@@ -23,8 +23,6 @@ flowchart LR
   Plugin --> Slots["Two existing hidden framebuffer slots"]
   Slots --> Latch["FPGA vblank latch"]
   Latch --> HDMI["HDMI output"]
-  Rust --> Fallback["/dev/fb0 fallback"]
-  Fallback --> HDMI
 ```
 
 ## Exactly what the plugin does
@@ -44,7 +42,7 @@ interfaces remain in the plugin. The cacheable zero-copy trial also initially
 omitted cache synchronization from its timing, overstating the improvement by
 roughly 2 ms. Comparisons must include that work and validate physical output.
 
-## Failure and fallback
+## Failure and stock recovery
 
 The stock device tree describes the visible 8 MiB framebuffer aperture, not the
 whole hidden scanout layout. The two hidden regions are instead bound to a
@@ -53,10 +51,16 @@ plugin requires the qualified kernel, machine, and framebuffer identity, then
 reserves both complete ranges exclusively before registering the device. The
 exclusive reservations reject System RAM and any occupied resource range.
 
-The Rust and Agent clients reject any ABI, geometry,
-address, mapping-size, or reserved-field mismatch. If the module is missing or
-rejected, MiSTer MagiK uses the supported `/dev/fb0` dirty-copy fallback; the
-plugin is never required to recover or boot the machine.
+The Rust and Agent clients reject any ABI, geometry, address, mapping-size or
+reserved-field mismatch. Production requires protocol-v5 hidden-slot admission;
+a missing or rejected module cannot select a `/dev/fb0` rendering fallback.
+A runtime failure freezes the last confirmed frame. Main's stock recovery path
+remains available independently of the plugin.
+
+The Linux 6.18 fixed-window provider is a separate development-only profile.
+Successful trial mappings do not qualify production writer exclusion, alias
+attributes or FPGA quiescence. The assurance contract retains those release
+gates alongside the qualified 5.15 requirements.
 
 ## How it is tested
 

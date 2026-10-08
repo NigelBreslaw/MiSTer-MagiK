@@ -1,25 +1,14 @@
 # FPGA scaler return recovery design
 
-Status: queued completion and copy-tail repairs retained; the separately
-qualified schema-10 raw-scaler observer is the platform publication target.
-
-No retired diagnostic RBF is release-qualified. The schema-10
-`raw-scaler-ordered-signature-v3` candidate is not retired: it passed the
-checked-in fixed-seed diagnostic signoff profile and is eligible for numbered
-platform publication so the observer survives ordinary delivery. The retained
-contract and evidence limits are in [Scaler copy-tail repair and ordered-signature
-diagnostics](fpga-raw-scaler-diagnostic.md).
-
-Later passive evidence found a second causal defect after the queued completion
-transport was already healthy: the final `sCOPY` horizontal carry can register
-`o_last` on the last edge admitted by the legacy shift gate, stranding the
-delayed line terminal and preventing `lev_dec_v`. The narrow forward repair is
-documented in [Scaler copy-tail repair](fpga-raw-scaler-diagnostic.md). It
-preserves the queued completion repair and removes the disposable observer.
+Status: retained queued-completion and copy-tail repair contract, with
+unresolved production qualification gates. The current diagnostic candidate
+is the [schema-24 memory-boundary observer](fpga-passive-video-diagnostics.md).
+Its signoff profile and compact evidence do not establish end-to-end scaler
+correctness, sink visibility or production qualification.
 
 ## Decision
 
-The next candidate replaces the lossy scaler completion toggle with a queued
+The retained repair replaces the lossy scaler completion toggle with a queued
 one-bit request/acknowledgement handshake inside `ascal`. It keeps the legacy
 HDMI-domain completion receiver and copy-level update structurally unchanged,
 adds only a one-bit source queue and one two-register acknowledgement
@@ -58,6 +47,81 @@ candidate boundaries:
 Per-buffer toggles were also rejected. They need two forward crossings and new
 HDMI-domain popcount or serialization state, with no demonstrated physical
 advantage over the failed Gray design.
+
+## Copy-tail repair
+
+### Decisive result
+
+After 75 valid returns, the installed schema-6 RBF reproduced a uniform
+physical MagiK black screen with the authoritative framebuffer still correct.
+Three coherent records were identical: flags `0x15e1`, state `0x83ea`, copy
+state `sCOPY`, `readlev=2`, `copylev=2`, `o_adturn=1`, front `prim=1`, front
+`last=1`, front bank `1`, offset `0`, and `o_copyv(0)=1`.
+
+The frame had copy shifts, next-word phases, line-last activity, and address
+wrap, but no bank-terminal event, exact terminal event, `lev_dec_v`, or
+nonzero copied word. This rules out a lost decrement after a successful
+terminal branch. It identifies a last-block terminal-condition stall.
+
+### Exact defect
+
+The legacy `sCOPY` word/last pipeline advanced only while:
+
+```text
+hcarry_v or o_dshi > 0
+```
+
+The final horizontal-carry edge registers `o_last = 1`. On the following edge
+`hcarry_v` is already false and `o_dshi` is zero, so the branch stops before
+`o_last` can pass through `o_last1` to `o_last2`. For a front block with
+`last=1`, the alternative bank terminal is deliberately false. The copy FSM
+therefore never reaches its existing terminal branch, never asserts
+`lev_dec_v`, and permanently holds both two-entry scheduler levels full.
+
+### Minimal repair
+
+The shift gate becomes:
+
+```text
+hcarry_v or o_dshi > 0 or o_last = 1
+```
+
+The added `o_last` term keeps the existing word phase and two-register
+line-last pipeline moving until the unchanged terminal semantics can retire
+the last block. On a tail-only edge (`not hcarry_v`, `o_dshi=0`, `o_last=1`),
+`o_copyv(0)` is forced low. Tail edges therefore retire only phase and
+line-last state; they create no new pixel-valid sample or line-buffer write.
+Already-valid delayed samples from the final real horizontal carry continue
+through the existing pipeline normally.
+
+Three exact helper functions are compiled from patched production `ascal.vhd`
+and shared by synthesis and proof:
+
+- `copy_shift_active` — legacy shift cases plus only the registered line-last
+  tail;
+- `copy_shift_onext` — the unmodified 8/16/24/32-bpp word-phase truth table;
+- `copy_terminal_ready` — the unmodified terminal predicate.
+
+Normal non-last blocks retain the legacy gate because `o_last=0`. The common
+reset and each first-line initialization explicitly clear `o_last`, `o_last1`,
+and `o_last2`. No scheduler/completion transport, framebuffer, latch, route,
+reset controller, PLL, mux, or output cone is otherwise changed.
+
+### Copy-tail proof obligations
+
+- Exhaustive GHDL checks cover every active-gate input, supported format and
+  all 16 phases, normal non-last retirement, no early last-block retirement
+  and bounded last-tail retirement.
+- Exact-source formal safety proves every active tail shifts, no tail edge
+  creates pixel validity, and tail age remains below 18 output-clock steps,
+  with a retirement cover witness.
+- Completion queue BMC, cover and induction proofs remain required.
+
+The functional copy-tail repair adds no register, RAM, DSP or PLL: it adds one
+registered-state term to the shift enable and a tail-only clear of the existing
+pixel-valid register. Fixed-seed signoff must still prove the exact candidate's
+timing, resources, warning identities, CDC and hard-block gates. A diagnostic
+observer pass is not physical qualification of the repaired production tuple.
 
 ## Completion transport
 
@@ -171,20 +235,15 @@ gap, reset qualification rejects this candidate.
 
 ## Production diagnostics and readiness
 
-The repair-only platform-v0.29 RBF contains none of commands `0x60` through
-`0x67`, no new UIO responder, and no repair-health, PLL, pixel, route, or Avalon
-observer. The diagnostic-enabled successor adds only read-only `0x67`, schema
-10, `raw-scaler-ordered-signature-v3`; commands `0x60` through `0x66` remain
-unsupported. The latch and its protocol-v5 capabilities remain unchanged.
+The active schema-24 candidate exposes bounded first/live memory-boundary
+evidence through `0x68`/`0x69`/`0x6a`, under the checked-in
+`experimental_scaler_causal-v1` signoff profile. Its protocol and isolation
+limits are documented in [passive evidence](fpga-passive-video-diagnostics.md).
+Latch protocol v5 and capabilities `0x03ff` remain unchanged.
 
-This deliberately separates correctness proof from field attribution. FPGA
-observers which alter placement cannot qualify the production artifact they are
-meant to describe.
-
-The retired `scaler-scheduler-state-v1` attribution candidate is not part of
-this contract. The separately qualified schema-10 raw-scaler ordered-signature
-observer preserves the repair unchanged and is accepted as a platform
-component under its checked-in diagnostic signoff profile.
+Correctness proof and field attribution remain separate. Observers which alter
+placement cannot qualify the production artifact they are meant to describe;
+each hardware result is bound to its exact RBF and component tuple.
 
 ### Activation profile
 
@@ -198,12 +257,12 @@ unavailable. Activation instead requires:
   presentation telemetry; and
 - stable Main ownership and owner epoch across preflight.
 
-Malformed diagnostic responses or unexpected acknowledgements are failures;
-an explicit unsupported result is correct for this candidate. The retired
-`video-path-evidence-v1` dependency is replaced by the software-only
-`scaler-completion-repair-v1` profile. That profile requires coherent latch-v5
-capability, status, and presentation-telemetry CRCs plus current Main/launcher
-identity and a stable owner epoch. It always reports
+Malformed diagnostic responses or unexpected acknowledgements are failures.
+An explicit unsupported response for a retired command is not an activation
+failure. Current schema-24 evidence must satisfy its own protocol. The
+software-only `scaler-completion-repair-v1` activation profile requires coherent
+latch-v5 capability, status and presentation-telemetry CRCs plus current
+Main/launcher identity and a stable owner epoch. It reports
 `sink_visibility: unobserved`.
 
 ### Fail-closed launch and return
@@ -296,11 +355,16 @@ make progress fatal. A sequential equivalence check proves legacy and repaired
 behavior identical whenever no completion is hidden, and refinement to an ideal
 lossless capacity-two transport whenever completions are hidden.
 
-### CDC and physical gates
+### Repair-only CDC and physical gates
 
 The candidate is built only through the canonical signoff path with Quartus
 Prime Lite 17.0.0 Build 595, seed 2, four processors, and matched stock, pinned
 pre-observer, and patched identities.
+
+The following are the repair-only qualification gates. The current
+diagnostic-enabled tuple has the separate checked-in observer gates described
+in [passive evidence](fpga-passive-video-diagnostics.md); its pass does not
+substitute for repair-only qualification or the hardware matrix below.
 
 All of these are hard gates:
 
@@ -363,7 +427,7 @@ allowed only inside its existing bounded transition.
 The exact tuple must then pass:
 
 - the four continuous qualified-black movies in
-  [Qualified Black Bootstrap](bootstrap-black-qualification.md);
+  [retained bootstrap movie contract](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/ba3a22fd3e1ab00fe3a46a7034a8c2e529dec094/docs/bootstrap-black-qualification.md);
 - the full HDMI and CRT display matrix with paired authoritative source and
   sink evidence;
 - the identity-locked six-hour, 1,000,000-frame latch-v5 gate in
