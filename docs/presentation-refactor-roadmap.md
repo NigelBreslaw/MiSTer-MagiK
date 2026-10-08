@@ -777,7 +777,19 @@ projection kernels are on the 60 fps budget.
   `director.on_presented(receipt)`.
 - Update `docs/architecture.md`: the Mermaid charts become one chart. Add a
   test that every `(state, event)` pair in the code is listed in the doc table.
-  (The transition chart's edges are now tested against the doc, PR 23; the charts are not one chart yet.)
+  (The transition chart's edges are now tested against the doc, PR 23.)
+
+**Status (PR 29): the director is done; the one-chart and loop-shrink items are closed or deferred.**
+
+- Closed, not done: one merged chart. The three axes are independent (PR 10), so one diagram would
+  draw their product. Each axis keeps its own diagram, and the transition chart keeps its doc test.
+- Deferred, not started: shrinking `run_launcher_loop`. Measured on `main` after #272: the function is
+  lines 5005 to 13581 of `launcher_loop.rs` (about 8,600). Setup is about 1,200 lines and the frame loop
+  about 7,300. Its largest blocks are the input phase (about 1,400 lines), the latch-trace flush
+  (about 750; its one call to `finish_frame_before_trace` passes about 45 locals) and the navigation
+  composition block (about 390). Each shares dozens of locals with the rest, so no block extracts as
+  a method without first moving those locals into a context struct. That move touches every line of
+  the function and changes no behaviour; it is a separate decision, not a bounded extraction.
 
 What the walks in PR 10 and PR 11 say the director has to be (measured, not assumed):
 
