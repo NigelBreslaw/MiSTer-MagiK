@@ -1779,14 +1779,14 @@ fn should_defer_arcade_overlay_bridge(
         && !active_system_game_view(catalog, nav).is_empty()
 }
 
-struct LauncherStatusTextSnapshot {
-    catalog_scan_message: SharedString,
-    catalog_scan_title: SharedString,
-    catalog_scan_detail: SharedString,
-    confirm_title: SharedString,
-    confirm_message: SharedString,
-    confirm_left_label: SharedString,
-    confirm_right_label: SharedString,
+pub(super) struct LauncherStatusTextSnapshot {
+    pub(super) catalog_scan_message: SharedString,
+    pub(super) catalog_scan_title: SharedString,
+    pub(super) catalog_scan_detail: SharedString,
+    pub(super) confirm_title: SharedString,
+    pub(super) confirm_message: SharedString,
+    pub(super) confirm_left_label: SharedString,
+    pub(super) confirm_right_label: SharedString,
 }
 
 impl LauncherStatusTextSnapshot {
@@ -11464,6 +11464,30 @@ pub(super) fn run_launcher_loop(
         } else {
             Default::default()
         };
+        let status = FrameStatusView {
+            nav: &nav,
+            pad: &pad,
+            catalog: &catalog,
+            catalog_ready,
+            catalog_refresh_done: catalog_session.refresh_done(),
+            launching,
+            loading_title: scheduler.visible_loading_title(&loading_title),
+            catalog_scan_visible,
+            catalog_scan_percent,
+            catalog_background_scan_visible,
+            confirm_visible,
+            confirm_selected,
+            status_text: status_text.as_ref(),
+            launcher_bench_scenario,
+            start_screen,
+            lock_screen,
+            route_reassert_count: display_session.reassert_count(),
+            last_route_reassert_frame: display_session.last_reassert_frame(),
+            last_route_reassert_ok: display_session.last_reassert_ok(),
+            last_route_reassert_error: display_session.last_reassert_error(),
+            startup_status: lifecycle.startup_status(),
+            return_session: &launch_return_session,
+        };
         if latch_trace_flush_deferred {
             let ControlFlow::Continue(LatchWaitOutcome {
                 finish_timing,
@@ -11474,25 +11498,17 @@ pub(super) fn run_launcher_loop(
                 readiness_post,
                 ..
             }) = post_accounting_and_latch_wait(LatchWait {
+                status,
                 card_direct_frame_rendered,
                 #[cfg(feature = "tooling")]
                 card_work_timing,
-                catalog: &catalog,
-                catalog_background_scan_visible,
-                catalog_ready,
-                catalog_scan_percent,
-                catalog_scan_visible,
-                catalog_session: &catalog_session,
                 composition_decision: &composition_decision,
-                confirm_selected,
-                confirm_visible,
                 confirmed_presentation: &mut confirmed_presentation,
                 #[cfg(feature = "tooling")]
                 custom_draw_done,
                 #[cfg(feature = "tooling")]
                 custom_draw_start,
                 director: &mut director,
-                display_session: &mut *display_session,
                 f: &mut *f,
                 frame_accounting: &mut frame_accounting,
                 frame_analytics_mode,
@@ -11507,16 +11523,10 @@ pub(super) fn run_launcher_loop(
                 frame_t4,
                 gui_profiling: &gui_profiling,
                 input_observation,
-                launch_return_session: &launch_return_session,
-                launcher_bench_scenario,
                 launcher_card_home: &mut launcher_card_home,
                 launcher_presenter: &mut launcher_presenter,
                 launcher_response_frame_stamp: &launcher_response_frame_stamp,
                 launcher_response_trace: &mut launcher_response_trace,
-                launching,
-                lifecycle: &lifecycle,
-                loading_title: &loading_title,
-                lock_screen,
                 nav: &nav,
                 pacer: &mut pacer,
                 pad: &pad,
@@ -11524,13 +11534,10 @@ pub(super) fn run_launcher_loop(
                 preview_presentation_commit: &preview_presentation_commit,
                 #[cfg(feature = "tooling")]
                 run_start,
-                scheduler: &scheduler,
                 scheduler_phase: &mut scheduler_phase,
                 screensaver: &screensaver,
                 selection_feedback_stamp: &selection_feedback_stamp,
-                start_screen,
                 startup_intro_frame_posted,
-                status_text: &status_text,
                 #[cfg(feature = "tooling")]
                 tooling: &mut tooling,
                 #[cfg(feature = "tooling")]
@@ -11686,55 +11693,7 @@ pub(super) fn run_launcher_loop(
                 presented_frame,
                 start,
                 disp,
-                &nav,
-                &pad,
-                &catalog,
-                catalog_ready,
-                catalog_session.refresh_done(),
-                launching,
-                scheduler.visible_loading_title(&loading_title),
-                catalog_scan_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_title.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_detail.as_str())
-                    .unwrap_or(""),
-                catalog_scan_percent,
-                catalog_background_scan_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_message.as_str())
-                    .unwrap_or(""),
-                confirm_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_title.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_message.as_str())
-                    .unwrap_or(""),
-                confirm_selected,
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_left_label.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_right_label.as_str())
-                    .unwrap_or(""),
-                launcher_bench_scenario,
-                start_screen,
-                lock_screen,
-                display_session.reassert_count(),
-                display_session.last_reassert_frame(),
-                display_session.last_reassert_ok(),
-                display_session.last_reassert_error(),
-                lifecycle.startup_status(),
-                &launch_return_session,
+                status,
                 latch_trace_flush_deferred,
             );
         }
@@ -12222,25 +12181,17 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
 
 /// What the latch post accounting, the vblank wait and the completion check read and update.
 struct LatchWait<'a> {
+    status: FrameStatusView<'a>,
     card_direct_frame_rendered: bool,
     #[cfg(feature = "tooling")]
     card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
-    catalog: &'a ArcadeCatalog,
-    catalog_background_scan_visible: bool,
-    catalog_ready: bool,
-    catalog_scan_percent: i32,
-    catalog_scan_visible: bool,
-    catalog_session: &'a LauncherCatalogSession,
     composition_decision: &'a UiCompositionDecision,
-    confirm_selected: i32,
-    confirm_visible: bool,
     confirmed_presentation: &'a mut PresentationOutcome,
     #[cfg(feature = "tooling")]
     custom_draw_done: Instant,
     #[cfg(feature = "tooling")]
     custom_draw_start: Instant,
     director: &'a mut PresentationDirector,
-    display_session: &'a mut LauncherDisplaySession,
     f: &'a mut Fpga,
     frame_accounting: &'a mut LauncherFrameAccounting,
     frame_analytics_mode: FrameAnalyticsMode,
@@ -12255,17 +12206,11 @@ struct LatchWait<'a> {
     frame_t4: Instant,
     gui_profiling: &'a GuiProfilingController,
     input_observation: crate::input_hub::InputObservation,
-    launch_return_session: &'a LaunchReturnSession,
-    launcher_bench_scenario: Option<LauncherBenchScenario>,
     launcher_card_home:
         &'a mut Option<crate::ui_runner::launcher_card_home::LauncherCardHomeSession>,
     launcher_presenter: &'a mut LauncherPresenter,
     launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
     launcher_response_trace: &'a mut LauncherResponseTrace,
-    launching: bool,
-    lifecycle: &'a LauncherLifecycle,
-    loading_title: &'a String,
-    lock_screen: Option<Screen>,
     nav: &'a LauncherNav,
     pacer: &'a mut VsyncPacer,
     pad: &'a PadPool,
@@ -12273,13 +12218,10 @@ struct LatchWait<'a> {
     preview_presentation_commit: &'a Option<crate::preview_state::PreviewPresentationCommit>,
     #[cfg(feature = "tooling")]
     run_start: Instant,
-    scheduler: &'a LauncherScheduler,
     scheduler_phase: &'a mut LauncherResponseSchedulerBoundary,
     screensaver: &'a ScreensaverControl,
     selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
-    start_screen: Screen,
     startup_intro_frame_posted: bool,
-    status_text: &'a Option<LauncherStatusTextSnapshot>,
     #[cfg(feature = "tooling")]
     tooling: &'a mut Option<mister_magik_tooling_support::Session>,
     #[cfg(feature = "tooling")]
@@ -12305,25 +12247,17 @@ struct LatchWaitOutcome {
 /// confirmation; `Break` means input arrived during the wait and the frame is superseded.
 fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWaitOutcome> {
     let LatchWait {
+        status,
         card_direct_frame_rendered,
         #[cfg(feature = "tooling")]
         card_work_timing,
-        catalog,
-        catalog_background_scan_visible,
-        catalog_ready,
-        catalog_scan_percent,
-        catalog_scan_visible,
-        catalog_session,
         composition_decision,
-        confirm_selected,
-        confirm_visible,
         confirmed_presentation,
         #[cfg(feature = "tooling")]
         custom_draw_done,
         #[cfg(feature = "tooling")]
         custom_draw_start,
         director,
-        display_session,
         f,
         frame_accounting,
         frame_analytics_mode,
@@ -12338,16 +12272,10 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
         frame_t4,
         gui_profiling,
         input_observation,
-        launch_return_session,
-        launcher_bench_scenario,
         launcher_card_home,
         launcher_presenter,
         launcher_response_frame_stamp,
         launcher_response_trace,
-        launching,
-        lifecycle,
-        loading_title,
-        lock_screen,
         nav,
         pacer,
         pad,
@@ -12355,13 +12283,10 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
         preview_presentation_commit,
         #[cfg(feature = "tooling")]
         run_start,
-        scheduler,
         scheduler_phase,
         screensaver,
         selection_feedback_stamp,
-        start_screen,
         startup_intro_frame_posted,
-        status_text,
         #[cfg(feature = "tooling")]
         tooling,
         #[cfg(feature = "tooling")]
@@ -12371,58 +12296,7 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
         visible_frame_presented,
         window,
     } = ctx;
-    let finish_timing = frame_accounting.finish_frame_before_trace(
-        presented_frame,
-        nav,
-        pad,
-        catalog,
-        catalog_ready,
-        catalog_session.refresh_done(),
-        launching,
-        scheduler.visible_loading_title(loading_title),
-        catalog_scan_visible,
-        status_text
-            .as_ref()
-            .map(|text| text.catalog_scan_title.as_str())
-            .unwrap_or(""),
-        status_text
-            .as_ref()
-            .map(|text| text.catalog_scan_detail.as_str())
-            .unwrap_or(""),
-        catalog_scan_percent,
-        catalog_background_scan_visible,
-        status_text
-            .as_ref()
-            .map(|text| text.catalog_scan_message.as_str())
-            .unwrap_or(""),
-        confirm_visible,
-        status_text
-            .as_ref()
-            .map(|text| text.confirm_title.as_str())
-            .unwrap_or(""),
-        status_text
-            .as_ref()
-            .map(|text| text.confirm_message.as_str())
-            .unwrap_or(""),
-        confirm_selected,
-        status_text
-            .as_ref()
-            .map(|text| text.confirm_left_label.as_str())
-            .unwrap_or(""),
-        status_text
-            .as_ref()
-            .map(|text| text.confirm_right_label.as_str())
-            .unwrap_or(""),
-        launcher_bench_scenario,
-        start_screen,
-        lock_screen,
-        display_session.reassert_count(),
-        display_session.last_reassert_frame(),
-        display_session.last_reassert_ok(),
-        display_session.last_reassert_error(),
-        lifecycle.startup_status(),
-        launch_return_session,
-    );
+    let finish_timing = frame_accounting.finish_frame_before_trace(presented_frame, status);
     record_launcher_frame_phase!(LauncherFramePhase::PostSubmitAccounted);
     // Latch mode posts the hidden buffer first, then spends the slack before
     // vblank on normal per-frame accounting. The final wait is only the

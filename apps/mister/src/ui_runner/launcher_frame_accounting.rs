@@ -4,7 +4,7 @@
 use super::launcher_compositor::{
     LauncherPresentBackend, LauncherPresentResult, LauncherPresentStatus,
 };
-use super::launcher_loop::LaunchReturnSession;
+use super::launcher_loop::{LaunchReturnSession, LauncherStatusTextSnapshot};
 #[cfg(feature = "tooling")]
 use super::launcher_pacing::FrameProductionClass;
 use super::launcher_pacing::{FrameProductionTrace, LauncherPacingTrace};
@@ -1172,6 +1172,33 @@ impl std::fmt::Display for ArcadeUpdateTrace {
     }
 }
 
+/// What the status snapshot and the automation observer read when a frame finishes.
+#[derive(Clone, Copy)]
+pub(super) struct FrameStatusView<'a> {
+    pub(super) nav: &'a LauncherNav,
+    pub(super) pad: &'a PadPool,
+    pub(super) catalog: &'a ArcadeCatalog,
+    pub(super) catalog_ready: bool,
+    pub(super) catalog_refresh_done: bool,
+    pub(super) launching: bool,
+    pub(super) loading_title: &'a str,
+    pub(super) catalog_scan_visible: bool,
+    pub(super) catalog_scan_percent: i32,
+    pub(super) catalog_background_scan_visible: bool,
+    pub(super) confirm_visible: bool,
+    pub(super) confirm_selected: i32,
+    pub(super) status_text: Option<&'a LauncherStatusTextSnapshot>,
+    pub(super) launcher_bench_scenario: Option<LauncherBenchScenario>,
+    pub(super) start_screen: Screen,
+    pub(super) lock_screen: Option<Screen>,
+    pub(super) route_reassert_count: u64,
+    pub(super) last_route_reassert_frame: u64,
+    pub(super) last_route_reassert_ok: bool,
+    pub(super) last_route_reassert_error: &'a str,
+    pub(super) startup_status: StartupRevealStatus,
+    pub(super) return_session: &'a LaunchReturnSession,
+}
+
 impl LauncherFrameAccounting {
     pub(super) fn new(
         run_start: Instant,
@@ -1401,48 +1428,35 @@ impl LauncherFrameAccounting {
         self.frame_analytics_mode
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn finish_frame(
         &mut self,
         frame: LauncherPresentedFrame,
         start: Instant,
         disp: &mut MappedRgb565Framebuffer,
-        nav: &LauncherNav,
-        pad: &PadPool,
-        catalog: &ArcadeCatalog,
-        catalog_ready: bool,
-        catalog_refresh_done: bool,
-        launching: bool,
-        loading_title: &str,
-        catalog_scan_visible: bool,
-        catalog_scan_title: &str,
-        catalog_scan_detail: &str,
-        catalog_scan_percent: i32,
-        catalog_background_scan_visible: bool,
-        catalog_scan_message: &str,
-        confirm_visible: bool,
-        confirm_title: &str,
-        confirm_message: &str,
-        confirm_selected: i32,
-        confirm_left_label: &str,
-        confirm_right_label: &str,
-        launcher_bench_scenario: Option<LauncherBenchScenario>,
-        start_screen: Screen,
-        lock_screen: Option<Screen>,
-        route_reassert_count: u64,
-        last_route_reassert_frame: u64,
-        last_route_reassert_ok: bool,
-        last_route_reassert_error: &str,
-        startup_status: StartupRevealStatus,
-        return_session: &LaunchReturnSession,
+        status: FrameStatusView<'_>,
         #[cfg_attr(
             not(any(feature = "bench-tools", feature = "diagnostics")),
             allow(unused_variables)
         )]
         defer_preview_trace_flush: bool,
     ) {
-        let timing = self.finish_frame_before_trace(
+        let timing = self.finish_frame_before_trace(&frame, status);
+        self.record_finished_frame(
             &frame,
+            start,
+            disp,
+            status.catalog_ready,
+            timing.runtime_status_write_us,
+        );
+        self.write_finished_frame_trace(&frame, timing, defer_preview_trace_flush);
+    }
+
+    pub(super) fn finish_frame_before_trace(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        status: FrameStatusView<'_>,
+    ) -> LauncherFrameFinishTraceTiming {
+        let FrameStatusView {
             nav,
             pad,
             catalog,
@@ -1451,17 +1465,11 @@ impl LauncherFrameAccounting {
             launching,
             loading_title,
             catalog_scan_visible,
-            catalog_scan_title,
-            catalog_scan_detail,
             catalog_scan_percent,
             catalog_background_scan_visible,
-            catalog_scan_message,
             confirm_visible,
-            confirm_title,
-            confirm_message,
             confirm_selected,
-            confirm_left_label,
-            confirm_right_label,
+            status_text,
             launcher_bench_scenario,
             start_screen,
             lock_screen,
@@ -1471,50 +1479,15 @@ impl LauncherFrameAccounting {
             last_route_reassert_error,
             startup_status,
             return_session,
-        );
-        self.record_finished_frame(
-            &frame,
-            start,
-            disp,
-            catalog_ready,
-            timing.runtime_status_write_us,
-        );
-        self.write_finished_frame_trace(&frame, timing, defer_preview_trace_flush);
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn finish_frame_before_trace(
-        &mut self,
-        frame: &LauncherPresentedFrame,
-        nav: &LauncherNav,
-        pad: &PadPool,
-        catalog: &ArcadeCatalog,
-        catalog_ready: bool,
-        catalog_refresh_done: bool,
-        launching: bool,
-        loading_title: &str,
-        catalog_scan_visible: bool,
-        catalog_scan_title: &str,
-        catalog_scan_detail: &str,
-        catalog_scan_percent: i32,
-        catalog_background_scan_visible: bool,
-        catalog_scan_message: &str,
-        confirm_visible: bool,
-        confirm_title: &str,
-        confirm_message: &str,
-        confirm_selected: i32,
-        confirm_left_label: &str,
-        confirm_right_label: &str,
-        launcher_bench_scenario: Option<LauncherBenchScenario>,
-        start_screen: Screen,
-        lock_screen: Option<Screen>,
-        route_reassert_count: u64,
-        last_route_reassert_frame: u64,
-        last_route_reassert_ok: bool,
-        last_route_reassert_error: &str,
-        startup_status: StartupRevealStatus,
-        return_session: &LaunchReturnSession,
-    ) -> LauncherFrameFinishTraceTiming {
+        } = status;
+        let text = |field: fn(&LauncherStatusTextSnapshot) -> &str| status_text.map_or("", field);
+        let catalog_scan_title = text(|t| t.catalog_scan_title.as_str());
+        let catalog_scan_detail = text(|t| t.catalog_scan_detail.as_str());
+        let catalog_scan_message = text(|t| t.catalog_scan_message.as_str());
+        let confirm_title = text(|t| t.confirm_title.as_str());
+        let confirm_message = text(|t| t.confirm_message.as_str());
+        let confirm_left_label = text(|t| t.confirm_left_label.as_str());
+        let confirm_right_label = text(|t| t.confirm_right_label.as_str());
         let frame_finish_start = Instant::now();
         self.observe_automation_state(
             nav,
