@@ -625,9 +625,15 @@ long-lived object built for one scene or orientation met a frame of another on a
   caller, so each worker now records its exit in a drop guard that runs only while panicking: the card
   worker reports the panic once from `lock_state`, and the compositor disables itself. The device aborts
   before either guard runs. The retry is gone on every build, so a face-build panic now fails the worker
-  instead of retrying once with a cold cache. The product decision to run the device with
-  `panic = "unwind"` stays open: it would let a worker panic be survived, but a panic on a catalog or
-  media thread would then leave the app running without that thread instead of restarting it.
+  instead of retrying once with a cold cache.
+- **Decided (PR 31): the device keeps `panic = "abort"`.** The one real device crash in this work (see
+  PR 31 below) was a panic on the card helper thread. Under abort it restarted the app, was diagnosed
+  from its report and was fixed. Under unwind that thread would have died and the app would have carried
+  on degraded; the card renderer now degrades to one thread (PR 27), but the catalog threads have no
+  equivalent (`crates/catalog` has no panic handling; other worker crates were not searched), so a panic
+  there would silently remove a feature with no restart and no report.
+  Surviving worker panics needs per-thread supervision first (restart or disable, and report), which is
+  its own piece of work. Reopen the decision when that exists.
 - **Checked and found sound:** the preview compositor (each request carries its layout and sizes its own
   buffers), screenshot-parade (asserts are test-only), the lab-only `ArcadeCardRenderer` (fixed
   960x540, never used by the launcher), the kernel asserts in `launcher_texture.rs` (every call is sized
@@ -683,8 +689,19 @@ long-lived object built for one scene or orientation met a frame of another on a
 - **Not done:** the portrait drops from system-panel and Games-list transitions (9 per run, in both
   orientations, unchanged) are a separate transition cost. A ten-repetition A/B against a build from
   `main` would settle the drop rate; it needs that build deployed.
-- **Open:** the crash with pid 29749 (signal 6) predates this deploy. Its report is over 8 KB, which the
-  device CLI cannot read, so its cause is unexplained.
+- **Crash with pid 29749: explained in PR 31** (below), no longer open.
+
+**PR 31 (in progress): the crash with pid 29749 is explained, and the device agent can show large crash reports.**
+
+- The device agent refused any crash report over 8 KB, and the 41 KB report for pid 29749 was over it. It
+  now returns a report whole up to 64 KiB and, above that, its first and last 32 KiB with the size, which
+  hold the cause and the backtrace. Test: `crash_reports_keep_their_head_and_tail_when_large`. The agent
+  was updated on the device with `MISTER_MAGIK2_REPAIR=1 scripts/magik deploy`; a plain deploy does not
+  replace the agent unless a new capability is required.
+- The report: a panic at `launcher.rs:642`, an `assert!` on `copy_rect_strided` in the helper thread's
+  band rotation, at 2026-10-07 21:53 UTC. This is the crash fixed by PR 26 and PR 27: the assert is gone and
+  `rotate_band` now checks the layout and returns. The only other stored report is an old test-harness
+  panic (`ui_test_support.rs`, September) and is unrelated.
 
 ## Phased plan
 

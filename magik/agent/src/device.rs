@@ -3,7 +3,7 @@ use crate::{Agent, Envelope, main_control, response};
 use serde_json::{Value, json};
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const MAIN_STATUS: &str = "/tmp/mister-magik/main-status.json";
@@ -60,6 +60,57 @@ fn evidence_file(path: &Path) -> Value {
     }
 }
 
+const CRASH_REPORT_LIMIT: u64 = 65536;
+const CRASH_ROOTS: [&str; 2] = [
+    "/media/fat/mister-magik-dev/crashes",
+    "/media/fat/mister-magik/crashes",
+];
+
+/// The report the main status names as the last crash, if it lies inside a crash
+/// directory. Nothing outside those directories is ever read.
+fn reported_crash_path(status: &Value) -> Option<PathBuf> {
+    let path = PathBuf::from(status["last_crash_report"].as_str()?);
+    let inside = CRASH_ROOTS.iter().any(|root| path.starts_with(root));
+    (inside && !path.components().any(|part| part == Component::ParentDir)).then_some(path)
+}
+
+/// A crash report, bounded. Whole when it fits, otherwise its first and last
+/// halves, which hold the cause and the backtrace; the middle is skipped.
+fn crash_file(path: &Path) -> Value {
+    let read_part = |offset: u64, length: u64| -> Result<String, String> {
+        use std::io::{Seek, SeekFrom};
+        let mut file = File::open(path).map_err(|e| e.to_string())?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(length)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    };
+    let size = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) => return json!({"path":path,"error":error.to_string()}),
+    };
+    let half = CRASH_REPORT_LIMIT / 2;
+    let parts = if size <= CRASH_REPORT_LIMIT {
+        read_part(0, size).map(|text| json!({"text":text}))
+    } else {
+        read_part(0, half).and_then(|head| {
+            read_part(size - half, half)
+                .map(|tail| json!({"truncated":true,"bytes":size,"head":head,"tail":tail}))
+        })
+    };
+    match parts {
+        Ok(Value::Object(mut fields)) => {
+            fields.insert("path".into(), json!(path));
+            Value::Object(fields)
+        }
+        Ok(other) => other,
+        Err(error) => json!({"path":path,"error":error}),
+    }
+}
+
 fn evidence() -> Value {
     let mut crashes = Vec::new();
     let files: Vec<_> = [
@@ -71,10 +122,7 @@ fn evidence() -> Value {
     .iter()
     .map(|path| json!({"path":path,"tail":crate::log_tail(Path::new(path))}))
     .collect();
-    for root in [
-        "/media/fat/mister-magik-dev/crashes",
-        "/media/fat/mister-magik/crashes",
-    ] {
+    for root in CRASH_ROOTS {
         match fs::read_dir(root) {
             Ok(entries) => {
                 let mut paths: Vec<_> = entries
@@ -86,11 +134,17 @@ fn evidence() -> Value {
                     .collect();
                 paths.sort();
                 if let Some(path) = paths.last() {
-                    crashes.push(evidence_file(path));
+                    crashes.push(crash_file(path));
                 }
             }
             Err(error) => crashes.push(json!({"path":root,"error":error.to_string()})),
         }
+    }
+    // The newest report by name is not always the one the launcher reports.
+    if let Some(path) = status().ok().as_ref().and_then(reported_crash_path)
+        && !crashes.iter().any(|crash| crash["path"] == json!(path))
+    {
+        crashes.push(crash_file(&path));
     }
     json!({"main_status":status().map_err(|e|json!({"error":e})).unwrap_or_else(|e|e),
         "main_log": {"path":"/tmp/mister-magik-main.log","tail":crate::log_tail(Path::new("/tmp/mister-magik-main.log"))},
@@ -288,5 +342,36 @@ mod tests {
         assert!(evidence_file(&root).get("error").is_some());
         fs::remove_file(&root).unwrap();
         assert!(evidence_file(&root).get("error").is_some());
+    }
+    #[test]
+    fn only_a_report_inside_a_crash_directory_is_read() {
+        let named = |path: &str| reported_crash_path(&json!({"last_crash_report":path}));
+        let inside = "/media/fat/mister-magik-dev/crashes/report-main-1-2.json";
+        assert_eq!(named(inside), Some(PathBuf::from(inside)));
+        assert!(named("/media/fat/mister-magik/crashes/report-slint-3.json").is_some());
+        assert!(named("/etc/passwd").is_none());
+        assert!(named("/media/fat/mister-magik-dev/crashes/../../secret.json").is_none());
+        assert!(named("/media/fat/mister-magik-dev/crashes-other/x.json").is_none());
+        assert!(reported_crash_path(&json!({})).is_none());
+    }
+    #[test]
+    fn crash_reports_keep_their_head_and_tail_when_large() {
+        let path = std::env::temp_dir().join(format!("magik-crash-{}", std::process::id()));
+        let half = (CRASH_REPORT_LIMIT / 2) as usize;
+        let mut big = vec![b'h'; half];
+        big.extend(vec![b'm'; 5000]);
+        big.extend(vec![b't'; half]);
+        fs::write(&path, &big).unwrap();
+        let report = crash_file(&path);
+        assert_eq!(report["truncated"], true);
+        assert_eq!(report["bytes"], big.len());
+        assert!(report["head"].as_str().unwrap().bytes().all(|b| b == b'h'));
+        assert!(report["tail"].as_str().unwrap().bytes().all(|b| b == b't'));
+        fs::write(&path, b"{\"signal\":6}").unwrap();
+        let small = crash_file(&path);
+        assert_eq!(small["text"], "{\"signal\":6}");
+        assert!(small.get("truncated").is_none());
+        fs::remove_file(&path).unwrap();
+        assert!(crash_file(&path).get("error").is_some());
     }
 }
