@@ -665,10 +665,16 @@ long-lived object built for one scene or orientation met a frame of another on a
   and the real band then rendered after it.
 - **Fix.** A cancel flag shared with the one job in flight. Setting it when a speculative band is
   discarded stops the helper at its next 32-pixel strip, so the wait is one strip, not one band.
-  Test: `a_cancelled_band_stops_before_its_first_strip`.
+  Tests: `a_cancelled_band_stops_before_its_first_strip` (the tile) and
+  `a_discarded_band_stops_and_the_next_job_completes` (the discard sequence, with the helper held until
+  the renderer has asked it to stop).
 - **After the fix, portrait:** 31 drops in 1,675 presentations; discard-caused card drops 15 to 2; mean
-  discard time 11.1 ms to 4.3 ms. The total moved less than the mechanism predicted: 40 to 31 is about one
-  standard deviation for three repetitions, so the drop-rate gain is **not established** at this sample.
+  producer time on card frames with no render-ahead 18.3 ms to 13.3 ms. `discarded_helper_us` fell from
+  11.1 ms to 4.3 ms, but it is the discarded job's own wall time, now cut off at the stop, so it is
+  evidence the band stopped early, not a measurement of the UI wait. The wait itself was not measured
+  directly; the producer time is the supporting number. The total moved less than the mechanism
+  predicted: 40 to 31 is about one standard deviation for three repetitions, so the drop-rate gain is
+  **not established** at this sample.
 - **Landscape:** 22 drops before, 25 after. Landscape had no discard-caused drops before, so the change
   cannot reach them; the difference is inside the per-repetition spread (7, 8, 7 before; 10, 6, 9 after).
 - **Pre-existing failure on `main`, fixed here.** The `animation_time_sources` guard expected 1 wall-clock

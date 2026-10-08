@@ -129,6 +129,8 @@ pub struct ParallelFrameTiming {
     pub helper_ahead_lead_us: u64,
     pub discarded_helper_us: u64,
     pub discarded_helper_cpu_us: Option<u64>,
+    /// The discarded band was stopped at a strip boundary, not finished.
+    pub discarded_helper_stopped: bool,
     pub primary_us: u64,
     pub secondary_us: u64,
     pub wait_us: u64,
@@ -167,6 +169,8 @@ struct Completion {
     #[cfg(feature = "launcher-profile")]
     profile: Option<crate::launcher_profile::Report>,
     buffer: PreparedLauncherFrame,
+    /// The job saw its cancel flag and left the band partial.
+    stopped: bool,
     wall_us: u64,
     cpu_us: Option<u64>,
     run_delay_us: Option<u64>,
@@ -213,6 +217,13 @@ fn copy_helper_band(
     micros(started)
 }
 
+/// The cancel handle for the job about to be sent. Every dispatch clears the
+/// shared flag here first. At most one job is ever in flight, and the previous
+/// one has been received, so this cannot cancel a running job.
+fn arm_cancel(cancel: &Arc<AtomicBool>) -> Arc<AtomicBool> {
+    cancel.store(false, Ordering::Relaxed);
+    Arc::clone(cancel)
+}
 fn micros(start: Instant) -> u64 {
     start.elapsed().as_micros() as u64
 }
@@ -274,6 +285,7 @@ impl ParallelLauncherRenderer {
                             #[cfg(feature = "launcher-profile")]
                             profile,
                             buffer: job.buffer,
+                            stopped: !finished,
                             wall_us,
                             cpu_us,
                             run_delay_us,
@@ -328,11 +340,11 @@ impl ParallelLauncherRenderer {
             .as_ref()
             .filter(|_| !helper_ahead)
             .map(|ahead| ahead.request.generation);
-        let (discarded_helper_us, discarded_helper_cpu_us) =
+        let (discarded_helper_us, discarded_helper_cpu_us, discarded_helper_stopped) =
             if self.ahead.is_some() && !helper_ahead {
                 self.retire_ahead()?
             } else {
-                (0, None)
+                (0, None, false)
             };
         if !helper_ahead {
             self.fit_shape(preparer, geometry);
@@ -347,7 +359,7 @@ impl ParallelLauncherRenderer {
             .as_ref()
             .map_or_else(|| clamp_split(self.split, left, right), |ahead| ahead.split);
         if !helper_ahead {
-            self.cancel.store(false, Ordering::Relaxed);
+            let cancel = arm_cancel(&self.cancel);
             self.requests
                 .as_ref()
                 .ok_or("card renderer stopped")?
@@ -358,7 +370,7 @@ impl ParallelLauncherRenderer {
                     dispatched_at: Instant::now(),
                     split,
                     rotation: self.rotation,
-                    cancel: Arc::clone(&self.cancel),
+                    cancel,
                 })
                 .map_err(|e| e.to_string())?;
         }
@@ -413,6 +425,7 @@ impl ParallelLauncherRenderer {
             helper_ahead_lead_us,
             discarded_helper_us,
             discarded_helper_cpu_us,
+            discarded_helper_stopped,
             primary_us,
             secondary_us: completed.wall_us,
             wait_us,
@@ -474,7 +487,7 @@ impl ParallelLauncherRenderer {
         let (left, right) = geometry.clip;
         let split = clamp_split(self.split, left, right);
         let dispatched_at = Instant::now();
-        self.cancel.store(false, Ordering::Relaxed);
+        let cancel = arm_cancel(&self.cancel);
         let job = Job {
             preparer: preparer.clone(),
             request,
@@ -482,7 +495,7 @@ impl ParallelLauncherRenderer {
             dispatched_at,
             split,
             rotation: self.rotation,
-            cancel: Arc::clone(&self.cancel),
+            cancel,
         };
         if let Err(error) = sender.send(job) {
             let mut buffer = error.0.buffer;
@@ -499,7 +512,7 @@ impl ParallelLauncherRenderer {
         Ok(true)
     }
 
-    fn retire_ahead(&mut self) -> Result<(u64, Option<u64>), String> {
+    fn retire_ahead(&mut self) -> Result<(u64, Option<u64>, bool), String> {
         self.ahead.take();
         // The helper stops at its next strip; waiting costs that strip, not the band.
         self.cancel.store(true, Ordering::Relaxed);
@@ -512,7 +525,7 @@ impl ParallelLauncherRenderer {
             .buffer
             .swap_scratch(self.helper.as_mut().ok_or("helper output unavailable")?);
         self.spare = Some(completed.buffer);
-        Ok((completed.wall_us, completed.cpu_us))
+        Ok((completed.wall_us, completed.cpu_us, completed.stopped))
     }
 
     /// Retain separate immutable sources for the native two-tile publisher.
@@ -1317,5 +1330,105 @@ mod tests {
         let mut reference = preparer.new_tile_buffer();
         preparer.render_tile(request, &mut reference, clip);
         assert!(completed.pixels() == reference.pixels());
+    }
+
+    /// The real discard sequence: a speculative band is in flight and held at
+    /// its start, the next request has another source, so the band is discarded.
+    /// The helper must see the flag and stop at its first strip, the frame must
+    /// still equal the serial render, and the job after it must run to the end.
+    #[test]
+    fn a_discarded_band_stops_and_the_next_job_completes() {
+        static HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        fn hold_helper() -> Option<u64> {
+            if std::thread::current().name() == Some("card-tile-helper") {
+                while HELD.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+            }
+            None
+        }
+        let clocks = ThreadClocks {
+            cpu_us: hold_helper,
+            run_delay_us: || None,
+        };
+        let scene = LauncherScene::new(960, 540);
+        let cards = ["A", "B", "C", "D", "E", "F"].map(|name| LauncherCard {
+            id: LauncherCardId::Consoles,
+            name,
+            games: Some(12),
+            colour: 0x2a7f,
+        });
+        let data = LauncherData {
+            cards: &cards,
+            selected: 0,
+            library_games: 72,
+            collections: 6,
+            favourites: 1,
+            clock: "12:00",
+            level: LauncherLevel::Root,
+        };
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 0,
+            phase: BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 180,
+        };
+        let first = LauncherFrameRequest {
+            frame,
+            timestamp_us: 0,
+            generation: 1,
+        };
+        let mut page = scene.prepare(data);
+        let mut serial = scene.prepare(data);
+        serial.render_frame(frame);
+        let preparer = page.frame_preparer();
+        let mut renderer =
+            ParallelLauncherRenderer::new(preparer.clone(), None, Some(clocks)).unwrap();
+        renderer.retain_bands(true);
+        page.render_parallel_frame(&mut renderer, first).unwrap();
+
+        let ahead = LauncherFrameRequest {
+            timestamp_us: 16_000,
+            generation: 2,
+            ..first
+        };
+        HELD.store(true, Ordering::Release);
+        assert!(renderer.prepare_helper_ahead(&preparer, ahead).unwrap());
+        // Release the held helper only once the renderer has asked it to stop.
+        // The timeout turns a missing cancel into a failed assertion, not a hang.
+        let cancel = Arc::clone(&renderer.cancel);
+        let releaser = std::thread::spawn(move || {
+            let deadline = Instant::now() + std::time::Duration::from_secs(5);
+            while !cancel.load(Ordering::Acquire) && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            HELD.store(false, Ordering::Release);
+        });
+        let mut replacement = scene.prepare(data);
+        let timing = replacement
+            .render_parallel_frame(&mut renderer, ahead)
+            .unwrap();
+        releaser.join().unwrap();
+        assert!(!timing.helper_ahead);
+        assert!(timing.discarded_helper_stopped);
+        replacement.merge_retained_helper(&mut renderer);
+        assert!(replacement.pixels() == serial.pixels());
+
+        let later = LauncherFrameRequest {
+            timestamp_us: 32_000,
+            generation: 3,
+            ..first
+        };
+        let preparer = replacement.frame_preparer();
+        assert!(renderer.prepare_helper_ahead(&preparer, later).unwrap());
+        let timing = replacement
+            .render_parallel_frame(&mut renderer, later)
+            .unwrap();
+        assert!(timing.helper_ahead);
+        assert!(!timing.discarded_helper_stopped);
+        replacement.merge_retained_helper(&mut renderer);
+        assert!(replacement.pixels() == serial.pixels());
     }
 }

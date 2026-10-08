@@ -1815,6 +1815,69 @@ mod tests {
         assert_eq!(session.artwork_retry_at, 9_000);
     }
 
+    /// Pending and trick content prepares on the worker, never the UI thread, in
+    /// every motion mode, settles to the expected pixels, re-prepares a changed
+    /// card, and keeps ownership bounded. It replaces the retry test's checks that
+    /// did not depend on a panic.
+    #[test]
+    fn pending_and_trick_content_prepares_off_ui_in_every_motion_mode() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for (motion, prefetch) in [(false, false), (true, false), (true, true)] {
+            let scene = LauncherScene::new(960, 540);
+            let root = snapshot();
+            let mut destination = consoles();
+            let mut session =
+                LauncherCardHomeSession::new(scene, root.clone(), 0, "07:28").unwrap();
+            session.update(scene, &root, 0, 0.0, "07:28", 0, motion, None, None);
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let worker_attempts = Arc::clone(&attempts);
+            let ui_thread = std::thread::current().id();
+            session.preparation = HomePreparation::start(
+                Arc::clone(&session.fonts),
+                root.menu_id.clone(),
+                CardFaceCache::default(),
+                move |_| {
+                    assert_ne!(std::thread::current().id(), ui_thread);
+                    worker_attempts.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .unwrap();
+            if prefetch {
+                session.prefetch(vec![destination.clone()]);
+            }
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut now = 16;
+            loop {
+                session.update(
+                    scene,
+                    &destination,
+                    0,
+                    0.0,
+                    "07:28",
+                    now,
+                    motion,
+                    None,
+                    Some("arcade"),
+                );
+                session.render();
+                if session.content_ready(scene, &destination) && session.trick.is_none() {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "Home content never settled");
+                now += 16;
+                std::thread::yield_now();
+            }
+            let expected = prepare(scene, &destination, 0, "07:28", &session.fonts);
+            assert_eq!(session.render(), expected.pixels());
+            destination.cards[0].games = Some(123);
+            wait_content(&mut session, scene, &destination, 0, "07:28");
+            let expected = prepare(scene, &destination, 0, "07:28", &session.fonts);
+            assert_eq!(session.render(), expected.pixels());
+            assert!(attempts.load(Ordering::SeqCst) >= 2);
+            assert!(session.preparation.ownership_is_bounded());
+        }
+    }
+
     #[test]
     fn repeated_preparation_panic_is_reported_instead_of_hanging_or_retrying_forever() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
