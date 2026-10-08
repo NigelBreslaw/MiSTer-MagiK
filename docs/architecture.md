@@ -755,7 +755,7 @@ Samples go into log-linear histograms, four buckets per octave, so reported
 percentiles are bucket lower bounds (at most about 19 % low). Every five seconds
 the rolling window is summarised into `phase_profile` in the runtime status:
 per-phase count, mean, p50, p95, p99 and max, the produced/idle/yielded counts,
-frames over the display period, and the three slowest frames with their time per
+frames longer than one and a half display periods (a missed refresh, not jitter), and the three slowest frames with their time per
 phase. Measurement windows (`check`) carry their own span as `phase_profile` in
 the window JSON, so a run can be compared phase by phase against another build.
 

@@ -243,7 +243,7 @@ impl FrameProfile {
                     }
                 }
                 self.total.record(total_us);
-                if self.budget_us > 0 && total_us > self.budget_us {
+                if self.budget_us > 0 && total_us > self.budget_us + self.budget_us / 2 {
                     self.over_budget += 1;
                 }
                 self.keep_if_slow(FrameSample {
@@ -572,7 +572,7 @@ mod tests {
         }
         let window = profile.summarise(at(start, clock));
         assert_eq!(window.produced, 5);
-        assert_eq!(window.over_budget, 3);
+        assert_eq!(window.over_budget, 1);
         let kept: Vec<u32> = window.worst.iter().map(|sample| sample.total_us).collect();
         assert_eq!(kept, vec![20_000, 12_000, 9_000]);
         // A mark past the window length closes it and starts a fresh one.
