@@ -848,10 +848,13 @@ projection kernels are on the 60 fps budget.
 - Deferred, not started: shrinking `run_launcher_loop`. Measured on `main` after #272: the function is
   lines 5005 to 13581 of `launcher_loop.rs` (about 8,600). Setup is about 1,200 lines and the frame loop
   about 7,300. Its largest blocks are the input phase (about 1,400 lines), the latch-trace flush
-  (about 750; its one call to `finish_frame_before_trace` passes about 45 locals) and the navigation
+  (about 750; its one call to `finish_frame_before_trace` passes 29 arguments) and the navigation
   composition block (about 390). Each shares dozens of locals with the rest, so no block extracts as
-  a method without first moving those locals into a context struct. That move touches every line of
-  the function and changes no behaviour; it is a separate decision, not a bounded extraction.
+  a method without first moving those locals into a context struct.
+- **Corrected by [launcher-loop-plan.md](launcher-loop-plan.md).** That note overstated the cost. Measured:
+  of 221 setup locals only 30 are shared widely, 99 are used by at most one loop statement, and a startup
+  struct that the function destructures leaves the frame-loop body unchanged. The plan stages the work by
+  measured line count, with a stop rule.
 
 What the walks in PR 10 and PR 11 say the director has to be (measured, not assumed):
 
