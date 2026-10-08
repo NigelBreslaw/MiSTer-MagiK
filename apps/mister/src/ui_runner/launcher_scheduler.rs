@@ -139,11 +139,6 @@ impl MediaJobEventBuf {
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    #[cfg(test)]
     fn capacity(&self) -> usize {
         self.events.capacity()
     }
@@ -626,6 +621,7 @@ pub(super) struct LauncherScheduler {
 }
 
 impl LauncherScheduler {
+    #[cfg(test)]
     pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
         let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
         let archive_cache =
@@ -633,6 +629,7 @@ impl LauncherScheduler {
         Self::with_catalog_config(launch_handoff_bench_enabled, paths, archive_cache)
     }
 
+    #[cfg(test)]
     pub(super) fn with_catalog_config(
         launch_handoff_bench_enabled: bool,
         catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
@@ -714,6 +711,7 @@ impl LauncherScheduler {
         matches!(self.system_shard, SystemShardJobState::Running { .. })
     }
 
+    #[cfg(test)]
     pub(super) fn system_shard_attempted(&self, system_id: &str) -> bool {
         self.system_shard_attempted.contains(system_id)
     }
@@ -1409,6 +1407,7 @@ impl LauncherScheduler {
         matches!(self.media, MediaJobState::Running(_))
     }
 
+    #[cfg(test)]
     pub(super) fn media_worker_unavailable(&self) -> bool {
         matches!(self.media, MediaJobState::Unavailable)
     }

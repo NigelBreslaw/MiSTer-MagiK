@@ -5,57 +5,32 @@
 //!
 //! These checks preserve source boundary ordering during cleanup. They do not
 //! execute the production frame pipeline or establish runtime behavior.
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum LauncherFramePhase {
-    Begin,
-    StartupCatalogReplay,
-    LaunchRecoveryApplied,
-    PreInputMaintenance,
-    InputCaptured,
-    InputConsumed,
-    InputRouted,
-    IdleWait,
-    FullScreenTransition,
-    FramePlanned,
-    FrameSubmitted,
-    CompatibilityResolved,
-    PostSubmitAccounted,
-    ConfirmationInterrupted,
-    ActiveConfirmed,
-    ReadinessSourceAcknowledged,
-    FrameAccounted,
-    PresentationAcknowledged,
-    FrameFinished,
-    Yielded,
-}
+//! The `record_launcher_frame_phase!` markers expand to nothing; they exist as text.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn production_hooks_keep_the_core_boundaries_ordered() {
         let source = include_str!("launcher_loop.rs")
             .split_whitespace()
             .collect::<String>();
         let phases = [
-            LauncherFramePhase::Begin,
-            LauncherFramePhase::PreInputMaintenance,
-            LauncherFramePhase::InputCaptured,
-            LauncherFramePhase::InputRouted,
-            LauncherFramePhase::FramePlanned,
-            LauncherFramePhase::FrameSubmitted,
-            LauncherFramePhase::FrameAccounted,
-            LauncherFramePhase::PresentationAcknowledged,
-            LauncherFramePhase::FrameFinished,
+            "Begin",
+            "PreInputMaintenance",
+            "InputCaptured",
+            "InputRouted",
+            "FramePlanned",
+            "FrameSubmitted",
+            "FrameAccounted",
+            "PresentationAcknowledged",
+            "FrameFinished",
         ];
         let mut previous = 0;
         for phase in phases {
-            let marker = format!("record_launcher_frame_phase!(LauncherFramePhase::{phase:?})");
+            let marker = format!("record_launcher_frame_phase!(LauncherFramePhase::{phase})");
             let offset = source[previous..]
                 .find(&marker)
-                .unwrap_or_else(|| panic!("missing production phase hook {phase:?}"));
+                .unwrap_or_else(|| panic!("missing production phase hook {phase}"));
             previous += offset + marker.len();
         }
     }
@@ -117,18 +92,18 @@ mod tests {
             .split_whitespace()
             .collect::<String>();
         let phases = [
-            LauncherFramePhase::FrameSubmitted,
-            LauncherFramePhase::PostSubmitAccounted,
-            LauncherFramePhase::ActiveConfirmed,
-            LauncherFramePhase::ReadinessSourceAcknowledged,
-            LauncherFramePhase::FrameAccounted,
+            "FrameSubmitted",
+            "PostSubmitAccounted",
+            "ActiveConfirmed",
+            "ReadinessSourceAcknowledged",
+            "FrameAccounted",
         ];
         let mut previous = 0;
         for phase in phases {
-            let marker = format!("record_launcher_frame_phase!(LauncherFramePhase::{phase:?})");
+            let marker = format!("record_launcher_frame_phase!(LauncherFramePhase::{phase})");
             let offset = source[previous..]
                 .find(&marker)
-                .unwrap_or_else(|| panic!("missing production phase hook {phase:?}"));
+                .unwrap_or_else(|| panic!("missing production phase hook {phase}"));
             previous += offset + marker.len();
         }
     }

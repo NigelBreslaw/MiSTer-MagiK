@@ -131,6 +131,7 @@ impl LauncherDisplaySession {
         launching || action.force_full_present
     }
 
+    #[cfg(test)]
     pub(in crate::ui_runner) fn activate_fb0_route_with_hardware(
         &mut self,
         hardware: &mut impl LauncherDisplayHardware,

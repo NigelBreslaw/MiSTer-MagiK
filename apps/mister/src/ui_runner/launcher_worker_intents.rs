@@ -10,7 +10,6 @@ pub(super) enum LauncherWorkerUiIntent {
     CatalogScan(CatalogScanBridgeStatus),
     ClearCatalogScan,
     ShowCatalogBackgroundScan,
-    HideCatalogBackgroundScan,
     InfoDatabaseBuild(String),
     MediaProgress {
         rows: Vec<MediaProgressDisplayRow>,
@@ -23,10 +22,7 @@ impl LauncherWorkerUiIntent {
     pub(super) fn is_catalog_presentation(&self) -> bool {
         matches!(
             self,
-            Self::CatalogScan(_)
-                | Self::ClearCatalogScan
-                | Self::ShowCatalogBackgroundScan
-                | Self::HideCatalogBackgroundScan
+            Self::CatalogScan(_) | Self::ClearCatalogScan | Self::ShowCatalogBackgroundScan
         )
     }
 }
@@ -61,9 +57,6 @@ pub(super) fn sync_launcher_worker_ui_intent(
         LauncherWorkerUiIntent::ShowCatalogBackgroundScan => {
             status_presenter.clear_catalog_scan();
             status_presenter.sync_catalog_background_scan_visible(true);
-        }
-        LauncherWorkerUiIntent::HideCatalogBackgroundScan => {
-            status_presenter.sync_catalog_background_scan_visible(false);
         }
         LauncherWorkerUiIntent::InfoDatabaseBuild(value) => {
             app.global::<slint_ui::launcher::InformationView>()
@@ -264,6 +257,7 @@ pub(super) fn catalog_system_update_progress_intent(
     ))
 }
 
+#[cfg(test)]
 pub(super) fn catalog_persistence_failed_intent(
     error: impl Into<String>,
 ) -> LauncherWorkerUiIntent {
@@ -461,6 +455,7 @@ impl MediaProgressDisplay {
     }
 }
 
+#[cfg(test)]
 fn media_progress_model(
     rows: &[MediaProgressDisplayRow],
 ) -> ModelRc<slint_ui::launcher::MediaPackRow> {
