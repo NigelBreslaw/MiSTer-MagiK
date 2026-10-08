@@ -8831,61 +8831,36 @@ pub(super) fn run_launcher_loop(
                 frames,
                 run_start,
                 Instant::now(),
-                &nav,
-                &pad,
-                &catalog,
-                catalog_ready,
-                catalog_session.refresh_done(),
-                launching,
-                scheduler.visible_loading_title(&loading_title),
-                catalog_scan_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_title.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_detail.as_str())
-                    .unwrap_or(""),
-                catalog_scan_percent,
-                catalog_background_scan_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.catalog_scan_message.as_str())
-                    .unwrap_or(""),
-                confirm_visible,
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_title.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_message.as_str())
-                    .unwrap_or(""),
-                confirm_selected,
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_left_label.as_str())
-                    .unwrap_or(""),
-                status_text
-                    .as_ref()
-                    .map(|text| text.confirm_right_label.as_str())
-                    .unwrap_or(""),
+                FrameStatusView {
+                    nav: &nav,
+                    pad: &pad,
+                    catalog: &catalog,
+                    catalog_ready,
+                    catalog_refresh_done: catalog_session.refresh_done(),
+                    launching,
+                    loading_title: scheduler.visible_loading_title(&loading_title),
+                    catalog_scan_visible,
+                    catalog_scan_percent,
+                    catalog_background_scan_visible,
+                    confirm_visible,
+                    confirm_selected,
+                    status_text: status_text.as_ref(),
+                    launcher_bench_scenario,
+                    start_screen,
+                    lock_screen,
+                    route_reassert_count: display_session.reassert_count(),
+                    last_route_reassert_frame: display_session.last_reassert_frame(),
+                    last_route_reassert_ok: display_session.last_reassert_ok(),
+                    last_route_reassert_error: display_session.last_reassert_error(),
+                    startup_status,
+                    return_session: &launch_return_session,
+                },
                 nav.arcade.selected,
                 nav.arcade.visual_index,
                 preview.trace_cache_state(),
                 preview_transition.current_label(frame_clock.elapsed()),
                 1.0,
                 &composition_status,
-                launcher_bench_scenario,
-                start_screen,
-                lock_screen,
-                display_session.reassert_count(),
-                display_session.last_reassert_frame(),
-                display_session.last_reassert_ok(),
-                display_session.last_reassert_error(),
-                startup_status,
-                &launch_return_session,
             );
             scheduler_phase = launcher_response_trace
                 .record_scheduler_interval("idle-accounting", scheduler_phase);
