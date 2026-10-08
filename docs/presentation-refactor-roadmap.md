@@ -595,6 +595,41 @@ effect.**
   screen orientation through Settings so a run can cover every output. Its first version pressed Keep
   when no dialog was up and toggled Reduce motion on; it now presses Keep only when the dialog shows.
 
+**PR 27 (in progress): an audit of the crash class "state that outlives a scene or orientation change".**
+
+Two device crashes had one shape (PR 21: the card renderer's buffers; PR 26: the helper's rotation): a
+long-lived object built for one scene or orientation met a frame of another on a worker thread, and
+`panic = "abort"` (the base `release` profile every device profile inherits) turned the panic into
+`LauncherCrashed`. What the audit covered and found:
+
+- **Fixed: a layout of another orientation reached the main thread.** `direct_physical_bands` accepted
+  any output layout whose pixel count matched, and portrait and landscape have the same count. A stale
+  layout either produced garbage or tripped an assert in the rotation helper on the presenting thread.
+  It now refuses a layout whose logical size is not the scene's, and `rotate_rect` reports failure
+  instead of panicking, so a bad frame falls back to the Slint path.
+- **Fixed: a failed card renderer aborted the app.** `render_output` and `render_trick_frame` ended in
+  `.expect("current card rendering failed")`, and the landscape direct path in `.expect("matching
+  current helper band")`. A renderer error (helper stopped, pose mismatch) now stops the two-thread
+  renderer, logs it, and renders on one thread; the direct path turns itself off. Same pixels, slower.
+- **A walk over the session.** `scene_and_orientation_walks_never_break_the_session` takes a seeded random
+  path through five scenes (HDMI landscape and portrait, CRT 240p, CRT portrait, CRT 480p), frames at
+  rest and in motion, and direct bands asked for with the right and a stale layout. A frame must equal
+  the serial render for its scene. Without the layout check it panics.
+- **Device matrix, no crash:** every orientation (normal, clockwise, counterclockwise) with HDMI 720p,
+  768p, 1200p, 1536p, 1440p and 1080p, CRT 240p, 288p, 480p and 576p, at the home screen.
+- **Found, not changed: recovery that cannot run.** `launcher_card_preparation.rs` retries a failed face
+  build with a cold cache inside `catch_unwind`, and `preview_compositor.rs` wraps its worker the same
+  way, but with `panic = "abort"` neither ever sees a panic. The retry is dead code on the device. Whether
+  to run the device with `panic = "unwind"` (so a worker panic can be survived) is a product decision
+  with a wide effect: a panic on a catalog or media thread would then leave the app running without
+  that thread instead of restarting it.
+- **Checked and found sound:** the preview compositor (each request carries its layout and sizes its own
+  buffers), screenshot-parade (asserts are test-only), the lab-only `ArcadeCardRenderer` (fixed
+  960x540, never used by the launcher), the kernel asserts in `launcher_texture.rs` (every call is sized
+  from the face and the buffer together).
+- **Not audited:** the Arcade list layers, the CRT backdrop worker and the particle systems across an
+  orientation change while their screen is open.
+
 ## Phased plan
 
 Each phase ships on its own and is checked with `scripts/magik check` on
