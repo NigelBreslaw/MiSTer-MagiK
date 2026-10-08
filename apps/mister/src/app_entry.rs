@@ -991,76 +991,10 @@ fn run_reset_delete_screenshot_packs(args: &[String]) {
 }
 
 #[cfg(test)]
-const DEFAULT_LIBRARY_REFRESH_LOCK_PATH: &str = "/tmp/mister-magik/library-refresh.lock";
-
-#[cfg(test)]
 fn usable_library_database_exists(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.len() > 0)
         .unwrap_or(false)
-}
-
-#[cfg(test)]
-fn library_refresh_lock_path() -> PathBuf {
-    std::env::var("MISTER_LIBRARY_REFRESH_LOCK")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_LIBRARY_REFRESH_LOCK_PATH))
-}
-
-#[cfg(test)]
-enum RefreshLockState {
-    Acquired(LibraryRefreshLock),
-    Active { pid: u32 },
-}
-
-#[cfg(test)]
-struct LibraryRefreshLock {
-    path: PathBuf,
-    pid: u32,
-}
-
-#[cfg(test)]
-impl LibraryRefreshLock {
-    fn acquire(path: &Path) -> Result<RefreshLockState, String> {
-        let pid = std::process::id();
-        acquire_library_refresh_lock(path, pid, process_is_library_refresh).map(|state| match state
-        {
-            RefreshLockDecision::Acquired => RefreshLockState::Acquired(Self {
-                path: path.to_path_buf(),
-                pid,
-            }),
-            RefreshLockDecision::Active { pid } => RefreshLockState::Active { pid },
-        })
-    }
-}
-
-#[cfg(test)]
-impl Drop for LibraryRefreshLock {
-    fn drop(&mut self) {
-        remove_pid_lock_if_owner(&self.path, self.pid);
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-enum RefreshLockDecision {
-    Acquired,
-    Active { pid: u32 },
-}
-
-#[cfg(test)]
-fn acquire_library_refresh_lock<F>(
-    path: &Path,
-    pid: u32,
-    is_active_refresh: F,
-) -> Result<RefreshLockDecision, String>
-where
-    F: Fn(u32) -> bool,
-{
-    acquire_pid_lock(path, pid, is_active_refresh).map(|decision| match decision {
-        PidLockDecision::Acquired => RefreshLockDecision::Acquired,
-        PidLockDecision::Active { pid } => RefreshLockDecision::Active { pid },
-    })
 }
 
 fn create_lock_file(path: &Path, pid: u32) -> std::io::Result<()> {
@@ -1073,14 +1007,6 @@ fn read_lock_pid(path: &Path) -> Option<u32> {
     let mut text = String::new();
     File::open(path).ok()?.read_to_string(&mut text).ok()?;
     text.trim().parse::<u32>().ok()
-}
-
-#[cfg(test)]
-fn process_is_library_refresh(pid: u32) -> bool {
-    process_cmdline_parts(pid).is_some_and(|parts| {
-        parts.iter().any(|part| part.ends_with("mister-magik-fb"))
-            && parts.iter().any(|part| *part == "library-refresh")
-    })
 }
 
 fn process_is_mister_magik_fb(pid: u32) -> bool {
@@ -2991,12 +2917,11 @@ mod tests {
     #[test]
     fn library_refresh_lock_acquires_and_cleans_up() {
         let lock_path = unique_temp_path("refresh-lock-acquire").join("library-refresh.lock");
-        let decision =
-            acquire_library_refresh_lock(&lock_path, 1234, |_| false).expect("acquire lock");
-        assert_eq!(decision, RefreshLockDecision::Acquired);
+        let decision = acquire_pid_lock(&lock_path, 1234, |_| false).expect("acquire lock");
+        assert_eq!(decision, PidLockDecision::Acquired);
         assert_eq!(read_lock_pid(&lock_path), Some(1234));
 
-        let guard = LibraryRefreshLock {
+        let guard = MagikProcessLock {
             path: lock_path.clone(),
             pid: 1234,
         };
@@ -3012,10 +2937,9 @@ mod tests {
         fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
         create_lock_file(&lock_path, 7777).expect("seed lock");
 
-        let decision =
-            acquire_library_refresh_lock(&lock_path, 8888, |pid| pid == 7777).expect("check lock");
+        let decision = acquire_pid_lock(&lock_path, 8888, |pid| pid == 7777).expect("check lock");
 
-        assert_eq!(decision, RefreshLockDecision::Active { pid: 7777 });
+        assert_eq!(decision, PidLockDecision::Active { pid: 7777 });
         assert_eq!(read_lock_pid(&lock_path), Some(7777));
         let _ = fs::remove_dir_all(lock_path.parent().unwrap());
     }
@@ -3026,10 +2950,9 @@ mod tests {
         fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
         create_lock_file(&lock_path, 7777).expect("seed stale lock");
 
-        let decision =
-            acquire_library_refresh_lock(&lock_path, 8888, |_| false).expect("replace stale lock");
+        let decision = acquire_pid_lock(&lock_path, 8888, |_| false).expect("replace stale lock");
 
-        assert_eq!(decision, RefreshLockDecision::Acquired);
+        assert_eq!(decision, PidLockDecision::Acquired);
         assert_eq!(read_lock_pid(&lock_path), Some(8888));
         let _ = fs::remove_dir_all(lock_path.parent().unwrap());
     }
@@ -3040,7 +2963,7 @@ mod tests {
         fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
         create_lock_file(&lock_path, 7777).expect("seed other lock");
 
-        let guard = LibraryRefreshLock {
+        let guard = MagikProcessLock {
             path: lock_path.clone(),
             pid: 8888,
         };

@@ -10492,7 +10492,6 @@ pub(super) fn run_launcher_loop(
                 RenderAheadPoll::SequenceFailure {
                     expected_tick,
                     actual_tick,
-                    frame: _,
                 } => {
                     crate::ui_errln!(
                         "screensaver: strict render-ahead sequence failure expected_tick={} actual_tick={}",
@@ -14429,7 +14428,6 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
-                load_us: _,
                 source,
                 durable,
                 generation_fingerprint,

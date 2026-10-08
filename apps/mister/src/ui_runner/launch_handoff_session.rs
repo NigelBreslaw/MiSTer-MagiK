@@ -49,7 +49,6 @@ impl PendingLaunch {
 #[derive(Debug)]
 struct StagedLaunch {
     title: String,
-    launch_ref: String,
     launch_target: LaunchTarget,
     action_start: Instant,
     return_state: Option<launcher::LaunchReturnState>,
@@ -181,7 +180,6 @@ impl LaunchHandoffBenchConfig {
 
 #[derive(Debug)]
 struct LaunchWorkerRequest {
-    launch_ref: String,
     launch_target: LaunchTarget,
     bench_iteration: Option<usize>,
     bench_delay: Duration,
@@ -324,7 +322,6 @@ impl LaunchHandoffSession {
         });
         self.staged = Some(StagedLaunch {
             title,
-            launch_ref: launch_ref.to_string(),
             launch_target,
             action_start: now,
             return_state,
@@ -359,7 +356,6 @@ impl LaunchHandoffSession {
             return_catalog_capsule::remove_return_catalog_capsule();
         }
         let rx = (self.spawn_worker)(LaunchWorkerRequest {
-            launch_ref: staged.launch_ref,
             launch_target: staged.launch_target,
             bench_iteration: staged.bench_iteration,
             bench_delay: self.bench.delay,

@@ -376,10 +376,6 @@ impl<'a> LayerTarget<'a> {
         rect
     }
 
-    pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
-        restore_cached_565(self.target, snapshot)
-    }
-
     pub(super) fn restore_presentation_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
         restore_cached_565(self.target, snapshot)
     }
