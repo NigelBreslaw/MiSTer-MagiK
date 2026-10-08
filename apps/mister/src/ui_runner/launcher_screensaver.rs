@@ -226,28 +226,20 @@ impl LauncherScreensaver {
         trace
     }
 
-    pub fn is_loading_archive(&self) -> bool {
-        false
-    }
-
+    // Used by the macOS preview binary through `production_launcher_screensaver`,
+    // which only exists on macOS; on other hosts nothing reaches them.
+    #[cfg(target_os = "macos")]
     pub fn active_card_count(&self) -> usize {
         self.parade
             .as_ref()
             .map_or(0, ScreenshotParade::active_card_count)
     }
 
+    #[cfg(target_os = "macos")]
     pub fn has_pending_card_work(&self) -> bool {
         self.parade
             .as_ref()
             .is_some_and(ScreenshotParade::has_pending_work)
-    }
-
-    pub fn preparation_slack(
-        &self,
-    ) -> Option<Arc<mister_magik_screenshot_parade::PreparationSlack>> {
-        self.parade
-            .as_ref()
-            .and_then(ScreenshotParade::preparation_slack)
     }
 }
 
