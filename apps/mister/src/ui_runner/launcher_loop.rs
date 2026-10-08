@@ -11779,406 +11779,6 @@ pub(super) fn run_launcher_loop(
     }
 }
 
-/// Whether the launcher loop carries on after a frame phase.
-enum FrameFlow {
-    Continue,
-    Break,
-}
-
-/// What the end of a presented frame reads and updates: confirmation logging, presentation
-/// acknowledgement, the benchmark completion checks and the frame-tail accounting.
-struct FrameCloseout<'a> {
-    accepted_and_active_confirmed: bool,
-    benchmark_config: &'a LauncherBenchmarkConfig,
-    bridge_models: &'a mut LauncherViewPresenters,
-    composition_decision: &'a UiCompositionDecision,
-    confirmed_present_sequence: u16,
-    confirmed_presentation: PresentationOutcome,
-    director: &'a mut PresentationDirector,
-    f: &'a mut Fpga,
-    frame_accounting: &'a mut LauncherFrameAccounting,
-    frame_clock: &'a mut mister_magik_core::frame_clock::FrameClock,
-    frames: &'a mut u64,
-    input_latency_lab: &'a mut InputLatencyLab,
-    input_observation: crate::input_hub::InputObservation,
-    latch_backend_active: bool,
-    latch_trace_flush_deferred: bool,
-    latch_v5_qualification: &'a mut LatchV5Qualification,
-    latency_critical_input_pending: &'a mut bool,
-    launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
-    launcher_response_trace: &'a mut LauncherResponseTrace,
-    nav: &'a LauncherNav,
-    orientation_benchmark: &'a mut OrientationTransitionBenchmark,
-    orientation_benchmark_completed_at: &'a mut Option<Instant>,
-    orientation_benchmark_terminal_status_requested: &'a mut bool,
-    preview: &'a mut PreviewState,
-    preview_presentation_commit: Option<crate::preview_state::PreviewPresentationCommit>,
-    #[cfg(feature = "tooling")]
-    run_start: Instant,
-    runtime_status_sequence_before_frame: u64,
-    scheduler: &'a LauncherScheduler,
-    scheduler_phase: &'a mut LauncherResponseSchedulerBoundary,
-    screensaver_cpu_profile: &'a mut cpu_profile::ScreensaverProfiler,
-    selection_feedback_confirmed_at: Option<Instant>,
-    selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
-    settings_navigation_benchmark: &'a mut SettingsNavigationBenchmark,
-    settings_navigation_benchmark_completed_at: &'a mut Option<Instant>,
-    settings_navigation_status_baseline: &'a mut Option<u64>,
-    start: Instant,
-    #[cfg(feature = "tooling")]
-    tooling: &'a mut Option<mister_magik_tooling_support::Session>,
-    #[cfg(feature = "tooling")]
-    tooling_frame_evidence:
-        &'a mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
-    visible_frame_presented: bool,
-    window: &'a Rc<MisterSoftwareWindow>,
-}
-
-/// Runs the end of the frame; `Break` ends the launcher loop.
-fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
-    let FrameCloseout {
-        accepted_and_active_confirmed,
-        benchmark_config,
-        bridge_models,
-        composition_decision,
-        confirmed_present_sequence,
-        confirmed_presentation,
-        director,
-        f,
-        frame_accounting,
-        frame_clock,
-        frames,
-        input_latency_lab,
-        input_observation,
-        latch_backend_active,
-        latch_trace_flush_deferred,
-        latch_v5_qualification,
-        latency_critical_input_pending,
-        launcher_response_frame_stamp,
-        launcher_response_trace,
-        nav,
-        orientation_benchmark,
-        orientation_benchmark_completed_at,
-        orientation_benchmark_terminal_status_requested,
-        preview,
-        preview_presentation_commit,
-        #[cfg(feature = "tooling")]
-        run_start,
-        runtime_status_sequence_before_frame,
-        scheduler,
-        scheduler_phase,
-        screensaver_cpu_profile,
-        selection_feedback_confirmed_at,
-        selection_feedback_stamp,
-        settings_navigation_benchmark,
-        settings_navigation_benchmark_completed_at,
-        settings_navigation_status_baseline,
-        start,
-        #[cfg(feature = "tooling")]
-        tooling,
-        #[cfg(feature = "tooling")]
-        tooling_frame_evidence,
-        visible_frame_presented,
-        window,
-    } = closeout;
-
-    let post_confirmation_pmu = launcher_response_trace.input_pmu_span(
-        launcher_response_frame_stamp.is_some(),
-        "launcher-response.post-confirmation",
-    );
-    if let Some(confirmed_at) = selection_feedback_confirmed_at {
-        for confirmation in
-            bridge_models.confirm_selection_feedback(selection_feedback_stamp, confirmed_at)
-        {
-            launcher_response_trace.record_feedback_confirmation(
-                &confirmation,
-                *frames,
-                confirmed_present_sequence,
-            );
-            match confirmation {
-                crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
-                    event_id,
-                    target,
-                    ..
-                } => crate::ui_logln!(
-                    "selection_feedback phase=visible event={} surface={} item={} frame={} sequence={}",
-                    event_id,
-                    target.surface,
-                    target.item,
-                    *frames,
-                    confirmed_present_sequence,
-                ),
-                crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
-                    event_id,
-                    target,
-                    visible_for,
-                    ..
-                } => crate::ui_logln!(
-                    "selection_feedback phase=hidden event={} surface={} item={} dwell_us={} frame={} sequence={}",
-                    event_id,
-                    target.surface,
-                    target.item,
-                    visible_for.as_micros(),
-                    *frames,
-                    confirmed_present_sequence,
-                ),
-                crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
-                    event_id,
-                    target,
-                    ..
-                } => crate::ui_logln!(
-                    "selection_feedback phase=cancelled event={} surface={} item={} frame={} sequence={}",
-                    event_id,
-                    target.surface,
-                    target.item,
-                    *frames,
-                    confirmed_present_sequence,
-                ),
-            }
-        }
-    }
-    drop(post_confirmation_pmu);
-    *scheduler_phase =
-        launcher_response_trace.record_scheduler_interval("post-confirmation", *scheduler_phase);
-    launcher_response_trace.flush();
-    if launcher_response_trace.take_frame_trace_finalize_pending() {
-        frame_accounting.finish_preview_scroll_trace();
-        if let Err(error) = launcher_response_trace.finish_pmu() {
-            crate::ui_errln!("launcher response PMU finalization failed: {error}");
-        }
-        screensaver_cpu_profile.complete_launcher_response(frames.saturating_add(1));
-    }
-    let frame_tail_pmu = launcher_response_trace.input_pmu_span(
-        launcher_response_frame_stamp.is_some(),
-        "launcher-response.frame-tail",
-    );
-    latch_v5_qualification.record_present(
-        accepted_and_active_confirmed,
-        scheduler.catalog_worker_running(),
-    );
-    if accepted_and_active_confirmed
-        && orientation_benchmark.enabled()
-        && director.chart.is_live()
-        && let Some(record) = orientation_benchmark.note_confirmed_presentation(
-            nav.settings.screen_orientation,
-            *frames,
-            confirmed_present_sequence,
-            Instant::now(),
-            f.read_magik_presentation_telemetry(),
-        )
-    {
-        print_startup_event(
-            start,
-            "orientation_transition_benchmark_leg_completed",
-            format!(
-                concat!(
-                    "leg={} effect={} label={} from={} to={} start_frame={} ",
-                    "rendered_endpoint_frame={} presented_endpoint_frame={} sequence={}"
-                ),
-                record.leg.index + 1,
-                record.leg.effect.id(),
-                record.leg.label(),
-                record.leg.from.id(),
-                record.leg.to.id(),
-                record.start_frame,
-                record.rendered_endpoint_frame,
-                record.presented_endpoint_frame,
-                record.presented_sequence,
-            ),
-        );
-    }
-    record_launcher_frame_phase!(LauncherFramePhase::FrameAccounted);
-    let preview_present_confirmed = if latch_trace_flush_deferred {
-        accepted_and_active_confirmed
-    } else {
-        visible_frame_presented
-    };
-    if preview_present_confirmed && let Some(commit) = preview_presentation_commit {
-        preview.confirm_presentation(commit);
-    }
-    let retired = director.on_presented(
-        composition_decision,
-        PresentationOutcome::resolve(
-            accepted_and_active_confirmed,
-            confirmed_presentation,
-            !latch_trace_flush_deferred && visible_frame_presented,
-            (*frames as u16).wrapping_add(1).max(1),
-        ),
-    );
-    if retired && let Some(generation) = preview.retirement_generation() {
-        preview.confirm_retirement(generation);
-    }
-    record_launcher_frame_phase!(LauncherFramePhase::PresentationAcknowledged);
-    if preview.frame_intent().is_actionable() {
-        window.request_redraw();
-    }
-    latch_v5_qualification.write_state_if_due(Instant::now());
-    if if latch_backend_active {
-        accepted_and_active_confirmed
-    } else {
-        visible_frame_presented
-    } {
-        *latency_critical_input_pending = false;
-    }
-    #[cfg(feature = "tooling")]
-    super::launcher_frame_accounting::capture_evidence_cpu(tooling_frame_evidence, 6, run_start);
-    #[cfg(feature = "tooling")]
-    if let Some(mut frame) = tooling_frame_evidence.take()
-        && let Some(session) = tooling.as_mut()
-        && session.frame_evidence_active()
-    {
-        let observer_start = Instant::now();
-        frame.outcome = if accepted_and_active_confirmed {
-            "active"
-        } else if visible_frame_presented {
-            "published"
-        } else {
-            "idle"
-        };
-        frame.finish_us = duration_us(run_start, observer_start);
-        session.record_frame_evidence(frame, observer_start);
-    }
-    *frames += 1;
-    frame_clock.advance();
-    if settings_navigation_benchmark.complete()
-        && settings_navigation_benchmark_completed_at.is_none()
-    {
-        if let Some(directory) = settings_navigation_benchmark_evidence_dir()
-            && let Err(error) = write_settings_navigation_benchmark_completion(
-                &directory,
-                settings_navigation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!("settings_navigation_benchmark_completion_write_failed error={error}");
-            settings_navigation_benchmark.fail("completion-write-failed");
-        }
-        if settings_navigation_benchmark.complete() {
-            let (status_baseline, request_status_write) = settings_navigation_status_drain_plan(
-                runtime_status_sequence_before_frame,
-                frame_accounting.runtime_status_submitted_sequence(),
-            );
-            *settings_navigation_status_baseline = Some(status_baseline);
-            print_startup_event(
-                start,
-                "settings_navigation_benchmark_complete",
-                format!(
-                    "orientations=normal,monitor-counterclockwise legs={} frames={frames}",
-                    settings_navigation_benchmark.records().len(),
-                ),
-            );
-            *settings_navigation_benchmark_completed_at = Some(Instant::now());
-            screensaver_cpu_profile.complete_settings_navigation_transitions(*frames);
-            if request_status_write {
-                frame_accounting.request_status_write();
-                window.request_redraw();
-            }
-        }
-    }
-    if settings_navigation_benchmark_completed_at.is_some_and(|completed| {
-        settings_navigation_status_drain_complete(
-            completed.elapsed(),
-            settings_navigation_status_baseline
-                .is_some_and(|sequence| frame_accounting.runtime_status_written_after(sequence)),
-        )
-    }) {
-        return FrameFlow::Break;
-    }
-    if settings_navigation_benchmark.failed() {
-        if let Some(directory) = settings_navigation_benchmark_evidence_dir()
-            && let Err(error) = write_settings_navigation_benchmark_completion(
-                &directory,
-                settings_navigation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!("settings_navigation_benchmark_failure_write_failed error={error}");
-        }
-        print_startup_event(
-            start,
-            "settings_navigation_benchmark_failed",
-            format!(
-                "failure={} orientation={} legs={} frames={frames}",
-                settings_navigation_benchmark.failure().unwrap_or("unknown"),
-                settings_navigation_benchmark.orientation().id(),
-                settings_navigation_benchmark.records().len(),
-            ),
-        );
-        return FrameFlow::Break;
-    }
-    if orientation_benchmark.complete() && orientation_benchmark_completed_at.is_none() {
-        if let Some(directory) = orientation_transition_benchmark_evidence_dir()
-            && let Err(error) = write_orientation_transition_benchmark_completion(
-                &directory,
-                orientation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!(
-                "orientation_transition_benchmark_completion_write_failed error={error}"
-            );
-            orientation_benchmark.fail("completion-write-failed");
-        }
-        if orientation_benchmark.complete() {
-            print_startup_event(
-                start,
-                "orientation_transition_benchmark_complete",
-                format!(
-                    "legs={} frames={frames}",
-                    orientation_benchmark.records().len()
-                ),
-            );
-            *orientation_benchmark_completed_at = Some(Instant::now());
-            screensaver_cpu_profile.complete_orientation_transitions(*frames);
-            if let Err(error) = write_orientation_transition_pmu_completion(
-                benchmark_config.orientation_pmu_completion(),
-                orientation_benchmark.effect(),
-            ) {
-                crate::ui_errln!("orientation_transition_benchmark_pmu_write_failed error={error}");
-            }
-        }
-    }
-    if let Some(completed) = *orientation_benchmark_completed_at {
-        let elapsed = completed.elapsed();
-        if elapsed >= Duration::from_millis(300)
-            && !*orientation_benchmark_terminal_status_requested
-        {
-            *orientation_benchmark_terminal_status_requested = true;
-            frame_accounting.request_status_write();
-            window.request_redraw();
-        }
-        if elapsed >= Duration::from_millis(800) {
-            return FrameFlow::Break;
-        }
-    }
-    if orientation_benchmark.failed() {
-        if let Some(directory) = orientation_transition_benchmark_evidence_dir()
-            && let Err(error) = write_orientation_transition_benchmark_completion(
-                &directory,
-                orientation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!("orientation_transition_benchmark_failure_write_failed error={error}");
-        }
-        print_startup_event(
-            start,
-            "orientation_transition_benchmark_failed",
-            format!(
-                "failure={} legs={} frames={frames}",
-                orientation_benchmark.failure().unwrap_or("unknown"),
-                orientation_benchmark.records().len(),
-            ),
-        );
-        return FrameFlow::Break;
-    }
-    launcher_response_trace.record_lab(input_latency_lab.cooperative_quantum(input_observation));
-    drop(frame_tail_pmu);
-    let _ = launcher_response_trace.record_scheduler_interval("frame-tail", *scheduler_phase);
-    record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
-    FrameFlow::Continue
-}
-
 /// What the latch post accounting, the vblank wait and the completion check read and update.
 struct LatchWait<'a> {
     status: FrameStatusView<'a>,
@@ -13348,6 +12948,406 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
             );
         }
     }
+}
+
+/// Whether the launcher loop carries on after a frame phase.
+enum FrameFlow {
+    Continue,
+    Break,
+}
+
+/// What the end of a presented frame reads and updates: confirmation logging, presentation
+/// acknowledgement, the benchmark completion checks and the frame-tail accounting.
+struct FrameCloseout<'a> {
+    accepted_and_active_confirmed: bool,
+    benchmark_config: &'a LauncherBenchmarkConfig,
+    bridge_models: &'a mut LauncherViewPresenters,
+    composition_decision: &'a UiCompositionDecision,
+    confirmed_present_sequence: u16,
+    confirmed_presentation: PresentationOutcome,
+    director: &'a mut PresentationDirector,
+    f: &'a mut Fpga,
+    frame_accounting: &'a mut LauncherFrameAccounting,
+    frame_clock: &'a mut mister_magik_core::frame_clock::FrameClock,
+    frames: &'a mut u64,
+    input_latency_lab: &'a mut InputLatencyLab,
+    input_observation: crate::input_hub::InputObservation,
+    latch_backend_active: bool,
+    latch_trace_flush_deferred: bool,
+    latch_v5_qualification: &'a mut LatchV5Qualification,
+    latency_critical_input_pending: &'a mut bool,
+    launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
+    launcher_response_trace: &'a mut LauncherResponseTrace,
+    nav: &'a LauncherNav,
+    orientation_benchmark: &'a mut OrientationTransitionBenchmark,
+    orientation_benchmark_completed_at: &'a mut Option<Instant>,
+    orientation_benchmark_terminal_status_requested: &'a mut bool,
+    preview: &'a mut PreviewState,
+    preview_presentation_commit: Option<crate::preview_state::PreviewPresentationCommit>,
+    #[cfg(feature = "tooling")]
+    run_start: Instant,
+    runtime_status_sequence_before_frame: u64,
+    scheduler: &'a LauncherScheduler,
+    scheduler_phase: &'a mut LauncherResponseSchedulerBoundary,
+    screensaver_cpu_profile: &'a mut cpu_profile::ScreensaverProfiler,
+    selection_feedback_confirmed_at: Option<Instant>,
+    selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
+    settings_navigation_benchmark: &'a mut SettingsNavigationBenchmark,
+    settings_navigation_benchmark_completed_at: &'a mut Option<Instant>,
+    settings_navigation_status_baseline: &'a mut Option<u64>,
+    start: Instant,
+    #[cfg(feature = "tooling")]
+    tooling: &'a mut Option<mister_magik_tooling_support::Session>,
+    #[cfg(feature = "tooling")]
+    tooling_frame_evidence:
+        &'a mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    visible_frame_presented: bool,
+    window: &'a Rc<MisterSoftwareWindow>,
+}
+
+/// Runs the end of the frame; `Break` ends the launcher loop.
+fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
+    let FrameCloseout {
+        accepted_and_active_confirmed,
+        benchmark_config,
+        bridge_models,
+        composition_decision,
+        confirmed_present_sequence,
+        confirmed_presentation,
+        director,
+        f,
+        frame_accounting,
+        frame_clock,
+        frames,
+        input_latency_lab,
+        input_observation,
+        latch_backend_active,
+        latch_trace_flush_deferred,
+        latch_v5_qualification,
+        latency_critical_input_pending,
+        launcher_response_frame_stamp,
+        launcher_response_trace,
+        nav,
+        orientation_benchmark,
+        orientation_benchmark_completed_at,
+        orientation_benchmark_terminal_status_requested,
+        preview,
+        preview_presentation_commit,
+        #[cfg(feature = "tooling")]
+        run_start,
+        runtime_status_sequence_before_frame,
+        scheduler,
+        scheduler_phase,
+        screensaver_cpu_profile,
+        selection_feedback_confirmed_at,
+        selection_feedback_stamp,
+        settings_navigation_benchmark,
+        settings_navigation_benchmark_completed_at,
+        settings_navigation_status_baseline,
+        start,
+        #[cfg(feature = "tooling")]
+        tooling,
+        #[cfg(feature = "tooling")]
+        tooling_frame_evidence,
+        visible_frame_presented,
+        window,
+    } = closeout;
+
+    let post_confirmation_pmu = launcher_response_trace.input_pmu_span(
+        launcher_response_frame_stamp.is_some(),
+        "launcher-response.post-confirmation",
+    );
+    if let Some(confirmed_at) = selection_feedback_confirmed_at {
+        for confirmation in
+            bridge_models.confirm_selection_feedback(selection_feedback_stamp, confirmed_at)
+        {
+            launcher_response_trace.record_feedback_confirmation(
+                &confirmation,
+                *frames,
+                confirmed_present_sequence,
+            );
+            match confirmation {
+                crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
+                    event_id,
+                    target,
+                    ..
+                } => crate::ui_logln!(
+                    "selection_feedback phase=visible event={} surface={} item={} frame={} sequence={}",
+                    event_id,
+                    target.surface,
+                    target.item,
+                    *frames,
+                    confirmed_present_sequence,
+                ),
+                crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
+                    event_id,
+                    target,
+                    visible_for,
+                    ..
+                } => crate::ui_logln!(
+                    "selection_feedback phase=hidden event={} surface={} item={} dwell_us={} frame={} sequence={}",
+                    event_id,
+                    target.surface,
+                    target.item,
+                    visible_for.as_micros(),
+                    *frames,
+                    confirmed_present_sequence,
+                ),
+                crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
+                    event_id,
+                    target,
+                    ..
+                } => crate::ui_logln!(
+                    "selection_feedback phase=cancelled event={} surface={} item={} frame={} sequence={}",
+                    event_id,
+                    target.surface,
+                    target.item,
+                    *frames,
+                    confirmed_present_sequence,
+                ),
+            }
+        }
+    }
+    drop(post_confirmation_pmu);
+    *scheduler_phase =
+        launcher_response_trace.record_scheduler_interval("post-confirmation", *scheduler_phase);
+    launcher_response_trace.flush();
+    if launcher_response_trace.take_frame_trace_finalize_pending() {
+        frame_accounting.finish_preview_scroll_trace();
+        if let Err(error) = launcher_response_trace.finish_pmu() {
+            crate::ui_errln!("launcher response PMU finalization failed: {error}");
+        }
+        screensaver_cpu_profile.complete_launcher_response(frames.saturating_add(1));
+    }
+    let frame_tail_pmu = launcher_response_trace.input_pmu_span(
+        launcher_response_frame_stamp.is_some(),
+        "launcher-response.frame-tail",
+    );
+    latch_v5_qualification.record_present(
+        accepted_and_active_confirmed,
+        scheduler.catalog_worker_running(),
+    );
+    if accepted_and_active_confirmed
+        && orientation_benchmark.enabled()
+        && director.chart.is_live()
+        && let Some(record) = orientation_benchmark.note_confirmed_presentation(
+            nav.settings.screen_orientation,
+            *frames,
+            confirmed_present_sequence,
+            Instant::now(),
+            f.read_magik_presentation_telemetry(),
+        )
+    {
+        print_startup_event(
+            start,
+            "orientation_transition_benchmark_leg_completed",
+            format!(
+                concat!(
+                    "leg={} effect={} label={} from={} to={} start_frame={} ",
+                    "rendered_endpoint_frame={} presented_endpoint_frame={} sequence={}"
+                ),
+                record.leg.index + 1,
+                record.leg.effect.id(),
+                record.leg.label(),
+                record.leg.from.id(),
+                record.leg.to.id(),
+                record.start_frame,
+                record.rendered_endpoint_frame,
+                record.presented_endpoint_frame,
+                record.presented_sequence,
+            ),
+        );
+    }
+    record_launcher_frame_phase!(LauncherFramePhase::FrameAccounted);
+    let preview_present_confirmed = if latch_trace_flush_deferred {
+        accepted_and_active_confirmed
+    } else {
+        visible_frame_presented
+    };
+    if preview_present_confirmed && let Some(commit) = preview_presentation_commit {
+        preview.confirm_presentation(commit);
+    }
+    let retired = director.on_presented(
+        composition_decision,
+        PresentationOutcome::resolve(
+            accepted_and_active_confirmed,
+            confirmed_presentation,
+            !latch_trace_flush_deferred && visible_frame_presented,
+            (*frames as u16).wrapping_add(1).max(1),
+        ),
+    );
+    if retired && let Some(generation) = preview.retirement_generation() {
+        preview.confirm_retirement(generation);
+    }
+    record_launcher_frame_phase!(LauncherFramePhase::PresentationAcknowledged);
+    if preview.frame_intent().is_actionable() {
+        window.request_redraw();
+    }
+    latch_v5_qualification.write_state_if_due(Instant::now());
+    if if latch_backend_active {
+        accepted_and_active_confirmed
+    } else {
+        visible_frame_presented
+    } {
+        *latency_critical_input_pending = false;
+    }
+    #[cfg(feature = "tooling")]
+    super::launcher_frame_accounting::capture_evidence_cpu(tooling_frame_evidence, 6, run_start);
+    #[cfg(feature = "tooling")]
+    if let Some(mut frame) = tooling_frame_evidence.take()
+        && let Some(session) = tooling.as_mut()
+        && session.frame_evidence_active()
+    {
+        let observer_start = Instant::now();
+        frame.outcome = if accepted_and_active_confirmed {
+            "active"
+        } else if visible_frame_presented {
+            "published"
+        } else {
+            "idle"
+        };
+        frame.finish_us = duration_us(run_start, observer_start);
+        session.record_frame_evidence(frame, observer_start);
+    }
+    *frames += 1;
+    frame_clock.advance();
+    if settings_navigation_benchmark.complete()
+        && settings_navigation_benchmark_completed_at.is_none()
+    {
+        if let Some(directory) = settings_navigation_benchmark_evidence_dir()
+            && let Err(error) = write_settings_navigation_benchmark_completion(
+                &directory,
+                settings_navigation_benchmark,
+                *frames,
+            )
+        {
+            crate::ui_errln!("settings_navigation_benchmark_completion_write_failed error={error}");
+            settings_navigation_benchmark.fail("completion-write-failed");
+        }
+        if settings_navigation_benchmark.complete() {
+            let (status_baseline, request_status_write) = settings_navigation_status_drain_plan(
+                runtime_status_sequence_before_frame,
+                frame_accounting.runtime_status_submitted_sequence(),
+            );
+            *settings_navigation_status_baseline = Some(status_baseline);
+            print_startup_event(
+                start,
+                "settings_navigation_benchmark_complete",
+                format!(
+                    "orientations=normal,monitor-counterclockwise legs={} frames={frames}",
+                    settings_navigation_benchmark.records().len(),
+                ),
+            );
+            *settings_navigation_benchmark_completed_at = Some(Instant::now());
+            screensaver_cpu_profile.complete_settings_navigation_transitions(*frames);
+            if request_status_write {
+                frame_accounting.request_status_write();
+                window.request_redraw();
+            }
+        }
+    }
+    if settings_navigation_benchmark_completed_at.is_some_and(|completed| {
+        settings_navigation_status_drain_complete(
+            completed.elapsed(),
+            settings_navigation_status_baseline
+                .is_some_and(|sequence| frame_accounting.runtime_status_written_after(sequence)),
+        )
+    }) {
+        return FrameFlow::Break;
+    }
+    if settings_navigation_benchmark.failed() {
+        if let Some(directory) = settings_navigation_benchmark_evidence_dir()
+            && let Err(error) = write_settings_navigation_benchmark_completion(
+                &directory,
+                settings_navigation_benchmark,
+                *frames,
+            )
+        {
+            crate::ui_errln!("settings_navigation_benchmark_failure_write_failed error={error}");
+        }
+        print_startup_event(
+            start,
+            "settings_navigation_benchmark_failed",
+            format!(
+                "failure={} orientation={} legs={} frames={frames}",
+                settings_navigation_benchmark.failure().unwrap_or("unknown"),
+                settings_navigation_benchmark.orientation().id(),
+                settings_navigation_benchmark.records().len(),
+            ),
+        );
+        return FrameFlow::Break;
+    }
+    if orientation_benchmark.complete() && orientation_benchmark_completed_at.is_none() {
+        if let Some(directory) = orientation_transition_benchmark_evidence_dir()
+            && let Err(error) = write_orientation_transition_benchmark_completion(
+                &directory,
+                orientation_benchmark,
+                *frames,
+            )
+        {
+            crate::ui_errln!(
+                "orientation_transition_benchmark_completion_write_failed error={error}"
+            );
+            orientation_benchmark.fail("completion-write-failed");
+        }
+        if orientation_benchmark.complete() {
+            print_startup_event(
+                start,
+                "orientation_transition_benchmark_complete",
+                format!(
+                    "legs={} frames={frames}",
+                    orientation_benchmark.records().len()
+                ),
+            );
+            *orientation_benchmark_completed_at = Some(Instant::now());
+            screensaver_cpu_profile.complete_orientation_transitions(*frames);
+            if let Err(error) = write_orientation_transition_pmu_completion(
+                benchmark_config.orientation_pmu_completion(),
+                orientation_benchmark.effect(),
+            ) {
+                crate::ui_errln!("orientation_transition_benchmark_pmu_write_failed error={error}");
+            }
+        }
+    }
+    if let Some(completed) = *orientation_benchmark_completed_at {
+        let elapsed = completed.elapsed();
+        if elapsed >= Duration::from_millis(300)
+            && !*orientation_benchmark_terminal_status_requested
+        {
+            *orientation_benchmark_terminal_status_requested = true;
+            frame_accounting.request_status_write();
+            window.request_redraw();
+        }
+        if elapsed >= Duration::from_millis(800) {
+            return FrameFlow::Break;
+        }
+    }
+    if orientation_benchmark.failed() {
+        if let Some(directory) = orientation_transition_benchmark_evidence_dir()
+            && let Err(error) = write_orientation_transition_benchmark_completion(
+                &directory,
+                orientation_benchmark,
+                *frames,
+            )
+        {
+            crate::ui_errln!("orientation_transition_benchmark_failure_write_failed error={error}");
+        }
+        print_startup_event(
+            start,
+            "orientation_transition_benchmark_failed",
+            format!(
+                "failure={} legs={} frames={frames}",
+                orientation_benchmark.failure().unwrap_or("unknown"),
+                orientation_benchmark.records().len(),
+            ),
+        );
+        return FrameFlow::Break;
+    }
+    launcher_response_trace.record_lab(input_latency_lab.cooperative_quantum(input_observation));
+    drop(frame_tail_pmu);
+    let _ = launcher_response_trace.record_scheduler_interval("frame-tail", *scheduler_phase);
+    record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
+    FrameFlow::Continue
 }
 
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
