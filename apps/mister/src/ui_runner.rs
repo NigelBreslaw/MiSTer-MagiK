@@ -114,21 +114,17 @@ mod arcade_drawer;
 // These leaf modules retain alternate benchmark, recovery, and diagnostic
 // routes that are deliberately compiled into the full device graph. Keep the
 // lint exception at the ownership leaf instead of the application root.
-#[allow(dead_code)]
 mod catalog_worker;
 pub(crate) use catalog_worker::run_catalog_worker_child;
 #[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
-#[allow(dead_code)]
 mod crt_backdrop_controller;
 mod crt_trial_loop;
 pub(crate) mod latch_v5_qualification;
-#[allow(dead_code)]
 mod launch_handoff_session;
 mod launcher_automation;
 #[allow(dead_code)]
 pub(crate) mod launcher_bench;
-#[allow(dead_code)]
 mod launcher_bridge;
 mod launcher_card_home;
 #[cfg(feature = "ui-preview")]
@@ -202,7 +198,6 @@ impl NativeCardPreview {
 }
 
 mod launcher_catalog_publication_test;
-#[allow(dead_code)]
 mod launcher_catalog_session;
 #[allow(dead_code)]
 mod launcher_compositor;
@@ -225,7 +220,6 @@ mod launcher_readiness;
 #[allow(dead_code)]
 mod launcher_scheduler;
 pub(crate) mod launcher_screensaver;
-#[allow(dead_code)]
 mod launcher_screensaver_pipeline;
 mod launcher_settings_pipeline;
 mod launcher_startup_intro;
@@ -237,9 +231,7 @@ pub use launcher_transition_start::{
 #[allow(dead_code)]
 mod launcher_worker_intents;
 mod preview_compositor;
-#[allow(dead_code)]
 mod raw565_preview_renderer;
-#[allow(dead_code)]
 mod screenshot_media_update_session;
 #[cfg(not(mister_ui_scope_launcher))]
 mod tear_pattern_loop;
