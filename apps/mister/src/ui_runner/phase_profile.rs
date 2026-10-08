@@ -14,6 +14,8 @@
 //! log-linear histograms (four buckets per octave, under 19 % error) and a short list of
 //! the slowest frames. Once a window has run for `WINDOW` it is summarised, kept as the
 //! latest window for the runtime status (`phase_profile` in `status.json`), and cleared.
+//! A measurement (`begin_measurement` .. `end_measurement`) records the same data over an
+//! explicit span instead, so a `check` window carries its own phase distribution.
 
 use mister_magik_fb::runtime_status::{
     PhaseProfileStatus, PhaseStatStatus, PhaseTimeStatus, WorstFrameStatus,
@@ -214,6 +216,7 @@ struct FrameProfile {
     over_budget: u64,
     worst: Vec<FrameSample>,
     latest: PhaseProfileStatus,
+    window_len: Duration,
 }
 
 impl FrameProfile {
@@ -233,6 +236,7 @@ impl FrameProfile {
             over_budget: 0,
             worst: Vec::with_capacity(WORST_FRAMES + 1),
             latest: PhaseProfileStatus::default(),
+            window_len: WINDOW,
         }
     }
 
@@ -280,7 +284,7 @@ impl FrameProfile {
             FrameEnd::Idle => self.idle += 1,
             FrameEnd::Yielded => self.yielded += 1,
         }
-        if now.saturating_duration_since(self.window_start) >= WINDOW {
+        if now.saturating_duration_since(self.window_start) >= self.window_len {
             let window = self.summarise(now);
             self.reset(now);
             return Some(window);
@@ -415,39 +419,72 @@ impl Window {
     }
 }
 
-thread_local! {
-    static PROFILE: RefCell<Option<FrameProfile>> = const { RefCell::new(None) };
+struct Profiles {
+    rolling: FrameProfile,
+    measurement: Option<FrameProfile>,
 }
 
-/// Sets the per-frame time budget (one display period) the window counts overruns against.
+thread_local! {
+    static PROFILE: RefCell<Option<Profiles>> = const { RefCell::new(None) };
+}
+
+fn with_profiles<T>(now: Instant, body: impl FnOnce(&mut Profiles) -> T) -> T {
+    PROFILE.with(|profiles| {
+        let mut profiles = profiles.borrow_mut();
+        let profiles = profiles.get_or_insert_with(|| Profiles {
+            rolling: FrameProfile::new(now),
+            measurement: None,
+        });
+        body(profiles)
+    })
+}
+
+/// Sets the per-frame time budget (one display period) the windows count overruns against.
 pub(super) fn set_budget_us(budget_us: u32) {
-    PROFILE.with(|profile| {
-        profile
-            .borrow_mut()
-            .get_or_insert_with(|| FrameProfile::new(Instant::now()))
-            .budget_us = budget_us;
+    with_profiles(Instant::now(), |profiles| {
+        profiles.rolling.budget_us = budget_us
     });
 }
 
 /// Records the end of `phase` on the calling thread's frame.
 pub(super) fn mark(phase: LauncherFramePhase) {
     let now = Instant::now();
-    PROFILE.with(|profile| {
-        let mut profile = profile.borrow_mut();
-        let profile = profile.get_or_insert_with(|| FrameProfile::new(now));
-        if let Some(window) = profile.mark(phase, now) {
-            profile.latest = window.status();
+    with_profiles(now, |profiles| {
+        if let Some(window) = profiles.rolling.mark(phase, now) {
+            profiles.rolling.latest = window.status();
+        }
+        if let Some(measurement) = profiles.measurement.as_mut() {
+            measurement.mark(phase, now);
         }
     });
 }
 
-/// The latest closed window, for the runtime status. Empty until the first window closes.
+/// The latest closed rolling window, for the runtime status. Empty until one closes.
 pub(super) fn latest() -> PhaseProfileStatus {
-    PROFILE.with(|profile| {
-        profile
-            .borrow()
-            .as_ref()
-            .map(|profile| profile.latest.clone())
+    with_profiles(Instant::now(), |profiles| profiles.rolling.latest.clone())
+}
+
+/// Starts recording a measurement span that ends only at `end_measurement`.
+#[cfg(feature = "tooling")]
+pub(super) fn begin_measurement() {
+    let now = Instant::now();
+    with_profiles(now, |profiles| {
+        let mut measurement = FrameProfile::new(now);
+        measurement.budget_us = profiles.rolling.budget_us;
+        measurement.window_len = Duration::MAX;
+        profiles.measurement = Some(measurement);
+    });
+}
+
+/// Ends the measurement span and returns its phase distribution (empty when none began).
+#[cfg(feature = "tooling")]
+pub(super) fn end_measurement() -> PhaseProfileStatus {
+    let now = Instant::now();
+    with_profiles(now, |profiles| {
+        profiles
+            .measurement
+            .take()
+            .map(|measurement| measurement.summarise(now).status())
             .unwrap_or_default()
     })
 }
@@ -609,5 +646,24 @@ mod tests {
         );
         let json = serde_json::to_value(&status).expect("status serialises");
         assert_eq!(json["worst"][0]["total_us"], 1_200);
+    }
+
+    #[cfg(feature = "tooling")]
+    #[test]
+    fn a_measurement_covers_only_its_own_span_and_never_rolls_over() {
+        // The thread-local is per test thread, so this exercises the public functions.
+        mark(LauncherFramePhase::Begin);
+        mark(LauncherFramePhase::FrameFinished);
+        begin_measurement();
+        for _ in 0..3 {
+            mark(LauncherFramePhase::Begin);
+            mark(LauncherFramePhase::FrameFinished);
+        }
+        let report = end_measurement();
+        assert_eq!(report.produced, 3);
+        assert_eq!(end_measurement(), PhaseProfileStatus::default());
+        mark(LauncherFramePhase::Begin);
+        mark(LauncherFramePhase::FrameFinished);
+        assert_eq!(end_measurement(), PhaseProfileStatus::default());
     }
 }

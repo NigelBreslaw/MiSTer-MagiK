@@ -5392,6 +5392,18 @@ pub(super) fn run_launcher_loop(
             }
             let window_is_open =
                 session.metrics.window_start.is_some() && session.metrics.window.is_none();
+            if !window_was_open && window_is_open {
+                super::phase_profile::begin_measurement();
+            } else if window_was_open && !window_is_open {
+                let report = super::phase_profile::end_measurement();
+                if let Some(window) = session.metrics.window.as_mut() {
+                    window["phase_profile"] =
+                        serde_json::to_value(report).expect("phase profile JSON");
+                }
+                if let Err(error) = session.publish_metrics(ui.render_w(), ui.render_h()) {
+                    session.metrics.error = Some(error);
+                }
+            }
             if renderer_profile_requested && !window_was_open && window_is_open {
                 let _ = mister_magik_framebuffer_scenes::launcher_profile::take();
                 mister_magik_framebuffer_scenes::launcher_profile::enable_wall_time();
