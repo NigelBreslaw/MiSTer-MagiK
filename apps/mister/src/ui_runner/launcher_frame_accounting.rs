@@ -4,7 +4,7 @@
 use super::launcher_compositor::{
     LauncherPresentBackend, LauncherPresentResult, LauncherPresentStatus,
 };
-use super::launcher_loop::LaunchReturnSession;
+use super::launcher_loop::{LaunchReturnSession, LauncherStatusTextSnapshot};
 #[cfg(feature = "tooling")]
 use super::launcher_pacing::FrameProductionClass;
 use super::launcher_pacing::{FrameProductionTrace, LauncherPacingTrace};
@@ -1172,6 +1172,61 @@ impl std::fmt::Display for ArcadeUpdateTrace {
     }
 }
 
+/// What the status snapshot and the automation observer read when a frame finishes.
+#[derive(Clone, Copy)]
+pub(super) struct FrameStatusView<'a> {
+    pub(super) nav: &'a LauncherNav,
+    pub(super) pad: &'a PadPool,
+    pub(super) catalog: &'a ArcadeCatalog,
+    pub(super) catalog_ready: bool,
+    pub(super) catalog_refresh_done: bool,
+    pub(super) launching: bool,
+    pub(super) loading_title: &'a str,
+    pub(super) catalog_scan_visible: bool,
+    pub(super) catalog_scan_percent: i32,
+    pub(super) catalog_background_scan_visible: bool,
+    pub(super) confirm_visible: bool,
+    pub(super) confirm_selected: i32,
+    pub(super) status_text: Option<&'a LauncherStatusTextSnapshot>,
+    pub(super) launcher_bench_scenario: Option<LauncherBenchScenario>,
+    pub(super) start_screen: Screen,
+    pub(super) lock_screen: Option<Screen>,
+    pub(super) route_reassert_count: u64,
+    pub(super) last_route_reassert_frame: u64,
+    pub(super) last_route_reassert_ok: bool,
+    pub(super) last_route_reassert_error: &'a str,
+    pub(super) startup_status: StartupRevealStatus,
+    pub(super) return_session: &'a LaunchReturnSession,
+}
+
+impl<'a> FrameStatusView<'a> {
+    /// The snapshot's status strings, or empty ones when no snapshot was taken this frame.
+    pub(super) fn strings(&self) -> FrameStatusStrings<'a> {
+        let text =
+            |field: fn(&LauncherStatusTextSnapshot) -> &str| self.status_text.map_or("", field);
+        FrameStatusStrings {
+            catalog_scan_title: text(|t| t.catalog_scan_title.as_str()),
+            catalog_scan_detail: text(|t| t.catalog_scan_detail.as_str()),
+            catalog_scan_message: text(|t| t.catalog_scan_message.as_str()),
+            confirm_title: text(|t| t.confirm_title.as_str()),
+            confirm_message: text(|t| t.confirm_message.as_str()),
+            confirm_left_label: text(|t| t.confirm_left_label.as_str()),
+            confirm_right_label: text(|t| t.confirm_right_label.as_str()),
+        }
+    }
+}
+
+/// The status strings of a `FrameStatusView`.
+pub(super) struct FrameStatusStrings<'a> {
+    pub(super) catalog_scan_title: &'a str,
+    pub(super) catalog_scan_detail: &'a str,
+    pub(super) catalog_scan_message: &'a str,
+    pub(super) confirm_title: &'a str,
+    pub(super) confirm_message: &'a str,
+    pub(super) confirm_left_label: &'a str,
+    pub(super) confirm_right_label: &'a str,
+}
+
 impl LauncherFrameAccounting {
     pub(super) fn new(
         run_start: Instant,
@@ -1401,120 +1456,47 @@ impl LauncherFrameAccounting {
         self.frame_analytics_mode
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn finish_frame(
         &mut self,
         frame: LauncherPresentedFrame,
         start: Instant,
         disp: &mut MappedRgb565Framebuffer,
-        nav: &LauncherNav,
-        pad: &PadPool,
-        catalog: &ArcadeCatalog,
-        catalog_ready: bool,
-        catalog_refresh_done: bool,
-        launching: bool,
-        loading_title: &str,
-        catalog_scan_visible: bool,
-        catalog_scan_title: &str,
-        catalog_scan_detail: &str,
-        catalog_scan_percent: i32,
-        catalog_background_scan_visible: bool,
-        catalog_scan_message: &str,
-        confirm_visible: bool,
-        confirm_title: &str,
-        confirm_message: &str,
-        confirm_selected: i32,
-        confirm_left_label: &str,
-        confirm_right_label: &str,
-        launcher_bench_scenario: Option<LauncherBenchScenario>,
-        start_screen: Screen,
-        lock_screen: Option<Screen>,
-        route_reassert_count: u64,
-        last_route_reassert_frame: u64,
-        last_route_reassert_ok: bool,
-        last_route_reassert_error: &str,
-        startup_status: StartupRevealStatus,
-        return_session: &LaunchReturnSession,
+        status: FrameStatusView<'_>,
         #[cfg_attr(
             not(any(feature = "bench-tools", feature = "diagnostics")),
             allow(unused_variables)
         )]
         defer_preview_trace_flush: bool,
     ) {
-        let timing = self.finish_frame_before_trace(
-            &frame,
-            nav,
-            pad,
-            catalog,
-            catalog_ready,
-            catalog_refresh_done,
-            launching,
-            loading_title,
-            catalog_scan_visible,
-            catalog_scan_title,
-            catalog_scan_detail,
-            catalog_scan_percent,
-            catalog_background_scan_visible,
-            catalog_scan_message,
-            confirm_visible,
-            confirm_title,
-            confirm_message,
-            confirm_selected,
-            confirm_left_label,
-            confirm_right_label,
-            launcher_bench_scenario,
-            start_screen,
-            lock_screen,
-            route_reassert_count,
-            last_route_reassert_frame,
-            last_route_reassert_ok,
-            last_route_reassert_error,
-            startup_status,
-            return_session,
-        );
+        let timing = self.finish_frame_before_trace(&frame, status);
         self.record_finished_frame(
             &frame,
             start,
             disp,
-            catalog_ready,
+            status.catalog_ready,
             timing.runtime_status_write_us,
         );
         self.write_finished_frame_trace(&frame, timing, defer_preview_trace_flush);
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn finish_frame_before_trace(
         &mut self,
         frame: &LauncherPresentedFrame,
-        nav: &LauncherNav,
-        pad: &PadPool,
-        catalog: &ArcadeCatalog,
-        catalog_ready: bool,
-        catalog_refresh_done: bool,
-        launching: bool,
-        loading_title: &str,
-        catalog_scan_visible: bool,
-        catalog_scan_title: &str,
-        catalog_scan_detail: &str,
-        catalog_scan_percent: i32,
-        catalog_background_scan_visible: bool,
-        catalog_scan_message: &str,
-        confirm_visible: bool,
-        confirm_title: &str,
-        confirm_message: &str,
-        confirm_selected: i32,
-        confirm_left_label: &str,
-        confirm_right_label: &str,
-        launcher_bench_scenario: Option<LauncherBenchScenario>,
-        start_screen: Screen,
-        lock_screen: Option<Screen>,
-        route_reassert_count: u64,
-        last_route_reassert_frame: u64,
-        last_route_reassert_ok: bool,
-        last_route_reassert_error: &str,
-        startup_status: StartupRevealStatus,
-        return_session: &LaunchReturnSession,
+        status: FrameStatusView<'_>,
     ) -> LauncherFrameFinishTraceTiming {
+        let FrameStatusView {
+            nav,
+            catalog,
+            launching,
+            loading_title,
+            confirm_visible,
+            ..
+        } = status;
+        let FrameStatusStrings {
+            confirm_title,
+            confirm_message,
+            ..
+        } = status.strings();
         let frame_finish_start = Instant::now();
         self.observe_automation_state(
             nav,
@@ -1537,25 +1519,7 @@ impl LauncherFrameAccounting {
             status_write_now,
             frame.frames,
             frame.run_start,
-            nav,
-            pad,
-            catalog,
-            catalog_ready,
-            catalog_refresh_done,
-            launching,
-            loading_title,
-            catalog_scan_visible,
-            catalog_scan_title,
-            catalog_scan_detail,
-            catalog_scan_percent,
-            catalog_background_scan_visible,
-            catalog_scan_message,
-            confirm_visible,
-            confirm_title,
-            confirm_message,
-            confirm_selected,
-            confirm_left_label,
-            confirm_right_label,
+            status,
             frame.selected,
             frame.visual_index,
             frame.preview_cache_state,
@@ -1563,15 +1527,6 @@ impl LauncherFrameAccounting {
             frame.preview_transition.progress,
             frame.screensaver_active_cards,
             &frame.composition_status,
-            launcher_bench_scenario,
-            start_screen,
-            lock_screen,
-            route_reassert_count,
-            last_route_reassert_frame,
-            last_route_reassert_ok,
-            last_route_reassert_error,
-            startup_status,
-            return_session,
             None,
         );
         let runtime_status_write_us = runtime_status_write_start
@@ -1666,40 +1621,13 @@ impl LauncherFrameAccounting {
         frames: u64,
         run_start: Instant,
         now: Instant,
-        nav: &LauncherNav,
-        pad: &PadPool,
-        catalog: &ArcadeCatalog,
-        catalog_ready: bool,
-        catalog_refresh_done: bool,
-        launching: bool,
-        loading_title: &str,
-        catalog_scan_visible: bool,
-        catalog_scan_title: &str,
-        catalog_scan_detail: &str,
-        catalog_scan_percent: i32,
-        catalog_background_scan_visible: bool,
-        catalog_scan_message: &str,
-        confirm_visible: bool,
-        confirm_title: &str,
-        confirm_message: &str,
-        confirm_selected: i32,
-        confirm_left_label: &str,
-        confirm_right_label: &str,
+        status: FrameStatusView<'_>,
         arcade_selected: usize,
         arcade_visual_index: f32,
         preview_cache_state: &str,
         preview_transition_effect: &str,
         preview_transition_progress: f32,
         composition_status: &UiCompositionStatus,
-        launcher_bench_scenario: Option<LauncherBenchScenario>,
-        start_screen: Screen,
-        lock_screen: Option<Screen>,
-        route_reassert_count: u64,
-        last_route_reassert_frame: u64,
-        last_route_reassert_ok: bool,
-        last_route_reassert_error: &str,
-        startup_status: StartupRevealStatus,
-        return_session: &LaunchReturnSession,
     ) {
         self.idle_loops_since_status = self.idle_loops_since_status.saturating_add(1);
         let status_write_due = self.status_write_due();
@@ -1714,25 +1642,7 @@ impl LauncherFrameAccounting {
             status_write_due,
             frames,
             run_start,
-            nav,
-            pad,
-            catalog,
-            catalog_ready,
-            catalog_refresh_done,
-            launching,
-            loading_title,
-            catalog_scan_visible,
-            catalog_scan_title,
-            catalog_scan_detail,
-            catalog_scan_percent,
-            catalog_background_scan_visible,
-            catalog_scan_message,
-            confirm_visible,
-            confirm_title,
-            confirm_message,
-            confirm_selected,
-            confirm_left_label,
-            confirm_right_label,
+            status,
             arcade_selected,
             arcade_visual_index,
             preview_cache_state,
@@ -1740,15 +1650,6 @@ impl LauncherFrameAccounting {
             preview_transition_progress,
             0,
             composition_status,
-            launcher_bench_scenario,
-            start_screen,
-            lock_screen,
-            route_reassert_count,
-            last_route_reassert_frame,
-            last_route_reassert_ok,
-            last_route_reassert_error,
-            startup_status,
-            return_session,
             Some((self.idle_loops_since_status, last_frame_ms_ago)),
         );
     }
@@ -2514,25 +2415,7 @@ impl LauncherFrameAccounting {
         status_write_due: bool,
         frames: u64,
         run_start: Instant,
-        nav: &LauncherNav,
-        pad: &PadPool,
-        catalog: &ArcadeCatalog,
-        catalog_ready: bool,
-        catalog_refresh_done: bool,
-        launching: bool,
-        loading_title: &str,
-        catalog_scan_visible: bool,
-        catalog_scan_title: &str,
-        catalog_scan_detail: &str,
-        catalog_scan_percent: i32,
-        catalog_background_scan_visible: bool,
-        catalog_scan_message: &str,
-        confirm_visible: bool,
-        confirm_title: &str,
-        confirm_message: &str,
-        confirm_selected: i32,
-        confirm_left_label: &str,
-        confirm_right_label: &str,
+        status: FrameStatusView<'_>,
         arcade_selected: usize,
         arcade_visual_index: f32,
         preview_cache_state: &str,
@@ -2540,17 +2423,41 @@ impl LauncherFrameAccounting {
         preview_transition_progress: f32,
         screensaver_active_cards: usize,
         composition_status: &UiCompositionStatus,
-        launcher_bench_scenario: Option<LauncherBenchScenario>,
-        start_screen: Screen,
-        lock_screen: Option<Screen>,
-        route_reassert_count: u64,
-        last_route_reassert_frame: u64,
-        last_route_reassert_ok: bool,
-        last_route_reassert_error: &str,
-        startup_status: StartupRevealStatus,
-        return_session: &LaunchReturnSession,
         idle_status: Option<(u64, u64)>,
     ) {
+        let FrameStatusView {
+            nav,
+            pad,
+            catalog,
+            catalog_ready,
+            catalog_refresh_done,
+            launching,
+            loading_title,
+            catalog_scan_visible,
+            catalog_scan_percent,
+            catalog_background_scan_visible,
+            confirm_visible,
+            confirm_selected,
+            launcher_bench_scenario,
+            start_screen,
+            lock_screen,
+            route_reassert_count,
+            last_route_reassert_frame,
+            last_route_reassert_ok,
+            last_route_reassert_error,
+            startup_status,
+            return_session,
+            ..
+        } = status;
+        let FrameStatusStrings {
+            catalog_scan_title,
+            catalog_scan_detail,
+            catalog_scan_message,
+            confirm_title,
+            confirm_message,
+            confirm_left_label,
+            confirm_right_label,
+        } = status.strings();
         if !status_write_due {
             return;
         }
