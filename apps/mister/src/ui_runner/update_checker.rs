@@ -22,8 +22,8 @@ const UPDATE_CHECK_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(30),
 ];
 
-pub(super) fn should_check_for_updates(launcher_bench: bool, dev_mode: bool) -> bool {
-    !launcher_bench && !dev_mode
+pub(super) fn should_check_for_updates(dev_mode: bool) -> bool {
+    !dev_mode
 }
 
 pub(super) struct UpdateCheck {
@@ -341,9 +341,7 @@ mod tests {
 
     #[test]
     fn development_layout_never_checks_public_updates() {
-        assert!(should_check_for_updates(false, false));
-        assert!(!should_check_for_updates(false, true));
-        assert!(!should_check_for_updates(true, false));
-        assert!(!should_check_for_updates(true, true));
+        assert!(should_check_for_updates(false));
+        assert!(!should_check_for_updates(true));
     }
 }

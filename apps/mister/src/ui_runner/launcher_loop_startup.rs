@@ -7,115 +7,11 @@
 //! The locals the frame loop uses come back as one struct that the loop
 //! destructures into locals of the same names, so the loop body is untouched.
 
-use super::super::launcher_card_home::LauncherCardHomeSession;
-use super::super::launcher_readiness::LauncherReadiness;
+use super::frame_loop::{Diagnostics, Domains, Effects, Input, Library, Output, Ui};
 use super::*;
-use crate::input_hub::InputObservationProbe;
-use crate::launcher_home::CardLevelSnapshot;
-use crate::process_config::ProfileProcessConfig;
-use mister_magik_core::frame_clock::FrameClock;
-
-pub(super) struct LoopState {
-    pub(super) launcher_ui_actions: LauncherUiActionsAdapter,
-    pub(super) start: Instant,
-    pub(super) frame_clock: FrameClock,
-    pub(super) idle_slept_since: Option<Instant>,
-    pub(super) ui_action_sequence: u64,
-    pub(super) startup_monotonic_us: u64,
-    pub(super) frames: u64,
-    pub(super) profile_config: ProfileProcessConfig,
-    pub(super) screensaver_preview_waits_for_analytics: bool,
-    pub(super) screensaver: ScreensaverControl,
-    pub(super) screensaver_pipeline: Option<ScreensaverRenderAhead>,
-    pub(super) retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead>,
-    pub(super) screensaver_loader: Option<LauncherScreensaverLoader>,
-    pub(super) screensaver_launcher_frame: Option<Vec<Rgb565Pixel>>,
-    pub(super) screensaver_frame_visible: bool,
-    pub(super) screensaver_active_cards: usize,
-    pub(super) screensaver_render_sequence: u64,
-    pub(super) screensaver_starvation_count: u64,
-    pub(super) launcher_presenter: LauncherPresenter,
-    pub(super) launcher_readiness: LauncherReadiness,
-    pub(super) scheduler: LauncherScheduler,
-    pub(super) catalog_events: CatalogJobEventBuf,
-    pub(super) deferred_catalog_events: VecDeque<CatalogWorkerMessage>,
-    pub(super) pending_catalog_ready: Option<CatalogWorkerMessage>,
-    pub(super) pending_collection_entry: Option<PendingCollectionEntry>,
-    pub(super) deferred_settings_activation: DeferredSettingsActivation,
-    pub(super) deferred_navigation_hydration_finish: Option<String>,
-    pub(super) catalog_ready_deferred_since: Option<Instant>,
-    pub(super) catalog_ready_stationary_edge_since: Option<Instant>,
-    pub(super) media_events: MediaJobEventBuf,
-    pub(super) lifecycle_effects: LifecycleEffects,
-    pub(super) preview_systems_entered: BTreeSet<String>,
-    pub(super) preview_initial_lists_ready: BTreeSet<String>,
-    pub(super) launch_return_session: LaunchReturnSession,
-    pub(super) crt_layout: bool,
-    pub(super) crt_metrics: CrtUiMetrics,
-    pub(super) preview_route: PreviewRoutePolicy,
-    pub(super) nav: LauncherNav,
-    pub(super) settings_store: FileSettingsStore,
-    pub(super) layout: UiLayoutGeometry,
-    pub(super) layout_epoch: u64,
-    pub(super) preview_compositor: Option<PreviewCompositor>,
-    pub(super) preview_compositor_start_attempted: bool,
-    pub(super) director: PresentationDirector,
-    pub(super) settings_cog_render_ahead: SettingsCogSession,
-    pub(super) display_confirmation: DisplayConfirmation,
-    pub(super) orientation_confirmation: OrientationConfirmation,
-    pub(super) orientation_full_redraw_pending: bool,
-    pub(super) orientation_preparation_trace: OrientationPreparationTrace,
-    pub(super) setup: SetupNav,
-    pub(super) input_router: InputRouter,
-    pub(super) setup_disconnect_notice: bool,
-    pub(super) input_observation_probe: Option<InputObservationProbe>,
-    pub(super) loading_title: String,
-    pub(super) library_reset: LibraryResetState,
-    pub(super) library_reset_bridge_dirty: bool,
-    pub(super) last_clock_update: Instant,
-    pub(super) last_clock_text: String,
-    pub(super) pacer: VsyncPacer,
-    pub(super) phase_alignment: LauncherPhaseAlignment,
-    pub(super) present_timing: PresentTiming,
-    pub(super) preview: PreviewState,
-    pub(super) preview_transition: PreviewTransitionDemo,
-    pub(super) arcade_list_renderer: ArcadeListRenderer,
-    pub(super) crt_backdrop: Option<CrtBackdropController>,
-    pub(super) crt_arcade_overlay: CrtArcadeOverlayState,
-    pub(super) launcher_preview_version: u64,
-    pub(super) launcher_arcade_version: u64,
-    pub(super) launcher_arcade_scroll_offset: LayerOffset,
-    pub(super) launcher_arcade_content_generation: u64,
-    pub(super) launcher_preview_publication: Option<PhysicalLayerPublication>,
-    pub(super) launcher_arcade_publication: Option<PhysicalLayerPublication>,
-    pub(super) arcade_drawer_view_cache: ArcadeDrawerViewCache,
-    pub(super) bridge_models: LauncherViewPresenters,
-    pub(super) native_device_background: NativeDeviceBackground,
-    pub(super) catalog_version: usize,
-    pub(super) user_state_session: UserStateSession,
-    pub(super) user_state_catalog_version: Option<usize>,
-    pub(super) arcade_root: String,
-    pub(super) catalog: ArcadeCatalog,
-    pub(super) catalog_ready: bool,
-    pub(super) return_capsule_active: bool,
-    pub(super) lifecycle: LauncherLifecycle,
-    pub(super) catalog_session: LauncherCatalogSession,
-    pub(super) media_session: ScreenshotMediaUpdateSession,
-    pub(super) catalog_generation: CatalogGenerationState,
-    pub(super) card_level: CardLevelSnapshot,
-    pub(super) card_prefetch_key: (String, usize),
-    pub(super) card_frame_rendered_last_iteration: bool,
-    pub(super) launcher_card_home: Option<LauncherCardHomeSession>,
-    pub(super) update_check: UpdateCheck,
-    pub(super) startup_intro: Option<StartupIntroSession>,
-    pub(super) startup_intro_launcher_frame_ready: bool,
-    pub(super) startup_intro_bridge_dirty_pending: bool,
-    pub(super) startup_intro_catalog_ui_replay: Option<LauncherWorkerUiIntent>,
-    pub(super) startup_intro_catalog_shells_pending: bool,
-}
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_loop_state(
+pub(super) fn build_domains(
     secs: u64,
     ui: &UiDisplay,
     window: &Rc<MisterSoftwareWindow>,
@@ -123,7 +19,7 @@ pub(super) fn build_loop_state(
     app: &slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
     launcher_config: &mister_magik_fb::process_config::LauncherProcessConfig,
-) -> LoopState {
+) -> Domains {
     let launcher_ui_actions = LauncherUiActionsAdapter::install(app);
     #[cfg(feature = "tooling")]
     app.set_development_keyboard_input(true);
@@ -681,10 +577,8 @@ pub(super) fn build_loop_state(
     let menu_item_presentation = bridge_models.menu_item_presentation();
     navigation.set_menu_item_presentation(menu_item_presentation);
     navigation.set_menu_items(menu_items);
-    let update_check = UpdateCheck::start(should_check_for_updates(
-        false,
-        navigation.get_development_build(),
-    ));
+    let update_check =
+        UpdateCheck::start(should_check_for_updates(navigation.get_development_build()));
     print_startup_event(
         start,
         "catalog_bridge_systems",
@@ -869,102 +763,240 @@ pub(super) fn build_loop_state(
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         scheduler.start_catalog_worker(worker.root, request, worker.initial_cache, execution_mode);
     }
-    LoopState {
-        launcher_ui_actions,
-        start,
-        frame_clock,
-        idle_slept_since,
-        ui_action_sequence,
-        startup_monotonic_us,
-        frames,
-        profile_config,
-        screensaver_preview_waits_for_analytics,
-        screensaver,
-        screensaver_pipeline,
-        retiring_screensaver_pipelines,
-        screensaver_loader,
-        screensaver_launcher_frame,
-        screensaver_frame_visible,
-        screensaver_active_cards,
-        screensaver_render_sequence,
-        screensaver_starvation_count,
-        launcher_presenter,
-        launcher_readiness,
-        scheduler,
-        catalog_events,
-        deferred_catalog_events,
-        pending_catalog_ready,
-        pending_collection_entry,
-        deferred_settings_activation,
-        deferred_navigation_hydration_finish,
-        catalog_ready_deferred_since,
-        catalog_ready_stationary_edge_since,
-        media_events,
-        lifecycle_effects,
-        preview_systems_entered,
-        preview_initial_lists_ready,
-        launch_return_session,
-        crt_layout,
-        crt_metrics,
-        preview_route,
-        nav,
-        settings_store,
-        layout,
-        layout_epoch,
-        preview_compositor,
-        preview_compositor_start_attempted,
-        director,
-        settings_cog_render_ahead,
-        display_confirmation,
-        orientation_confirmation,
-        orientation_full_redraw_pending,
-        orientation_preparation_trace,
-        setup,
-        input_router,
-        setup_disconnect_notice,
-        input_observation_probe,
-        loading_title,
-        library_reset,
-        library_reset_bridge_dirty,
-        last_clock_update,
-        last_clock_text,
-        pacer,
-        phase_alignment,
-        present_timing,
-        preview,
-        preview_transition,
-        arcade_list_renderer,
-        crt_backdrop,
-        crt_arcade_overlay,
-        launcher_preview_version,
-        launcher_arcade_version,
-        launcher_arcade_scroll_offset,
-        launcher_arcade_content_generation,
-        launcher_preview_publication,
-        launcher_arcade_publication,
-        arcade_drawer_view_cache,
-        bridge_models,
-        native_device_background,
-        catalog_version,
-        user_state_session,
-        user_state_catalog_version,
-        arcade_root,
-        catalog,
-        catalog_ready,
-        return_capsule_active,
-        lifecycle,
-        catalog_session,
-        media_session,
-        catalog_generation,
-        card_level,
-        card_prefetch_key,
-        card_frame_rendered_last_iteration,
-        launcher_card_home,
-        update_check,
-        startup_intro,
-        startup_intro_launcher_frame_ready,
-        startup_intro_bridge_dirty_pending,
-        startup_intro_catalog_ui_replay,
-        startup_intro_catalog_shells_pending,
+    let run_start = start;
+    let first_render_logged = false;
+    let first_vsync_logged = false;
+    let first_launcher_frame_logged = false;
+    let mut frame_accounting = LauncherFrameAccounting::new(
+        run_start,
+        ui.output_route().label(),
+        ui.crt_font_experiment().label(),
+        ui.fb_w(),
+        ui.fb_h(),
+        profile_config.frame().fps_log_enabled(),
+    );
+    if let Some(failure) = launcher_presenter.latch_failure() {
+        frame_accounting.record_latch_failure(failure);
+    }
+    let memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
+    let catalog_contention_quiet_previews = matches!(
+        std::env::var("MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("on") | Some("true") | Some("yes")
+    );
+    let last_home_pan_scroll_x = nav.scroll_x;
+    let home_pan_present_until = None;
+    let catalog_scan_blink = CatalogScanBlink::default();
+    let navigation_source_bridge_sync_pending = false;
+    let latency_critical_input_pending = false;
+    let unpublished_cached_frame_present = false;
+    let input_observation = input_observation_probe
+        .as_ref()
+        .map(crate::input_hub::InputObservationProbe::observe)
+        .unwrap_or_default();
+    let catalog_idle_candidate_since = None;
+    let catalog_work_telemetry = CatalogWorkModeTelemetry::new(run_start);
+    #[cfg(feature = "tooling")]
+    let mut tooling = mister_magik_tooling_support::Session::from_environment();
+    #[cfg(feature = "tooling")]
+    let renderer_profile_requested = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
+    #[cfg(feature = "tooling")]
+    let tooling_carousel_release: Option<crate::input_event::InputEvent> = None;
+    // Grade artwork against the requested pose in ordinary measurements too.
+    // Reusing an unchanged quantized pose is valid; CPU sampling is separate.
+    #[cfg(feature = "tooling")]
+    let card_presentation_measurement_enabled = tooling.is_some();
+    #[cfg(feature = "tooling")]
+    if let Some(session) = tooling.as_mut() {
+        let paths = launcher_config.device_paths();
+        let catalog = launcher_config.catalog_paths();
+        session.metrics.render_timing_scope =
+            Some("before-custom-draw; excludes custom drawing, latch post and completion");
+        session.metrics.context = serde_json::json!({
+            "data_root":paths.app_dir(), "main":paths.main_path(),
+            "settings":paths.app_path("settings.json"), "controllers":paths.app_path("controllers.json"),
+            "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
+            "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
+            "animation_clock": {"mode":"vsync-locked-v1", "period_ns":frame_clock.period().as_nanos()},
+            "card_sampler": if cfg!(feature = "card-axis-filter") { "independent-vertical-prefilter" } else { "current" },
+            "card_quantiser": if cfg!(feature = "card-fast-quantisation") { "centred-bayer-shifts" } else { "existing-bayer" },
+            "native_device_plane": if !layout.is_portrait() && !ui.output_route().is_crt()
+                && (layout.logical_w(), layout.logical_h()) == (960, 540)
+                { "exposed-hdmi-v1" } else { "disabled" },
+            "system_hub_axis": if layout.is_portrait() || ui.output_route().is_crt()
+                { "vertical" } else { "horizontal" },
+            "card_helper_ahead": if !layout.is_portrait() && !ui.output_route().is_crt()
+                && (layout.logical_w(), layout.logical_h()) == (960, 540)
+                { "native-browse-tricks-v2" } else { "disabled" },
+        });
+        crate::ui_logln!("magik_context {}", session.metrics.context);
+    }
+    // Launcher-thread maintenance and status publication yield to UI motion.
+    // Both are decided before this frame's motion is known, so they use the
+    // signal published by the previous frame; one frame of lag is harmless.
+    let background_maintenance_deferral = mister_magik_catalog::ui_motion::Deferral::default();
+    let status_write_deferral = mister_magik_catalog::ui_motion::Deferral::default();
+    #[cfg(feature = "tooling")]
+    let tooling_drop_baseline: Option<
+        super::launcher_frame_accounting::ToolingPresentationObservation,
+    > = None;
+    #[cfg(feature = "tooling")]
+    let tooling_reject_baseline: Option<u16> = None;
+    #[cfg(feature = "tooling")]
+    let tooling_attempt_id = 0u64;
+    #[cfg(feature = "tooling")]
+    let tooling_input_epoch = 0u64;
+    #[cfg(feature = "tooling")]
+    let tooling_produced_id = 0u64;
+    #[cfg(feature = "tooling")]
+    crate::catalog_equivalence::start_requested_probe();
+    super::phase_profile::set_budget_us(u32::try_from(pacer.period_us()).unwrap_or(u32::MAX));
+
+    Domains {
+        lib: Library {
+            system_entry: SystemEntryAdoption::default(),
+            scheduler,
+            catalog_events,
+            deferred_catalog_events,
+            pending_catalog_ready,
+            pending_collection_entry,
+            deferred_navigation_hydration_finish,
+            catalog_ready_deferred_since,
+            catalog_ready_stationary_edge_since,
+            media_events,
+            lifecycle_effects,
+            preview_systems_entered,
+            preview_initial_lists_ready,
+            launch_return_session,
+            loading_title,
+            preview,
+            catalog_version,
+            user_state_session,
+            user_state_catalog_version,
+            arcade_root,
+            catalog,
+            catalog_ready,
+            return_capsule_active,
+            lifecycle,
+            catalog_session,
+            media_session,
+            catalog_generation,
+            card_level,
+            card_prefetch_key,
+            update_check,
+            memory_guard,
+            catalog_contention_quiet_previews,
+            catalog_idle_candidate_since,
+            catalog_work_telemetry,
+            background_maintenance_deferral,
+            status_write_deferral,
+        },
+        ui: Ui {
+            preview_route,
+            nav,
+            bridge_models,
+            catalog_scan_blink,
+            navigation_source_bridge_sync_pending,
+        },
+        inp: Input {
+            launcher_ui_actions,
+            deferred_settings_activation,
+            settings_store,
+            display_confirmation,
+            orientation_confirmation,
+            setup,
+            input_router,
+            setup_disconnect_notice,
+            input_observation_probe,
+            library_reset,
+            library_reset_bridge_dirty,
+            last_clock_update,
+            last_clock_text,
+            latency_critical_input_pending,
+            input_observation,
+        },
+        out: Output {
+            start,
+            frame_clock,
+            idle_slept_since,
+            frames,
+            launcher_presenter,
+            launcher_readiness,
+            crt_layout,
+            crt_metrics,
+            layout,
+            layout_epoch,
+            preview_compositor,
+            preview_compositor_start_attempted,
+            director,
+            orientation_full_redraw_pending,
+            pacer,
+            phase_alignment,
+            present_timing,
+            arcade_list_renderer,
+            crt_backdrop,
+            crt_arcade_overlay,
+            launcher_preview_version,
+            launcher_arcade_version,
+            launcher_arcade_scroll_offset,
+            launcher_arcade_content_generation,
+            launcher_preview_publication,
+            launcher_arcade_publication,
+            arcade_drawer_view_cache,
+            native_device_background,
+            run_start,
+            last_home_pan_scroll_x,
+            home_pan_present_until,
+            unpublished_cached_frame_present,
+        },
+        fx: Effects {
+            screensaver_preview_waits_for_analytics,
+            screensaver,
+            screensaver_pipeline,
+            retiring_screensaver_pipelines,
+            screensaver_loader,
+            screensaver_launcher_frame,
+            screensaver_frame_visible,
+            screensaver_active_cards,
+            screensaver_render_sequence,
+            screensaver_starvation_count,
+            settings_cog_render_ahead,
+            card_frame_rendered_last_iteration,
+            launcher_card_home,
+            startup_intro,
+            startup_intro_launcher_frame_ready,
+            startup_intro_bridge_dirty_pending,
+            startup_intro_catalog_ui_replay,
+            startup_intro_catalog_shells_pending,
+        },
+        diag: Diagnostics {
+            ui_action_sequence,
+            startup_monotonic_us,
+            orientation_preparation_trace,
+            preview_transition,
+            first_render_logged,
+            first_vsync_logged,
+            first_launcher_frame_logged,
+            frame_accounting,
+            #[cfg(feature = "tooling")]
+            tooling,
+            #[cfg(feature = "tooling")]
+            renderer_profile_requested,
+            #[cfg(feature = "tooling")]
+            tooling_carousel_release,
+            #[cfg(feature = "tooling")]
+            card_presentation_measurement_enabled,
+            #[cfg(feature = "tooling")]
+            tooling_drop_baseline,
+            #[cfg(feature = "tooling")]
+            tooling_reject_baseline,
+            #[cfg(feature = "tooling")]
+            tooling_attempt_id,
+            #[cfg(feature = "tooling")]
+            tooling_input_epoch,
+            #[cfg(feature = "tooling")]
+            tooling_produced_id,
+        },
     }
 }
