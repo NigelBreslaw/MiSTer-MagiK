@@ -99,8 +99,8 @@ mod controller_loop;
 mod crt_backdrop_controller;
 mod crt_trial_loop;
 mod launch_handoff_session;
-pub(crate) mod launcher_bench;
 mod launcher_bridge;
+mod launcher_bridge_sync;
 mod launcher_card_home;
 #[cfg(feature = "ui-preview")]
 pub struct NativeCardPreview {
@@ -219,8 +219,8 @@ use catalog_worker::*;
 use controller_loop::*;
 use crt_trial_loop::*;
 use launch_handoff_session::*;
-use launcher_bench::*;
 use launcher_bridge::*;
+use launcher_bridge_sync::*;
 use launcher_catalog_session::*;
 use launcher_compositor::*;
 use launcher_display_session::*;

@@ -106,7 +106,6 @@ pub(super) struct Output {
     pub(super) director: PresentationDirector,
     pub(super) orientation_full_redraw_pending: bool,
     pub(super) pacer: VsyncPacer,
-    pub(super) pacing_policy: LauncherFramePacingPolicy,
     pub(super) phase_alignment: LauncherPhaseAlignment,
     pub(super) present_timing: PresentTiming,
     pub(super) arcade_list_renderer: ArcadeListRenderer,
@@ -449,7 +448,6 @@ impl<'a> FrameLoop<'a> {
             last_clock_update,
             last_clock_text,
             pacer,
-            pacing_policy,
             phase_alignment,
             present_timing,
             preview,
@@ -677,7 +675,6 @@ impl<'a> FrameLoop<'a> {
                 director,
                 orientation_full_redraw_pending,
                 pacer,
-                pacing_policy,
                 phase_alignment,
                 present_timing,
                 arcade_list_renderer,
@@ -782,6 +779,37 @@ impl<'a> FrameLoop<'a> {
         {
             crate::ui_errln!("controller setup: shutdown save incomplete: {error}");
         }
+    }
+
+    /// Draws a one-off status frame ("Exit to MiSTer", "Loading …") straight to the display,
+    /// outside the normal frame sequence, then waits for the next vblank.
+    fn show_status_frame(&mut self, title: &str, subtitle: &str) {
+        sync_bridge_launcher(
+            &self.env.app,
+            &self.env.pad,
+            &self.ui.nav,
+            &self.lib.lifecycle,
+            &self.inp.setup,
+            title,
+            subtitle,
+            &self.lib.catalog,
+            &mut self.lib.preview,
+            &mut self.ui.bridge_models,
+            self.lib.catalog_version,
+            false,
+            false,
+            self.env.ui,
+        );
+        self.env.window.request_redraw();
+        update_slint_animations(self.env.animation_clock);
+        let _ = render_immediate_launcher_frame(self.env.window, self.env.target, self.out.layout);
+        let _pace = self.out.pacer.wait();
+        copy_cached_rows_565(
+            self.env.disp,
+            self.env.target.cached_frame_view(),
+            0,
+            self.env.ui.render_h(),
+        );
     }
 
     /// Whether the loop should run another frame.
@@ -2581,37 +2609,14 @@ impl<'a> FrameLoop<'a> {
                                     }
                                     LauncherAction::ExitToMister => {
                                         self.lib.loading_title = "Exit to MiSTer".to_string();
-                                        sync_bridge_launcher(
-                                            &self.env.app,
-                                            &self.env.pad,
-                                            &self.ui.nav,
-                                            &self.lib.lifecycle,
-                                            &self.inp.setup,
-                                            self.lib
-                                                .scheduler
-                                                .visible_loading_title(&self.lib.loading_title),
+                                        let title = self
+                                            .lib
+                                            .scheduler
+                                            .visible_loading_title(&self.lib.loading_title)
+                                            .to_owned();
+                                        self.show_status_frame(
+                                            &title,
                                             "Return to MiSTer MagiK after reboot",
-                                            &self.lib.catalog,
-                                            &mut self.lib.preview,
-                                            &mut self.ui.bridge_models,
-                                            self.lib.catalog_version,
-                                            false,
-                                            false,
-                                            self.env.ui,
-                                        );
-                                        self.env.window.request_redraw();
-                                        update_slint_animations(self.env.animation_clock);
-                                        let _ = render_immediate_launcher_frame(
-                                            self.env.window,
-                                            self.env.target,
-                                            self.out.layout,
-                                        );
-                                        let _pace = self.out.pacer.wait();
-                                        copy_cached_rows_565(
-                                            self.env.disp,
-                                            self.env.target.cached_frame_view(),
-                                            0,
-                                            self.env.ui.render_h(),
                                         );
                                         match launcher::exit_to_mister() {
                                             Ok(()) => std::process::exit(0),
@@ -2655,38 +2660,12 @@ impl<'a> FrameLoop<'a> {
                                             "Shutting down…"
                                         }
                                         .to_string();
-                                        sync_bridge_launcher(
-                                            &self.env.app,
-                                            &self.env.pad,
-                                            &self.ui.nav,
-                                            &self.lib.lifecycle,
-                                            &self.inp.setup,
-                                            self.lib
-                                                .scheduler
-                                                .visible_loading_title(&self.lib.loading_title),
-                                            "Restarting MiSTer",
-                                            &self.lib.catalog,
-                                            &mut self.lib.preview,
-                                            &mut self.ui.bridge_models,
-                                            self.lib.catalog_version,
-                                            false,
-                                            false,
-                                            self.env.ui,
-                                        );
-                                        self.env.window.request_redraw();
-                                        update_slint_animations(self.env.animation_clock);
-                                        let _ = render_immediate_launcher_frame(
-                                            self.env.window,
-                                            self.env.target,
-                                            self.out.layout,
-                                        );
-                                        let _pace = self.out.pacer.wait();
-                                        copy_cached_rows_565(
-                                            self.env.disp,
-                                            self.env.target.cached_frame_view(),
-                                            0,
-                                            self.env.ui.render_h(),
-                                        );
+                                        let title = self
+                                            .lib
+                                            .scheduler
+                                            .visible_loading_title(&self.lib.loading_title)
+                                            .to_owned();
+                                        self.show_status_frame(&title, "Restarting MiSTer");
                                         if resetting {
                                             let (sender, receiver) = std::sync::mpsc::channel();
                                             match std::thread::Builder::new()
@@ -2976,36 +2955,9 @@ impl<'a> FrameLoop<'a> {
                                         &mut self.lib.scheduler,
                                         self.out.start,
                                     );
-                                    sync_bridge_launcher(
-                                        &self.env.app,
-                                        &self.env.pad,
-                                        &self.ui.nav,
-                                        &self.lib.lifecycle,
-                                        &self.inp.setup,
-                                        self.lib.scheduler.launch_loading_title(),
-                                        "",
-                                        &self.lib.catalog,
-                                        &mut self.lib.preview,
-                                        &mut self.ui.bridge_models,
-                                        self.lib.catalog_version,
-                                        false,
-                                        false,
-                                        self.env.ui,
-                                    );
-                                    self.env.window.request_redraw();
-                                    update_slint_animations(self.env.animation_clock);
-                                    let _ = render_immediate_launcher_frame(
-                                        self.env.window,
-                                        self.env.target,
-                                        self.out.layout,
-                                    );
-                                    let _pace = self.out.pacer.wait();
-                                    copy_cached_rows_565(
-                                        self.env.disp,
-                                        self.env.target.cached_frame_view(),
-                                        0,
-                                        self.env.ui.render_h(),
-                                    );
+                                    let title =
+                                        self.lib.scheduler.launch_loading_title().to_owned();
+                                    self.show_status_frame(&title, "");
                                     let loading_presented = Instant::now();
                                     self.lib.lifecycle.loading_frame_presented(
                                         loading_presented,
@@ -4183,9 +4135,7 @@ impl<'a> FrameLoop<'a> {
             latch_backend_active,
             project.scheduled_frame_class,
             self.inp.latency_critical_input_pending,
-        ) && self
-            .out
-            .pacing_policy
+        ) && LauncherFramePacingPolicy
             .decide(LauncherFramePacingInput {
                 first_visible_copy_done: self.diag.frame_accounting.first_visible_copy_done(),
                 frame_start_phase_us,

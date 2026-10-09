@@ -75,7 +75,6 @@ pub(super) struct LoopState {
     pub(super) last_clock_update: Instant,
     pub(super) last_clock_text: String,
     pub(super) pacer: VsyncPacer,
-    pub(super) pacing_policy: LauncherFramePacingPolicy,
     pub(super) phase_alignment: LauncherPhaseAlignment,
     pub(super) present_timing: PresentTiming,
     pub(super) preview: PreviewState,
@@ -309,7 +308,6 @@ pub(super) fn build_loop_state(
             )
         })
         .unwrap_or_else(|| VsyncPacer::from_config(launcher_config.display_pacing().vsync()));
-    let pacing_policy = LauncherFramePacingPolicy;
     let phase_alignment = LauncherPhaseAlignment::default();
     let present_timing = launcher_config.display_pacing().present_timing();
     let mut preview = PreviewState::new_with_config(start, launcher_config.preview().clone());
@@ -931,7 +929,6 @@ pub(super) fn build_loop_state(
         last_clock_update,
         last_clock_text,
         pacer,
-        pacing_policy,
         phase_alignment,
         present_timing,
         preview,
