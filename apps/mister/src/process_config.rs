@@ -4,8 +4,6 @@
 //! Immutable process-boundary configuration capture.
 
 #[cfg(feature = "ui")]
-#[cfg(feature = "ui")]
-#[cfg(feature = "ui")]
 use crate::launcher_runtime::media::MediaWorkerConfig;
 #[cfg(feature = "ui")]
 use crate::preview_state::PreviewStateConfig;
@@ -13,9 +11,6 @@ use crate::preview_state::PreviewStateConfig;
 use crate::screenshot_transitions::PreviewTransitionConfig;
 #[cfg(feature = "ui")]
 use crate::ui_display::UiDisplayInputs;
-#[cfg(feature = "ui")]
-#[cfg(feature = "ui")]
-#[cfg(feature = "ui")]
 #[cfg(feature = "ui")]
 use crate::visual_platform::PresentTiming;
 use mister_magik_catalog::catalog_config::ArchiveCacheConfig;
@@ -27,7 +22,6 @@ use mister_magik_mister_runtime::framebuffer::ownership::FramebufferRouteConfig;
 use mister_magik_mister_runtime::framebuffer::target::DirtyRegionConfig;
 #[cfg(feature = "ui")]
 use mister_magik_mister_runtime::framebuffer::vsync::VsyncPacerConfig;
-#[cfg(feature = "ui")]
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -198,7 +192,6 @@ impl LauncherProcessConfig {
         &self.display_pacing
     }
 
-    #[cfg(feature = "ui")]
     pub fn presentation_backend(&self) -> &PresentBackendConfig {
         &self.presentation_backend
     }
