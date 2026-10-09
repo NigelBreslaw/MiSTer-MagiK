@@ -25,6 +25,7 @@ use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
 };
+use super::phase_profile::LauncherFramePhase;
 use super::*;
 #[path = "launcher_loop_startup.rs"]
 mod startup;
@@ -5006,9 +5007,11 @@ fn render_immediate_launcher_frame(
     damage.iter().reduce(DirtyRect::union)
 }
 
-// Frame-phase markers are source text that the pipeline tests pin; they compile to nothing.
+// The pipeline tests pin these markers as source text; each one also feeds the frame profile.
 macro_rules! record_launcher_frame_phase {
-    ($phase:expr) => {};
+    ($phase:expr) => {
+        super::phase_profile::mark($phase)
+    };
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5298,6 +5301,7 @@ pub(super) fn run_launcher_loop(
     let mut tooling_produced_id = 0u64;
     #[cfg(feature = "tooling")]
     crate::catalog_equivalence::start_requested_probe();
+    super::phase_profile::set_budget_us(u32::try_from(pacer.period_us()).unwrap_or(u32::MAX));
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
@@ -5388,6 +5392,18 @@ pub(super) fn run_launcher_loop(
             }
             let window_is_open =
                 session.metrics.window_start.is_some() && session.metrics.window.is_none();
+            if !window_was_open && window_is_open {
+                super::phase_profile::begin_measurement();
+            } else if window_was_open && !window_is_open {
+                let report = super::phase_profile::end_measurement();
+                if let Some(window) = session.metrics.window.as_mut() {
+                    window["phase_profile"] =
+                        serde_json::to_value(report).expect("phase profile JSON");
+                }
+                if let Err(error) = session.publish_metrics(ui.render_w(), ui.render_h()) {
+                    session.metrics.error = Some(error);
+                }
+            }
             if renderer_profile_requested && !window_was_open && window_is_open {
                 let _ = mister_magik_framebuffer_scenes::launcher_profile::take();
                 mister_magik_framebuffer_scenes::launcher_profile::enable_wall_time();

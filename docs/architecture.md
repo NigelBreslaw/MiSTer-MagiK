@@ -741,6 +741,24 @@ runtime status. Delivery smoke and diagnosis sample that sequence with the same
 PID so a live but stalled process cannot pass health checks, while a correctly
 sleeping Slint screen does not need to produce extra frames.
 
+### Frame phase profile
+
+The launcher loop marks the end of each frame phase with
+`record_launcher_frame_phase!`. `ui_runner/phase_profile.rs` turns those marks
+into always-on timing: the time since the previous mark in the frame belongs to
+the phase the mark names, so the ordered phase list attributes the whole frame.
+A frame ends as produced (`FrameFinished`), idle (`IdleWait`) or yielded
+(`Yielded`); a frame cut short by an early return is counted as abandoned. The
+profile costs one clock read per mark and allocates nothing in the frame.
+
+Samples go into log-linear histograms, four buckets per octave, so reported
+percentiles are bucket lower bounds (at most about 19 % low). Every five seconds
+the rolling window is summarised into `phase_profile` in the runtime status:
+per-phase count, mean, p50, p95, p99 and max, the produced/idle/yielded counts,
+frames longer than one and a half display periods (a missed refresh, not jitter), and the three slowest frames with their time per
+phase. Measurement windows (`check`) carry their own span as `phase_profile` in
+the window JSON, so a run can be compared phase by phase against another build.
+
 ## Game Launch Handoff
 
 Slint does not directly load cores. It hands launch requests back to Main so the
