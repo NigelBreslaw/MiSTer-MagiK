@@ -256,6 +256,9 @@ use launcher_frame_accounting::*;
 use launcher_gui_profile::*;
 use launcher_input_latency_lab::*;
 use launcher_loop::*;
+
+/// Runs the domain-struct frame loop instead of the original while the port is verified.
+const NEXT_LOOP: bool = true;
 use launcher_present::*;
 use launcher_scheduler::*;
 use launcher_screensaver::LauncherScreensaverLoader;
@@ -535,20 +538,37 @@ pub fn run_ui(
                 let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 let pad = open_pads();
                 init_launcher_bridge(&app, &pad);
-                run_launcher_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    f,
-                    &mut display_session,
-                    &window,
-                    &mut target,
-                    pad,
-                    app,
-                    &animation_clock,
-                    process_entry_cpu_profile,
-                    launcher_config,
-                );
+                if NEXT_LOOP {
+                    launcher_loop::run_frame_loop(
+                        secs,
+                        &ui,
+                        &mut disp,
+                        f,
+                        &mut display_session,
+                        &window,
+                        &mut target,
+                        pad,
+                        app,
+                        &animation_clock,
+                        process_entry_cpu_profile,
+                        launcher_config,
+                    );
+                } else {
+                    run_launcher_loop(
+                        secs,
+                        &ui,
+                        &mut disp,
+                        f,
+                        &mut display_session,
+                        &window,
+                        &mut target,
+                        pad,
+                        app,
+                        &animation_clock,
+                        process_entry_cpu_profile,
+                        launcher_config,
+                    );
+                }
             });
         }
         _ => unreachable!(),

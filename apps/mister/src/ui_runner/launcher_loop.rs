@@ -1,6 +1,16 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// The pipeline tests pin these markers as source text; each one also feeds the frame profile.
+macro_rules! record_launcher_frame_phase {
+    ($phase:expr) => {
+        crate::ui_runner::phase_profile::mark($phase)
+    };
+}
+
+mod frame_loop;
+pub(super) use frame_loop::run_frame_loop;
+
 use super::arcade_drawer::{ArcadeDrawerViewCache, arcade_filter_cache_token};
 use super::crt_backdrop_controller::CrtBackdropController;
 use super::launcher_confirmation::{
@@ -5005,13 +5015,6 @@ fn render_immediate_launcher_frame(
         damage.push_if_some(dirty);
     }
     damage.iter().reduce(DirtyRect::union)
-}
-
-// The pipeline tests pin these markers as source text; each one also feeds the frame profile.
-macro_rules! record_launcher_frame_phase {
-    ($phase:expr) => {
-        super::phase_profile::mark($phase)
-    };
 }
 
 #[allow(clippy::too_many_arguments)]
