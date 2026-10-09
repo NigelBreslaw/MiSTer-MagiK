@@ -10,6 +10,8 @@ const MAIN_STATUS: &str = "/tmp/mister-magik/main-status.json";
 pub const OPERATIONS: &[&str] = &[
     "device-status",
     "application-install-inspect",
+    "crash-report-read",
+    "crash-report-delete",
     "input-probe",
     "mode-status",
     "mode-set",
@@ -66,6 +68,42 @@ const CRASH_ROOTS: [&str; 2] = [
     "/media/fat/mister-magik-dev/crashes",
     "/media/fat/mister-magik/crashes",
 ];
+
+fn crash_report_path(path: &str, roots: &[&Path]) -> Result<PathBuf, String> {
+    let path = PathBuf::from(path);
+    if !roots.iter().any(|root| path.parent() == Some(*root))
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+        || !path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("report-"))
+        || path.extension().is_none_or(|extension| extension != "json")
+        || !fs::symlink_metadata(&path)
+            .map_err(|e| e.to_string())?
+            .is_file()
+        || path.canonicalize().map_err(|e| e.to_string())? != path
+    {
+        return Err("expected a regular report JSON directly inside a crash directory".into());
+    }
+    Ok(path)
+}
+
+fn delete_crash_report(path: &Path, expected: &str) -> Result<Value, String> {
+    if crate::media::hash(path)? != expected {
+        return Err("crash report changed; deletion refused".into());
+    }
+    let report: Value =
+        serde_json::from_str(&read(path, 1024 * 1024)?).map_err(|e| e.to_string())?;
+    if report["schema"] != "mister-magik-crash-report-v1" {
+        return Err("unsupported crash report; deletion refused".into());
+    }
+    fs::remove_file(path).map_err(|e| e.to_string())?;
+    File::open(path.parent().ok_or("crash directory missing")?)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"deleted":true,"path":path,"sha256":expected,"report_id":report["report_id"]}))
+}
 
 /// The report the main status names as the last crash, if it lies inside a crash
 /// directory. Nothing outside those directories is ever read.
@@ -263,6 +301,8 @@ impl Agent {
                         | "mode-set"
                         | "device-reboot"
                         | "device-recover"
+                        | "crash-report-read"
+                        | "crash-report-delete"
                 ) && !request.fields.is_empty())
             {
                 return Err("unexpected device operation arguments".into());
@@ -270,6 +310,40 @@ impl Agent {
             match request.op.as_str() {
                 "device-status" => status(),
                 "application-install-inspect" => self.app_install_inspect(),
+                "crash-report-read" | "crash-report-delete" => {
+                    let deleting = request.op == "crash-report-delete";
+                    if request.fields.len() != if deleting { 2 } else { 1 } {
+                        return Err(
+                            "crash report operation requires path and, for deletion, sha256".into(),
+                        );
+                    }
+                    let path = crash_report_path(
+                        request
+                            .fields
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .ok_or("report path required")?,
+                        &CRASH_ROOTS.map(Path::new),
+                    )?;
+                    if deleting {
+                        if reported_crash_path(&status()?).as_ref() == Some(&path) {
+                            return Err(
+                                "Main still identifies this as its current crash; deletion refused"
+                                    .into(),
+                            );
+                        }
+                        delete_crash_report(
+                            &path,
+                            request
+                                .fields
+                                .get("sha256")
+                                .and_then(Value::as_str)
+                                .ok_or("report sha256 required")?,
+                        )
+                    } else {
+                        Ok(json!({"report":crash_file(&path),"sha256":crate::media::hash(&path)?}))
+                    }
+                }
                 "input-probe" => crate::input_probe::run(&request.fields),
                 "mode-status" => crate::mode::status(),
                 "mode-set" => crate::mode::set(&request.fields),
@@ -356,6 +430,42 @@ mod tests {
         assert!(named("/media/fat/mister-magik-dev/crashes-other/x.json").is_none());
         assert!(reported_crash_path(&json!({})).is_none());
     }
+    #[test]
+    fn crash_deletion_requires_a_report_in_the_allowed_directory_and_matching_hash() {
+        let directory =
+            std::env::temp_dir().join(format!("magik-crash-delete-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let directory = directory.canonicalize().unwrap();
+        let path = directory.join("report-fixed.json");
+        fs::write(
+            &path,
+            br#"{"schema":"mister-magik-crash-report-v1","report_id":"fixed"}"#,
+        )
+        .unwrap();
+        let roots = [directory.as_path()];
+        let validated = crash_report_path(path.to_str().unwrap(), &roots).unwrap();
+        assert!(delete_crash_report(&validated, &"0".repeat(64)).is_err());
+        assert!(path.exists());
+        assert!(
+            crash_report_path(
+                directory.join("../report-fixed.json").to_str().unwrap(),
+                &roots
+            )
+            .is_err()
+        );
+        let symlink = directory.join("report-link.json");
+        std::os::unix::fs::symlink(&path, &symlink).unwrap();
+        assert!(crash_report_path(symlink.to_str().unwrap(), &roots).is_err());
+        let hash = crate::media::hash(&path).unwrap();
+        assert_eq!(
+            delete_crash_report(&validated, &hash).unwrap()["deleted"],
+            true
+        );
+        assert!(!path.exists());
+        fs::remove_file(symlink).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
     #[test]
     fn crash_reports_keep_their_head_and_tail_when_large() {
         let path = std::env::temp_dir().join(format!("magik-crash-{}", std::process::id()));

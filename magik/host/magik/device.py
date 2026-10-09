@@ -72,6 +72,14 @@ def add_commands(commands):
     probe.add_argument("--event", action="append", default=[])
     commands.add_parser("status")
     commands.add_parser("application-install-inspect")
+    crash = commands.add_parser("crash-report").add_subparsers(
+        dest="action", required=True
+    )
+    for action in ("read", "delete"):
+        report = crash.add_parser(action)
+        report.add_argument("--path", required=True)
+        if action == "delete":
+            report.add_argument("--sha256", required=True)
     commands.add_parser("diagnostics")
     evidence = commands.add_parser("fpga-evidence")
     evidence.add_argument("--framebuffer", action="store_true")
@@ -124,6 +132,11 @@ def run_device(arguments, run):
         }
     elif group == "application-install-inspect":
         operation = "application-install-inspect"
+    elif group == "crash-report":
+        operation = "crash-report-" + arguments.action
+        fields = {"path": arguments.path}
+        if arguments.action == "delete":
+            fields["sha256"] = arguments.sha256
     elif group in {"status", "launcher"}:
         action = getattr(arguments, "action", "status")
         operation = {

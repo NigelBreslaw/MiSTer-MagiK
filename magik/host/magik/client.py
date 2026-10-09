@@ -48,7 +48,9 @@ class NativeAgent:
             raise AgentError.from_fields(response.fields)
         return AgentStatus.from_response(response.fields)
 
-    def upload(self, artifact: str, payload: bytes, *, source_revision: str | None = None) -> Mapping[str, object]:
+    def upload(
+        self, artifact: str, payload: bytes, *, source_revision: str | None = None
+    ) -> Mapping[str, object]:
         fields = {"artifact": artifact, "sha256": sha256_hex(payload)}
         if source_revision is not None:
             fields["source_revision"] = source_revision
