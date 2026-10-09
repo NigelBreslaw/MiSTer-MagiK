@@ -36,13 +36,6 @@ pub struct ParticleRenderStats {
     pub render_cpu_end: u64,
     pub voluntary_context_switches: u64,
     pub involuntary_context_switches: u64,
-    pub pmu_available: bool,
-    pub pmu_cycles: u64,
-    pub pmu_instructions: u64,
-    pub pmu_cache_references: u64,
-    pub pmu_cache_misses: u64,
-    pub pmu_branch_instructions: u64,
-    pub pmu_branch_misses: u64,
     pub rotation_y_millidegrees: u32,
     pub simulation_bytes: usize,
     pub renderer_scratch_bytes: usize,
@@ -51,7 +44,6 @@ pub struct ParticleRenderStats {
 pub struct ParticleRenderer {
     scene: MagikScene,
     reusable_buffers: u8,
-    pmu: ParticlePmu,
 }
 
 impl ParticleRenderer {
@@ -60,7 +52,6 @@ impl ParticleRenderer {
         Ok(Self {
             scene: MagikScene::new_magik_with_options(config, options)?,
             reusable_buffers: options.reusable_buffers,
-            pmu: ParticlePmu::from_env(),
         })
     }
 
@@ -76,7 +67,6 @@ impl ParticleRenderer {
                 width, height, preset, recipe, options,
             )?,
             reusable_buffers: options.reusable_buffers,
-            pmu: ParticlePmu::from_env(),
         })
     }
 
@@ -107,20 +97,13 @@ impl ParticleRenderer {
         next_elapsed: Option<Duration>,
     ) -> Result<ParticleRenderStats, String> {
         let buffer = hardware_slot_to_scene_buffer(hidden_slot, self.reusable_buffers)?;
-        self.pmu.begin();
         let execution_started = thread_execution_snapshot();
         let shared = slint_rgb565_as_shared_mut(destination);
         let stats = self
             .scene
             .render_with_lookahead(shared, buffer, elapsed, next_elapsed)?;
         let execution_finished = thread_execution_snapshot();
-        let pmu = self.pmu.finish();
-        Ok(merge_stats(
-            stats,
-            execution_started,
-            execution_finished,
-            pmu,
-        ))
+        Ok(merge_stats(stats, execution_started, execution_finished))
     }
 
     pub fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
@@ -184,7 +167,6 @@ fn merge_stats(
     shared: MagikSceneStats,
     execution_started: ThreadExecutionSnapshot,
     execution_finished: ThreadExecutionSnapshot,
-    pmu: ParticlePmuSample,
 ) -> ParticleRenderStats {
     ParticleRenderStats {
         count: shared.count,
@@ -214,89 +196,9 @@ fn merge_stats(
         involuntary_context_switches: execution_finished
             .involuntary_context_switches
             .saturating_sub(execution_started.involuntary_context_switches),
-        pmu_available: pmu.available,
-        pmu_cycles: pmu.cycles,
-        pmu_instructions: pmu.instructions,
-        pmu_cache_references: pmu.cache_references,
-        pmu_cache_misses: pmu.cache_misses,
-        pmu_branch_instructions: pmu.branch_instructions,
-        pmu_branch_misses: pmu.branch_misses,
         rotation_y_millidegrees: shared.rotation_y_millidegrees,
         simulation_bytes: shared.simulation_bytes,
         renderer_scratch_bytes: shared.renderer_scratch_bytes,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct ParticlePmuSample {
-    available: bool,
-    cycles: u64,
-    instructions: u64,
-    cache_references: u64,
-    cache_misses: u64,
-    branch_instructions: u64,
-    branch_misses: u64,
-}
-
-struct ParticlePmu {
-    requested: bool,
-    initialization_attempted: bool,
-    counters: Option<mister_magik_perf_events::CounterGroup>,
-    started: Option<mister_magik_perf_events::CounterSnapshot>,
-}
-
-impl ParticlePmu {
-    fn from_env() -> Self {
-        Self {
-            requested: std::env::var_os("MISTER_PARTICLE_PMU").is_some_and(|value| value == "1"),
-            initialization_attempted: false,
-            counters: None,
-            started: None,
-        }
-    }
-
-    fn begin(&mut self) {
-        if !self.requested {
-            return;
-        }
-        if !self.initialization_attempted {
-            self.initialization_attempted = true;
-            self.counters = mister_magik_perf_events::CounterGroup::open().ok();
-        }
-        self.started = self
-            .counters
-            .as_ref()
-            .and_then(|counters| counters.snapshot().ok());
-        if self.started.is_none() {
-            self.counters = None;
-        }
-    }
-
-    fn finish(&mut self) -> ParticlePmuSample {
-        let (Some(counters), Some(started)) = (self.counters.as_ref(), self.started.take()) else {
-            return ParticlePmuSample::default();
-        };
-        match counters.snapshot() {
-            Ok(finished) => {
-                let delta = finished.delta_from(started).counters;
-                use mister_magik_perf_events::HardwareEvent;
-                ParticlePmuSample {
-                    available: true,
-                    cycles: delta.get(HardwareEvent::Cycles).unwrap_or_default(),
-                    instructions: delta.get(HardwareEvent::Instructions).unwrap_or_default(),
-                    cache_references: delta.get(HardwareEvent::L1dAccesses).unwrap_or_default(),
-                    cache_misses: delta.get(HardwareEvent::L1dRefills).unwrap_or_default(),
-                    branch_instructions: delta.get(HardwareEvent::Branches).unwrap_or_default(),
-                    branch_misses: delta
-                        .get(HardwareEvent::BranchMispredicts)
-                        .unwrap_or_default(),
-                }
-            }
-            Err(_) => {
-                self.counters = None;
-                ParticlePmuSample::default()
-            }
-        }
     }
 }
 

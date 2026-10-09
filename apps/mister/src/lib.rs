@@ -101,9 +101,6 @@ pub mod input;
 )]
 #[doc(hidden)]
 pub mod input_hub;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod input_integrity_driver;
 pub use mister_magik_mister_runtime::latch_readiness;
 pub mod latch_failure_report;
 pub mod launch_preparation;
@@ -141,12 +138,6 @@ pub mod mr_audio;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_renderer;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod pmu_probe;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod pmu_profile;
 #[cfg(feature = "ui")]
 #[cfg_attr(
     any(

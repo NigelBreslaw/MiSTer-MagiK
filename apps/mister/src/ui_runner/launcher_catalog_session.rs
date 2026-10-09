@@ -85,7 +85,6 @@ pub(super) enum CatalogSessionEffect {
         base_catalog_version: usize,
         game_count: usize,
         prepare_us: u64,
-        profile: SystemEntryCatalogProfile,
         preview_prelude: Option<SystemEntryPreviewPrelude>,
     },
     RequestLibraryRebuildOnNextBoot,
@@ -340,15 +339,14 @@ impl LauncherCatalogSession {
                 base_catalog_version,
                 game_count,
                 prepare_us,
-                profile,
                 preview_prelude,
+                ..
             } => effects.push(CatalogSessionEffect::ApplySystemShard {
                 system_id,
                 catalog,
                 base_catalog_version,
                 game_count,
                 prepare_us,
-                profile,
                 preview_prelude,
             }),
             CatalogWorkerMessage::SystemShardFailed { system_id, error } => {

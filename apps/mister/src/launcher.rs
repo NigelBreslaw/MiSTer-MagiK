@@ -5822,10 +5822,7 @@ pub fn request_supervised_launcher_restart() -> Result<(), String> {
 }
 
 fn execute_main_command(command: &MainCommand) -> Result<Option<String>, String> {
-    let fifo_pmu = mister_magik_perf_events::sampled_span("launch.fifo-request");
-    let result = main_command::execute(command).map_err(|error| error.to_string());
-    drop(fifo_pmu);
-    result
+    main_command::execute(command).map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

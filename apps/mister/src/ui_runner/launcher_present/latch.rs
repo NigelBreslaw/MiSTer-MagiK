@@ -292,13 +292,10 @@ const fn physical_slot_mirror_index(slot_index: u8) -> usize {
 
 #[derive(Debug)]
 pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
+    pub(in crate::ui_runner) full_copy: bool,
     #[cfg(feature = "tooling")]
     pub(in crate::ui_runner) post_timing: (Instant, Instant),
     pub(in crate::ui_runner) copied_bytes: usize,
-    pub(in crate::ui_runner) invalid_bytes: usize,
-    pub(in crate::ui_runner) rect_count: u32,
-    pub(in crate::ui_runner) catchup_bytes: usize,
-    pub(in crate::ui_runner) full_copy: bool,
     pub(in crate::ui_runner) copy_path: LatchCopyPath,
     pub(in crate::ui_runner) buffer_index: u8,
     pub(in crate::ui_runner) copied_rows: u32,
@@ -643,14 +640,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         completed: CompletedHiddenFrame,
         hardware: &mut H,
         _display_session: &mut LauncherDisplaySession,
-        profile_latch_phases: bool,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
-        let result = self.present_completed_hidden_frame_inner(
-            completed,
-            hardware,
-            _display_session,
-            profile_latch_phases,
-        );
+        let result =
+            self.present_completed_hidden_frame_inner(completed, hardware, _display_session);
         if result.is_err() {
             self.invalidate_direct_slot_coherency();
         }
@@ -662,7 +654,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         completed: CompletedHiddenFrame,
         hardware: &mut H,
         _display_session: &mut LauncherDisplaySession,
-        profile_latch_phases: bool,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
         let grant = completed.grant;
         if self.outstanding_direct_grant != Some(grant) {
@@ -692,9 +683,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut status_us = status_started.elapsed().as_micros() as u64;
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
-        let post_pmu = profile_latch_phases
-            .then(|| mister_magik_perf_events::sampled_span("gui.latch.post-request"))
-            .flatten();
         #[cfg(feature = "tooling")]
         let post_started_at = Instant::now();
         let receipt = post_confirm_prepared_frame(
@@ -711,7 +699,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         )?;
         #[cfg(feature = "tooling")]
         let post_verified_at = Instant::now();
-        drop(post_pmu);
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
         let set_vga_fb_us = 0;
@@ -722,13 +709,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.invalidate_layer_coherency();
         self.hidden_active_verified = true;
         Ok(FpgaVblankLatchHiddenPresentStats {
+            full_copy: false,
             #[cfg(feature = "tooling")]
             post_timing: (post_started_at, post_verified_at),
             copied_bytes: 0,
-            invalid_bytes: 0,
-            rect_count: 0,
-            catchup_bytes: 0,
-            full_copy: false,
             copy_path: LatchCopyPath::ExternalDirect,
             buffer_index: grant.slot_index,
             copied_rows: 0,
@@ -826,7 +810,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         input: LauncherFramePlan,
         hardware: &mut H,
         _display_session: &mut LauncherDisplaySession,
-        profile_latch_phases: bool,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure>
     where
@@ -855,7 +838,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut before_status = before_sample.status;
         let mut status_us = status_start.elapsed().as_micros() as u64;
 
-        let current_damage_bytes = input.cached_damage().total_rgb565_bytes();
         let mut plan = self.latch_state.plan_next(input.clone());
         if matches!(plan, Err(LatchPlanError::NoWritableSlot)) && before_status.pending() {
             let settle_started = Instant::now();
@@ -900,8 +882,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             .latch_state
             .planned_publication(PhysicalLayerRole::Arcade)
             .cloned();
-        let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
-        let rect_count = plan.restore_rects.len() as u32;
         // Damage remains in composition coordinates; analytics report the
         // destination rows that the native scanout copy actually touched.
         let copied_rows = if self.render_height == self.height {
@@ -939,21 +919,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 .sum::<u32>()
         };
         let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
-        let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let base_addr = self.base_addr(buffer_index);
         let buffer = self.buffers.buffer_mut(buffer_index);
         let copy_start = Instant::now();
-        let copy_pmu = profile_latch_phases
-            .then(|| {
-                mister_magik_perf_events::sampled_span(gui_latch_copy_span_name(
-                    invalid_bytes,
-                    current_damage_bytes,
-                ))
-            })
-            .flatten();
-        let base_copy_pmu = (profile_latch_phases && invalid_bytes <= current_damage_bytes)
-            .then(|| mister_magik_perf_events::sampled_span("gui.latch.hidden-slot-base-copy"))
-            .flatten();
         let mut copied_bytes = 0usize;
         let mut copy_path = LatchCopyPath::IdentityFull;
         for rect in plan.restore_rects.iter() {
@@ -976,8 +944,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             }
         }
         let copy_us = copy_start.elapsed().as_micros();
-        drop(base_copy_pmu);
-        drop(copy_pmu);
         if let Err(e) = apply_overlays(
             buffer,
             plan,
@@ -994,18 +960,11 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             ));
         }
         let publish_start = Instant::now();
-        let publish_pmu = profile_latch_phases
-            .then(|| mister_magik_perf_events::sampled_span("gui.latch.store-publication"))
-            .flatten();
         B::publish_writes(buffer);
-        drop(publish_pmu);
         let publish_us = publish_start.elapsed().as_micros();
 
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
-        let post_pmu = profile_latch_phases
-            .then(|| mister_magik_perf_events::sampled_span("gui.latch.post-request"))
-            .flatten();
         #[cfg(feature = "tooling")]
         let post_started_at = Instant::now();
         let receipt = match post_confirm_prepared_frame(
@@ -1032,7 +991,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         };
         #[cfg(feature = "tooling")]
         let post_verified_at = Instant::now();
-        drop(post_pmu);
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
         let set_vga_fb_us = 0;
@@ -1044,13 +1002,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.latch_state.mark_post_success(plan);
         self.last_committed_buffer = Some(buffer_index);
         Ok(FpgaVblankLatchHiddenPresentStats {
+            full_copy,
             #[cfg(feature = "tooling")]
             post_timing: (post_started_at, post_verified_at),
             copied_bytes,
-            invalid_bytes,
-            rect_count,
-            catchup_bytes,
-            full_copy,
             copy_path,
             buffer_index,
             copied_rows,
@@ -1876,395 +1831,8 @@ mod tests {
             frame_plan(),
             hardware,
             display,
-            false,
             |_, _, _, _, _| Ok(()),
         )
-    }
-
-    #[test]
-    fn successful_present_orders_copy_overlay_post_and_status_reads() {
-        let events = EventLog::default();
-        let mut presenter = presenter_with_events(events.clone());
-        let mut hardware = FakeHardware {
-            statuses: vec![
-                Ok(status(FRONT_BASE, 0x0001)),
-                Ok(status(FRONT_BASE, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-            ],
-            events: Some(events.clone()),
-            ..FakeHardware::default()
-        };
-        let mut display = display_session();
-        let pixels = cached_pixels();
-
-        presenter
-            .present_cached_full_frame(
-                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
-                frame_plan(),
-                &mut hardware,
-                &mut display,
-                false,
-                |_, _, _, _, _| {
-                    events.borrow_mut().push(TestEvent::Overlay);
-                    Ok(())
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            *events.borrow(),
-            [
-                TestEvent::ReadStatus,
-                TestEvent::Copy,
-                TestEvent::Overlay,
-                TestEvent::Publish,
-                TestEvent::ReadStatus,
-                TestEvent::Post,
-                TestEvent::ReadStatus,
-            ]
-        );
-    }
-
-    #[test]
-    fn direct_hidden_render_posts_while_presenter_keeps_mapping_ownership() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: vec![
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE2, 0x0001)),
-            ],
-            ..FakeHardware::default()
-        };
-        let mut display = display_session();
-        let completed = presenter
-            .try_render_direct_hidden_frame(&mut hardware, &mut display, |grant, pixels| {
-                assert_eq!(grant.slot_index, 2);
-                pixels[0] = Rgb565Pixel(0x5aa5);
-                true
-            })
-            .unwrap()
-            .expect("inactive slot render");
-        let grant = completed.grant;
-        assert!(
-            presenter
-                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
-                .unwrap()
-                .is_none()
-        );
-
-        let stats = presenter
-            .present_completed_hidden_frame(completed, &mut hardware, &mut display, false)
-            .unwrap();
-        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
-        assert_eq!(stats.copied_bytes, 0);
-        assert!(stats.post_pending);
-        assert_eq!(stats.post_pending_sequence, stats.posted_sequence);
-        assert_ne!(stats.post_active_sequence, stats.posted_sequence);
-        assert_eq!(hardware.post_bases, vec![BASE2]);
-        assert!(
-            presenter
-                .present_completed_hidden_frame(
-                    CompletedHiddenFrame {
-                        grant,
-                        source_evidence: None,
-                    },
-                    &mut hardware,
-                    &mut display,
-                    false,
-                )
-                .is_err()
-        );
-        assert_eq!(
-            presenter.buffers.buffer_mut(2).pixels[0],
-            Rgb565Pixel(0x5aa5)
-        );
-    }
-
-    #[test]
-    fn repeated_input_cancellation_releases_and_reseeds_the_direct_slot() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: (0..6)
-                .map(|_| Ok(status(BASE1, 0x0001)))
-                .chain([Ok(status(BASE2, 0x0001))])
-                .collect(),
-            ..Default::default()
-        };
-        let mut display = display_session();
-        let damage = [
-            DirtyRect {
-                x0: 0,
-                x1: 2,
-                y0: 1,
-                y1: 2,
-            },
-            DirtyRect {
-                x0: 2,
-                x1: WIDTH,
-                y0: 1,
-                y1: 2,
-            },
-        ];
-        let mut previous_generation = 0;
-        for colour in [11, 13, 17] {
-            let pixels = vec![Rgb565Pixel(colour); WIDTH * HEIGHT];
-            let view = CachedFrameView::new(&pixels, WIDTH, HEIGHT);
-            let copy = presenter
-                .try_copy_direct_hidden_tiles(
-                    &mut hardware,
-                    &mut display,
-                    view,
-                    &DirtyRectList::new(),
-                    [view; 2],
-                    damage,
-                    1,
-                )
-                .unwrap()
-                .expect("new input must not strand the previous direct reservation");
-            assert!(copy.completed.grant.generation > previous_generation);
-            previous_generation = copy.completed.grant.generation;
-            assert!(
-                presenter
-                    .buffers
-                    .buffer_mut(2)
-                    .pixels
-                    .iter()
-                    .all(|p| p.0 == colour)
-            );
-            // A press/release or direction change arrives after the pixels were
-            // written but before publication. Repeated interruptions stay safe.
-            let mut completed = Some(copy.completed);
-            let mut full_present = false;
-            crate::ui_runner::launcher_loop::restart_unpublished_home_frame(
-                &mut completed,
-                false,
-                &mut full_present,
-                |frame| presenter.discard_completed_hidden_frame(frame),
-            );
-            assert!(completed.is_none());
-            assert!(
-                !full_present,
-                "aborting direct work must not force software composition"
-            );
-            assert!(hardware.post_bases.is_empty());
-            assert_eq!(presenter.direct_slot_content_generation[1], None);
-        }
-        let pixels = vec![Rgb565Pixel(23); WIDTH * HEIGHT];
-        let view = CachedFrameView::new(&pixels, WIDTH, HEIGHT);
-        let replacement = presenter
-            .try_copy_direct_hidden_tiles(
-                &mut hardware,
-                &mut display,
-                view,
-                &DirtyRectList::new(),
-                [view; 2],
-                damage,
-                1,
-            )
-            .unwrap()
-            .expect("direct rendering resumes after input settles");
-        assert!(
-            presenter
-                .buffers
-                .buffer_mut(2)
-                .pixels
-                .iter()
-                .all(|p| p.0 == 23)
-        );
-        let stats = presenter
-            .present_completed_hidden_frame(
-                replacement.completed,
-                &mut hardware,
-                &mut display,
-                false,
-            )
-            .unwrap();
-        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
-        assert_eq!(hardware.post_bases, [BASE2]);
-    }
-
-    #[test]
-    fn discarded_direct_pixels_are_restored_before_partial_slint_publication() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: [
-                BASE1, BASE1, BASE2, BASE2, BASE2, BASE1, BASE1, BASE1, BASE1, BASE2,
-            ]
-            .into_iter()
-            .map(|base| Ok(status(base, 0x0001)))
-            .collect(),
-            ..Default::default()
-        };
-        let mut display = display_session();
-        let mut pixels = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
-        presenter
-            .present_cached_full_frame(
-                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
-                frame_plan(),
-                &mut hardware,
-                &mut display,
-                false,
-                |_, _, _, _, _| Ok(()),
-            )
-            .unwrap();
-        // Seed both slots so a missing discard invalidation would incorrectly
-        // permit a one-pixel copy over the abandoned native image.
-        presenter
-            .present_cached_full_frame(
-                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
-                frame_plan(),
-                &mut hardware,
-                &mut display,
-                false,
-                |_, _, _, _, _| Ok(()),
-            )
-            .unwrap();
-        let abandoned = presenter
-            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, destination| {
-                destination.fill(Rgb565Pixel(99));
-                true
-            })
-            .unwrap()
-            .unwrap();
-        let slot = abandoned.grant.slot_index;
-        presenter.arcade_slot_mirrors[physical_slot_mirror_index(slot)].rect =
-            Some(presenter.full_rect());
-        presenter.discard_completed_hidden_frame(abandoned);
-        assert!(
-            presenter.arcade_slot_mirrors[physical_slot_mirror_index(slot)]
-                .rect
-                .is_none()
-        );
-        pixels[0] = Rgb565Pixel(11);
-        let damage = DirtyRectList::from_one(DirtyRect {
-            x0: 0,
-            x1: 1,
-            y0: 0,
-            y1: 1,
-        });
-        let plan = LauncherFramePlan::from_cached_layers(damage, None, None, None, None);
-        presenter
-            .present_cached_full_frame(
-                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
-                plan,
-                &mut hardware,
-                &mut display,
-                false,
-                |_, _, _, _, _| Ok(()),
-            )
-            .unwrap();
-        assert_eq!(presenter.buffers.buffer_mut(slot).pixels, pixels);
-    }
-
-    #[test]
-    fn loop_restart_while_waiting_for_a_slot_preserves_direct_rendering() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: [BASE1, BASE1, BASE1, BASE2]
-                .into_iter()
-                .map(|base| Ok(status(base, 0x0001)))
-                .collect(),
-            ..Default::default()
-        };
-        let mut display = display_session();
-        let completed = presenter
-            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
-                pixels.fill(Rgb565Pixel(7));
-                true
-            })
-            .unwrap()
-            .unwrap();
-        // The loop retries while the earlier completed frame owns the slot.
-        assert!(
-            presenter
-                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
-                .unwrap()
-                .is_none()
-        );
-        let mut no_raster = None;
-        let mut full_present = false;
-        crate::ui_runner::launcher_loop::restart_unpublished_home_frame(
-            &mut no_raster,
-            false,
-            &mut full_present,
-            |frame| presenter.discard_completed_hidden_frame(frame),
-        );
-        assert!(!full_present);
-        presenter
-            .present_completed_hidden_frame(completed, &mut hardware, &mut display, false)
-            .unwrap();
-        hardware.statuses.push(Ok(status(BASE2, 0x0001)));
-        assert!(
-            presenter
-                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
-                .unwrap()
-                .is_some()
-        );
-        let mut cached_raster = None;
-        crate::ui_runner::launcher_loop::restart_unpublished_home_frame(
-            &mut cached_raster,
-            true,
-            &mut full_present,
-            |frame| presenter.discard_completed_hidden_frame(frame),
-        );
-        assert!(
-            full_present,
-            "a real cached raster must retain its full-copy obligation"
-        );
-    }
-
-    #[test]
-    fn discarding_a_stale_completion_cannot_release_the_replacement() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: (0..4)
-                .map(|_| Ok(status(BASE1, 0x0001)))
-                .chain([Ok(status(BASE2, 0x0001))])
-                .collect(),
-            ..Default::default()
-        };
-        let mut display = display_session();
-        let abandoned = presenter
-            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
-                pixels.fill(Rgb565Pixel(11));
-                true
-            })
-            .unwrap()
-            .unwrap();
-        let abandoned_grant = abandoned.grant;
-        presenter.discard_completed_hidden_frame(abandoned);
-        let replacement = presenter
-            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
-                pixels.fill(Rgb565Pixel(13));
-                true
-            })
-            .unwrap()
-            .expect("replacement gets a new reservation");
-        assert_ne!(abandoned_grant.generation, replacement.grant.generation);
-        presenter.discard_completed_hidden_frame(CompletedHiddenFrame {
-            grant: abandoned_grant,
-            source_evidence: None,
-        });
-        assert!(
-            presenter
-                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
-                .unwrap()
-                .is_none()
-        );
-        presenter
-            .present_completed_hidden_frame(replacement, &mut hardware, &mut display, false)
-            .unwrap();
-        assert_eq!(hardware.post_bases, [BASE2]);
-        assert!(
-            presenter
-                .buffers
-                .buffer_mut(2)
-                .pixels
-                .iter()
-                .all(|p| p.0 == 13)
-        );
     }
 
     #[test]
@@ -2305,322 +1873,6 @@ mod tests {
         assert_eq!(presenter.direct_slot_content_generation[1], None);
         assert!(presenter.outstanding_direct_grant.is_none());
         assert!(!events.borrow().contains(&TestEvent::Publish));
-    }
-
-    #[test]
-    fn retained_same_image_keeps_eight_posts_and_copies_each_slot_once() {
-        use mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity;
-        const W: usize = 960;
-        const H: usize = 540;
-        let events = EventLog::default();
-        let mut presenter = presenter_with_events(events.clone());
-        presenter.width = W;
-        presenter.height = H;
-        presenter.render_width = W;
-        presenter.render_height = H;
-        presenter.latch_geometry = crate::fpga::LatchedFbufGeometry::new(
-            W as u16,
-            crate::framebuffer::route::FramebufferRouteMode::framebuffer_sized(W as u16, H as u16),
-            1,
-        );
-        for slot in [1, 2] {
-            presenter.buffers.buffer_mut(slot).pixels = vec![Rgb565Pixel(7); W * H];
-        }
-        presenter.direct_slot_content_generation = [Some(7); 2];
-        let chrome = vec![Rgb565Pixel(7); W * H];
-        let left = vec![Rgb565Pixel(11); W * H];
-        let right = vec![Rgb565Pixel(13); W * H];
-        let damage = [
-            DirtyRect {
-                x0: 296,
-                y0: 120,
-                x1: 629,
-                y1: 495,
-            },
-            DirtyRect {
-                x0: 629,
-                y0: 120,
-                x1: 934,
-                y1: 495,
-            },
-        ];
-        let mut expected = chrome.clone();
-        for (source, rect) in [&left, &right].into_iter().zip(damage) {
-            for y in rect.y0..rect.y1 {
-                let range = y * W + rect.x0..y * W + rect.x1;
-                expected[range.clone()].copy_from_slice(&source[range]);
-            }
-        }
-        let mut statuses = Vec::new();
-        for index in 0..8 {
-            let (front, next) = if index % 2 == 0 {
-                (BASE1, BASE2)
-            } else {
-                (BASE2, BASE1)
-            };
-            for base in [front, front, front, next] {
-                let mut sample = status(base, 0x0001);
-                sample.active_width = W as u16;
-                sample.active_height = H as u16;
-                sample.active_stride = (W * 2) as u16;
-                statuses.push(Ok(sample));
-            }
-        }
-        let mut hardware = FakeHardware {
-            statuses,
-            events: Some(events.clone()),
-            ..Default::default()
-        };
-        let mut display = display_session();
-        let mut bytes = 0;
-        for _ in 0..8 {
-            let copy = presenter
-                .try_copy_direct_hidden_tiles(
-                    &mut hardware,
-                    &mut display,
-                    CachedFrameView::new(&chrome, W, H),
-                    &DirtyRectList::new(),
-                    [
-                        CachedFrameView::new(&left, W, H),
-                        CachedFrameView::new(&right, W, H),
-                    ],
-                    damage,
-                    TileImageIdentity::new(7, 19),
-                )
-                .unwrap()
-                .unwrap();
-            bytes += copy.copy.bytes;
-            assert_eq!(
-                presenter
-                    .buffers
-                    .buffer_mut(copy.completed.grant.slot_index)
-                    .pixels,
-                expected
-            );
-            presenter
-                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-                .unwrap();
-        }
-        let publishes = events
-            .borrow()
-            .iter()
-            .filter(|event| **event == TestEvent::Publish)
-            .count();
-        println!(
-            "retained_tile_bytes={bytes} posts={} publishes={publishes}",
-            hardware.post_bases.len()
-        );
-        assert_eq!(hardware.post_bases.len(), 8);
-        assert_eq!(publishes, 8);
-        assert_eq!(bytes, 957_000);
-    }
-
-    fn copy_tiny_tiles(
-        presenter: &mut FpgaVblankLatchHiddenPresenter<FakeBuffers>,
-        hardware: &mut FakeHardware,
-        display: &mut LauncherDisplaySession,
-    ) -> DirectHiddenFrameCopy {
-        let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
-        let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
-        let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
-        presenter
-            .try_copy_direct_hidden_tiles(
-                hardware,
-                display,
-                CachedFrameView::new(&chrome, WIDTH, HEIGHT),
-                &DirtyRectList::new(),
-                [
-                    CachedFrameView::new(&left, WIDTH, HEIGHT),
-                    CachedFrameView::new(&right, WIDTH, HEIGHT),
-                ],
-                [
-                    DirtyRect {
-                        x0: 0,
-                        y0: 1,
-                        x1: 2,
-                        y1: 2,
-                    },
-                    DirtyRect {
-                        x0: 2,
-                        y0: 1,
-                        x1: 4,
-                        y1: 2,
-                    },
-                ],
-                TileImageIdentity::new(7, 19),
-            )
-            .unwrap()
-            .unwrap()
-    }
-
-    #[test]
-    fn retained_tiles_are_rewritten_after_another_direct_writer() {
-        let events = EventLog::default();
-        let mut presenter = presenter_with_events(events.clone());
-        presenter.direct_slot_content_generation = [Some(7); 2];
-        let mut statuses = Vec::new();
-        for index in 0..5 {
-            let (front, next) = if index % 2 == 0 {
-                (BASE1, BASE2)
-            } else {
-                (BASE2, BASE1)
-            };
-            for base in [front, front, front, next] {
-                statuses.push(Ok(status(base, 0x0001)));
-            }
-        }
-        let mut hardware = FakeHardware {
-            statuses,
-            events: Some(events),
-            ..Default::default()
-        };
-        let mut display = display_session();
-        for _ in 0..2 {
-            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-            assert_eq!(copy.copy.bytes, 8);
-            presenter
-                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-                .unwrap();
-        }
-        let other = presenter
-            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
-                pixels.fill(Rgb565Pixel(42));
-                true
-            })
-            .unwrap()
-            .unwrap();
-        presenter
-            .present_completed_hidden_frame(other, &mut hardware, &mut display, false)
-            .unwrap();
-        // The untouched slot can still reuse its image; the overwritten slot
-        // must restore chrome and both tiles before its next post.
-        let untouched = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-        assert_eq!(untouched.copy.bytes, 0);
-        presenter
-            .present_completed_hidden_frame(untouched.completed, &mut hardware, &mut display, false)
-            .unwrap();
-        let overwritten = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-        assert_eq!(overwritten.copy.bytes, WIDTH * HEIGHT * 2);
-        assert_eq!(
-            presenter
-                .buffers
-                .buffer_mut(overwritten.completed.grant.slot_index)
-                .pixels[0],
-            Rgb565Pixel(7)
-        );
-        presenter
-            .present_completed_hidden_frame(
-                overwritten.completed,
-                &mut hardware,
-                &mut display,
-                false,
-            )
-            .unwrap();
-        assert_eq!(hardware.post_bases.len(), 5);
-    }
-
-    #[test]
-    fn retained_tiles_are_invalidated_after_failed_post() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: vec![
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-            ],
-            posts: vec![Err(io::Error::other("controlled post failure"))],
-            ..Default::default()
-        };
-        let mut display = display_session();
-        let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-        assert!(
-            presenter
-                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-                .is_err()
-        );
-        assert_eq!(presenter.direct_slot_content_generation, [None; 2]);
-        assert_eq!(presenter.direct_slot_tile_damage, [None; 2]);
-        for slot in [1, 2] {
-            assert_eq!(
-                presenter.direct_retained_tiles.write_if_changed(
-                    slot,
-                    TileImageIdentity::new(7, 19),
-                    || Ok::<_, ()>(true)
-                ),
-                Ok(Some(true)),
-                "failed post retained a tile key"
-            );
-        }
-    }
-
-    #[test]
-    fn retained_cache_is_invalidated_by_partial_tile_write() {
-        let mut presenter = presenter();
-        let mut statuses = Vec::new();
-        for index in 0..2 {
-            let (front, next) = if index % 2 == 0 {
-                (BASE1, BASE2)
-            } else {
-                (BASE2, BASE1)
-            };
-            for base in [front, front, front, next] {
-                statuses.push(Ok(status(base, 0x0001)));
-            }
-        }
-        statuses.push(Ok(status(BASE1, 0x0001)));
-        let mut hardware = FakeHardware {
-            statuses,
-            ..Default::default()
-        };
-        let mut display = display_session();
-        for _ in 0..2 {
-            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-            presenter
-                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-                .unwrap();
-        }
-        let buffer = presenter.buffers.buffer_mut(2);
-        buffer.fail_on_copy = Some(buffer.copy_count + 2);
-        let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
-        let left = vec![Rgb565Pixel(21); WIDTH * HEIGHT];
-        let right = vec![Rgb565Pixel(23); WIDTH * HEIGHT];
-        let result = presenter.try_copy_direct_hidden_tiles(
-            &mut hardware,
-            &mut display,
-            CachedFrameView::new(&chrome, WIDTH, HEIGHT),
-            &DirtyRectList::new(),
-            [
-                CachedFrameView::new(&left, WIDTH, HEIGHT),
-                CachedFrameView::new(&right, WIDTH, HEIGHT),
-            ],
-            [
-                DirtyRect {
-                    x0: 0,
-                    y0: 1,
-                    x1: 2,
-                    y1: 2,
-                },
-                DirtyRect {
-                    x0: 2,
-                    y0: 1,
-                    x1: 4,
-                    y1: 2,
-                },
-            ],
-            TileImageIdentity::new(7, 20),
-        );
-        assert!(result.is_err());
-        assert_eq!(presenter.direct_slot_content_generation[1], None);
-        assert!(presenter.outstanding_direct_grant.is_none());
-        assert_eq!(
-            presenter.direct_retained_tiles.write_if_changed(
-                2,
-                TileImageIdentity::new(7, 19),
-                || Ok::<_, ()>(true)
-            ),
-            Ok(Some(true)),
-            "partial write retained the previous complete image"
-        );
     }
 
     #[test]
@@ -2681,335 +1933,6 @@ mod tests {
     }
 
     #[test]
-    fn tile_pair_seeds_once_and_publishes_only_after_both_copies() {
-        for previous_generation in [None, Some(6), Some(7)] {
-            let coherent = previous_generation == Some(7);
-            let events = EventLog::default();
-            let mut presenter = presenter_with_events(events.clone());
-            presenter.direct_slot_content_generation[1] = previous_generation;
-            presenter.buffers.buffer_mut(2).pixels.fill(Rgb565Pixel(6));
-            let mut hardware = FakeHardware {
-                statuses: vec![
-                    Ok(status(BASE1, 0x0001)),
-                    Ok(status(BASE1, 0x0001)),
-                    Ok(status(BASE1, 0x0001)),
-                    Ok(status(BASE2, 0x0001)),
-                ],
-                events: Some(events.clone()),
-                ..Default::default()
-            };
-            let mut display = display_session();
-            let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
-            let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
-            let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
-            let damage = [
-                DirtyRect {
-                    x0: 0,
-                    x1: 2,
-                    y0: 1,
-                    y1: 2,
-                },
-                DirtyRect {
-                    x0: 2,
-                    x1: 4,
-                    y0: 1,
-                    y1: 2,
-                },
-            ];
-            let copy = presenter
-                .try_copy_direct_hidden_tiles(
-                    &mut hardware,
-                    &mut display,
-                    CachedFrameView::new(&chrome, WIDTH, HEIGHT),
-                    &DirtyRectList::new(),
-                    [
-                        CachedFrameView::new(&left, WIDTH, HEIGHT),
-                        CachedFrameView::new(&right, WIDTH, HEIGHT),
-                    ],
-                    damage,
-                    7,
-                )
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                copy.copy.bytes,
-                if coherent { 8 } else { WIDTH * HEIGHT * 2 }
-            );
-            let pixels = &presenter.buffers.buffer_mut(2).pixels;
-            assert_eq!(
-                &pixels[4..8],
-                &[
-                    Rgb565Pixel(11),
-                    Rgb565Pixel(11),
-                    Rgb565Pixel(13),
-                    Rgb565Pixel(13)
-                ]
-            );
-            assert_eq!(pixels[0], Rgb565Pixel(if coherent { 6 } else { 7 }));
-            assert_eq!(
-                pixels[WIDTH * HEIGHT - 1],
-                Rgb565Pixel(if coherent { 6 } else { 7 })
-            );
-            let expected = if coherent {
-                vec![
-                    TestEvent::ReadStatus,
-                    TestEvent::Copy,
-                    TestEvent::Copy,
-                    TestEvent::Publish,
-                ]
-            } else {
-                vec![
-                    TestEvent::ReadStatus,
-                    TestEvent::Copy, // top chrome band
-                    TestEvent::Copy, // bottom chrome band
-                    TestEvent::Copy, // primary tile
-                    TestEvent::Copy, // helper tile
-                    TestEvent::Publish,
-                ]
-            };
-            assert_eq!(*events.borrow(), expected);
-            assert_eq!(presenter.direct_slot_content_generation[1], Some(7));
-            let stats = presenter
-                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-                .unwrap();
-            assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
-            assert_eq!(hardware.post_bases, vec![BASE2]);
-            presenter.invalidate_external_mode();
-            assert_eq!(presenter.direct_slot_content_generation, [None; 2]);
-        }
-    }
-
-    #[test]
-    fn fading_chrome_catches_up_in_both_slots_when_tiles_are_resident() {
-        let events = EventLog::default();
-        let mut presenter = presenter_with_events(events.clone());
-        let mut statuses = Vec::new();
-        for frame in 0..6 {
-            let (front, next) = if frame % 2 == 0 {
-                (BASE1, BASE2)
-            } else {
-                (BASE2, BASE1)
-            };
-            statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
-        }
-        let mut hardware = FakeHardware {
-            statuses,
-            ..Default::default()
-        };
-        let mut display = display_session();
-        let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
-        let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
-        let damage = [
-            DirtyRect {
-                x0: 0,
-                y0: 1,
-                x1: 2,
-                y1: 2,
-            },
-            DirtyRect {
-                x0: 2,
-                y0: 1,
-                x1: WIDTH,
-                y1: 2,
-            },
-        ];
-        let chrome_damage = DirtyRectList::from_one(DirtyRect {
-            x0: 1,
-            y0: 0,
-            x1: 3,
-            y1: 1,
-        });
-        for frame in 0..6 {
-            let mut chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
-            chrome[1..3].fill(Rgb565Pixel(20 + frame));
-            let copy = presenter
-                .try_copy_direct_hidden_tiles(
-                    &mut hardware,
-                    &mut display,
-                    CachedFrameView::new(&chrome, WIDTH, HEIGHT),
-                    &chrome_damage,
-                    [
-                        CachedFrameView::new(&left, WIDTH, HEIGHT),
-                        CachedFrameView::new(&right, WIDTH, HEIGHT),
-                    ],
-                    damage,
-                    TileImageIdentity::new(7, 19),
-                )
-                .unwrap()
-                .unwrap();
-            let slot = copy.completed.grant.slot_index;
-            let mut expected = chrome;
-            expected[WIDTH..WIDTH + 2].fill(Rgb565Pixel(11));
-            expected[WIDTH + 2..2 * WIDTH].fill(Rgb565Pixel(13));
-            assert_eq!(presenter.buffers.buffer_mut(slot).pixels, expected);
-            assert_eq!(
-                copy.copy.bytes,
-                if frame < 2 { WIDTH * HEIGHT * 2 } else { 4 }
-            );
-            presenter
-                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-                .unwrap();
-        }
-        assert_eq!(hardware.post_bases.len(), 6);
-    }
-
-    #[test]
-    fn partial_chrome_failure_requires_full_slot_reseeding() {
-        let events = EventLog::default();
-        let mut presenter = presenter_with_events(events.clone());
-        let mut statuses = Vec::new();
-        for (front, next) in [(BASE1, BASE2), (BASE2, BASE1)] {
-            statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
-        }
-        statuses.push(Ok(status(BASE1, 0x0001)));
-        statuses.extend([BASE1, BASE1, BASE1, BASE2].map(|base| Ok(status(base, 0x0001))));
-        let mut hardware = FakeHardware {
-            statuses,
-            ..Default::default()
-        };
-        let mut display = display_session();
-        for _ in 0..2 {
-            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-            presenter
-                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-                .unwrap();
-        }
-        let buffer = presenter.buffers.buffer_mut(2);
-        buffer.fail_on_copy = Some(buffer.copy_count + 2);
-        let pixels = vec![Rgb565Pixel(20); WIDTH * HEIGHT];
-        let mut chrome_damage = DirtyRectList::new();
-        chrome_damage.push(DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: 1,
-            y1: 1,
-        });
-        chrome_damage.push(DirtyRect {
-            x0: 1,
-            y0: 0,
-            x1: 2,
-            y1: 1,
-        });
-        let result = presenter.try_copy_direct_hidden_tiles(
-            &mut hardware,
-            &mut display,
-            CachedFrameView::new(&pixels, WIDTH, HEIGHT),
-            &chrome_damage,
-            [CachedFrameView::new(&pixels, WIDTH, HEIGHT); 2],
-            [
-                DirtyRect {
-                    x0: 0,
-                    y0: 1,
-                    x1: 2,
-                    y1: 2,
-                },
-                DirtyRect {
-                    x0: 2,
-                    y0: 1,
-                    x1: 4,
-                    y1: 2,
-                },
-            ],
-            TileImageIdentity::new(7, 19),
-        );
-        assert!(result.is_err());
-        assert_eq!(hardware.post_bases.len(), 2);
-        assert_eq!(presenter.direct_slot_content_generation[1], None);
-        assert!(presenter.outstanding_direct_grant.is_none());
-        let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
-        assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2);
-        let mut expected = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
-        expected[WIDTH..WIDTH + 2].fill(Rgb565Pixel(11));
-        expected[WIDTH + 2..2 * WIDTH].fill(Rgb565Pixel(13));
-        assert_eq!(presenter.buffers.buffer_mut(2).pixels, expected);
-        presenter
-            .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display, false)
-            .unwrap();
-    }
-
-    #[test]
-    fn full_frame_and_gapped_tiles_seed_every_pixel_once() {
-        for full_frame in [false, true] {
-            let events = EventLog::default();
-            let mut presenter = presenter_with_events(events.clone());
-            let mut statuses = Vec::new();
-            for (front, next) in [(BASE1, BASE2), (BASE2, BASE1)] {
-                statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
-            }
-            let mut hardware = FakeHardware {
-                statuses,
-                events: Some(events.clone()),
-                ..Default::default()
-            };
-            let mut display = display_session();
-            let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
-            let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
-            let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
-            let damage = [
-                DirtyRect {
-                    x0: 0,
-                    x1: if full_frame { 2 } else { 1 },
-                    y0: 0,
-                    y1: HEIGHT,
-                },
-                DirtyRect {
-                    x0: 2,
-                    x1: WIDTH,
-                    y0: 0,
-                    y1: HEIGHT,
-                },
-            ];
-            for sequence in 1..=2 {
-                let start = events.borrow().len();
-                let copy = presenter
-                    .try_copy_direct_hidden_tiles(
-                        &mut hardware,
-                        &mut display,
-                        CachedFrameView::new(&chrome, WIDTH, HEIGHT),
-                        &DirtyRectList::new(),
-                        [
-                            CachedFrameView::new(&left, WIDTH, HEIGHT),
-                            CachedFrameView::new(&right, WIDTH, HEIGHT),
-                        ],
-                        damage,
-                        TileImageIdentity::new(7, sequence),
-                    )
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2);
-                let row = [
-                    Rgb565Pixel(11),
-                    Rgb565Pixel(if full_frame { 11 } else { 7 }),
-                    Rgb565Pixel(13),
-                    Rgb565Pixel(13),
-                ];
-                assert_eq!(
-                    presenter
-                        .buffers
-                        .buffer_mut(copy.completed.grant.slot_index)
-                        .pixels,
-                    row.repeat(HEIGHT)
-                );
-                let mut expected = vec![TestEvent::ReadStatus, TestEvent::Copy, TestEvent::Copy];
-                if !full_frame {
-                    expected.push(TestEvent::Copy);
-                }
-                expected.push(TestEvent::Publish);
-                assert_eq!(&events.borrow()[start..], expected);
-                presenter
-                    .present_completed_hidden_frame(
-                        copy.completed,
-                        &mut hardware,
-                        &mut display,
-                        false,
-                    )
-                    .unwrap();
-            }
-            assert_eq!(hardware.post_bases, [BASE2, BASE1]);
-        }
-    }
-
-    #[test]
     fn startup_intro_grant_uses_native_slot_geometry_for_transformed_composition() {
         let mut presenter = presenter();
         presenter.render_height = HEIGHT * 2;
@@ -3049,143 +1972,6 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-    }
-
-    #[test]
-    fn external_hidden_completion_rejects_a_slot_that_became_active_or_pending() {
-        for status_before_post in [status(BASE2, 0x0001), status(BASE1, 0x0001 | 0x0004)] {
-            let mut presenter = presenter();
-            let mut hardware = FakeHardware {
-                statuses: vec![Ok(status(BASE1, 0x0001)), Ok(status_before_post)],
-                ..FakeHardware::default()
-            };
-            let mut display = display_session();
-            let grant = presenter
-                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
-                .unwrap()
-                .expect("inactive slot grant");
-
-            let failure = presenter
-                .present_completed_hidden_frame(
-                    CompletedHiddenFrame {
-                        grant,
-                        source_evidence: None,
-                    },
-                    &mut hardware,
-                    &mut display,
-                    false,
-                )
-                .unwrap_err();
-
-            assert_eq!(failure.reason_code(), "no-writable-hidden-buffer");
-            assert!(hardware.post_bases.is_empty());
-        }
-    }
-
-    #[test]
-    fn external_hidden_invalidation_rejects_stale_completion_tokens() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: vec![Ok(status(BASE1, 0x0001))],
-            ..FakeHardware::default()
-        };
-        let mut display = display_session();
-        let grant = presenter
-            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
-            .unwrap()
-            .expect("inactive slot grant");
-
-        presenter.invalidate_external_mode();
-        let failure = presenter
-            .present_completed_hidden_frame(
-                CompletedHiddenFrame {
-                    grant,
-                    source_evidence: None,
-                },
-                &mut hardware,
-                &mut display,
-                false,
-            )
-            .unwrap_err();
-
-        assert_eq!(failure.reason_code(), "posted-sequence-unverified");
-        assert!(hardware.post_bases.is_empty());
-    }
-
-    #[test]
-    fn external_hidden_completion_becomes_the_committed_capture_view() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: vec![
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-                Ok(status(BASE2, 0x0001)),
-            ],
-            ..FakeHardware::default()
-        };
-        let mut display = display_session();
-        let grant = presenter
-            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
-            .unwrap()
-            .expect("inactive slot grant");
-        let buffers = &mut presenter.buffers;
-        buffers.buffer_mut(grant.slot_index).pixels[0] = Rgb565Pixel(0x5aa5);
-        FakeBuffers::publish_writes(buffers.buffer_mut(grant.slot_index));
-
-        let stats = presenter
-            .present_completed_hidden_frame(
-                CompletedHiddenFrame {
-                    grant,
-                    source_evidence: None,
-                },
-                &mut hardware,
-                &mut display,
-                false,
-            )
-            .unwrap();
-
-        assert_eq!(
-            presenter.committed_frame_view(stats.buffer_index).pixels[0],
-            Rgb565Pixel(0x5aa5)
-        );
-        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
-        assert_eq!(stats.copied_bytes, 0);
-    }
-
-    #[test]
-    fn committed_frame_view_contains_final_overlay_pixels() {
-        let mut presenter = presenter();
-        let mut hardware = FakeHardware {
-            statuses: vec![
-                Ok(status(FRONT_BASE, 0x0001)),
-                Ok(status(FRONT_BASE, 0x0001)),
-                Ok(status(BASE1, 0x0001)),
-            ],
-            ..FakeHardware::default()
-        };
-        let mut display = display_session();
-        let pixels = cached_pixels();
-
-        let stats = presenter
-            .present_cached_full_frame(
-                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
-                frame_plan(),
-                &mut hardware,
-                &mut display,
-                false,
-                |hidden, _, _, _, _| {
-                    hidden.pixels[0] = Rgb565Pixel(0x5aa5);
-                    Ok(())
-                },
-            )
-            .expect("successful latch present");
-
-        let committed = presenter.committed_frame_view(stats.buffer_index);
-        assert_eq!(committed.pixels[0], Rgb565Pixel(0x5aa5));
-        assert_eq!(committed.width, WIDTH);
-        assert_eq!(committed.height, HEIGHT);
-        assert_eq!(committed.stride_pixels, WIDTH);
     }
 
     #[test]
@@ -3256,9 +2042,7 @@ mod tests {
         let recovered_other_slot = present(&mut presenter, &mut hardware, &mut display).unwrap();
 
         assert!(recovered.full_copy);
-        assert_eq!(recovered.invalid_bytes, WIDTH * HEIGHT * 2);
         assert!(recovered_other_slot.full_copy);
-        assert_eq!(recovered_other_slot.invalid_bytes, WIDTH * HEIGHT * 2);
         assert_eq!(hardware.read_count, 12);
     }
 
@@ -3742,5 +2526,1149 @@ mod tests {
         );
         assert_eq!(diagnostics.protocol_version, Some(5));
         assert_eq!(diagnostics.attempt_count, 2);
+    }
+
+    #[test]
+    fn committed_frame_view_contains_final_overlay_pixels() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+            ],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let pixels = cached_pixels();
+
+        let stats = presenter
+            .present_cached_full_frame(
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                frame_plan(),
+                &mut hardware,
+                &mut display,
+                |hidden, _, _, _, _| {
+                    hidden.pixels[0] = Rgb565Pixel(0x5aa5);
+                    Ok(())
+                },
+            )
+            .expect("successful latch present");
+
+        let committed = presenter.committed_frame_view(stats.buffer_index);
+        assert_eq!(committed.pixels[0], Rgb565Pixel(0x5aa5));
+        assert_eq!(committed.width, WIDTH);
+        assert_eq!(committed.height, HEIGHT);
+        assert_eq!(committed.stride_pixels, WIDTH);
+    }
+
+    #[test]
+    fn direct_hidden_render_posts_while_presenter_keeps_mapping_ownership() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
+            ],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let completed = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |grant, pixels| {
+                assert_eq!(grant.slot_index, 2);
+                pixels[0] = Rgb565Pixel(0x5aa5);
+                true
+            })
+            .unwrap()
+            .expect("inactive slot render");
+        let grant = completed.grant;
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_none()
+        );
+
+        let stats = presenter
+            .present_completed_hidden_frame(completed, &mut hardware, &mut display)
+            .unwrap();
+        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+        assert_eq!(stats.copied_bytes, 0);
+        assert!(stats.post_pending);
+        assert_eq!(stats.post_pending_sequence, stats.posted_sequence);
+        assert_ne!(stats.post_active_sequence, stats.posted_sequence);
+        assert_eq!(hardware.post_bases, vec![BASE2]);
+        assert!(
+            presenter
+                .present_completed_hidden_frame(
+                    CompletedHiddenFrame {
+                        grant,
+                        source_evidence: None,
+                    },
+                    &mut hardware,
+                    &mut display,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            presenter.buffers.buffer_mut(2).pixels[0],
+            Rgb565Pixel(0x5aa5)
+        );
+    }
+
+    #[test]
+    fn discarded_direct_pixels_are_restored_before_partial_slint_publication() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: [
+                BASE1, BASE1, BASE2, BASE2, BASE2, BASE1, BASE1, BASE1, BASE1, BASE2,
+            ]
+            .into_iter()
+            .map(|base| Ok(status(base, 0x0001)))
+            .collect(),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let mut pixels = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+        presenter
+            .present_cached_full_frame(
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                frame_plan(),
+                &mut hardware,
+                &mut display,
+                |_, _, _, _, _| Ok(()),
+            )
+            .unwrap();
+        // Seed both slots so a missing discard invalidation would incorrectly
+        // permit a one-pixel copy over the abandoned native image.
+        presenter
+            .present_cached_full_frame(
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                frame_plan(),
+                &mut hardware,
+                &mut display,
+                |_, _, _, _, _| Ok(()),
+            )
+            .unwrap();
+        let abandoned = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, destination| {
+                destination.fill(Rgb565Pixel(99));
+                true
+            })
+            .unwrap()
+            .unwrap();
+        let slot = abandoned.grant.slot_index;
+        presenter.arcade_slot_mirrors[physical_slot_mirror_index(slot)].rect =
+            Some(presenter.full_rect());
+        presenter.discard_completed_hidden_frame(abandoned);
+        assert!(
+            presenter.arcade_slot_mirrors[physical_slot_mirror_index(slot)]
+                .rect
+                .is_none()
+        );
+        pixels[0] = Rgb565Pixel(11);
+        let damage = DirtyRectList::from_one(DirtyRect {
+            x0: 0,
+            x1: 1,
+            y0: 0,
+            y1: 1,
+        });
+        let plan = LauncherFramePlan::from_cached_layers(damage, None, None, None, None);
+        presenter
+            .present_cached_full_frame(
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                plan,
+                &mut hardware,
+                &mut display,
+                |_, _, _, _, _| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(presenter.buffers.buffer_mut(slot).pixels, pixels);
+    }
+
+    #[test]
+    fn discarding_a_stale_completion_cannot_release_the_replacement() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: (0..4)
+                .map(|_| Ok(status(BASE1, 0x0001)))
+                .chain([Ok(status(BASE2, 0x0001))])
+                .collect(),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let abandoned = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
+                pixels.fill(Rgb565Pixel(11));
+                true
+            })
+            .unwrap()
+            .unwrap();
+        let abandoned_grant = abandoned.grant;
+        presenter.discard_completed_hidden_frame(abandoned);
+        let replacement = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
+                pixels.fill(Rgb565Pixel(13));
+                true
+            })
+            .unwrap()
+            .expect("replacement gets a new reservation");
+        assert_ne!(abandoned_grant.generation, replacement.grant.generation);
+        presenter.discard_completed_hidden_frame(CompletedHiddenFrame {
+            grant: abandoned_grant,
+            source_evidence: None,
+        });
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_none()
+        );
+        presenter
+            .present_completed_hidden_frame(replacement, &mut hardware, &mut display)
+            .unwrap();
+        assert_eq!(hardware.post_bases, [BASE2]);
+        assert!(
+            presenter
+                .buffers
+                .buffer_mut(2)
+                .pixels
+                .iter()
+                .all(|p| p.0 == 13)
+        );
+    }
+
+    #[test]
+    fn external_hidden_completion_becomes_the_committed_capture_view() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
+            ],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let grant = presenter
+            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+            .unwrap()
+            .expect("inactive slot grant");
+        let buffers = &mut presenter.buffers;
+        buffers.buffer_mut(grant.slot_index).pixels[0] = Rgb565Pixel(0x5aa5);
+        FakeBuffers::publish_writes(buffers.buffer_mut(grant.slot_index));
+
+        let stats = presenter
+            .present_completed_hidden_frame(
+                CompletedHiddenFrame {
+                    grant,
+                    source_evidence: None,
+                },
+                &mut hardware,
+                &mut display,
+            )
+            .unwrap();
+
+        assert_eq!(
+            presenter.committed_frame_view(stats.buffer_index).pixels[0],
+            Rgb565Pixel(0x5aa5)
+        );
+        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+        assert_eq!(stats.copied_bytes, 0);
+    }
+
+    #[test]
+    fn external_hidden_completion_rejects_a_slot_that_became_active_or_pending() {
+        for status_before_post in [status(BASE2, 0x0001), status(BASE1, 0x0001 | 0x0004)] {
+            let mut presenter = presenter();
+            let mut hardware = FakeHardware {
+                statuses: vec![Ok(status(BASE1, 0x0001)), Ok(status_before_post)],
+                ..FakeHardware::default()
+            };
+            let mut display = display_session();
+            let grant = presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .expect("inactive slot grant");
+
+            let failure = presenter
+                .present_completed_hidden_frame(
+                    CompletedHiddenFrame {
+                        grant,
+                        source_evidence: None,
+                    },
+                    &mut hardware,
+                    &mut display,
+                )
+                .unwrap_err();
+
+            assert_eq!(failure.reason_code(), "no-writable-hidden-buffer");
+            assert!(hardware.post_bases.is_empty());
+        }
+    }
+
+    #[test]
+    fn external_hidden_invalidation_rejects_stale_completion_tokens() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001))],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let grant = presenter
+            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+            .unwrap()
+            .expect("inactive slot grant");
+
+        presenter.invalidate_external_mode();
+        let failure = presenter
+            .present_completed_hidden_frame(
+                CompletedHiddenFrame {
+                    grant,
+                    source_evidence: None,
+                },
+                &mut hardware,
+                &mut display,
+            )
+            .unwrap_err();
+
+        assert_eq!(failure.reason_code(), "posted-sequence-unverified");
+        assert!(hardware.post_bases.is_empty());
+    }
+
+    #[test]
+    fn fading_chrome_catches_up_in_both_slots_when_tiles_are_resident() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        let mut statuses = Vec::new();
+        for frame in 0..6 {
+            let (front, next) = if frame % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
+        }
+        let mut hardware = FakeHardware {
+            statuses,
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+        let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+        let damage = [
+            DirtyRect {
+                x0: 0,
+                y0: 1,
+                x1: 2,
+                y1: 2,
+            },
+            DirtyRect {
+                x0: 2,
+                y0: 1,
+                x1: WIDTH,
+                y1: 2,
+            },
+        ];
+        let chrome_damage = DirtyRectList::from_one(DirtyRect {
+            x0: 1,
+            y0: 0,
+            x1: 3,
+            y1: 1,
+        });
+        for frame in 0..6 {
+            let mut chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+            chrome[1..3].fill(Rgb565Pixel(20 + frame));
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                    &chrome_damage,
+                    [
+                        CachedFrameView::new(&left, WIDTH, HEIGHT),
+                        CachedFrameView::new(&right, WIDTH, HEIGHT),
+                    ],
+                    damage,
+                    TileImageIdentity::new(7, 19),
+                )
+                .unwrap()
+                .unwrap();
+            let slot = copy.completed.grant.slot_index;
+            let mut expected = chrome;
+            expected[WIDTH..WIDTH + 2].fill(Rgb565Pixel(11));
+            expected[WIDTH + 2..2 * WIDTH].fill(Rgb565Pixel(13));
+            assert_eq!(presenter.buffers.buffer_mut(slot).pixels, expected);
+            assert_eq!(
+                copy.copy.bytes,
+                if frame < 2 { WIDTH * HEIGHT * 2 } else { 4 }
+            );
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                .unwrap();
+        }
+        assert_eq!(hardware.post_bases.len(), 6);
+    }
+
+    #[test]
+    fn full_frame_and_gapped_tiles_seed_every_pixel_once() {
+        for full_frame in [false, true] {
+            let events = EventLog::default();
+            let mut presenter = presenter_with_events(events.clone());
+            let mut statuses = Vec::new();
+            for (front, next) in [(BASE1, BASE2), (BASE2, BASE1)] {
+                statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
+            }
+            let mut hardware = FakeHardware {
+                statuses,
+                events: Some(events.clone()),
+                ..Default::default()
+            };
+            let mut display = display_session();
+            let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+            let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+            let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+            let damage = [
+                DirtyRect {
+                    x0: 0,
+                    x1: if full_frame { 2 } else { 1 },
+                    y0: 0,
+                    y1: HEIGHT,
+                },
+                DirtyRect {
+                    x0: 2,
+                    x1: WIDTH,
+                    y0: 0,
+                    y1: HEIGHT,
+                },
+            ];
+            for sequence in 1..=2 {
+                let start = events.borrow().len();
+                let copy = presenter
+                    .try_copy_direct_hidden_tiles(
+                        &mut hardware,
+                        &mut display,
+                        CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                        &DirtyRectList::new(),
+                        [
+                            CachedFrameView::new(&left, WIDTH, HEIGHT),
+                            CachedFrameView::new(&right, WIDTH, HEIGHT),
+                        ],
+                        damage,
+                        TileImageIdentity::new(7, sequence),
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2);
+                let row = [
+                    Rgb565Pixel(11),
+                    Rgb565Pixel(if full_frame { 11 } else { 7 }),
+                    Rgb565Pixel(13),
+                    Rgb565Pixel(13),
+                ];
+                assert_eq!(
+                    presenter
+                        .buffers
+                        .buffer_mut(copy.completed.grant.slot_index)
+                        .pixels,
+                    row.repeat(HEIGHT)
+                );
+                let mut expected = vec![TestEvent::ReadStatus, TestEvent::Copy, TestEvent::Copy];
+                if !full_frame {
+                    expected.push(TestEvent::Copy);
+                }
+                expected.push(TestEvent::Publish);
+                assert_eq!(&events.borrow()[start..], expected);
+                presenter
+                    .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                    .unwrap();
+            }
+            assert_eq!(hardware.post_bases, [BASE2, BASE1]);
+        }
+    }
+
+    #[test]
+    fn loop_restart_while_waiting_for_a_slot_preserves_direct_rendering() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: [BASE1, BASE1, BASE1, BASE2]
+                .into_iter()
+                .map(|base| Ok(status(base, 0x0001)))
+                .collect(),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let completed = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
+                pixels.fill(Rgb565Pixel(7));
+                true
+            })
+            .unwrap()
+            .unwrap();
+        // The loop retries while the earlier completed frame owns the slot.
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_none()
+        );
+        let mut no_raster = None;
+        let mut full_present = false;
+        crate::ui_runner::launcher_loop::restart_unpublished_home_frame(
+            &mut no_raster,
+            false,
+            &mut full_present,
+            |frame| presenter.discard_completed_hidden_frame(frame),
+        );
+        assert!(!full_present);
+        presenter
+            .present_completed_hidden_frame(completed, &mut hardware, &mut display)
+            .unwrap();
+        hardware.statuses.push(Ok(status(BASE2, 0x0001)));
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_some()
+        );
+        let mut cached_raster = None;
+        crate::ui_runner::launcher_loop::restart_unpublished_home_frame(
+            &mut cached_raster,
+            true,
+            &mut full_present,
+            |frame| presenter.discard_completed_hidden_frame(frame),
+        );
+        assert!(
+            full_present,
+            "a real cached raster must retain its full-copy obligation"
+        );
+    }
+
+    #[test]
+    fn partial_chrome_failure_requires_full_slot_reseeding() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        let mut statuses = Vec::new();
+        for (front, next) in [(BASE1, BASE2), (BASE2, BASE1)] {
+            statuses.extend([front, front, front, next].map(|base| Ok(status(base, 0x0001))));
+        }
+        statuses.push(Ok(status(BASE1, 0x0001)));
+        statuses.extend([BASE1, BASE1, BASE1, BASE2].map(|base| Ok(status(base, 0x0001))));
+        let mut hardware = FakeHardware {
+            statuses,
+            ..Default::default()
+        };
+        let mut display = display_session();
+        for _ in 0..2 {
+            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                .unwrap();
+        }
+        let buffer = presenter.buffers.buffer_mut(2);
+        buffer.fail_on_copy = Some(buffer.copy_count + 2);
+        let pixels = vec![Rgb565Pixel(20); WIDTH * HEIGHT];
+        let mut chrome_damage = DirtyRectList::new();
+        chrome_damage.push(DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 1,
+            y1: 1,
+        });
+        chrome_damage.push(DirtyRect {
+            x0: 1,
+            y0: 0,
+            x1: 2,
+            y1: 1,
+        });
+        let result = presenter.try_copy_direct_hidden_tiles(
+            &mut hardware,
+            &mut display,
+            CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+            &chrome_damage,
+            [CachedFrameView::new(&pixels, WIDTH, HEIGHT); 2],
+            [
+                DirtyRect {
+                    x0: 0,
+                    y0: 1,
+                    x1: 2,
+                    y1: 2,
+                },
+                DirtyRect {
+                    x0: 2,
+                    y0: 1,
+                    x1: 4,
+                    y1: 2,
+                },
+            ],
+            TileImageIdentity::new(7, 19),
+        );
+        assert!(result.is_err());
+        assert_eq!(hardware.post_bases.len(), 2);
+        assert_eq!(presenter.direct_slot_content_generation[1], None);
+        assert!(presenter.outstanding_direct_grant.is_none());
+        let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert_eq!(copy.copy.bytes, WIDTH * HEIGHT * 2);
+        let mut expected = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+        expected[WIDTH..WIDTH + 2].fill(Rgb565Pixel(11));
+        expected[WIDTH + 2..2 * WIDTH].fill(Rgb565Pixel(13));
+        assert_eq!(presenter.buffers.buffer_mut(2).pixels, expected);
+        presenter
+            .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+            .unwrap();
+    }
+
+    #[test]
+    fn repeated_input_cancellation_releases_and_reseeds_the_direct_slot() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: (0..6)
+                .map(|_| Ok(status(BASE1, 0x0001)))
+                .chain([Ok(status(BASE2, 0x0001))])
+                .collect(),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let damage = [
+            DirtyRect {
+                x0: 0,
+                x1: 2,
+                y0: 1,
+                y1: 2,
+            },
+            DirtyRect {
+                x0: 2,
+                x1: WIDTH,
+                y0: 1,
+                y1: 2,
+            },
+        ];
+        let mut previous_generation = 0;
+        for colour in [11, 13, 17] {
+            let pixels = vec![Rgb565Pixel(colour); WIDTH * HEIGHT];
+            let view = CachedFrameView::new(&pixels, WIDTH, HEIGHT);
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    view,
+                    &DirtyRectList::new(),
+                    [view; 2],
+                    damage,
+                    1,
+                )
+                .unwrap()
+                .expect("new input must not strand the previous direct reservation");
+            assert!(copy.completed.grant.generation > previous_generation);
+            previous_generation = copy.completed.grant.generation;
+            assert!(
+                presenter
+                    .buffers
+                    .buffer_mut(2)
+                    .pixels
+                    .iter()
+                    .all(|p| p.0 == colour)
+            );
+            // A press/release or direction change arrives after the pixels were
+            // written but before publication. Repeated interruptions stay safe.
+            let mut completed = Some(copy.completed);
+            let mut full_present = false;
+            crate::ui_runner::launcher_loop::restart_unpublished_home_frame(
+                &mut completed,
+                false,
+                &mut full_present,
+                |frame| presenter.discard_completed_hidden_frame(frame),
+            );
+            assert!(completed.is_none());
+            assert!(
+                !full_present,
+                "aborting direct work must not force software composition"
+            );
+            assert!(hardware.post_bases.is_empty());
+            assert_eq!(presenter.direct_slot_content_generation[1], None);
+        }
+        let pixels = vec![Rgb565Pixel(23); WIDTH * HEIGHT];
+        let view = CachedFrameView::new(&pixels, WIDTH, HEIGHT);
+        let replacement = presenter
+            .try_copy_direct_hidden_tiles(
+                &mut hardware,
+                &mut display,
+                view,
+                &DirtyRectList::new(),
+                [view; 2],
+                damage,
+                1,
+            )
+            .unwrap()
+            .expect("direct rendering resumes after input settles");
+        assert!(
+            presenter
+                .buffers
+                .buffer_mut(2)
+                .pixels
+                .iter()
+                .all(|p| p.0 == 23)
+        );
+        let stats = presenter
+            .present_completed_hidden_frame(replacement.completed, &mut hardware, &mut display)
+            .unwrap();
+        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+        assert_eq!(hardware.post_bases, [BASE2]);
+    }
+
+    #[test]
+    fn retained_cache_is_invalidated_by_partial_tile_write() {
+        let mut presenter = presenter();
+        let mut statuses = Vec::new();
+        for index in 0..2 {
+            let (front, next) = if index % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            for base in [front, front, front, next] {
+                statuses.push(Ok(status(base, 0x0001)));
+            }
+        }
+        statuses.push(Ok(status(BASE1, 0x0001)));
+        let mut hardware = FakeHardware {
+            statuses,
+            ..Default::default()
+        };
+        let mut display = display_session();
+        for _ in 0..2 {
+            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                .unwrap();
+        }
+        let buffer = presenter.buffers.buffer_mut(2);
+        buffer.fail_on_copy = Some(buffer.copy_count + 2);
+        let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+        let left = vec![Rgb565Pixel(21); WIDTH * HEIGHT];
+        let right = vec![Rgb565Pixel(23); WIDTH * HEIGHT];
+        let result = presenter.try_copy_direct_hidden_tiles(
+            &mut hardware,
+            &mut display,
+            CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+            &DirtyRectList::new(),
+            [
+                CachedFrameView::new(&left, WIDTH, HEIGHT),
+                CachedFrameView::new(&right, WIDTH, HEIGHT),
+            ],
+            [
+                DirtyRect {
+                    x0: 0,
+                    y0: 1,
+                    x1: 2,
+                    y1: 2,
+                },
+                DirtyRect {
+                    x0: 2,
+                    y0: 1,
+                    x1: 4,
+                    y1: 2,
+                },
+            ],
+            TileImageIdentity::new(7, 20),
+        );
+        assert!(result.is_err());
+        assert_eq!(presenter.direct_slot_content_generation[1], None);
+        assert!(presenter.outstanding_direct_grant.is_none());
+        assert_eq!(
+            presenter.direct_retained_tiles.write_if_changed(
+                2,
+                TileImageIdentity::new(7, 19),
+                || Ok::<_, ()>(true)
+            ),
+            Ok(Some(true)),
+            "partial write retained the previous complete image"
+        );
+    }
+
+    #[test]
+    fn retained_same_image_keeps_eight_posts_and_copies_each_slot_once() {
+        use mister_magik_framebuffer_scenes::retained_tiles::TileImageIdentity;
+        const W: usize = 960;
+        const H: usize = 540;
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        presenter.width = W;
+        presenter.height = H;
+        presenter.render_width = W;
+        presenter.render_height = H;
+        presenter.latch_geometry = crate::fpga::LatchedFbufGeometry::new(
+            W as u16,
+            crate::framebuffer::route::FramebufferRouteMode::framebuffer_sized(W as u16, H as u16),
+            1,
+        );
+        for slot in [1, 2] {
+            presenter.buffers.buffer_mut(slot).pixels = vec![Rgb565Pixel(7); W * H];
+        }
+        presenter.direct_slot_content_generation = [Some(7); 2];
+        let chrome = vec![Rgb565Pixel(7); W * H];
+        let left = vec![Rgb565Pixel(11); W * H];
+        let right = vec![Rgb565Pixel(13); W * H];
+        let damage = [
+            DirtyRect {
+                x0: 296,
+                y0: 120,
+                x1: 629,
+                y1: 495,
+            },
+            DirtyRect {
+                x0: 629,
+                y0: 120,
+                x1: 934,
+                y1: 495,
+            },
+        ];
+        let mut expected = chrome.clone();
+        for (source, rect) in [&left, &right].into_iter().zip(damage) {
+            for y in rect.y0..rect.y1 {
+                let range = y * W + rect.x0..y * W + rect.x1;
+                expected[range.clone()].copy_from_slice(&source[range]);
+            }
+        }
+        let mut statuses = Vec::new();
+        for index in 0..8 {
+            let (front, next) = if index % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            for base in [front, front, front, next] {
+                let mut sample = status(base, 0x0001);
+                sample.active_width = W as u16;
+                sample.active_height = H as u16;
+                sample.active_stride = (W * 2) as u16;
+                statuses.push(Ok(sample));
+            }
+        }
+        let mut hardware = FakeHardware {
+            statuses,
+            events: Some(events.clone()),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let mut bytes = 0;
+        for _ in 0..8 {
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    CachedFrameView::new(&chrome, W, H),
+                    &DirtyRectList::new(),
+                    [
+                        CachedFrameView::new(&left, W, H),
+                        CachedFrameView::new(&right, W, H),
+                    ],
+                    damage,
+                    TileImageIdentity::new(7, 19),
+                )
+                .unwrap()
+                .unwrap();
+            bytes += copy.copy.bytes;
+            assert_eq!(
+                presenter
+                    .buffers
+                    .buffer_mut(copy.completed.grant.slot_index)
+                    .pixels,
+                expected
+            );
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                .unwrap();
+        }
+        let publishes = events
+            .borrow()
+            .iter()
+            .filter(|event| **event == TestEvent::Publish)
+            .count();
+        println!(
+            "retained_tile_bytes={bytes} posts={} publishes={publishes}",
+            hardware.post_bases.len()
+        );
+        assert_eq!(hardware.post_bases.len(), 8);
+        assert_eq!(publishes, 8);
+        assert_eq!(bytes, 957_000);
+    }
+
+    #[test]
+    fn retained_tiles_are_invalidated_after_failed_post() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+            ],
+            posts: vec![Err(io::Error::other("controlled post failure"))],
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert!(
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                .is_err()
+        );
+        assert_eq!(presenter.direct_slot_content_generation, [None; 2]);
+        assert_eq!(presenter.direct_slot_tile_damage, [None; 2]);
+        for slot in [1, 2] {
+            assert_eq!(
+                presenter.direct_retained_tiles.write_if_changed(
+                    slot,
+                    TileImageIdentity::new(7, 19),
+                    || Ok::<_, ()>(true)
+                ),
+                Ok(Some(true)),
+                "failed post retained a tile key"
+            );
+        }
+    }
+
+    #[test]
+    fn retained_tiles_are_rewritten_after_another_direct_writer() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        presenter.direct_slot_content_generation = [Some(7); 2];
+        let mut statuses = Vec::new();
+        for index in 0..5 {
+            let (front, next) = if index % 2 == 0 {
+                (BASE1, BASE2)
+            } else {
+                (BASE2, BASE1)
+            };
+            for base in [front, front, front, next] {
+                statuses.push(Ok(status(base, 0x0001)));
+            }
+        }
+        let mut hardware = FakeHardware {
+            statuses,
+            events: Some(events),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        for _ in 0..2 {
+            let copy = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+            assert_eq!(copy.copy.bytes, 8);
+            presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                .unwrap();
+        }
+        let other = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |_, pixels| {
+                pixels.fill(Rgb565Pixel(42));
+                true
+            })
+            .unwrap()
+            .unwrap();
+        presenter
+            .present_completed_hidden_frame(other, &mut hardware, &mut display)
+            .unwrap();
+        // The untouched slot can still reuse its image; the overwritten slot
+        // must restore chrome and both tiles before its next post.
+        let untouched = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert_eq!(untouched.copy.bytes, 0);
+        presenter
+            .present_completed_hidden_frame(untouched.completed, &mut hardware, &mut display)
+            .unwrap();
+        let overwritten = copy_tiny_tiles(&mut presenter, &mut hardware, &mut display);
+        assert_eq!(overwritten.copy.bytes, WIDTH * HEIGHT * 2);
+        assert_eq!(
+            presenter
+                .buffers
+                .buffer_mut(overwritten.completed.grant.slot_index)
+                .pixels[0],
+            Rgb565Pixel(7)
+        );
+        presenter
+            .present_completed_hidden_frame(overwritten.completed, &mut hardware, &mut display)
+            .unwrap();
+        assert_eq!(hardware.post_bases.len(), 5);
+    }
+
+    #[test]
+    fn successful_present_orders_copy_overlay_post_and_status_reads() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+            ],
+            events: Some(events.clone()),
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let pixels = cached_pixels();
+
+        presenter
+            .present_cached_full_frame(
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                frame_plan(),
+                &mut hardware,
+                &mut display,
+                |_, _, _, _, _| {
+                    events.borrow_mut().push(TestEvent::Overlay);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            *events.borrow(),
+            [
+                TestEvent::ReadStatus,
+                TestEvent::Copy,
+                TestEvent::Overlay,
+                TestEvent::Publish,
+                TestEvent::ReadStatus,
+                TestEvent::Post,
+                TestEvent::ReadStatus,
+            ]
+        );
+    }
+
+    #[test]
+    fn tile_pair_seeds_once_and_publishes_only_after_both_copies() {
+        for previous_generation in [None, Some(6), Some(7)] {
+            let coherent = previous_generation == Some(7);
+            let events = EventLog::default();
+            let mut presenter = presenter_with_events(events.clone());
+            presenter.direct_slot_content_generation[1] = previous_generation;
+            presenter.buffers.buffer_mut(2).pixels.fill(Rgb565Pixel(6));
+            let mut hardware = FakeHardware {
+                statuses: vec![
+                    Ok(status(BASE1, 0x0001)),
+                    Ok(status(BASE1, 0x0001)),
+                    Ok(status(BASE1, 0x0001)),
+                    Ok(status(BASE2, 0x0001)),
+                ],
+                events: Some(events.clone()),
+                ..Default::default()
+            };
+            let mut display = display_session();
+            let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+            let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+            let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+            let damage = [
+                DirtyRect {
+                    x0: 0,
+                    x1: 2,
+                    y0: 1,
+                    y1: 2,
+                },
+                DirtyRect {
+                    x0: 2,
+                    x1: 4,
+                    y0: 1,
+                    y1: 2,
+                },
+            ];
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                    &DirtyRectList::new(),
+                    [
+                        CachedFrameView::new(&left, WIDTH, HEIGHT),
+                        CachedFrameView::new(&right, WIDTH, HEIGHT),
+                    ],
+                    damage,
+                    7,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                copy.copy.bytes,
+                if coherent { 8 } else { WIDTH * HEIGHT * 2 }
+            );
+            let pixels = &presenter.buffers.buffer_mut(2).pixels;
+            assert_eq!(
+                &pixels[4..8],
+                &[
+                    Rgb565Pixel(11),
+                    Rgb565Pixel(11),
+                    Rgb565Pixel(13),
+                    Rgb565Pixel(13)
+                ]
+            );
+            assert_eq!(pixels[0], Rgb565Pixel(if coherent { 6 } else { 7 }));
+            assert_eq!(
+                pixels[WIDTH * HEIGHT - 1],
+                Rgb565Pixel(if coherent { 6 } else { 7 })
+            );
+            let expected = if coherent {
+                vec![
+                    TestEvent::ReadStatus,
+                    TestEvent::Copy,
+                    TestEvent::Copy,
+                    TestEvent::Publish,
+                ]
+            } else {
+                vec![
+                    TestEvent::ReadStatus,
+                    TestEvent::Copy, // top chrome band
+                    TestEvent::Copy, // bottom chrome band
+                    TestEvent::Copy, // primary tile
+                    TestEvent::Copy, // helper tile
+                    TestEvent::Publish,
+                ]
+            };
+            assert_eq!(*events.borrow(), expected);
+            assert_eq!(presenter.direct_slot_content_generation[1], Some(7));
+            let stats = presenter
+                .present_completed_hidden_frame(copy.completed, &mut hardware, &mut display)
+                .unwrap();
+            assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+            assert_eq!(hardware.post_bases, vec![BASE2]);
+            presenter.invalidate_external_mode();
+            assert_eq!(presenter.direct_slot_content_generation, [None; 2]);
+        }
+    }
+
+    fn copy_tiny_tiles(
+        presenter: &mut FpgaVblankLatchHiddenPresenter<FakeBuffers>,
+        hardware: &mut FakeHardware,
+        display: &mut LauncherDisplaySession,
+    ) -> DirectHiddenFrameCopy {
+        let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+        let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+        let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+        presenter
+            .try_copy_direct_hidden_tiles(
+                hardware,
+                display,
+                CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                &DirtyRectList::new(),
+                [
+                    CachedFrameView::new(&left, WIDTH, HEIGHT),
+                    CachedFrameView::new(&right, WIDTH, HEIGHT),
+                ],
+                [
+                    DirtyRect {
+                        x0: 0,
+                        y0: 1,
+                        x1: 2,
+                        y1: 2,
+                    },
+                    DirtyRect {
+                        x0: 2,
+                        y0: 1,
+                        x1: 4,
+                        y1: 2,
+                    },
+                ],
+                TileImageIdentity::new(7, 19),
+            )
+            .unwrap()
+            .unwrap()
     }
 }

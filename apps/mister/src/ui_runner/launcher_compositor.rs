@@ -414,12 +414,7 @@ impl<'a> LayerTarget<'a> {
         slint_dirty: Option<DirtyRect>,
         full_frame_present: bool,
         worker: Option<&mut PreviewCompositor>,
-    ) -> (
-        Option<RawPreviewPresent>,
-        PreviewTransitionTrace,
-        bool,
-        Option<PreviewCompositorTelemetry>,
-    ) {
+    ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace, bool) {
         let drawing_ui = &self.drawing_ui;
         let raw_dirty_before = preview.raw_dirty();
         let slint_touched_preview = full_frame_present
@@ -435,12 +430,7 @@ impl<'a> LayerTarget<'a> {
             let borrowed = snapshot.as_ref().map(|frame| frame.borrowed());
             let mut trace = transition.update(borrowed.as_ref(), elapsed);
             let Some(snapshot) = snapshot else {
-                return (
-                    None,
-                    trace,
-                    false,
-                    Some(worker.telemetry(preview.presentation_generation())),
-                );
+                return (None, trace, false);
             };
             let token = oriented_preview_cache_token(
                 preview.presentation_generation(),
@@ -469,12 +459,7 @@ impl<'a> LayerTarget<'a> {
                 };
                 worker.recycle(result.pixels);
                 if adopted {
-                    return (
-                        Some(RawPreviewPresent::Direct(result.rect)),
-                        trace,
-                        false,
-                        Some(worker.telemetry(key.generation)),
-                    );
+                    return (Some(RawPreviewPresent::Direct(result.rect)), trace, false);
                 }
                 worker.note_adoption_failed(key);
                 let queued = worker.queue(PreviewCompositionRequest::new(
@@ -484,7 +469,7 @@ impl<'a> LayerTarget<'a> {
                     trace.progress,
                     trace.active,
                 ));
-                return (None, trace, queued, Some(worker.telemetry(key.generation)));
+                return (None, trace, queued);
             }
             let needs_work = raw_dirty
                 || slint_touched_preview
@@ -500,12 +485,7 @@ impl<'a> LayerTarget<'a> {
                     trace.active,
                 ));
             }
-            return (
-                None,
-                trace,
-                needs_work,
-                Some(worker.telemetry(key.generation)),
-            );
+            return (None, trace, needs_work);
         }
         let (present, trace) = blit_raw_preview_if_needed(
             self.target,
@@ -529,23 +509,15 @@ impl<'a> LayerTarget<'a> {
                 transition_id,
                 trace,
             );
-            let rotation_pmu =
-                mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
             let physical_rect = self.target.compose_direct_preview_to_physical(
                 rect,
                 self.layout.output_layout(),
                 token,
                 raw_dirty_before || slint_touched_preview,
             );
-            drop(rotation_pmu);
-            return (
-                physical_rect.map(RawPreviewPresent::Direct),
-                trace,
-                false,
-                None,
-            );
+            return (physical_rect.map(RawPreviewPresent::Direct), trace, false);
         }
-        (present, trace, false, None)
+        (present, trace, false)
     }
 
     pub(super) fn compose_exact_preview(
@@ -570,15 +542,12 @@ impl<'a> LayerTarget<'a> {
                     transition_id,
                     PreviewTransitionTrace::default(),
                 );
-                let rotation_pmu =
-                    mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
                 let physical_rect = self.target.compose_direct_preview_to_physical(
                     rect,
                     self.layout.output_layout(),
                     token,
                     true,
                 );
-                drop(rotation_pmu);
                 physical_rect.map(RawPreviewPresent::Direct)
             } else {
                 Some(RawPreviewPresent::Direct(rect))
@@ -622,12 +591,10 @@ impl<'a> LayerTarget<'a> {
         );
         let output = self.layout.output_layout();
         let physical_rect = self.layout.logical_rect_to_composition(rect);
-        let rotation_pmu = mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
         let changed = self
             .target
             .compose_direct_preview_to_physical(rect, output, token, false)
             .is_some();
-        drop(rotation_pmu);
         if !changed
             && !self
                 .target
@@ -691,16 +658,12 @@ impl<'a> LayerTarget<'a> {
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {
         if self.layout.is_portrait() {
-            let rotation_pmu =
-                mister_magik_perf_events::sampled_span("gui.custom.arcade-list-rotation");
-            let stats = compose_arcade_list_update_oriented(
+            compose_arcade_list_update_oriented(
                 self.target,
                 self.layout.output_layout(),
                 renderer,
                 update,
-            );
-            drop(rotation_pmu);
-            stats
+            )
         } else {
             compose_arcade_list_update(self.target, renderer, update)
         }
@@ -1017,24 +980,17 @@ pub(super) struct LauncherPresentResult {
     pub(super) vsync_us_override: Option<u128>,
     pub(super) cached_present_us: u128,
     pub(super) hidden_compose_us: u128,
-    pub(super) hidden_preview_compose_us: u128,
-    pub(super) hidden_arcade_compose_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
-    pub(super) arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace,
     pub(super) main_present_backend: LauncherPresentBackend,
     pub(super) main_present_status: LauncherPresentStatus,
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
     pub(super) main_present_hidden_publish_us: u128,
     pub(super) main_present_hidden_copied_bytes: usize,
-    pub(super) main_present_hidden_invalid_bytes: usize,
-    pub(super) main_present_hidden_rect_count: u32,
-    pub(super) main_present_hidden_catchup_bytes: usize,
-    pub(super) main_present_hidden_full_copy: bool,
     pub(super) main_present_copy_path: &'static str,
     pub(super) main_present_request_us: u128,
-    pub(super) main_present_set_vga_fb_us: u128,
+    pub(super) main_present_hidden_full_copy: bool,
     pub(super) main_present_wait_us: u64,
     pub(super) main_present_sequence: u16,
     pub(super) main_present_post_active_sequence: u16,

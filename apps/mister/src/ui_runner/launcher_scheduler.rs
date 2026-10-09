@@ -451,14 +451,10 @@ fn prepare_system_shard(
             )
         })?;
         let descriptor_started = Instant::now();
-        let descriptor_pmu =
-            mister_magik_perf_events::sampled_span("system-entry-descriptor-lookup");
         let generation = reader.active_system_generation(&parsed)?;
-        drop(descriptor_pmu);
         let descriptor_lookup_us = elapsed_us(descriptor_started);
         let (collection, navpack) = if let Some(navpack_path) = generation.navpack_path {
-            let navpack_pmu = mister_magik_perf_events::sampled_span("system-entry-navpack-open");
-            let opened = arcade_catalog::SystemCollection::open_navpack(
+            arcade_catalog::SystemCollection::open_navpack(
                 artifact_system_id.as_str(),
                 &navpack_path,
                 generation.navpack_bytes,
@@ -468,9 +464,7 @@ fn prepare_system_shard(
             )
             .map_err(|error| {
                 mister_magik_catalog::sharded_catalog::CatalogError::new("open-system", error)
-            })?;
-            drop(navpack_pmu);
-            opened
+            })?
         } else {
             (
                 arcade_catalog::SystemCollection::new(
@@ -518,19 +512,15 @@ fn prepare_system_shard(
                     })
             });
             let replacement_started = Instant::now();
-            let replacement_pmu =
-                mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
             let catalog = publish_prepared_system_collection(
                 &base_catalog,
                 &worker_system_id,
                 &artifact_system_id,
                 Arc::new(collection),
             );
-            drop(replacement_pmu);
             let catalog_replacement_us = elapsed_us(replacement_started);
             let allocations = crate::allocation_metrics::finish();
             let execution_finished = system_entry_thread_snapshot();
-            mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
             CatalogWorkerMessage::SystemShardReady {
                 system_id: worker_system_id.clone(),
                 catalog,
@@ -560,7 +550,6 @@ fn prepare_system_shard(
         }
         Err(error) => {
             let _ = crate::allocation_metrics::finish();
-            mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
             CatalogWorkerMessage::SystemShardFailed {
                 system_id: worker_system_id.clone(),
                 error: error.to_string(),

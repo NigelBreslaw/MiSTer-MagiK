@@ -60,19 +60,6 @@ pub(super) struct PreviewCompositionResult {
     pub(super) age_us: u64,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(super) struct PreviewCompositorTelemetry {
-    pub(super) queue_replacements: u64,
-    pub(super) result_replacements: u64,
-    pub(super) stale_results: u64,
-    pub(super) worker_age_us: u64,
-    pub(super) generation_lag: u64,
-    pub(super) affinity_status: &'static str,
-    pub(super) worker_errors: u64,
-    pub(super) adoption_failures: u64,
-    pub(super) worker_alive: bool,
-}
-
 #[derive(Default)]
 struct WorkerState {
     request: Option<PreviewCompositionRequest>,
@@ -211,49 +198,6 @@ impl PreviewCompositor {
             state.disabled = true;
         }
     }
-
-    pub(super) fn telemetry(&self, current_generation: u64) -> PreviewCompositorTelemetry {
-        let state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        let pending_generation = state
-            .request
-            .as_ref()
-            .map(|request| request.key.generation)
-            .or_else(|| state.result.as_ref().map(|result| result.key.generation))
-            .unwrap_or(current_generation);
-        PreviewCompositorTelemetry {
-            queue_replacements: state.queue_replacements,
-            result_replacements: state.result_replacements,
-            stale_results: state.stale_results,
-            worker_age_us: state.latest_age_us,
-            generation_lag: current_generation.saturating_sub(pending_generation),
-            affinity_status: state
-                .affinity
-                .as_ref()
-                .map(|report| report.affinity_status)
-                .unwrap_or("pending"),
-            worker_errors: state.worker_errors,
-            adoption_failures: state.adoption_failures,
-            worker_alive: state.worker_alive && !state.disabled,
-        }
-    }
-
-    pub(super) fn flush_pmu_profile(&self, timeout: Duration) -> bool {
-        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        if !state.worker_alive {
-            return false;
-        }
-        let requested = state.profile_flush_requested.saturating_add(1);
-        state.profile_flush_requested = requested;
-        self.shared.ready.notify_one();
-        let (state, _) = self
-            .shared
-            .ready
-            .wait_timeout_while(state, timeout, |state| {
-                state.worker_alive && state.profile_flush_completed < requested
-            })
-            .unwrap_or_else(|error| error.into_inner());
-        state.profile_flush_completed >= requested
-    }
 }
 
 impl Drop for PreviewCompositor {
@@ -288,13 +232,11 @@ fn run_worker(shared: Arc<SharedWorker>) {
             }
             if state.shutdown {
                 drop(state);
-                mister_magik_perf_events::submit_thread_profile("preview-compositor");
                 return;
             }
             if state.profile_flush_completed < state.profile_flush_requested {
                 let requested = state.profile_flush_requested;
                 drop(state);
-                mister_magik_perf_events::submit_thread_profile("preview-compositor");
                 let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.profile_flush_completed = requested;
                 shared.ready.notify_all();
@@ -306,9 +248,7 @@ fn run_worker(shared: Arc<SharedWorker>) {
             )
         };
         let key = request.key;
-        let request_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-composition");
         let result = compose_request(request, &mut logical, &mut physical);
-        drop(request_pmu);
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         match result {
             Ok(result) => {
@@ -378,13 +318,8 @@ fn compose_request(
         None
     };
     if let Some((cut_frame, alpha_bucket, report_cut)) = cut_frame
-        && let Some(cut_trace) = {
-            let cut_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-cut");
-            let result =
-                compose_worker_cut(physical, &ui, screen, local_output, cut_frame, alpha_bucket);
-            drop(cut_pmu);
-            result
-        }
+        && let Some(cut_trace) =
+            { compose_worker_cut(physical, &ui, screen, local_output, cut_frame, alpha_bucket) }
     {
         return Ok(PreviewCompositionResult {
             key: request.key,
@@ -412,7 +347,6 @@ fn compose_request(
         screen.width().saturating_mul(screen.rows() as usize),
         Rgb565Pixel(0),
     );
-    let blend_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-blend");
     let fade = compose_worker_blend(
         composed,
         &ui,
@@ -422,7 +356,6 @@ fn compose_request(
         request.active,
         screen,
     )?;
-    drop(blend_pmu);
     if identity_output {
         return Ok(PreviewCompositionResult {
             key: request.key,
@@ -436,9 +369,7 @@ fn compose_request(
                 .min(u128::from(u64::MAX)) as u64,
         });
     }
-    let rotation_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-rotation");
     let copied = compose_worker_rotation(physical, local_output, logical, screen);
-    drop(rotation_pmu);
     if !copied {
         return Err("preview physical rotation failed".to_string());
     }

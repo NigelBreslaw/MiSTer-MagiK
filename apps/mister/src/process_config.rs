@@ -18,7 +18,6 @@ use crate::ui_display::UiDisplayInputs;
 #[cfg(feature = "ui")]
 #[cfg(feature = "ui")]
 #[cfg(feature = "ui")]
-use crate::ui_runner::launcher_gui_profile::GuiProfileConfig;
 #[cfg(feature = "ui")]
 use crate::visual_platform::PresentTiming;
 use mister_magik_catalog::catalog_config::ArchiveCacheConfig;
@@ -58,8 +57,6 @@ const SYSTEM_ENTRY_TRACE: &str = "MISTER_SYSTEM_ENTRY_TRACE";
 const ARCADE_ENTRY_TRACE: &str = "MISTER_ARCADE_ENTRY_TRACE";
 const SYSTEM_ENTRY_PROFILE_OUT: &str = "MISTER_SYSTEM_ENTRY_PROFILE_OUT";
 const INPUT_INTEGRITY_STALL_MS: &str = "MISTER_INPUT_INTEGRITY_STALL_MS";
-const INPUT_LATENCY_LAB_ARM: &str = "MISTER_INPUT_LATENCY_LAB_ARM";
-const INPUT_LATENCY_LAB_SESSION: &str = "MISTER_INPUT_LATENCY_LAB_SESSION";
 const INPUT_INTEGRITY_TRACE: &str = "MISTER_INPUT_INTEGRITY_TRACE";
 const SCREENSAVER_SEED: &str = "MISTER_SCREENSAVER_SEED";
 const SCREENSAVER_START_ACTIVE: &str = "MISTER_SCREENSAVER_START_ACTIVE";
@@ -258,7 +255,6 @@ impl FaultProcessConfig {
 pub struct ProfileProcessConfig {
     frame: FrameProfilerConfig,
     cpu: CpuProfileConfig,
-    gui: GuiProfileConfig,
     pmu: PmuProfileConfig,
 }
 
@@ -268,7 +264,6 @@ impl ProfileProcessConfig {
         Self {
             frame: FrameProfilerConfig::capture_with(|name| environment.get(name)),
             cpu: CpuProfileConfig::capture_with(|name| environment.get(name)),
-            gui: GuiProfileConfig::capture_with(|name| environment.get(name)),
             pmu: PmuProfileConfig::capture_with(|name| environment.get(name)),
         }
     }
@@ -279,10 +274,6 @@ impl ProfileProcessConfig {
 
     pub fn cpu(&self) -> &CpuProfileConfig {
         &self.cpu
-    }
-
-    pub(crate) fn gui(&self) -> &GuiProfileConfig {
-        &self.gui
     }
 
     pub fn pmu(&self) -> PmuProfileConfig {
@@ -416,28 +407,10 @@ impl ScreensaverProcessConfig {
 pub struct InputProcessConfig {
     integrity_trace: bool,
     integrity_stall_ms: Option<u64>,
-    latency_lab: InputLatencyLabConfig,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct InputLatencyLabConfig {
-    arm: Option<String>,
-    session: Option<String>,
-}
-
-impl InputLatencyLabConfig {
-    pub fn arm(&self) -> Option<&str> {
-        self.arm.as_deref()
-    }
-
-    pub fn session(&self) -> Option<&str> {
-        self.session.as_deref()
-    }
 }
 
 impl InputProcessConfig {
-    /// The integrity trace only observes; the stall and the
-    /// latency lab alter input handling and come from the lab environment.
+    /// The integrity trace only observes; the stall alters input handling and come from the lab environment.
     fn capture(environment: &EnvironmentSnapshot, lab_environment: &EnvironmentSnapshot) -> Self {
         Self {
             integrity_trace: environment_flag(environment, INPUT_INTEGRITY_TRACE),
@@ -445,14 +418,6 @@ impl InputProcessConfig {
                 .get(INPUT_INTEGRITY_STALL_MS)
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| (1..=1_000).contains(value)),
-            latency_lab: InputLatencyLabConfig {
-                arm: lab_environment
-                    .get(INPUT_LATENCY_LAB_ARM)
-                    .map(str::to_owned),
-                session: lab_environment
-                    .get(INPUT_LATENCY_LAB_SESSION)
-                    .map(str::to_owned),
-            },
         }
     }
 
@@ -462,10 +427,6 @@ impl InputProcessConfig {
 
     pub fn integrity_stall_ms(&self) -> Option<u64> {
         self.integrity_stall_ms
-    }
-
-    pub fn latency_lab(&self) -> &InputLatencyLabConfig {
-        &self.latency_lab
     }
 }
 
@@ -1146,5 +1107,46 @@ mod tests {
             readiness.entry_trace().profile_path(),
             Some("/tmp/system-entry.json")
         );
+    }
+
+    #[test]
+    fn release_capture_ignores_every_lab_switch() {
+        let environment = EnvironmentSnapshot::from_values([
+            (INPUT_INTEGRITY_TRACE, "on"),
+            (INPUT_INTEGRITY_STALL_MS, "50"),
+            ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
+            (
+                "MISTER_FS_FAULT_SESSION",
+                "/tmp/mister-magik/fs-fault-session",
+            ),
+        ]);
+        let args = ["mister-magik-fb".into(), "ui".into()];
+        let paths =
+            || DevicePaths::for_layout(mister_magik_platform_manifest_contract::Layout::Public);
+        let lab = ProcessConfig::from_snapshot_with_device_paths(
+            &args,
+            "ui",
+            &environment,
+            paths(),
+            true,
+        );
+        let release = ProcessConfig::from_snapshot_with_device_paths(
+            &args,
+            "ui",
+            &environment,
+            paths(),
+            false,
+        );
+
+        assert_eq!(
+            lab.launcher().unwrap().input().integrity_stall_ms(),
+            Some(50)
+        );
+        assert!(lab.fault().is_some());
+
+        let release_launcher = release.launcher().unwrap();
+        assert!(release_launcher.input().integrity_trace());
+        assert_eq!(release_launcher.input().integrity_stall_ms(), None);
+        assert!(release.fault().is_none());
     }
 }

@@ -177,12 +177,9 @@ mod launcher_compositor;
 mod launcher_confirmation;
 #[doc(hidden)]
 pub mod launcher_display_session;
-mod launcher_execution_trace;
 mod launcher_frame_accounting;
 #[cfg(test)]
 mod launcher_frame_pipeline;
-pub(crate) mod launcher_gui_profile;
-mod launcher_input_latency_lab;
 mod launcher_loop;
 mod launcher_pacing;
 mod launcher_present;
@@ -227,10 +224,7 @@ use launcher_bridge::*;
 use launcher_catalog_session::*;
 use launcher_compositor::*;
 use launcher_display_session::*;
-use launcher_execution_trace::*;
 use launcher_frame_accounting::*;
-use launcher_gui_profile::*;
-use launcher_input_latency_lab::*;
 
 use launcher_present::*;
 use launcher_scheduler::*;
@@ -378,7 +372,6 @@ macro_rules! with_scene_app {
 
 pub fn run_ui(
     f: &mut Fpga,
-    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
     mister_magik_fb::framebuffer::target::configure_dirty_rect_broad_pct(
@@ -505,22 +498,19 @@ pub fn run_ui(
                 let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 let pad = open_pads();
                 init_launcher_bridge(&app, &pad);
-                launcher_loop::run_frame_loop(
-                    launcher_loop::Env {
-                        secs,
-                        ui: &ui,
-                        disp: &mut disp,
-                        f,
-                        display_session: &mut display_session,
-                        window: &window,
-                        target: &mut target,
-                        pad,
-                        app,
-                        animation_clock: &animation_clock,
-                        launcher_config,
-                    },
-                    process_entry_cpu_profile,
-                );
+                launcher_loop::run_frame_loop(launcher_loop::Env {
+                    secs,
+                    ui: &ui,
+                    disp: &mut disp,
+                    f,
+                    display_session: &mut display_session,
+                    window: &window,
+                    target: &mut target,
+                    pad,
+                    app,
+                    animation_clock: &animation_clock,
+                    launcher_config,
+                });
             });
         }
         _ => unreachable!(),

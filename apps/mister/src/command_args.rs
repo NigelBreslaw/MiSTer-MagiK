@@ -43,10 +43,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("display-persist", CommandKind::PreFpga),
     CommandSpec::new("purge-library-data", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
-    CommandSpec::new("benchmark-capabilities", CommandKind::PreFpga),
-    CommandSpec::new("input-integrity-driver", CommandKind::PreFpga),
-    CommandSpec::new("pmu-probe", CommandKind::PreFpga),
-    CommandSpec::new("pmu-profile", CommandKind::PreFpga),
     CommandSpec::new("search-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_CORPUS_INVENTORY_COMMAND, CommandKind::PreFpga),
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
@@ -209,9 +205,6 @@ mod tests {
         assert!(is_known_command("catalog-inspect"));
         assert!(is_known_command("catalog-neogeo-family-audit"));
         assert!(is_known_command("catalog-registry-report"));
-        assert!(is_known_command("benchmark-capabilities"));
-        assert!(is_known_command("pmu-probe"));
-        assert!(is_known_command("pmu-profile"));
         assert!(is_known_command("search-bench"));
         assert!(is_known_command("media-bench-download"));
         assert!(is_known_command("read"));

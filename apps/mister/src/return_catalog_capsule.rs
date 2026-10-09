@@ -208,7 +208,6 @@ fn prepare_return_catalog_capsule_inner(
     }
 
     validate_binding(&binding)?;
-    let _encode_pmu = mister_magik_perf_events::sampled_span("launch.return-capsule-encode");
     let mut writer = CapsuleBinaryWriter::new();
     writer.write_bytes(RETURN_CATALOG_CAPSULE_MAGIC)?;
     writer.write_u32(RETURN_CATALOG_CAPSULE_SCHEMA)?;
@@ -292,7 +291,6 @@ impl PreparedReturnCatalogCapsule {
 }
 
 pub fn save_return_catalog_capsule(capsule: &PreparedReturnCatalogCapsule) -> Result<(), String> {
-    let _pmu = mister_magik_perf_events::sampled_span("launch.return-capsule-save");
     save_return_catalog_capsule_at(Path::new(RETURN_CATALOG_CAPSULE_PATH), capsule)
 }
 

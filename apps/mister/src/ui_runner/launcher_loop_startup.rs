@@ -10,7 +10,6 @@
 use super::super::launcher_card_home::LauncherCardHomeSession;
 use super::super::launcher_readiness::LauncherReadiness;
 use super::*;
-use crate::cpu_profile::{CpuProfiler, ScreensaverProfiler};
 use crate::input_hub::InputObservationProbe;
 use crate::launcher_home::CardLevelSnapshot;
 use crate::process_config::ProfileProcessConfig;
@@ -69,13 +68,7 @@ pub(super) struct LoopState {
     pub(super) setup: SetupNav,
     pub(super) input_router: InputRouter,
     pub(super) setup_disconnect_notice: bool,
-    pub(super) input_integrity_stall: Option<u64>,
-    pub(super) input_integrity_trace: InputIntegrityTrace,
     pub(super) input_observation_probe: Option<InputObservationProbe>,
-    pub(super) launcher_response_trace: LauncherResponseTrace,
-    pub(super) gui_profiling: GuiProfilingController,
-    pub(super) bridge_churn_playback: BridgeChurnPlayback,
-    pub(super) input_latency_lab: InputLatencyLab,
     pub(super) loading_title: String,
     pub(super) library_reset: LibraryResetState,
     pub(super) library_reset_bridge_dirty: bool,
@@ -97,9 +90,6 @@ pub(super) struct LoopState {
     pub(super) launcher_preview_publication: Option<PhysicalLayerPublication>,
     pub(super) launcher_arcade_publication: Option<PhysicalLayerPublication>,
     pub(super) arcade_drawer_view_cache: ArcadeDrawerViewCache,
-    pub(super) cpu: Option<CpuProfiler>,
-    pub(super) system_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
-    pub(super) screensaver_cpu_profile: ScreensaverProfiler,
     pub(super) bridge_models: LauncherViewPresenters,
     pub(super) native_device_background: NativeDeviceBackground,
     pub(super) catalog_version: usize,
@@ -133,7 +123,6 @@ pub(super) fn build_loop_state(
     pad: &mut PadPool,
     app: &slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
-    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     launcher_config: &mister_magik_fb::process_config::LauncherProcessConfig,
 ) -> LoopState {
     let launcher_ui_actions = LauncherUiActionsAdapter::install(app);
@@ -221,8 +210,7 @@ pub(super) fn build_loop_state(
         ));
     }
     nav.sync_orientation_selection();
-    let navigation_motion_enabled =
-        !nav.settings.reduce_motion || profile_config.cpu().navigation_transition_requested();
+    let navigation_motion_enabled = !nav.settings.reduce_motion;
     let director = PresentationDirector::new(
         NavigationTransitionRuntime::new(
             layout.logical_w(),
@@ -274,23 +262,8 @@ pub(super) fn build_loop_state(
         false, false, false, false, false, false, &nav,
     ));
     let setup_disconnect_notice = false;
-    let input_integrity_stall = launcher_config.input().integrity_stall_ms();
-    let input_integrity_trace =
-        InputIntegrityTrace::new(launcher_config.input().integrity_trace(), Instant::now());
     let input_observation_probe = pad.input_observation_probe();
-    let launcher_response_trace = LauncherResponseTrace::from_config(
-        launcher_config.readiness().response_trace(),
-        launcher_config.readiness().entry_trace(),
-        &nav,
-        input_observation_probe.clone(),
-    );
-    let gui_profiling = GuiProfilingController::from_config(profile_config.gui().clone());
     reset_media_progress_bridge();
-    let bridge_churn_playback = BridgeChurnPlayback::new(gui_profiling.bridge_churn_route());
-    let input_latency_lab = InputLatencyLab::from_config(
-        launcher_config.input().latency_lab(),
-        input_observation_probe.clone(),
-    );
     let loading_title = String::new();
     let library_reset = LibraryResetState::Idle;
     let library_reset_bridge_dirty = false;
@@ -357,10 +330,6 @@ pub(super) fn build_loop_state(
     let launcher_preview_publication: Option<PhysicalLayerPublication> = None;
     let launcher_arcade_publication: Option<PhysicalLayerPublication> = None;
     let arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
-    let cpu = process_entry_cpu_profile.or_else(|| cpu_profile::start(profile_config.cpu()));
-    let system_entry_cpu_profile = None;
-    let screensaver_cpu_profile =
-        cpu_profile::ScreensaverProfiler::from_config(profile_config.cpu());
     let mut bridge_models = LauncherViewModels::default();
     let native_device_background = super::launcher_compositor::NativeDeviceBackground::default();
     let mut catalog_version = 0usize;
@@ -955,13 +924,7 @@ pub(super) fn build_loop_state(
         setup,
         input_router,
         setup_disconnect_notice,
-        input_integrity_stall,
-        input_integrity_trace,
         input_observation_probe,
-        launcher_response_trace,
-        gui_profiling,
-        bridge_churn_playback,
-        input_latency_lab,
         loading_title,
         library_reset,
         library_reset_bridge_dirty,
@@ -983,9 +946,6 @@ pub(super) fn build_loop_state(
         launcher_preview_publication,
         launcher_arcade_publication,
         arcade_drawer_view_cache,
-        cpu,
-        system_entry_cpu_profile,
-        screensaver_cpu_profile,
         bridge_models,
         native_device_background,
         catalog_version,

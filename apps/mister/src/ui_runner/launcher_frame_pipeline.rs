@@ -129,7 +129,6 @@ mod tests {
             "input_router.set_focus(",
             "input_router.route_event(",
             "input_router.tick_repeat(",
-            "launcher_response_trace.observe_state(",
         ] {
             assert!(phase.contains(operation), "input phase omitted {operation}");
         }

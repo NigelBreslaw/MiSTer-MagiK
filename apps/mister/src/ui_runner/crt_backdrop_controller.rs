@@ -212,14 +212,6 @@ impl CrtBackdropController {
         self.was_eligible
     }
 
-    pub(super) fn selection_matches(&self, selected: usize) -> bool {
-        self.selected == Some(selected)
-    }
-
-    pub(super) fn transition_id(&self) -> Option<u64> {
-        self.transition_id
-    }
-
     pub(super) fn backdrop_revision(&self) -> u64 {
         self.prepared_revision
     }

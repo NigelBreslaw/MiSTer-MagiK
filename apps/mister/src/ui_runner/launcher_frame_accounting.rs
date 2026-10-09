@@ -94,12 +94,10 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) startup_monotonic_us: u64,
     pub(super) run_start: Instant,
     pub(super) loop_start: Instant,
-    pub(super) frame_t0: Instant,
     pub(super) frame_t1: Instant,
     pub(super) frame_t2: Instant,
     pub(super) frame_t3: Instant,
     pub(super) frame_t4: Instant,
-    pub(super) pre_render_wait_us: u128,
     pub(super) post_present_wait_us: u128,
     pub(super) custom_draw_start: Instant,
     pub(super) custom_draw_done: Instant,
@@ -115,8 +113,6 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) vsync_us_override: Option<u128>,
     pub(super) cached_present_us: u128,
     pub(super) hidden_compose_us: u128,
-    pub(super) hidden_preview_compose_us: u128,
-    pub(super) hidden_arcade_compose_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
     pub(super) main_present_backend: LauncherPresentBackend,
@@ -126,13 +122,11 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) main_present_hidden_publish_us: u128,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub(super) main_present_hidden_copied_bytes: usize,
-    pub(super) main_present_hidden_invalid_bytes: usize,
-    pub(super) main_present_hidden_rect_count: u32,
-    pub(super) main_present_hidden_catchup_bytes: usize,
-    pub(super) main_present_hidden_full_copy: bool,
     pub(super) main_present_copy_path: &'static str,
     pub(super) main_present_request_us: u128,
-    pub(super) main_present_set_vga_fb_us: u128,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+    pub(super) main_present_hidden_full_copy: bool,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub(super) main_present_wait_us: u64,
     pub(super) main_present_sequence: u16,
     pub(super) main_present_post_active_sequence: u16,
@@ -154,8 +148,6 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) vsync_accepted_hit_age_us: u64,
     pub(super) frame_start_phase_us: u64,
     pub(super) present_phase_us: u128,
-    pub(super) redraw_pending: bool,
-    pub(super) wake_reasons_bits: u64,
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
     pub(super) composition_status: UiCompositionStatus,
@@ -199,18 +191,14 @@ pub(super) struct LauncherFrameTiming {
     pub(super) startup_monotonic_us: u64,
     pub(super) run_start: Instant,
     pub(super) loop_start: Instant,
-    pub(super) frame_t0: Instant,
     pub(super) frame_t1: Instant,
     pub(super) frame_t2: Instant,
     pub(super) frame_t3: Instant,
     pub(super) frame_t4: Instant,
-    pub(super) pre_render_wait_us: u128,
     pub(super) post_present_wait_us: u128,
     pub(super) custom_draw_start: Instant,
     pub(super) custom_draw_done: Instant,
     pub(super) prepare_us: u128,
-    pub(super) redraw_pending: bool,
-    pub(super) wake_reasons_bits: u64,
 }
 
 pub(super) struct LauncherFrameRenderData {
@@ -246,7 +234,6 @@ pub(super) struct LauncherFrameCpuTrace {
 
 pub(super) struct LauncherFrameFinishTraceTiming {
     pub(super) runtime_status_write_us: u128,
-    pub(super) frame_finish_us: u128,
 }
 
 impl LauncherFrameSnapshotBuilder {
@@ -260,12 +247,10 @@ impl LauncherFrameSnapshotBuilder {
             startup_monotonic_us: self.timing.startup_monotonic_us,
             run_start: self.timing.run_start,
             loop_start: self.timing.loop_start,
-            frame_t0: self.timing.frame_t0,
             frame_t1: self.timing.frame_t1,
             frame_t2: self.timing.frame_t2,
             frame_t3: self.timing.frame_t3,
             frame_t4: self.timing.frame_t4,
-            pre_render_wait_us: self.timing.pre_render_wait_us,
             post_present_wait_us: self.timing.post_present_wait_us,
             custom_draw_start: self.timing.custom_draw_start,
             custom_draw_done: self.timing.custom_draw_done,
@@ -281,8 +266,6 @@ impl LauncherFrameSnapshotBuilder {
             vsync_us_override: self.presentation.vsync_us_override,
             cached_present_us: self.presentation.cached_present_us,
             hidden_compose_us: self.presentation.hidden_compose_us,
-            hidden_preview_compose_us: self.presentation.hidden_preview_compose_us,
-            hidden_arcade_compose_us: self.presentation.hidden_arcade_compose_us,
             direct_preview_present_us: self.presentation.direct_preview_present_us,
             arcade_list_present_us: self.presentation.arcade_list_present_us,
             main_present_backend: self.presentation.main_present_backend,
@@ -291,13 +274,9 @@ impl LauncherFrameSnapshotBuilder {
             main_present_hidden_copy_us: self.presentation.main_present_hidden_copy_us,
             main_present_hidden_publish_us: self.presentation.main_present_hidden_publish_us,
             main_present_hidden_copied_bytes: self.presentation.main_present_hidden_copied_bytes,
-            main_present_hidden_invalid_bytes: self.presentation.main_present_hidden_invalid_bytes,
-            main_present_hidden_rect_count: self.presentation.main_present_hidden_rect_count,
-            main_present_hidden_catchup_bytes: self.presentation.main_present_hidden_catchup_bytes,
-            main_present_hidden_full_copy: self.presentation.main_present_hidden_full_copy,
             main_present_copy_path: self.presentation.main_present_copy_path,
             main_present_request_us: self.presentation.main_present_request_us,
-            main_present_set_vga_fb_us: self.presentation.main_present_set_vga_fb_us,
+            main_present_hidden_full_copy: self.presentation.main_present_hidden_full_copy,
             main_present_wait_us: self.presentation.main_present_wait_us,
             main_present_sequence: self.presentation.main_present_sequence,
             main_present_post_active_sequence: self.presentation.main_present_post_active_sequence,
@@ -321,8 +300,6 @@ impl LauncherFrameSnapshotBuilder {
             vsync_accepted_hit_age_us: self.pacing.vsync_accepted_hit_age_us,
             frame_start_phase_us: self.pacing.frame_start_phase_us,
             present_phase_us: self.pacing.present_phase_us,
-            redraw_pending: self.timing.redraw_pending,
-            wake_reasons_bits: self.timing.wake_reasons_bits,
             preview_cache_state: self.render.preview_cache_state,
             preview_transition: self.render.preview_transition,
             composition_status: self.render.composition_status,
@@ -457,28 +434,10 @@ impl LauncherFrameAccounting {
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct LauncherCustomDrawTrace {
-    pub(super) arcade_bbox_invalidation: bool,
-    pub(super) arcade_rect_invalidation: bool,
-    pub(super) arcade_false_positive_invalidation: bool,
-    pub(super) preview_bbox_invalidation: bool,
-    pub(super) preview_rect_invalidation: bool,
-    pub(super) preview_false_positive_invalidation: bool,
-    pub(super) arcade_list_update_us: u128,
     pub(super) persistent_arcade_composition:
         crate::arcade_list_renderer::PersistentArcadeCompositionTrace,
     pub(super) portrait_arcade_list_pixels: u64,
     pub(super) portrait_arcade_list_bytes: u64,
-    pub(super) portrait_preview_rotation_pixels: u64,
-    pub(super) portrait_preview_blend_pixels: u64,
-    pub(super) portrait_preview_worker_queue_replacements: u64,
-    pub(super) portrait_preview_worker_result_replacements: u64,
-    pub(super) portrait_preview_worker_stale_results: u64,
-    pub(super) portrait_preview_worker_age_us: u64,
-    pub(super) portrait_preview_worker_generation_lag: u64,
-    pub(super) portrait_preview_worker_affinity_status: &'static str,
-    pub(super) portrait_preview_worker_errors: u64,
-    pub(super) portrait_preview_worker_adoption_failures: u64,
-    pub(super) portrait_preview_worker_alive: bool,
     pub(super) crt_backdrop_prepare_us: u64,
     pub(super) crt_backdrop_prepare_pixels: u32,
     pub(super) crt_backdrop_blend_us: u64,
@@ -489,11 +448,6 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) crt_backdrop_list_overlay_pixels: u32,
     pub(super) crt_backdrop_list_restore_pixels: u32,
     pub(super) crt_backdrop_list_foreground_pixels: u32,
-    pub(super) crt_backdrop_alpha_bucket: u8,
-    pub(super) crt_backdrop_active: bool,
-    pub(super) crt_backdrop_selected: usize,
-    pub(super) crt_backdrop_transition_id: u64,
-    pub(super) crt_backdrop_cache_state: &'static str,
     pub(super) effect_label_us: u128,
     pub(super) navigation_transition_base_copy_us: u128,
     pub(super) navigation_transition_settings_blit_us: u128,
@@ -811,7 +765,6 @@ impl LauncherFrameAccounting {
         frame: &LauncherPresentedFrame,
         status: FrameStatusView<'_>,
     ) -> LauncherFrameFinishTraceTiming {
-        let frame_finish_start = Instant::now();
         let runtime_status_write_deferred = should_defer_runtime_status_write(frame);
         let status_write_now = frame.status_write_due && !runtime_status_write_deferred;
         if status_write_now {
@@ -835,10 +788,8 @@ impl LauncherFrameAccounting {
         let runtime_status_write_us = runtime_status_write_start
             .map(|start| start.elapsed().as_micros())
             .unwrap_or(0);
-        let frame_finish_us = frame_finish_start.elapsed().as_micros();
         LauncherFrameFinishTraceTiming {
             runtime_status_write_us,
-            frame_finish_us,
         }
     }
 
@@ -2408,7 +2359,6 @@ mod tests {
     }
 
     fn presented_frame(frame: u64, loop_start: Instant, wall_us: u64) -> LauncherPresentedFrame {
-        let frame_t0 = loop_start;
         let frame_t1 = loop_start + Duration::from_micros(100);
         let frame_t2 = frame_t1 + Duration::from_micros(200);
         let custom_draw_start = frame_t2;
@@ -2424,12 +2374,10 @@ mod tests {
             startup_monotonic_us: 1_000_000,
             run_start: loop_start,
             loop_start,
-            frame_t0,
             frame_t1,
             frame_t2,
             frame_t3,
             frame_t4,
-            pre_render_wait_us: 400,
             post_present_wait_us: 800,
             custom_draw_start,
             custom_draw_done,
@@ -2479,8 +2427,6 @@ mod tests {
             vsync_us_override: None,
             cached_present_us: 0,
             hidden_compose_us: 0,
-            hidden_preview_compose_us: 0,
-            hidden_arcade_compose_us: 0,
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
             main_present_backend: LauncherPresentBackend::Fb0Dirty,
@@ -2489,13 +2435,9 @@ mod tests {
             main_present_hidden_copy_us: 0,
             main_present_hidden_publish_us: 0,
             main_present_hidden_copied_bytes: 0,
-            main_present_hidden_invalid_bytes: 0,
-            main_present_hidden_rect_count: 0,
-            main_present_hidden_catchup_bytes: 0,
             main_present_hidden_full_copy: false,
             main_present_copy_path: "vertical-partial",
             main_present_request_us: 0,
-            main_present_set_vga_fb_us: 0,
             main_present_wait_us: 0,
             main_present_sequence: 0,
             main_present_post_active_sequence: 0,
@@ -2517,8 +2459,6 @@ mod tests {
             vsync_accepted_hit_age_us: 500,
             frame_start_phase_us: 8_000,
             present_phase_us: 0,
-            redraw_pending: true,
-            wake_reasons_bits: 0x40,
             preview_cache_state: "exact",
             preview_transition: PreviewTransitionTrace::default(),
             composition_status: UiCompositionStatus::default(),
@@ -2554,18 +2494,14 @@ mod tests {
                 startup_monotonic_us: frame.startup_monotonic_us,
                 run_start: frame.run_start,
                 loop_start: frame.loop_start,
-                frame_t0: frame.frame_t0,
                 frame_t1: frame.frame_t1,
                 frame_t2: frame.frame_t2,
                 frame_t3: frame.frame_t3,
                 frame_t4: frame.frame_t4,
-                pre_render_wait_us: frame.pre_render_wait_us,
                 post_present_wait_us: frame.post_present_wait_us,
                 custom_draw_start: frame.custom_draw_start,
                 custom_draw_done: frame.custom_draw_done,
                 prepare_us: frame.prepare_us,
-                redraw_pending: frame.redraw_pending,
-                wake_reasons_bits: frame.wake_reasons_bits,
             },
             render: LauncherFrameRenderData {
                 custom_draw_trace: frame.custom_draw_trace,
@@ -2599,25 +2535,17 @@ mod tests {
                 vsync_us_override: frame.vsync_us_override,
                 cached_present_us: frame.cached_present_us,
                 hidden_compose_us: frame.hidden_compose_us,
-                hidden_preview_compose_us: frame.hidden_preview_compose_us,
-                hidden_arcade_compose_us: frame.hidden_arcade_compose_us,
                 direct_preview_present_us: frame.direct_preview_present_us,
                 arcade_list_present_us: frame.arcade_list_present_us,
-                arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(
-                ),
                 main_present_backend: frame.main_present_backend,
                 main_present_status: frame.main_present_status,
                 main_present_buffer: frame.main_present_buffer,
                 main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
                 main_present_hidden_publish_us: frame.main_present_hidden_publish_us,
                 main_present_hidden_copied_bytes: frame.main_present_hidden_copied_bytes,
-                main_present_hidden_invalid_bytes: frame.main_present_hidden_invalid_bytes,
-                main_present_hidden_rect_count: frame.main_present_hidden_rect_count,
-                main_present_hidden_catchup_bytes: frame.main_present_hidden_catchup_bytes,
                 main_present_hidden_full_copy: frame.main_present_hidden_full_copy,
                 main_present_copy_path: frame.main_present_copy_path,
                 main_present_request_us: frame.main_present_request_us,
-                main_present_set_vga_fb_us: frame.main_present_set_vga_fb_us,
                 main_present_wait_us: frame.main_present_wait_us,
                 main_present_sequence: frame.main_present_sequence,
                 main_present_post_active_sequence: frame.main_present_post_active_sequence,
@@ -2644,53 +2572,6 @@ mod tests {
                 t4: frame.cpu_t4,
             },
         }
-    }
-
-    #[test]
-    fn frame_snapshot_builder_populates_existing_fields() {
-        let start = Instant::now();
-        let mut expected = presented_frame(42, start, 21_000);
-        expected.main_present_receipt_crc = 0x5a3c;
-
-        let built = builder_from_frame(&expected).build();
-
-        assert_eq!(built.frames, expected.frames);
-        assert_eq!(built.selected, expected.selected);
-        assert_eq!(built.visual_index, expected.visual_index);
-        assert_eq!(built.frame_t0, expected.frame_t0);
-        assert_eq!(built.frame_t4, expected.frame_t4);
-        assert_eq!(built.prepare_trace.catalog_message_count, 2);
-        assert_eq!(built.copied_rows, 12);
-        assert_eq!(built.present_bytes, 23_040);
-        assert_eq!(built.vsync_source, Some(VsyncPaceSource::Timeout));
-        assert_eq!(built.vsync_miss_streak, 3);
-        assert_eq!(built.frame_start_phase_us, 8_000);
-        assert_eq!(built.main_present_receipt_crc, 0x5a3c);
-        assert_eq!(built.preview_cache_state, "exact");
-        assert_eq!(built.status_string_copy_bytes, 128);
-    }
-
-    #[test]
-    fn frame_snapshot_builder_preserves_hidden_present_attribution() {
-        let start = Instant::now();
-        let mut expected = presented_frame(42, start, 21_000);
-        expected.hidden_compose_us = 730;
-        expected.hidden_preview_compose_us = 230;
-        expected.hidden_arcade_compose_us = 500;
-        expected.direct_preview_present_us = 230;
-        expected.arcade_list_present_us = 500;
-
-        let built = builder_from_frame(&expected).build();
-
-        assert_eq!(built.hidden_compose_us, 730);
-        assert_eq!(built.hidden_preview_compose_us, 230);
-        assert_eq!(built.hidden_arcade_compose_us, 500);
-        assert_eq!(built.direct_preview_present_us, 230);
-        assert_eq!(built.arcade_list_present_us, 500);
-        assert_eq!(
-            built.hidden_compose_us,
-            built.hidden_preview_compose_us + built.hidden_arcade_compose_us
-        );
     }
 
     #[test]
@@ -2875,5 +2756,28 @@ mod tests {
         assert_eq!(status.slow_frames[0].severity, "cadence-warning");
         assert_eq!(status.slow_frames[0].warning_us, FRAME_CADENCE_WARNING_US);
         assert_eq!(status.slow_frames[0].over_budget_us, 0);
+    }
+
+    #[test]
+    fn frame_snapshot_builder_populates_existing_fields() {
+        let start = Instant::now();
+        let mut expected = presented_frame(42, start, 21_000);
+        expected.main_present_receipt_crc = 0x5a3c;
+
+        let built = builder_from_frame(&expected).build();
+
+        assert_eq!(built.frames, expected.frames);
+        assert_eq!(built.selected, expected.selected);
+        assert_eq!(built.visual_index, expected.visual_index);
+        assert_eq!(built.frame_t4, expected.frame_t4);
+        assert_eq!(built.prepare_trace.catalog_message_count, 2);
+        assert_eq!(built.copied_rows, 12);
+        assert_eq!(built.present_bytes, 23_040);
+        assert_eq!(built.vsync_source, Some(VsyncPaceSource::Timeout));
+        assert_eq!(built.vsync_miss_streak, 3);
+        assert_eq!(built.frame_start_phase_us, 8_000);
+        assert_eq!(built.main_present_receipt_crc, 0x5a3c);
+        assert_eq!(built.preview_cache_state, "exact");
+        assert_eq!(built.status_string_copy_bytes, 128);
     }
 }

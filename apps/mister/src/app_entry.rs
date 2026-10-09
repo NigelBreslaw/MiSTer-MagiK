@@ -96,10 +96,7 @@ pub use mister_magik_fb::{
     media_update, particle_engine, preview_worker, return_catalog_capsule, setup_nav,
     spring_animation, ui_errln, ui_log, ui_logln,
 };
-use mister_magik_fb::{
-    cpu_profile, input_integrity_driver, media_bench_download, pmu_probe, pmu_profile,
-    search_bench, ui_display, ui_runner,
-};
+use mister_magik_fb::{media_bench_download, search_bench, ui_display, ui_runner};
 
 use fpga::{Fpga, MAGIK_FBUF_LATCH_MAGIC, MAGIK_FBUF_STATUS_MAGIC, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
@@ -130,16 +127,6 @@ pub fn run() {
 
     let cmd = command_args::resolve_command(&args);
     let process_config = mister_magik_fb::process_config::ProcessConfig::capture(&args, &cmd);
-    if let Some(config) = process_config.launcher()
-        && let Err(error) =
-            mister_magik_perf_events::install_process_config(config.profiles().pmu())
-    {
-        crate::ui_errln!("PMU configuration initialization failed: {error}");
-        std::process::exit(1);
-    }
-    let process_entry_cpu_profile = process_config
-        .launcher()
-        .and_then(|config| cpu_profile::start_process_entry(config.profiles().cpu()));
     let fault_config = process_config.fault().cloned();
     if let Err(error) =
         mister_magik_mister_runtime::direct_reset_fault::install_process_fault_config(
@@ -210,13 +197,7 @@ pub fn run() {
         }
     };
 
-    dispatch_fpga(
-        &cmd,
-        &mut f,
-        process_entry_cpu_profile,
-        fault_config.as_ref(),
-        &process_config,
-    );
+    dispatch_fpga(&cmd, &mut f, fault_config.as_ref(), &process_config);
 }
 
 enum ProcessLockState {
@@ -325,10 +306,6 @@ fn dispatch_pre_fpga(
         "display-persist" => run_display_persist(args),
         "purge-library-data" => run_purge_library_data(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
-        "benchmark-capabilities" => print_benchmark_capabilities(),
-        "input-integrity-driver" => input_integrity_driver::run(args.get(2..).unwrap_or_default()),
-        "pmu-probe" => pmu_probe::run(),
-        "pmu-profile" => pmu_profile::run(args.get(2..).unwrap_or_default()),
         "search-bench" => search_bench::run(),
         command_args::CATALOG_CORPUS_INVENTORY_COMMAND => run_catalog_corpus_inventory(),
         "media-bench-download" => media_bench_download::run(),
@@ -357,52 +334,12 @@ fn dispatch_pre_fpga(
     }
 }
 
-fn print_benchmark_capabilities() {
-    crate::ui_logln!("{}", benchmark_capabilities());
-}
-
 fn run_catalog_corpus_inventory() {
     let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
     crate::ui_log!(
         "{}",
         mister_magik_catalog::catalog_corpus_inventory_tsv(&roots)
     );
-}
-
-fn benchmark_capabilities() -> serde_json::Value {
-    let mut capabilities = serde_json::json!({
-        "schema": "mister-magik-benchmark-capabilities-v1",
-        "screensaver-pprof-v1": cfg!(feature = "profile"),
-        "cold-boot-pprof-v1": cfg!(feature = "profile"),
-        "particle-capacity-v1": true,
-        "orientation-transition-v2": true,
-        "orientation-transition-pprof-v1": cfg!(feature = "profile"),
-        "settings-navigation-transition-v4": true,
-        "settings-navigation-transition-pprof-v4": cfg!(feature = "profile"),
-        "launcher-response-pprof-v1": cfg!(feature = "profile"),
-        "launcher-response-pmu-v1": true,
-        "pmu-probe-v1": true,
-        "pmu-profile-v1": true,
-        "pmu-profile-v2": true,
-        "persisted-search-v1": true,
-        "search-benchmark-v2": true,
-        "media-pack-persistence-v1": true,
-        "runtime-metadata-qualification-v2": true,
-        "input-integrity-driver-v1": true,
-        "arcade-velocity-scroll-v1": true,
-        "arcade-velocity-scroll-attribution-v1": true,
-        "preview-work-attribution-v1": true,
-        "system-entry-v1": true,
-        "system-entry-profile-v1": cfg!(feature = "profile"),
-    });
-    capabilities
-        .as_object_mut()
-        .expect("benchmark capabilities must be an object")
-        .insert(
-            "screensaver-frame-evidence-v6".to_owned(),
-            serde_json::Value::Bool(cfg!(feature = "profile")),
-        );
-    capabilities
 }
 
 fn run_catalog_inspect(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
@@ -744,7 +681,6 @@ fn installed_qualification_archive_path(
 fn dispatch_fpga(
     cmd: &str,
     f: &mut Fpga,
-    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     _fault_config: Option<&mister_magik_catalog::fs_fault::FaultConfig>,
     process_config: &mister_magik_fb::process_config::ProcessConfig,
 ) {
@@ -753,7 +689,6 @@ fn dispatch_fpga(
         "early-black" => early_black_route(f),
         "ui" => ui_runner::run_ui(
             f,
-            process_entry_cpu_profile,
             process_config
                 .launcher()
                 .expect("ui command captures launcher process configuration")
@@ -1786,14 +1721,5 @@ mod tests {
             format_latch_readiness_tsv(&report),
             "latch_readiness_tsv\tvalid=1\tstate=ready\tstage=none\treason=none\tdetail=live platform ready flip_count=4 post_count=5 drop_count=0"
         );
-    }
-
-    #[test]
-    fn benchmark_capabilities_preserve_pmu_v1_and_advertise_v2() {
-        let capabilities = benchmark_capabilities();
-        assert_eq!(capabilities["pmu-profile-v1"], true);
-        assert_eq!(capabilities["pmu-profile-v2"], true);
-        assert_eq!(capabilities["settings-navigation-transition-v4"], true);
-        assert_eq!(capabilities["arcade-velocity-scroll-attribution-v1"], true);
     }
 }

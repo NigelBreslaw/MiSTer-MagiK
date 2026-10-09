@@ -39,7 +39,7 @@ use super::phase_profile::LauncherFramePhase;
 use super::*;
 #[path = "launcher_loop_startup.rs"]
 mod startup;
-use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
+use crate::input_event::{InputPhase, LogicalAction};
 use crate::input_state::PadState;
 use crate::launcher_presentation::SelectionFeedbackTarget;
 use crate::launcher_ui_actions::{
@@ -49,11 +49,9 @@ use crate::preview_state::PreviewApplyTrace;
 #[cfg(test)]
 use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
 use mister_magik_fb::process_config::ScreensaverStartMode;
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::io::Write;
+use std::collections::{BTreeSet, VecDeque};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Sender, channel};
 
 const LIBRARY_RESET_REBOOT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -187,21 +185,6 @@ pub(super) fn card_pixels_as_slint(
     // SAFETY: both RGB565 pixel types are transparent `u16` wrappers, have
     // compile-time-checked layout, and accept every `u16` bit pattern.
     unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565Pixel>(), pixels.len()) }
-}
-
-fn custom_damage_invalidation_comparison(
-    bounding_rect: Option<DirtyRect>,
-    damage: &DirtyRectList,
-    target: DirtyRect,
-    full_frame_present: bool,
-) -> (bool, bool, bool) {
-    let bounding =
-        full_frame_present || bounding_rect.is_some_and(|rect| rect.intersection(target).is_some());
-    let rectangles = full_frame_present
-        || damage
-            .iter()
-            .any(|rect| rect.intersection(target).is_some());
-    (bounding, rectangles, bounding && !rectangles)
 }
 
 pub(super) fn selected_device_reveal_image(
@@ -472,183 +455,14 @@ fn present_mode_label_for_backend_status(
     }
 }
 
-struct ArcadeEntryLatencyTrace {
-    writer: Option<std::io::BufWriter<std::fs::File>>,
-    run_id: String,
-    profile_path: Option<String>,
-}
-
-impl ArcadeEntryLatencyTrace {
-    fn from_config(config: &mister_magik_fb::process_config::LauncherEntryTraceConfig) -> Self {
-        let run_id = config.run_id().to_owned();
-        let writer = config
-            .trace_path()
-            .and_then(|path| {
-                let file = std::fs::File::create(path)
-                    .map_err(|e| crate::ui_errln!("arcade entry trace: create {path} failed: {e}"))
-                    .ok()?;
-                let mut writer = std::io::BufWriter::with_capacity(16 * 1024, file);
-                writer
-                    .write_all(
-                        b"event\trun_id\telapsed_ms\tdelta_ms\tsince_input_enabled_ms\taccepted\tsystem\tselected\tframe\tprepare_us\tpreview_state\tasset_key\tdetail\n",
-                    )
-                    .map_err(|e| crate::ui_errln!("arcade entry trace: header write failed: {e}"))
-                    .ok()?;
-                crate::ui_logln!("arcade_entry_trace={path} run_id={run_id}");
-                Some(writer)
-            });
-        Self {
-            writer,
-            run_id,
-            profile_path: config.profile_path().map(str::to_owned),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn record(
-        &mut self,
-        start: Instant,
-        event: &str,
-        at: Instant,
-        reference: Option<Instant>,
-        input_enabled_ms: u64,
-        accepted: bool,
-        system: &str,
-        selected: usize,
-        frame: Option<u64>,
-        prepare_us: Option<u128>,
-        preview_state: &str,
-        asset_key: &str,
-        detail: impl std::fmt::Display,
-    ) {
-        let elapsed_ms = at.saturating_duration_since(start).as_millis();
-        let delta_ms = reference
-            .map(|reference| at.saturating_duration_since(reference).as_millis() as i128)
-            .unwrap_or(-1);
-        let since_input_enabled_ms = (elapsed_ms as i128 - input_enabled_ms as i128).max(0);
-        let detail = detail.to_string();
-        print_startup_event(
-            start,
-            event,
-            format!(
-                "delta_ms={} since_input_enabled_ms={} accepted={} system={} selected={} frame={} prepare_us={} preview_state={} asset_key={} {}",
-                delta_ms,
-                since_input_enabled_ms,
-                u8::from(accepted),
-                system,
-                selected,
-                frame
-                    .map(|frame| frame.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                prepare_us
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                preview_state,
-                asset_key,
-                detail
-            ),
-        );
-        if let Some(writer) = self.writer.as_mut() {
-            let _ = writeln!(
-                writer,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                event,
-                self.run_id,
-                elapsed_ms,
-                delta_ms,
-                since_input_enabled_ms,
-                u8::from(accepted),
-                system,
-                selected,
-                frame
-                    .map(|frame| frame.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                prepare_us
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                preview_state,
-                asset_key,
-                detail.replace('\t', " ")
-            );
-            let _ = writer.flush();
-        }
-    }
-}
-
-struct ArcadeEntryLatencyTracker {
-    trace: ArcadeEntryLatencyTrace,
-    enter_input_at: Option<Instant>,
-    destination_prepared: bool,
-    enter_presented: bool,
-    rows_ready: bool,
-    preview_exact: bool,
-    ready_presented: bool,
-    first_nav_input_at: Option<Instant>,
-    first_nav_presented: bool,
-    catalog_resident_at_input: Option<bool>,
-    presentation_start: Option<SystemEntryPresentationStart>,
-}
-
-#[derive(Clone, Copy)]
-struct SystemEntryPresentationStart {
-    telemetry: mister_magik_latch_contract::PresentationTelemetry,
-    latch_drop_count: u16,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct SystemEntryPublicationPhases {
-    bridge_model_assembly_us: u64,
-    bridge_updates_us: u64,
-    list_projection_us: u64,
-    slint_raster_us: u64,
-    overlay_composition_us: u64,
-    latch_copy_us: u64,
-    post_us: u64,
-    confirmation_wait_wall_us: u64,
-    confirmation_poll_cpu_us: u64,
-}
-
-impl SystemEntryPublicationPhases {
-    fn from_presented_frame(frame: &LauncherPresentedFrame) -> Self {
-        let bridge_total_us = u128_to_u64(frame.prepare_trace.bridge_sync_us);
-        let bridge_model_assembly_us = u128_to_u64(frame.prepare_trace.bridge_model_projection_us);
-        let list_projection_us = u128_to_u64(frame.custom_draw_trace.arcade_list_update_us);
-        let custom_draw_us = duration_us(frame.custom_draw_start, frame.custom_draw_done);
-        Self {
-            bridge_model_assembly_us,
-            bridge_updates_us: bridge_total_us.saturating_sub(bridge_model_assembly_us),
-            list_projection_us,
-            slint_raster_us: duration_us(frame.frame_t1, frame.frame_t2),
-            overlay_composition_us: custom_draw_us.saturating_sub(list_projection_us),
-            latch_copy_us: u128_to_u64(frame.main_present_hidden_copy_us),
-            post_us: u128_to_u64(frame.main_present_request_us),
-            confirmation_wait_wall_us: u128_to_u64(frame.post_present_wait_us),
-            confirmation_poll_cpu_us: frame.main_present_completion_poll_cpu_us,
-        }
-    }
-
-    fn json(self) -> serde_json::Value {
-        serde_json::json!({
-            "clock_domain": "CLOCK_MONOTONIC",
-            "bridge_model_assembly": self.bridge_model_assembly_us,
-            "bridge_updates": self.bridge_updates_us,
-            "list_projection": self.list_projection_us,
-            "slint_raster": self.slint_raster_us,
-            "overlay_composition": self.overlay_composition_us,
-            "latch_copy": self.latch_copy_us,
-            "post": self.post_us,
-            "confirmation_wait_wall": self.confirmation_wait_wall_us,
-            "confirmation_poll_cpu": self.confirmation_poll_cpu_us,
-        })
-    }
-}
-
+#[cfg(feature = "tooling")]
 fn duration_us(start: Instant, end: Instant) -> u64 {
     end.saturating_duration_since(start)
         .as_micros()
         .min(u128::from(u64::MAX)) as u64
 }
 
+#[cfg(feature = "tooling")]
 fn u128_to_u64(value: u128) -> u64 {
     value.min(u128::from(u64::MAX)) as u64
 }
@@ -704,18 +518,6 @@ impl DeferredSettingsActivation {
 }
 
 const NAVIGATION_STATUS_QUIESCE_LIMIT: Duration = Duration::from_millis(50);
-
-fn system_entry_preview_terminal(
-    selected_has_preview: bool,
-    preview_state: &str,
-    terminal_empty: bool,
-) -> bool {
-    if selected_has_preview {
-        preview_state == "exact"
-    } else {
-        terminal_empty
-    }
-}
 
 fn should_defer_or_preserve_selected_preview(
     defer_selected_preview: bool,
@@ -1010,509 +812,72 @@ fn cancel_pending_collection_entry_for_input(
     true
 }
 
-impl ArcadeEntryLatencyTracker {
-    fn from_config(config: &mister_magik_fb::process_config::LauncherEntryTraceConfig) -> Self {
-        Self {
-            trace: ArcadeEntryLatencyTrace::from_config(config),
-            enter_input_at: None,
-            destination_prepared: false,
-            enter_presented: false,
-            rows_ready: false,
-            preview_exact: false,
-            ready_presented: false,
-            first_nav_input_at: None,
-            first_nav_presented: false,
-            catalog_resident_at_input: None,
-            presentation_start: None,
+/// One system entry, from the press that opens it to the first frame that shows its rows and
+/// exact preview. Preview work stays off until that frame is out, so it cannot delay it.
+#[derive(Default)]
+struct SystemEntryAdoption {
+    entered: bool,
+    rows_ready: bool,
+    preview_exact: bool,
+    destination_prepared: bool,
+    ready_presented: bool,
+}
+
+impl SystemEntryAdoption {
+    fn cancel(&mut self) {
+        *self = Self::default();
+    }
+
+    fn note_enter(&mut self) {
+        self.entered = true;
+    }
+
+    fn note_rows_ready(&mut self) {
+        if self.entered {
+            self.rows_ready = true;
         }
     }
 
-    fn input_enabled_ms(lifecycle: &LauncherLifecycle) -> u64 {
-        lifecycle.startup_status().input_enabled_ms
+    fn note_preview(&mut self, nav: &LauncherNav, catalog: &ArcadeCatalog, preview: &PreviewState) {
+        if !self.entered || self.preview_exact || !self.rows_ready {
+            return;
+        }
+        self.preview_exact = if selected_arcade_game_has_preview(nav, catalog) {
+            preview.trace_cache_state() == "exact"
+        } else {
+            preview.terminal_empty()
+        };
     }
 
-    fn cancel_enter(&mut self) {
-        self.enter_input_at = None;
-        self.destination_prepared = false;
-        self.enter_presented = false;
-        self.rows_ready = false;
-        self.preview_exact = false;
-        self.ready_presented = false;
-        self.first_nav_input_at = None;
-        self.first_nav_presented = false;
-        self.catalog_resident_at_input = None;
-        self.presentation_start = None;
+    /// The first frame carrying the rows and the exact preview.
+    fn note_destination_frame(&mut self, screen: Screen, copied_rows: u32) {
+        if self.entered
+            && self.rows_ready
+            && self.preview_exact
+            && screen == Screen::Arcade
+            && copied_rows > 0
+        {
+            self.destination_prepared = true;
+        }
+    }
+
+    /// The same frame once the hardware confirms it.
+    fn note_ready_frame(&mut self, screen: Screen, copied_rows: u32, main_active_confirmed: bool) {
+        if self.destination_prepared
+            && self.entered
+            && self.rows_ready
+            && self.preview_exact
+            && screen == Screen::Arcade
+            && copied_rows > 0
+            && main_active_confirmed
+        {
+            self.ready_presented = true;
+        }
     }
 
     fn preview_adoption_in_progress(&self) -> bool {
-        self.enter_input_at.is_some() && self.rows_ready && !self.ready_presented
+        self.entered && self.rows_ready && !self.ready_presented
     }
-
-    fn active_system_id(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
-        active_system(catalog, nav)
-            .map(|system| system.legacy_system_id.clone())
-            .unwrap_or_default()
-    }
-
-    fn selected_asset_key(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
-        active_system(catalog, nav)
-            .and_then(|system| nav.active_arcade_game_at(catalog, &system.id, nav.arcade.selected))
-            .map(|game| game.preview_asset_key.to_string())
-            .unwrap_or_default()
-    }
-
-    fn record_enter_input(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-    ) {
-        if self.enter_input_at.is_some() {
-            return;
-        }
-        self.enter_input_at = Some(at);
-        self.catalog_resident_at_input = Some(true);
-        let system = Self::active_system_id(catalog, nav);
-        let asset_key = Self::selected_asset_key(catalog, nav);
-        self.trace.record(
-            start,
-            "arcade_enter_input",
-            at,
-            None,
-            Self::input_enabled_ms(lifecycle),
-            true,
-            &system,
-            nav.arcade.selected,
-            None,
-            None,
-            "",
-            &asset_key,
-            "source=launcher_input",
-        );
-    }
-
-    fn record_collection_enter_input(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        collection_id: &str,
-        source: &'static str,
-        catalog_resident: bool,
-    ) {
-        if self.enter_input_at.is_some() {
-            return;
-        }
-        self.enter_input_at = Some(at);
-        self.catalog_resident_at_input = Some(catalog_resident);
-        self.trace.record(
-            start,
-            "arcade_enter_input",
-            at,
-            None,
-            Self::input_enabled_ms(lifecycle),
-            true,
-            collection_id,
-            0,
-            None,
-            None,
-            "",
-            "",
-            format!(
-                "source={source} catalog_resident={}",
-                u8::from(catalog_resident)
-            ),
-        );
-    }
-
-    fn record_first_nav_input(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-    ) {
-        if self.enter_input_at.is_none() || self.first_nav_input_at.is_some() {
-            return;
-        }
-        self.first_nav_input_at = Some(at);
-        let system = Self::active_system_id(catalog, nav);
-        let asset_key = Self::selected_asset_key(catalog, nav);
-        self.trace.record(
-            start,
-            "arcade_first_nav_input",
-            at,
-            self.enter_input_at,
-            Self::input_enabled_ms(lifecycle),
-            true,
-            &system,
-            nav.arcade.selected,
-            None,
-            None,
-            "",
-            &asset_key,
-            "source=launcher_input",
-        );
-    }
-
-    fn record_rows_ready(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-    ) {
-        if self.enter_input_at.is_none() || self.rows_ready {
-            return;
-        }
-        self.rows_ready = true;
-        let system = Self::active_system_id(catalog, nav);
-        let asset_key = Self::selected_asset_key(catalog, nav);
-        self.trace.record(
-            start,
-            "arcade_rows_ready",
-            at,
-            self.enter_input_at,
-            Self::input_enabled_ms(lifecycle),
-            true,
-            &system,
-            nav.arcade.selected,
-            None,
-            None,
-            "",
-            &asset_key,
-            format!(
-                "games={} catalog_resident_at_input={}",
-                catalog.system_game_count(&system),
-                u8::from(self.catalog_resident_at_input.unwrap_or(false))
-            ),
-        );
-    }
-
-    fn record_preview_exact(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-        preview: &PreviewState,
-    ) {
-        if self.enter_input_at.is_none() || self.preview_exact || !self.rows_ready {
-            return;
-        }
-        let preview_state = preview.trace_cache_state();
-        let selected_has_preview = selected_arcade_game_has_preview(nav, catalog);
-        if !system_entry_preview_terminal(
-            selected_has_preview,
-            preview_state,
-            preview.terminal_empty(),
-        ) {
-            return;
-        }
-        self.preview_exact = true;
-        let system = Self::active_system_id(catalog, nav);
-        let asset_key = Self::selected_asset_key(catalog, nav);
-        let timing = if selected_has_preview {
-            preview.selected_preview_timing()
-        } else {
-            crate::preview_state::SelectedPreviewTiming::default()
-        };
-        self.trace.record(
-            start,
-            "arcade_preview_exact",
-            at,
-            self.enter_input_at,
-            Self::input_enabled_ms(lifecycle),
-            true,
-            &system,
-            nav.arcade.selected,
-            None,
-            None,
-            preview_state,
-            &asset_key,
-            format!(
-                "source=preview_state selected_has_preview={} provenance={} request_age_us={} read_us={} decode_us={} raw565_parse_us={} resize_us={} total_us={} encoded_bytes={} decoded_bytes={}",
-                u8::from(selected_has_preview),
-                if selected_has_preview {
-                    preview.visible_preview_load_source()
-                } else {
-                    "terminal-empty"
-                },
-                timing.request_age_us,
-                timing.read_us,
-                timing.decode_us,
-                timing.raw565_parse_us,
-                timing.resize_us,
-                timing.total_us,
-                timing.encoded_bytes,
-                timing.decoded_bytes,
-            ),
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn record_destination_prepared_frame(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-        preview: &PreviewState,
-        frame: u64,
-        prepare_us: u128,
-        copied_rows: u32,
-        catalog_generation: usize,
-    ) {
-        if !system_entry_destination_frame_eligible(
-            self.enter_input_at.is_some(),
-            self.rows_ready,
-            self.preview_exact,
-            self.destination_prepared,
-            nav.screen,
-            copied_rows,
-        ) {
-            return;
-        }
-        self.destination_prepared = true;
-        let system = Self::active_system_id(catalog, nav);
-        let asset_key = Self::selected_asset_key(catalog, nav);
-        self.trace.record(
-            start,
-            "system_entry_destination_prepared",
-            at,
-            self.enter_input_at,
-            Self::input_enabled_ms(lifecycle),
-            true,
-            &system,
-            nav.arcade.selected,
-            Some(frame),
-            Some(prepare_us),
-            preview.trace_cache_state(),
-            &asset_key,
-            format!(
-                "copied_rows={copied_rows} catalog_generation={} preview_generation={}",
-                catalog_generation,
-                preview.presentation_generation(),
-            ),
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn record_presented_frame(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-        preview: &PreviewState,
-        frame: u64,
-        prepare_us: u128,
-        copied_rows: u32,
-    ) {
-        if self.enter_input_at.is_none() || copied_rows == 0 || nav.screen != Screen::Arcade {
-            return;
-        }
-        let system = Self::active_system_id(catalog, nav);
-        let asset_key = Self::selected_asset_key(catalog, nav);
-        if !self.enter_presented {
-            self.enter_presented = true;
-            self.trace.record(
-                start,
-                "arcade_enter_presented",
-                at,
-                self.enter_input_at,
-                Self::input_enabled_ms(lifecycle),
-                true,
-                &system,
-                nav.arcade.selected,
-                Some(frame),
-                Some(prepare_us),
-                preview.trace_cache_state(),
-                &asset_key,
-                format!("copied_rows={copied_rows}"),
-            );
-        }
-        if self.first_nav_input_at.is_some() && !self.first_nav_presented {
-            self.first_nav_presented = true;
-            self.trace.record(
-                start,
-                "arcade_first_nav_presented",
-                at,
-                self.first_nav_input_at,
-                Self::input_enabled_ms(lifecycle),
-                true,
-                &system,
-                nav.arcade.selected,
-                Some(frame),
-                Some(prepare_us),
-                preview.trace_cache_state(),
-                &asset_key,
-                format!("copied_rows={copied_rows}"),
-            );
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn record_ready_presented_frame(
-        &mut self,
-        start: Instant,
-        at: Instant,
-        lifecycle: &LauncherLifecycle,
-        catalog: &ArcadeCatalog,
-        nav: &LauncherNav,
-        preview: &PreviewState,
-        frame: u64,
-        prepare_us: u128,
-        copied_rows: u32,
-        main_active_confirmed: bool,
-        catalog_generation: usize,
-        main_sequence: u16,
-        presentation_end: Option<mister_magik_latch_contract::PresentationTelemetry>,
-        latch_drop_count: u16,
-        publication: SystemEntryPublicationPhases,
-    ) -> bool {
-        if !self.destination_prepared
-            || !system_entry_ready_frame_eligible(
-                self.enter_input_at.is_some(),
-                self.rows_ready,
-                self.preview_exact,
-                self.ready_presented,
-                nav.screen,
-                copied_rows,
-                main_active_confirmed,
-            )
-        {
-            return false;
-        }
-        self.ready_presented = true;
-        let system = Self::active_system_id(catalog, nav);
-        let asset_key = Self::selected_asset_key(catalog, nav);
-        let selected_has_preview = selected_arcade_game_has_preview(nav, catalog);
-        let cadence = self
-            .presentation_start
-            .zip(presentation_end)
-            .filter(|(start, end)| {
-                start.telemetry.magik_ownership()
-                    && end.magik_ownership()
-                    && start.telemetry.lifetime_invariant_valid()
-                    && end.lifetime_invariant_valid()
-            })
-            .map(|(start, end)| {
-                (
-                    end.repeated_vblank_count
-                        .wrapping_sub(start.telemetry.repeated_vblank_count),
-                    latch_drop_count.wrapping_sub(start.latch_drop_count),
-                )
-            });
-        // Publish the benchmark-owned phase record before the ready marker. The host treats
-        // that marker as the point at which every correlated artifact is complete.
-        write_system_entry_publication_profile(self.trace.profile_path.as_deref(), publication);
-        self.trace.record(
-            start,
-            "system_entry_ready_presented",
-            at,
-            self.enter_input_at,
-            Self::input_enabled_ms(lifecycle),
-            true,
-            &system,
-            nav.arcade.selected,
-            Some(frame),
-            Some(prepare_us),
-            preview.trace_cache_state(),
-            &asset_key,
-            format!(
-                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={} catalog_generation={} preview_generation={} main_sequence={} cadence_authoritative={} repeated_vblank_delta={} latch_drop_delta={} bridge_model_assembly_us={} bridge_updates_us={} list_projection_us={} slint_raster_us={} overlay_composition_us={} latch_copy_us={} post_us={} confirmation_wait_wall_us={} confirmation_poll_cpu_us={}",
-                u8::from(selected_has_preview),
-                catalog_generation,
-                preview.presentation_generation(),
-                main_sequence,
-                u8::from(cadence.is_some()),
-                cadence
-                    .map(|(repeated, _)| repeated.to_string())
-                    .unwrap_or_else(|| "unavailable".to_string()),
-                cadence
-                    .map(|(_, dropped)| dropped.to_string())
-                    .unwrap_or_else(|| "unavailable".to_string()),
-                publication.bridge_model_assembly_us,
-                publication.bridge_updates_us,
-                publication.list_projection_us,
-                publication.slint_raster_us,
-                publication.overlay_composition_us,
-                publication.latch_copy_us,
-                publication.post_us,
-                publication.confirmation_wait_wall_us,
-                publication.confirmation_poll_cpu_us,
-            ),
-        );
-        true
-    }
-}
-
-fn write_system_entry_publication_profile(
-    path: Option<&str>,
-    publication: SystemEntryPublicationPhases,
-) {
-    let Some(path) = path else {
-        return;
-    };
-    let path = std::path::Path::new(path);
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(mut evidence) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return;
-    };
-    evidence["first_frame_publication_us"] = publication.json();
-    if let Err(error) = std::fs::write(
-        path,
-        format!(
-            "{}\n",
-            serde_json::to_string_pretty(&evidence).unwrap_or_default()
-        ),
-    ) {
-        crate::ui_errln!("system-entry publication profile write failed: {error}");
-    }
-}
-
-fn system_entry_destination_frame_eligible(
-    entered: bool,
-    rows_ready: bool,
-    preview_terminal: bool,
-    already_recorded: bool,
-    screen: Screen,
-    copied_rows: u32,
-) -> bool {
-    entered
-        && rows_ready
-        && preview_terminal
-        && !already_recorded
-        && screen == Screen::Arcade
-        && copied_rows > 0
-}
-
-fn system_entry_ready_frame_eligible(
-    entered: bool,
-    rows_ready: bool,
-    preview_terminal: bool,
-    already_recorded: bool,
-    screen: Screen,
-    copied_rows: u32,
-    main_active_confirmed: bool,
-) -> bool {
-    entered
-        && rows_ready
-        && preview_terminal
-        && !already_recorded
-        && screen == Screen::Arcade
-        && copied_rows > 0
-        && main_active_confirmed
 }
 
 fn should_defer_arcade_overlay_bridge(
@@ -1560,1584 +925,6 @@ impl LauncherStatusTextSnapshot {
             + self.confirm_message.len()
             + self.confirm_left_label.len()
             + self.confirm_right_label.len()
-    }
-}
-
-const INPUT_INTEGRITY_TRACE_PATH: &str = "/tmp/mister-magik/input-integrity-trace.json";
-const INPUT_INTEGRITY_TRACE_LIMIT: usize = 512;
-const LAUNCHER_RESPONSE_TRACE_PATH: &str = "/tmp/mister-magik/launcher-response-trace.json";
-const LAUNCHER_RESPONSE_PARTIAL_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
-const LAUNCHER_RESPONSE_TRACE_LIMIT: usize = 256;
-
-struct InputIntegrityTrace {
-    enabled: bool,
-    records: VecDeque<serde_json::Value>,
-    initial_presses: u64,
-    releases: u64,
-    repeats: u64,
-    queue_high_water: usize,
-    dispatch_latencies_us: Vec<u64>,
-    dirty: bool,
-    last_write: Instant,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct LauncherResponseState {
-    screen: String,
-    menu_id: String,
-    selected_item_id: String,
-    selected_index: usize,
-    arcade_visual_index_milli: Option<i64>,
-}
-
-impl LauncherResponseState {
-    fn capture(nav: &LauncherNav) -> Self {
-        let feedback_target = nav_selection_feedback_target(nav);
-        Self {
-            screen: screen_label(nav.screen).to_string(),
-            menu_id: feedback_target
-                .as_ref()
-                .map(|target| target.surface.clone())
-                .unwrap_or_else(|| nav.current_menu_id().to_string()),
-            selected_item_id: feedback_target
-                .map(|target| target.item)
-                .unwrap_or_else(|| nav.current_menu_selected_item_id().to_string()),
-            selected_index: match nav.screen {
-                Screen::Arcade if nav.is_system_hub() => nav.system_hub_selected,
-                Screen::Arcade => nav.arcade.selected,
-                Screen::Settings => nav.settings_selected,
-                Screen::About => 0,
-                Screen::Licenses => nav.licenses_selected,
-                _ => nav.selected,
-            },
-            arcade_visual_index_milli: (nav.screen == Screen::Arcade && !nav.is_system_hub())
-                .then(|| (f64::from(nav.arcade.visual_index) * 1_000.0).round() as i64),
-        }
-    }
-
-    fn json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "screen": self.screen,
-            "menu_id": self.menu_id,
-            "selected_item_id": self.selected_item_id,
-            "selected_index": self.selected_index,
-            "arcade_visual_index_milli": self.arcade_visual_index_milli,
-        })
-    }
-
-    fn matches_presented(&self, before: &Self, presented: &Self) -> bool {
-        if self.arcade_visual_index_milli.is_none() {
-            return self == presented;
-        }
-        self.screen == presented.screen
-            && self.selected_index == presented.selected_index
-            && presented.arcade_visual_index_milli.is_some()
-            && before.arcade_visual_index_milli != presented.arcade_visual_index_milli
-    }
-}
-
-#[derive(Clone)]
-struct LauncherResponseFeedbackRecord {
-    phase: &'static str,
-    event_id: u64,
-    surface: String,
-    item: String,
-    confirmed_at_us: u64,
-    confirmed_frame: u64,
-    confirmed_sequence: u16,
-    dwell_us: Option<u64>,
-}
-
-#[derive(Clone, Copy)]
-struct LauncherResponsePresentationSnapshot {
-    owned_vblank_count: u32,
-    presented_vblank_count: u32,
-    repeated_vblank_count: u32,
-    ownership_loss_count: u32,
-    latch_drop_count: u32,
-    magik_ownership: bool,
-}
-
-#[derive(Clone)]
-struct LauncherResponseRecord {
-    action: LogicalAction,
-    trigger: DispatchKind,
-    press_id: u64,
-    proxy_sequence: Option<u32>,
-    proxy_kernel_at_us: Option<u64>,
-    input_reader: Option<crate::input_hub::InputReaderEventEvidence>,
-    captured_at_us: u64,
-    published_at_us: Option<u64>,
-    drained_at_us: Option<u64>,
-    drained_execution: Option<ThreadExecutionStamp>,
-    dispatch_at_us: u64,
-    dispatch_execution: Option<ThreadExecutionStamp>,
-    state_applied_at_us: Option<u64>,
-    state_applied_execution: Option<ThreadExecutionStamp>,
-    before: LauncherResponseState,
-    after: Option<LauncherResponseState>,
-    disposition: &'static str,
-    frame: Option<LauncherResponseFrameEvidence>,
-    confirmed_at_us: Option<u64>,
-    confirmed_execution: Option<ThreadExecutionStamp>,
-    confirmed_frame: Option<u64>,
-    confirmed_sequence: Option<u16>,
-}
-
-#[derive(Clone)]
-struct LauncherResponseFrameEvidence {
-    selected: LauncherResponseState,
-    projected_at_us: u64,
-    projected_execution: Option<ThreadExecutionStamp>,
-    raster_started_at_us: u64,
-    raster_started_execution: Option<ThreadExecutionStamp>,
-    raster_completed_at_us: u64,
-    raster_completed_execution: Option<ThreadExecutionStamp>,
-    slint_damage_rects: Vec<(usize, usize, usize, usize)>,
-    post_accepted_at_us: u64,
-    post_accepted_execution: Option<ThreadExecutionStamp>,
-    dirty_rect: Option<(usize, usize, usize, usize)>,
-    present_bytes: usize,
-    wasted_present_bytes: usize,
-    cached_present_us: u64,
-    hidden_compose_us: u64,
-    hidden_copy_us: u64,
-    hidden_publish_us: u64,
-    hidden_invalid_bytes: usize,
-    hidden_rect_count: u32,
-    hidden_catchup_bytes: usize,
-    hidden_full_copy: bool,
-    hidden_copy_path: &'static str,
-    present_request_us: u64,
-    set_vga_fb_us: u64,
-    present_wait_us: u64,
-    posted_sequence: u16,
-    post_active_sequence: u16,
-    post_pending_sequence: u16,
-    post_pending: bool,
-    first_eligible_vblank: Option<bool>,
-}
-
-#[derive(Clone)]
-struct LauncherResponseFrameStamp {
-    record_index: usize,
-    selected: LauncherResponseState,
-    projected_at_us: u64,
-    projected_execution: Option<ThreadExecutionStamp>,
-    raster_started_at_us: u64,
-    raster_started_execution: Option<ThreadExecutionStamp>,
-    raster_completed_at_us: u64,
-    raster_completed_execution: Option<ThreadExecutionStamp>,
-    slint_damage_rects: Vec<(usize, usize, usize, usize)>,
-}
-
-#[derive(Clone, Copy, Default)]
-struct LauncherResponsePresentReceipt {
-    post_accepted_at_us: u64,
-    post_accepted_execution: Option<ThreadExecutionStamp>,
-    dirty_rect: Option<(usize, usize, usize, usize)>,
-    present_bytes: usize,
-    wasted_present_bytes: usize,
-    cached_present_us: u64,
-    hidden_compose_us: u64,
-    hidden_copy_us: u64,
-    hidden_publish_us: u64,
-    hidden_invalid_bytes: usize,
-    hidden_rect_count: u32,
-    hidden_catchup_bytes: usize,
-    hidden_full_copy: bool,
-    hidden_copy_path: &'static str,
-    present_request_us: u64,
-    set_vga_fb_us: u64,
-    present_wait_us: u64,
-    posted_sequence: u16,
-    post_active_sequence: u16,
-    post_pending_sequence: u16,
-    post_pending: bool,
-    refresh_period_us: u64,
-}
-
-struct LauncherResponseTrace {
-    enabled: bool,
-    execution_enabled: bool,
-    pmu_enabled: bool,
-    pmu_active: bool,
-    completion_path: Option<String>,
-    pmu_completion_path: Option<String>,
-    system_entry_profile_path: Option<String>,
-    records: Vec<LauncherResponseRecord>,
-    feedback_records: Vec<LauncherResponseFeedbackRecord>,
-    pending_dispatches: VecDeque<usize>,
-    pending_confirmations: VecDeque<usize>,
-    published_at_us: HashMap<u64, u64>,
-    proxy_sequences: HashMap<u64, u32>,
-    proxy_kernel_at_us: HashMap<u64, u64>,
-    input_reader: HashMap<u64, crate::input_hub::InputReaderEventEvidence>,
-    input_reader_policy: Option<mister_magik_catalog::runtime_thread::RuntimeThreadPolicyReport>,
-    drained_at_us: HashMap<u64, u64>,
-    drained_execution: HashMap<u64, ThreadExecutionStamp>,
-    state: LauncherResponseState,
-    queue_high_water: usize,
-    refresh_period_us: u64,
-    presentation_start: Option<LauncherResponsePresentationSnapshot>,
-    presentation_end: Option<LauncherResponsePresentationSnapshot>,
-    run_id: String,
-    expected_confirmed: usize,
-    expected_feedback_hidden: usize,
-    hidden_feedback_count: usize,
-    cancelled_feedback_count: usize,
-    outstanding_feedback: HashSet<u64>,
-    complete: bool,
-    frame_trace_finalize_pending: bool,
-    writer: Option<Sender<LauncherResponseTraceWrite>>,
-    input_probe: Option<crate::input_hub::InputObservationProbe>,
-    catalog_phases: Vec<serde_json::Value>,
-    scheduler_phases: Vec<serde_json::Value>,
-    lab_records: Vec<serde_json::Value>,
-    last_partial_flush_at: Instant,
-    partial_confirmed_sent: usize,
-    partial_feedback_sent: usize,
-    partial_lab_sent: usize,
-    dirty: bool,
-}
-
-fn launcher_response_u64(value: u128) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
-
-fn launcher_response_execution_interval(
-    started: Option<ThreadExecutionStamp>,
-    finished: Option<ThreadExecutionStamp>,
-    started_at_us: Option<u64>,
-    finished_at_us: Option<u64>,
-) -> Option<serde_json::Value> {
-    started
-        .zip(finished)
-        .zip(started_at_us.zip(finished_at_us))
-        .map(|((started, finished), (started_at, finished_at))| {
-            started.interval_json(finished, finished_at.saturating_sub(started_at))
-        })
-}
-
-struct LauncherResponseTraceWrite {
-    snapshot: LauncherResponseTraceSnapshot,
-    completion_path: Option<String>,
-}
-
-struct LauncherResponseTraceSnapshot {
-    records: Vec<LauncherResponseRecord>,
-    feedback_records: Vec<LauncherResponseFeedbackRecord>,
-    refresh_period_us: u64,
-    presentation_start: Option<LauncherResponsePresentationSnapshot>,
-    presentation_end: Option<LauncherResponsePresentationSnapshot>,
-    run_id: String,
-    expected_confirmed: usize,
-    expected_feedback_hidden: usize,
-    hidden_feedback_count: usize,
-    cancelled_feedback_count: usize,
-    outstanding_feedback_count: usize,
-    complete: bool,
-    execution_enabled: bool,
-    queue_high_water: usize,
-    catalog_phases: Vec<serde_json::Value>,
-    scheduler_phases: Vec<serde_json::Value>,
-    lab_records: Vec<serde_json::Value>,
-    input_reader_policy: Option<mister_magik_catalog::runtime_thread::RuntimeThreadPolicyReport>,
-}
-
-struct LauncherResponseCatalogPhaseStart {
-    label: &'static str,
-    started_at_us: u64,
-    input_generation: Option<u64>,
-}
-
-#[derive(Clone, Copy, Default)]
-struct LauncherResponseSchedulerBoundary {
-    wall_at_us: u64,
-    input_generation: Option<u64>,
-    execution: Option<ThreadExecutionStamp>,
-}
-
-impl LauncherResponseTrace {
-    fn from_config(
-        config: &mister_magik_fb::process_config::LauncherResponseTraceConfig,
-        entry_config: &mister_magik_fb::process_config::LauncherEntryTraceConfig,
-        nav: &LauncherNav,
-        input_probe: Option<crate::input_hub::InputObservationProbe>,
-    ) -> Self {
-        let enabled = config.enabled();
-        let execution_enabled = config.execution_enabled();
-        let pmu_enabled = config.pmu_enabled();
-        let pmu_completion_path = response_trace_volatile_path(config.pmu_completion_path());
-        let run_id = config.run_id().to_owned();
-        let expected_confirmed = config.expected_confirmed();
-        let expected_feedback_hidden = config.expected_feedback_hidden();
-        let completion_path = response_trace_volatile_path(config.completion_path());
-        if enabled {
-            let _ = std::fs::remove_file(LAUNCHER_RESPONSE_TRACE_PATH);
-            for path in [
-                config.completion_path(),
-                config.frame_completion_path(),
-                config.pmu_completion_path(),
-            ] {
-                if let Some(path) = response_trace_volatile_path(path) {
-                    let _ = std::fs::remove_file(path);
-                }
-            }
-        }
-        if pmu_enabled {
-            mister_magik_perf_events::clear_process_profiles();
-        }
-        let writer = enabled.then(|| spawn_launcher_response_trace_writer(completion_path.clone()));
-        Self {
-            enabled,
-            execution_enabled,
-            pmu_enabled,
-            pmu_active: false,
-            completion_path,
-            pmu_completion_path,
-            system_entry_profile_path: entry_config.profile_path().map(str::to_owned),
-            records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
-            feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
-            pending_dispatches: VecDeque::new(),
-            pending_confirmations: VecDeque::new(),
-            published_at_us: HashMap::new(),
-            proxy_sequences: HashMap::new(),
-            proxy_kernel_at_us: HashMap::new(),
-            input_reader: HashMap::new(),
-            input_reader_policy: None,
-            drained_at_us: HashMap::new(),
-            drained_execution: HashMap::new(),
-            state: LauncherResponseState::capture(nav),
-            queue_high_water: 0,
-            refresh_period_us: 0,
-            presentation_start: None,
-            presentation_end: None,
-            run_id,
-            expected_confirmed,
-            expected_feedback_hidden,
-            hidden_feedback_count: 0,
-            cancelled_feedback_count: 0,
-            outstanding_feedback: HashSet::new(),
-            complete: false,
-            frame_trace_finalize_pending: false,
-            writer,
-            input_probe,
-            catalog_phases: Vec::new(),
-            scheduler_phases: Vec::new(),
-            lab_records: Vec::new(),
-            last_partial_flush_at: Instant::now(),
-            partial_confirmed_sent: 0,
-            partial_feedback_sent: 0,
-            partial_lab_sent: 0,
-            dirty: enabled,
-        }
-    }
-
-    #[cfg(test)]
-    fn enabled_for_test(nav: &LauncherNav) -> Self {
-        Self {
-            enabled: true,
-            execution_enabled: false,
-            pmu_enabled: false,
-            pmu_active: false,
-            completion_path: None,
-            pmu_completion_path: None,
-            system_entry_profile_path: None,
-            records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
-            feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
-            pending_dispatches: VecDeque::new(),
-            pending_confirmations: VecDeque::new(),
-            published_at_us: HashMap::new(),
-            proxy_sequences: HashMap::new(),
-            proxy_kernel_at_us: HashMap::new(),
-            input_reader: HashMap::new(),
-            input_reader_policy: None,
-            drained_at_us: HashMap::new(),
-            drained_execution: HashMap::new(),
-            state: LauncherResponseState::capture(nav),
-            queue_high_water: 0,
-            refresh_period_us: 0,
-            presentation_start: None,
-            presentation_end: None,
-            run_id: "test-run".to_string(),
-            expected_confirmed: 0,
-            expected_feedback_hidden: 0,
-            hidden_feedback_count: 0,
-            cancelled_feedback_count: 0,
-            outstanding_feedback: HashSet::new(),
-            complete: false,
-            frame_trace_finalize_pending: false,
-            writer: None,
-            input_probe: None,
-            catalog_phases: Vec::new(),
-            scheduler_phases: Vec::new(),
-            lab_records: Vec::new(),
-            last_partial_flush_at: Instant::now()
-                .checked_sub(LAUNCHER_RESPONSE_PARTIAL_FLUSH_INTERVAL)
-                .unwrap_or_else(Instant::now),
-            partial_confirmed_sent: 0,
-            partial_feedback_sent: 0,
-            partial_lab_sent: 0,
-            dirty: false,
-        }
-    }
-
-    #[cfg(test)]
-    fn configured_for_test(
-        nav: &LauncherNav,
-        expected_confirmed: usize,
-        expected_feedback_hidden: usize,
-    ) -> Self {
-        let mut trace = Self::enabled_for_test(nav);
-        trace.expected_confirmed = expected_confirmed;
-        trace.expected_feedback_hidden = expected_feedback_hidden;
-        trace
-    }
-
-    #[cfg(test)]
-    fn enable_execution_for_test(&mut self) {
-        self.execution_enabled = true;
-    }
-
-    fn execution_stamp(&self) -> Option<ThreadExecutionStamp> {
-        self.execution_enabled.then(ThreadExecutionStamp::capture)
-    }
-
-    fn input_pmu_span(
-        &self,
-        relevant: bool,
-        name: &'static str,
-    ) -> Option<mister_magik_perf_events::SampledSpan> {
-        (self.pmu_active && relevant)
-            .then(|| mister_magik_perf_events::sampled_span(name))
-            .flatten()
-    }
-
-    fn observe_drained_input(&mut self, drained: &crate::input_hub::DrainedInput) {
-        if self.enabled {
-            let batch = &drained.batch;
-            self.queue_high_water = self.queue_high_water.max(batch.health.queue_high_water);
-            let drained_at_us = crate::input_hub::monotonic_us();
-            let drained_execution = self.execution_stamp();
-            for publication in &drained.publications {
-                self.published_at_us
-                    .insert(publication.sequence, publication.published_at_us);
-                if let Some(proxy_sequence) = publication.proxy_sequence {
-                    self.proxy_sequences
-                        .insert(publication.sequence, proxy_sequence);
-                }
-                if let Some(proxy_kernel_at_us) = publication.proxy_kernel_at_us {
-                    self.proxy_kernel_at_us
-                        .insert(publication.sequence, proxy_kernel_at_us);
-                }
-                if let Some(reader) = publication.reader {
-                    self.input_reader.insert(publication.sequence, reader);
-                }
-            }
-            self.input_reader_policy.clone_from(&drained.reader_policy);
-            for event in &batch.events {
-                self.drained_at_us.insert(event.sequence, drained_at_us);
-                if let Some(execution) = drained_execution {
-                    self.drained_execution.insert(event.sequence, execution);
-                }
-            }
-        }
-    }
-
-    fn record_route(&mut self, event: crate::input_event::InputEvent, outcome: InputOutcome) {
-        self.record_route_outcome(event, outcome);
-        if !self.enabled
-            || event.source.kind != InputSourceKind::MainProxy
-            || event.phase != InputPhase::Pressed
-            || self.records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT
-        {
-            return;
-        }
-        let dispatch_at_us = crate::input_hub::monotonic_us();
-        let dispatch_execution = self.execution_stamp();
-        let (trigger, disposition) = match outcome {
-            InputOutcome::Dispatch { kind, .. } => (kind, "dispatched"),
-            InputOutcome::Consumed {
-                reason: ConsumedReason::TransitionActive,
-                ..
-            } => (DispatchKind::Initial, "transition-swallowed"),
-            _ => return,
-        };
-        let index = self.records.len();
-        self.records.push(LauncherResponseRecord {
-            action: event.action,
-            trigger,
-            press_id: event.press_id.0,
-            proxy_sequence: self.proxy_sequences.remove(&event.sequence),
-            proxy_kernel_at_us: self.proxy_kernel_at_us.remove(&event.sequence),
-            input_reader: self.input_reader.remove(&event.sequence),
-            captured_at_us: event.captured_at_us,
-            published_at_us: self.published_at_us.remove(&event.sequence),
-            drained_at_us: self.drained_at_us.remove(&event.sequence),
-            drained_execution: self.drained_execution.remove(&event.sequence),
-            dispatch_at_us,
-            dispatch_execution,
-            state_applied_at_us: None,
-            state_applied_execution: None,
-            before: self.state.clone(),
-            after: None,
-            disposition,
-            frame: None,
-            confirmed_at_us: None,
-            confirmed_execution: None,
-            confirmed_frame: None,
-            confirmed_sequence: None,
-        });
-        if disposition == "dispatched" {
-            self.pending_dispatches.push_back(index);
-        }
-        self.dirty = true;
-    }
-
-    fn observe_state(&mut self, nav: &LauncherNav, transition_active: bool) {
-        if !self.enabled {
-            return;
-        }
-        let state = LauncherResponseState::capture(nav);
-        if state != self.state {
-            self.state = state.clone();
-            if let Some(index) = self.pending_dispatches.pop_front() {
-                self.records[index].after = Some(state);
-                self.records[index].state_applied_at_us = Some(crate::input_hub::monotonic_us());
-                self.records[index].state_applied_execution = self.execution_stamp();
-                self.records[index].disposition = "state-changed";
-                self.pending_confirmations.push_back(index);
-            }
-            self.dirty = true;
-        } else if !transition_active && let Some(index) = self.pending_dispatches.pop_front() {
-            self.records[index].disposition = "no-change";
-            self.dirty = true;
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn frame_stamp(
-        &self,
-        nav: &LauncherNav,
-        projected_at_us: u64,
-        projected_execution: Option<ThreadExecutionStamp>,
-        raster_started_at_us: u64,
-        raster_started_execution: Option<ThreadExecutionStamp>,
-        raster_completed_at_us: u64,
-        raster_completed_execution: Option<ThreadExecutionStamp>,
-    ) -> Option<LauncherResponseFrameStamp> {
-        if !self.enabled {
-            return None;
-        }
-        let state = LauncherResponseState::capture(nav);
-        let position = self.pending_confirmations.iter().rposition(|index| {
-            let record = &self.records[*index];
-            record
-                .state_applied_at_us
-                .is_some_and(|applied_at_us| applied_at_us <= projected_at_us)
-                && record
-                    .after
-                    .as_ref()
-                    .is_some_and(|after| after.matches_presented(&record.before, &state))
-        })?;
-        Some(LauncherResponseFrameStamp {
-            record_index: self.pending_confirmations[position],
-            selected: state,
-            projected_at_us,
-            projected_execution,
-            raster_started_at_us,
-            raster_started_execution,
-            raster_completed_at_us,
-            raster_completed_execution,
-            slint_damage_rects: Vec::new(),
-        })
-    }
-
-    fn confirm(
-        &mut self,
-        stamp: Option<&LauncherResponseFrameStamp>,
-        receipt: LauncherResponsePresentReceipt,
-        frame: u64,
-        sequence: u16,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        let Some(stamp) = stamp else {
-            return;
-        };
-        let Some(position) = self
-            .pending_confirmations
-            .iter()
-            .position(|index| *index == stamp.record_index)
-        else {
-            return;
-        };
-        let index = self
-            .pending_confirmations
-            .remove(position)
-            .expect("stamped response index");
-        let confirmed_at_us = crate::input_hub::monotonic_us();
-        let confirmed_execution = self.execution_stamp();
-        let first_eligible_vblank = (receipt.refresh_period_us > 0).then(|| {
-            confirmed_at_us.saturating_sub(receipt.post_accepted_at_us)
-                <= receipt.refresh_period_us.saturating_add(3_000)
-        });
-        let record = &mut self.records[index];
-        record.disposition = "confirmed";
-        record.frame = Some(LauncherResponseFrameEvidence {
-            selected: stamp.selected.clone(),
-            projected_at_us: stamp.projected_at_us,
-            projected_execution: stamp.projected_execution,
-            raster_started_at_us: stamp.raster_started_at_us,
-            raster_started_execution: stamp.raster_started_execution,
-            raster_completed_at_us: stamp.raster_completed_at_us,
-            raster_completed_execution: stamp.raster_completed_execution,
-            slint_damage_rects: stamp.slint_damage_rects.clone(),
-            post_accepted_at_us: receipt.post_accepted_at_us,
-            post_accepted_execution: receipt.post_accepted_execution,
-            dirty_rect: receipt.dirty_rect,
-            present_bytes: receipt.present_bytes,
-            wasted_present_bytes: receipt.wasted_present_bytes,
-            cached_present_us: receipt.cached_present_us,
-            hidden_compose_us: receipt.hidden_compose_us,
-            hidden_copy_us: receipt.hidden_copy_us,
-            hidden_publish_us: receipt.hidden_publish_us,
-            hidden_invalid_bytes: receipt.hidden_invalid_bytes,
-            hidden_rect_count: receipt.hidden_rect_count,
-            hidden_catchup_bytes: receipt.hidden_catchup_bytes,
-            hidden_full_copy: receipt.hidden_full_copy,
-            hidden_copy_path: receipt.hidden_copy_path,
-            present_request_us: receipt.present_request_us,
-            set_vga_fb_us: receipt.set_vga_fb_us,
-            present_wait_us: receipt.present_wait_us,
-            posted_sequence: receipt.posted_sequence,
-            post_active_sequence: receipt.post_active_sequence,
-            post_pending_sequence: receipt.post_pending_sequence,
-            post_pending: receipt.post_pending,
-            first_eligible_vblank,
-        });
-        record.confirmed_at_us = Some(confirmed_at_us);
-        record.confirmed_execution = confirmed_execution;
-        record.confirmed_frame = Some(frame);
-        record.confirmed_sequence = Some(sequence);
-        self.update_completion();
-        self.dirty = true;
-    }
-
-    fn record_feedback_confirmation(
-        &mut self,
-        confirmation: &crate::launcher_presentation::SelectionFeedbackConfirmation,
-        frame: u64,
-        sequence: u16,
-    ) {
-        if !self.enabled || self.feedback_records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT {
-            return;
-        }
-        let (phase, event_id, target, dwell_us) = match confirmation {
-            crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
-                event_id,
-                target,
-                ..
-            } => {
-                self.outstanding_feedback.insert(*event_id);
-                ("visible", *event_id, target, None)
-            }
-            crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
-                event_id,
-                target,
-                visible_for,
-                ..
-            } => {
-                self.outstanding_feedback.remove(event_id);
-                self.hidden_feedback_count = self.hidden_feedback_count.saturating_add(1);
-                (
-                    "hidden",
-                    *event_id,
-                    target,
-                    Some(u64::try_from(visible_for.as_micros()).unwrap_or(u64::MAX)),
-                )
-            }
-            crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
-                event_id,
-                target,
-                ..
-            } => {
-                self.outstanding_feedback.remove(event_id);
-                self.cancelled_feedback_count = self.cancelled_feedback_count.saturating_add(1);
-                ("cancelled", *event_id, target, None)
-            }
-        };
-        self.feedback_records.push(LauncherResponseFeedbackRecord {
-            phase,
-            event_id,
-            surface: target.surface.clone(),
-            item: target.item.clone(),
-            confirmed_at_us: crate::input_hub::monotonic_us(),
-            confirmed_frame: frame,
-            confirmed_sequence: sequence,
-            dwell_us,
-        });
-        self.update_completion();
-        self.dirty = true;
-    }
-
-    fn begin_catalog_phase(
-        &self,
-        label: &'static str,
-    ) -> Option<LauncherResponseCatalogPhaseStart> {
-        self.enabled.then(|| LauncherResponseCatalogPhaseStart {
-            label,
-            started_at_us: crate::input_hub::monotonic_us(),
-            input_generation: self
-                .input_probe
-                .as_ref()
-                .map(|probe| probe.observe().generation()),
-        })
-    }
-
-    fn catalog_boundary(&self) -> (u64, Option<u64>) {
-        (
-            crate::input_hub::monotonic_us(),
-            self.input_probe
-                .as_ref()
-                .map(|probe| probe.observe().generation()),
-        )
-    }
-
-    fn scheduler_boundary(&self) -> LauncherResponseSchedulerBoundary {
-        if self.enabled {
-            LauncherResponseSchedulerBoundary {
-                wall_at_us: crate::input_hub::monotonic_us(),
-                input_generation: self
-                    .input_probe
-                    .as_ref()
-                    .map(|probe| probe.observe().generation()),
-                execution: self.execution_stamp(),
-            }
-        } else {
-            LauncherResponseSchedulerBoundary::default()
-        }
-    }
-
-    fn record_scheduler_interval(
-        &mut self,
-        label: &'static str,
-        start: LauncherResponseSchedulerBoundary,
-    ) -> LauncherResponseSchedulerBoundary {
-        let end = self.scheduler_boundary();
-        let duration_us = end.wall_at_us.saturating_sub(start.wall_at_us);
-        let input_changed_during = start
-            .input_generation
-            .zip(end.input_generation)
-            .is_some_and(|(before, after)| before != after);
-        if self.enabled && (input_changed_during || duration_us >= 20_000) {
-            let execution = start
-                .execution
-                .zip(end.execution)
-                .map(|(before, after)| before.interval_json(after, duration_us));
-            self.scheduler_phases.push(serde_json::json!({
-                "label": label,
-                "started_at_us": start.wall_at_us,
-                "completed_at_us": end.wall_at_us,
-                "duration_us": duration_us,
-                "input_generation_before": start.input_generation,
-                "input_generation_after": end.input_generation,
-                "input_changed_during": input_changed_during,
-                "execution": execution,
-            }));
-            self.dirty = true;
-        }
-        end
-    }
-
-    fn record_catalog_interval(
-        &mut self,
-        label: &'static str,
-        start: (u64, Option<u64>),
-        end: (u64, Option<u64>),
-        measured_duration_us: u128,
-    ) {
-        self.catalog_phases.push(serde_json::json!({
-            "label": label,
-            "started_at_us": start.0,
-            "completed_at_us": end.0,
-            "duration_us": end.0.saturating_sub(start.0),
-            "measured_duration_us": measured_duration_us.min(u128::from(u64::MAX)) as u64,
-            "input_generation_before": start.1,
-            "input_generation_after": end.1,
-            "input_changed_during": start.1.zip(end.1)
-                .is_some_and(|(before, after)| before != after),
-        }));
-        self.dirty = true;
-    }
-
-    fn end_catalog_phase(&mut self, phase: Option<LauncherResponseCatalogPhaseStart>) {
-        let Some(phase) = phase else {
-            return;
-        };
-        let completed_at_us = crate::input_hub::monotonic_us();
-        let input_generation_after = self
-            .input_probe
-            .as_ref()
-            .map(|probe| probe.observe().generation());
-        self.catalog_phases.push(serde_json::json!({
-            "label": phase.label,
-            "started_at_us": phase.started_at_us,
-            "completed_at_us": completed_at_us,
-            "duration_us": completed_at_us.saturating_sub(phase.started_at_us),
-            "input_generation_before": phase.input_generation,
-            "input_generation_after": input_generation_after,
-            "input_changed_during": phase.input_generation.zip(input_generation_after)
-                .is_some_and(|(before, after)| before != after),
-        }));
-        self.dirty = true;
-    }
-
-    fn record_lab(&mut self, record: Option<serde_json::Value>) {
-        if self.enabled
-            && let Some(record) = record
-        {
-            self.lab_records.push(record);
-            self.dirty = true;
-        }
-    }
-
-    fn record_input_batch_gate(
-        &mut self,
-        batch: &crate::input_event::InputBatch,
-        fault: Option<InputFault>,
-    ) {
-        if !self.enabled
-            || (batch.events.is_empty() && fault.is_none())
-            || self.lab_records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT
-        {
-            return;
-        }
-        let held_after_last = LogicalAction::ALL
-            .into_iter()
-            .filter(|action| batch.held_after_last.is_held(*action))
-            .map(|action| format!("{action:?}").to_ascii_lowercase())
-            .collect::<Vec<_>>();
-        self.lab_records.push(serde_json::json!({
-            "type": "input-batch-gate",
-            "event_count": batch.events.len(),
-            "first_sequence": batch.first_sequence,
-            "last_sequence": batch.last_sequence,
-            "source_epoch": batch.source_epoch.0,
-            "held_after_last": held_after_last,
-            "health": {
-                "protocol": format!("{:?}", batch.health.protocol).to_ascii_lowercase(),
-                "queue_depth": batch.health.queue_depth,
-                "queue_high_water": batch.health.queue_high_water,
-                "overflow_count": batch.health.overflow_count,
-                "desync_count": batch.health.desync_count,
-                "proxy_generation": batch.health.proxy_generation,
-            },
-            "result": fault
-                .map(|fault| format!("rejected-{fault:?}").to_ascii_lowercase())
-                .unwrap_or_else(|| "accepted".to_string()),
-        }));
-        self.dirty = true;
-    }
-
-    fn record_route_outcome(
-        &mut self,
-        event: crate::input_event::InputEvent,
-        outcome: InputOutcome,
-    ) {
-        if !self.enabled
-            || event.source.kind != InputSourceKind::MainProxy
-            || self.lab_records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT
-        {
-            return;
-        }
-        let (result, context) = match outcome {
-            InputOutcome::Dispatch { context, kind, .. } => (
-                match kind {
-                    DispatchKind::Initial => "dispatch-initial".to_string(),
-                    DispatchKind::Repeat => "dispatch-repeat".to_string(),
-                },
-                Some(context),
-            ),
-            InputOutcome::Released { context, .. } => ("released".to_string(), Some(context)),
-            InputOutcome::WakeScreensaver { context, .. } => {
-                ("wake-screensaver".to_string(), Some(context))
-            }
-            InputOutcome::Consumed { reason, .. } => {
-                (format!("consumed-{reason:?}").to_ascii_lowercase(), None)
-            }
-        };
-        self.lab_records.push(serde_json::json!({
-            "type": "input-route-outcome",
-            "sequence": event.sequence,
-            "source_epoch": event.source_epoch.0,
-            "press_id": event.press_id.0,
-            "proxy_sequence": self.proxy_sequences.get(&event.sequence),
-            "captured_at_us": event.captured_at_us,
-            "published_at_us": self.published_at_us.get(&event.sequence),
-            "drained_at_us": self.drained_at_us.get(&event.sequence),
-            "action": format!("{:?}", event.action).to_ascii_lowercase(),
-            "phase": format!("{:?}", event.phase).to_ascii_lowercase(),
-            "result": result,
-            "context": context.map(|context| serde_json::json!({
-                "kind": format!("{:?}", context.target.kind).to_ascii_lowercase(),
-                "owner": context.target.owner,
-                "generation": context.generation,
-            })),
-            "launcher_state": self.state.json(),
-        }));
-        self.dirty = true;
-    }
-
-    fn update_completion(&mut self) {
-        if self.complete || self.expected_confirmed == 0 {
-            return;
-        }
-        let confirmed = self
-            .records
-            .iter()
-            .filter(|record| record.disposition == "confirmed")
-            .count();
-        let resolved_feedback = self
-            .hidden_feedback_count
-            .saturating_add(self.cancelled_feedback_count);
-        let required_non_feedback_confirmations = self
-            .expected_confirmed
-            .saturating_sub(self.expected_feedback_hidden);
-        if confirmed >= required_non_feedback_confirmations
-            && resolved_feedback >= self.expected_feedback_hidden
-            && self.outstanding_feedback.is_empty()
-        {
-            self.complete = true;
-            self.frame_trace_finalize_pending = true;
-        }
-    }
-
-    fn take_frame_trace_finalize_pending(&mut self) -> bool {
-        std::mem::take(&mut self.frame_trace_finalize_pending)
-    }
-
-    fn launcher_profile_start_ready(&self) -> bool {
-        if !self.enabled {
-            return false;
-        }
-        let mut confirmed = self
-            .records
-            .iter()
-            .filter(|record| record.disposition == "confirmed");
-        confirmed.next().is_some_and(|record| {
-            confirmed.next().is_none()
-                && record.after.as_ref().is_some_and(|state| {
-                    state.menu_id == "menu:computers"
-                        && state.selected_item_id == "menu:computers:acorn"
-                })
-        })
-    }
-
-    fn start_pmu_if_ready(&mut self) {
-        if self.pmu_enabled && self.launcher_profile_start_ready() {
-            self.pmu_active = true;
-        }
-    }
-
-    fn finish_pmu(&mut self) -> Result<(), String> {
-        if !self.pmu_enabled {
-            return Ok(());
-        }
-        self.pmu_active = false;
-        let profile = mister_magik_perf_events::take_thread_profile();
-        let passed = profile.enabled
-            && profile.failure.is_none()
-            && profile.dropped_spans == 0
-            && !profile.records.is_empty();
-        let payload = serde_json::json!({
-            "schema": "mister-magik-launcher-response-pmu-v1",
-            "run_id": self.run_id,
-            "state": if passed { "complete" } else { "failed" },
-            "profile": profile,
-        });
-        let path = self
-            .pmu_completion_path
-            .as_deref()
-            .ok_or_else(|| "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE is missing".to_owned())?;
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        std::fs::write(path, format!("{payload}\n")).map_err(|error| error.to_string())?;
-        if passed {
-            Ok(())
-        } else {
-            Err("launcher response PMU profile is incomplete".into())
-        }
-    }
-
-    fn observe_presentation(
-        &mut self,
-        telemetry: mister_magik_latch_contract::PresentationTelemetry,
-        refresh_period_us: u64,
-        latch_drop_count: u32,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        let snapshot = LauncherResponsePresentationSnapshot {
-            owned_vblank_count: telemetry.owned_vblank_count,
-            presented_vblank_count: telemetry.presented_vblank_count,
-            repeated_vblank_count: telemetry.repeated_vblank_count,
-            ownership_loss_count: telemetry.ownership_loss_count,
-            latch_drop_count,
-            magik_ownership: telemetry.magik_ownership(),
-        };
-        self.presentation_start.get_or_insert(snapshot);
-        self.presentation_end = Some(snapshot);
-        self.refresh_period_us = refresh_period_us;
-        self.dirty = true;
-    }
-
-    fn snapshot(&self) -> LauncherResponseTraceSnapshot {
-        self.snapshot_with_records(
-            self.complete,
-            self.feedback_records.clone(),
-            if self.complete {
-                self.lab_records.clone()
-            } else {
-                Default::default()
-            },
-        )
-    }
-
-    fn snapshot_with_records(
-        &self,
-        complete: bool,
-        feedback_records: Vec<LauncherResponseFeedbackRecord>,
-        lab_records: Vec<serde_json::Value>,
-    ) -> LauncherResponseTraceSnapshot {
-        LauncherResponseTraceSnapshot {
-            records: self.records.clone(),
-            feedback_records,
-            refresh_period_us: self.refresh_period_us,
-            presentation_start: self.presentation_start,
-            presentation_end: self.presentation_end,
-            run_id: self.run_id.clone(),
-            expected_confirmed: self.expected_confirmed,
-            expected_feedback_hidden: self.expected_feedback_hidden,
-            hidden_feedback_count: self.hidden_feedback_count,
-            cancelled_feedback_count: self.cancelled_feedback_count,
-            outstanding_feedback_count: self.outstanding_feedback.len(),
-            complete,
-            execution_enabled: self.execution_enabled,
-            queue_high_water: self.queue_high_water,
-            catalog_phases: if complete {
-                self.catalog_phases.clone()
-            } else {
-                Default::default()
-            },
-            scheduler_phases: if complete {
-                self.scheduler_phases.clone()
-            } else {
-                Default::default()
-            },
-            lab_records,
-            input_reader_policy: self.input_reader_policy.clone(),
-        }
-    }
-
-    fn partial_snapshot(&self) -> (LauncherResponseTraceSnapshot, usize, usize, usize) {
-        let confirmed_count = self
-            .records
-            .iter()
-            .filter(|record| record.disposition == "confirmed")
-            .count();
-        let feedback_count = self.feedback_records.len();
-        let feedback_records = self.feedback_records[self.partial_feedback_sent..].to_vec();
-        let lab_count = self.lab_records.len();
-        let lab_records = self.lab_records[self.partial_lab_sent..].to_vec();
-        (
-            self.snapshot_with_records(false, feedback_records, lab_records),
-            confirmed_count,
-            feedback_count,
-            lab_count,
-        )
-    }
-
-    fn flush(&mut self) {
-        if !self.enabled || !self.dirty {
-            return;
-        }
-        if !self.complete
-            && self.last_partial_flush_at.elapsed() < LAUNCHER_RESPONSE_PARTIAL_FLUSH_INTERVAL
-        {
-            return;
-        }
-        let (snapshot, partial_counts) = if self.complete {
-            (self.snapshot(), None)
-        } else {
-            let (snapshot, confirmed_count, feedback_count, lab_count) = self.partial_snapshot();
-            (snapshot, Some((confirmed_count, feedback_count, lab_count)))
-        };
-        if self.writer.as_ref().is_some_and(|writer| {
-            writer
-                .send(LauncherResponseTraceWrite {
-                    snapshot,
-                    completion_path: self.completion_path.clone(),
-                })
-                .is_ok()
-        }) || self.writer.is_none()
-        {
-            if let Some((confirmed_count, feedback_count, lab_count)) = partial_counts {
-                self.partial_confirmed_sent = confirmed_count;
-                self.partial_feedback_sent = feedback_count;
-                self.partial_lab_sent = lab_count;
-            }
-            self.dirty = false;
-            self.last_partial_flush_at = Instant::now();
-        }
-    }
-}
-
-impl LauncherResponseTraceSnapshot {
-    fn merge_partial(&mut self, next: Self) {
-        debug_assert!(!self.complete && !next.complete);
-        debug_assert_eq!(self.run_id, next.run_id);
-        debug_assert_eq!(self.execution_enabled, next.execution_enabled);
-        self.records = next.records;
-        self.feedback_records.extend(next.feedback_records);
-        self.lab_records.extend(next.lab_records);
-        self.refresh_period_us = next.refresh_period_us;
-        self.presentation_start = self.presentation_start.or(next.presentation_start);
-        self.presentation_end = next.presentation_end;
-        self.expected_confirmed = next.expected_confirmed;
-        self.expected_feedback_hidden = next.expected_feedback_hidden;
-        self.hidden_feedback_count = next.hidden_feedback_count;
-        self.cancelled_feedback_count = next.cancelled_feedback_count;
-        self.outstanding_feedback_count = next.outstanding_feedback_count;
-        self.queue_high_water = next.queue_high_water;
-        if next.input_reader_policy.is_some() {
-            self.input_reader_policy = next.input_reader_policy;
-        }
-    }
-
-    fn payload(&self) -> String {
-        let records = self
-            .records
-            .iter()
-            .map(|record| {
-                let frame_evidence = record.frame.as_ref().map(|frame| {
-                    let slint_damage_rects = frame
-                        .slint_damage_rects
-                        .iter()
-                        .map(|(x0, y0, x1, y1)| {
-                            serde_json::json!({
-                                "x0": x0,
-                                "y0": y0,
-                                "x1": x1,
-                                "y1": y1,
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let present_cost = serde_json::json!({
-                        "present_bytes": frame.present_bytes,
-                        "wasted_present_bytes": frame.wasted_present_bytes,
-                        "cached_present_us": frame.cached_present_us,
-                        "hidden_compose_us": frame.hidden_compose_us,
-                        "hidden_copy_us": frame.hidden_copy_us,
-                        "hidden_publish_us": frame.hidden_publish_us,
-                        "hidden_invalid_bytes": frame.hidden_invalid_bytes,
-                        "hidden_rect_count": frame.hidden_rect_count,
-                        "hidden_catchup_bytes": frame.hidden_catchup_bytes,
-                        "hidden_full_copy": frame.hidden_full_copy,
-                        "hidden_copy_path": frame.hidden_copy_path,
-                        "present_request_us": frame.present_request_us,
-                        "set_vga_fb_us": frame.set_vga_fb_us,
-                        "present_wait_us": frame.present_wait_us,
-                    });
-                    let execution = self.execution_enabled.then(|| serde_json::json!({
-                        "stamps": {
-                            "projected": frame.projected_execution.map(ThreadExecutionStamp::json),
-                            "raster_started": frame.raster_started_execution.map(ThreadExecutionStamp::json),
-                            "raster_completed": frame.raster_completed_execution.map(ThreadExecutionStamp::json),
-                            "post_accepted": frame.post_accepted_execution.map(ThreadExecutionStamp::json),
-                        },
-                        "intervals": {
-                            "projection_to_raster": launcher_response_execution_interval(
-                                frame.projected_execution,
-                                frame.raster_started_execution,
-                                Some(frame.projected_at_us),
-                                Some(frame.raster_started_at_us),
-                            ),
-                            "raster": launcher_response_execution_interval(
-                                frame.raster_started_execution,
-                                frame.raster_completed_execution,
-                                Some(frame.raster_started_at_us),
-                                Some(frame.raster_completed_at_us),
-                            ),
-                            "raster_to_post": launcher_response_execution_interval(
-                                frame.raster_completed_execution,
-                                frame.post_accepted_execution,
-                                Some(frame.raster_completed_at_us),
-                                Some(frame.post_accepted_at_us),
-                            ),
-                        },
-                    }));
-                    serde_json::json!({
-                        "selected": frame.selected.json(),
-                        "projected_at_us": frame.projected_at_us,
-                        "raster_started_at_us": frame.raster_started_at_us,
-                        "raster_completed_at_us": frame.raster_completed_at_us,
-                        "slint_damage_rects": slint_damage_rects,
-                        "post_accepted_at_us": frame.post_accepted_at_us,
-                        "dirty_rect": frame.dirty_rect.map(|(x0, y0, x1, y1)| serde_json::json!({
-                            "x0": x0,
-                            "y0": y0,
-                            "x1": x1,
-                            "y1": y1,
-                        })),
-                        "present_cost": present_cost,
-                        "posted_sequence": frame.posted_sequence,
-                        "post_active_sequence": frame.post_active_sequence,
-                        "post_pending_sequence": frame.post_pending_sequence,
-                        "post_pending": frame.post_pending,
-                        "first_eligible_vblank": frame.first_eligible_vblank,
-                        "execution": execution,
-                    })
-                });
-                let execution = self.execution_enabled.then(|| serde_json::json!({
-                    "stamps": {
-                        "drained": record.drained_execution.map(ThreadExecutionStamp::json),
-                        "dispatched": record.dispatch_execution.map(ThreadExecutionStamp::json),
-                        "state_applied": record.state_applied_execution.map(ThreadExecutionStamp::json),
-                        "confirmed": record.confirmed_execution.map(ThreadExecutionStamp::json),
-                    },
-                    "intervals": {
-                        "drain_to_dispatch": launcher_response_execution_interval(
-                            record.drained_execution,
-                            record.dispatch_execution,
-                            record.drained_at_us,
-                            Some(record.dispatch_at_us),
-                        ),
-                        "dispatch_to_state": launcher_response_execution_interval(
-                            record.dispatch_execution,
-                            record.state_applied_execution,
-                            Some(record.dispatch_at_us),
-                            record.state_applied_at_us,
-                        ),
-                        "state_to_projection": record.frame.as_ref().and_then(|frame| {
-                            launcher_response_execution_interval(
-                                record.state_applied_execution,
-                                frame.projected_execution,
-                                record.state_applied_at_us,
-                                Some(frame.projected_at_us),
-                            )
-                        }),
-                        "post_to_confirmation": record.frame.as_ref().and_then(|frame| {
-                            launcher_response_execution_interval(
-                                frame.post_accepted_execution,
-                                record.confirmed_execution,
-                                Some(frame.post_accepted_at_us),
-                                record.confirmed_at_us,
-                            )
-                        }),
-                    },
-                }));
-                serde_json::json!({
-                    "action": format!("{:?}", record.action).to_ascii_lowercase(),
-                    "trigger": match record.trigger {
-                        DispatchKind::Initial => "initial",
-                        DispatchKind::Repeat => "repeat",
-                    },
-                    "press_id": record.press_id,
-                    "proxy_sequence": record.proxy_sequence,
-                    "proxy_kernel_at_us": record.proxy_kernel_at_us,
-                    "input_reader": record.input_reader.map(|reader| serde_json::json!({
-                        "poll_returned_at_us": reader.poll_returned_at_us,
-                        "poll_thread_cpu_us": reader.poll_thread_cpu_us,
-                        "poll_cpu": reader.poll_cpu,
-                        "read_started_at_us": reader.read_started_at_us,
-                        "captured_thread_cpu_us": reader.captured_thread_cpu_us,
-                        "captured_cpu": reader.captured_cpu,
-                        "poll_runtime_delta_us": reader.poll_runtime_delta_us,
-                        "poll_run_delay_delta_us": reader.poll_run_delay_delta_us,
-                        "poll_timeslice_delta": reader.poll_timeslice_delta,
-                    })),
-                    "captured_at_us": record.captured_at_us,
-                    "published_at_us": record.published_at_us,
-                    "drained_at_us": record.drained_at_us,
-                    "dispatch_at_us": record.dispatch_at_us,
-                    "capture_to_publish_us": record.published_at_us.map(|at| at.saturating_sub(record.captured_at_us)),
-                    "publish_to_drain_us": record.published_at_us.zip(record.drained_at_us).map(|(published, drained)| drained.saturating_sub(published)),
-                    "dispatch_latency_us": record.dispatch_at_us.saturating_sub(record.captured_at_us),
-                    "state_applied_at_us": record.state_applied_at_us,
-                    "before": record.before.json(),
-                    "after": record.after.as_ref().map(LauncherResponseState::json),
-                    "disposition": record.disposition,
-                    "frame": frame_evidence,
-                    "confirmed_at_us": record.confirmed_at_us,
-                    "confirmed_latency_us": record.confirmed_at_us.map(|at| at.saturating_sub(record.captured_at_us)),
-                    "confirmed_frame": record.confirmed_frame,
-                    "confirmed_sequence": record.confirmed_sequence,
-                    "execution": execution,
-                })
-            })
-            .collect::<Vec<_>>();
-        let feedback_records = self
-            .feedback_records
-            .iter()
-            .map(|record| {
-                serde_json::json!({
-                    "phase": record.phase,
-                    "event_id": record.event_id,
-                    "surface": record.surface,
-                    "item": record.item,
-                    "confirmed_at_us": record.confirmed_at_us,
-                    "confirmed_frame": record.confirmed_frame,
-                    "confirmed_sequence": record.confirmed_sequence,
-                    "dwell_us": record.dwell_us,
-                })
-            })
-            .collect::<Vec<_>>();
-        let presentation = self
-            .presentation_start
-            .zip(self.presentation_end)
-            .map(|(start, end)| {
-                serde_json::json!({
-                    "source": "fpga-owned-vblank-telemetry",
-                    "refresh_period_us": self.refresh_period_us,
-                    "start": {
-                        "owned_vblank_count": start.owned_vblank_count,
-                        "presented_vblank_count": start.presented_vblank_count,
-                        "repeated_vblank_count": start.repeated_vblank_count,
-                        "ownership_loss_count": start.ownership_loss_count,
-                        "latch_drop_count": start.latch_drop_count,
-                        "magik_ownership": start.magik_ownership,
-                    },
-                    "end": {
-                        "owned_vblank_count": end.owned_vblank_count,
-                        "presented_vblank_count": end.presented_vblank_count,
-                        "repeated_vblank_count": end.repeated_vblank_count,
-                        "ownership_loss_count": end.ownership_loss_count,
-                        "latch_drop_count": end.latch_drop_count,
-                        "magik_ownership": end.magik_ownership,
-                    },
-                    "repeated_vblank_delta": end.repeated_vblank_count.wrapping_sub(start.repeated_vblank_count),
-                    "ownership_loss_delta": end.ownership_loss_count.wrapping_sub(start.ownership_loss_count),
-                    "latch_drop_delta": end.latch_drop_count.wrapping_sub(start.latch_drop_count),
-                })
-            });
-        let build_identity = crate::build_identity::BuildIdentity::current();
-        format!(
-            "{}\n",
-            serde_json::json!({
-                "schema": "mister-magik-launcher-response-trace-v6",
-                "run_id": self.run_id,
-                "completion": {
-                    "state": if self.complete { "complete" } else { "running" },
-                    "expected_confirmed": self.expected_confirmed,
-                    "expected_feedback_hidden": self.expected_feedback_hidden,
-                    "confirmed": self.records.iter().filter(|record| record.disposition == "confirmed").count(),
-                    "feedback_hidden": self.hidden_feedback_count,
-                    "feedback_cancelled": self.cancelled_feedback_count,
-                    "outstanding_feedback": self.outstanding_feedback_count,
-                },
-                "runtime": build_identity,
-                "latch_protocol": 5,
-                "queue_high_water": self.queue_high_water,
-                "execution_attribution": {
-                    "enabled": self.execution_enabled,
-                    "source": "clock-thread-cputime-getrusage-thread-sched-getcpu",
-                    "on_cpu_tolerance_us": 250,
-                },
-                "input_reader_policy": self.input_reader_policy.as_ref().map(|policy| serde_json::json!({
-                    "role": policy.role,
-                    "intended_nice": policy.intended_nice,
-                    "actual_nice": policy.actual_nice,
-                    "intended_affinity": policy.intended_affinity,
-                    "allowed_cpus": policy.allowed_cpus,
-                    "processor": policy.processor,
-                    "scheduler_policy": policy.scheduler_policy,
-                    "scheduler_priority": policy.scheduler_priority,
-                    "thread_id": policy.thread_id,
-                    "nice_status": policy.nice_status,
-                    "affinity_status": policy.affinity_status,
-                    "intended_scheduler": policy.intended_scheduler,
-                    "scheduler_status": policy.scheduler_status,
-                })),
-                "records": records,
-                "feedback_records": feedback_records,
-                "catalog_phases": &self.catalog_phases,
-                "scheduler_phases": &self.scheduler_phases,
-                "lab_records": &self.lab_records,
-                "presentation": presentation,
-            })
-        )
-    }
-}
-
-fn response_trace_volatile_path(path: Option<&str>) -> Option<String> {
-    path.filter(|path| path.starts_with("/tmp/") && path.len() > "/tmp/".len())
-        .map(str::to_owned)
-}
-
-fn spawn_launcher_response_trace_writer(
-    completion_path: Option<String>,
-) -> Sender<LauncherResponseTraceWrite> {
-    let (sender, receiver) = channel::<LauncherResponseTraceWrite>();
-    let _ = std::thread::Builder::new()
-        .name("launcher-response-trace".to_string())
-        .spawn(move || {
-            let trace_path = Path::new(LAUNCHER_RESPONSE_TRACE_PATH);
-            let temporary_path = trace_path.with_extension("json.pending");
-            let mut partial_snapshot: Option<LauncherResponseTraceSnapshot> = None;
-            if let Some(parent) = trace_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            while let Ok(write) = receiver.recv() {
-                let LauncherResponseTraceWrite {
-                    snapshot,
-                    completion_path: write_completion_path,
-                } = write;
-                let complete = snapshot.complete;
-                if complete {
-                    partial_snapshot = Some(snapshot);
-                } else if let Some(accumulated) = partial_snapshot.as_mut() {
-                    accumulated.merge_partial(snapshot);
-                } else {
-                    partial_snapshot = Some(snapshot);
-                }
-                let wrote = std::fs::write(
-                    &temporary_path,
-                    partial_snapshot
-                        .as_ref()
-                        .expect("response trace snapshot")
-                        .payload(),
-                )
-                .and_then(|()| std::fs::rename(&temporary_path, trace_path))
-                .is_ok();
-                if wrote
-                    && complete
-                    && let Some(path) = write_completion_path.or_else(|| completion_path.clone())
-                {
-                    let _ = std::fs::write(path, b"complete\n");
-                }
-            }
-        });
-    sender
-}
-
-impl InputIntegrityTrace {
-    fn new(enabled: bool, now: Instant) -> Self {
-        if enabled {
-            let _ = std::fs::remove_file(INPUT_INTEGRITY_TRACE_PATH);
-        }
-        Self {
-            enabled,
-            records: VecDeque::new(),
-            initial_presses: 0,
-            releases: 0,
-            repeats: 0,
-            queue_high_water: 0,
-            dispatch_latencies_us: Vec::new(),
-            dirty: enabled,
-            last_write: now,
-        }
-    }
-
-    fn observe_batch(&mut self, batch: &crate::input_event::InputBatch) {
-        if !self.enabled {
-            return;
-        }
-        self.queue_high_water = self.queue_high_water.max(batch.health.queue_high_water);
-        self.dirty = true;
-    }
-
-    fn record_outcome(&mut self, outcome: InputOutcome) {
-        if !self.enabled {
-            return;
-        }
-        match outcome {
-            InputOutcome::Dispatch { event, kind, .. } => self.record_dispatch(event, kind),
-            InputOutcome::Released { event, .. } => self.record_event(event, "release"),
-            _ => {}
-        }
-    }
-
-    fn record_dispatch(&mut self, event: crate::input_event::InputEvent, kind: DispatchKind) {
-        if event.source.kind != InputSourceKind::MainProxy {
-            return;
-        }
-        match kind {
-            DispatchKind::Initial => self.initial_presses = self.initial_presses.saturating_add(1),
-            DispatchKind::Repeat => self.repeats = self.repeats.saturating_add(1),
-        }
-        let kind = match kind {
-            DispatchKind::Initial => "initial",
-            DispatchKind::Repeat => "repeat",
-        };
-        self.record_event(event, kind);
-    }
-
-    fn record_event(&mut self, event: crate::input_event::InputEvent, kind: &'static str) {
-        if event.source.kind != InputSourceKind::MainProxy {
-            return;
-        }
-        if event.phase == InputPhase::Released {
-            self.releases = self.releases.saturating_add(1);
-        }
-        let dispatch_at_us = crate::input_hub::monotonic_us();
-        let dispatch_latency_us = dispatch_at_us.saturating_sub(event.captured_at_us);
-        if kind != "repeat" {
-            self.dispatch_latencies_us.push(dispatch_latency_us);
-        }
-        if self.records.len() == INPUT_INTEGRITY_TRACE_LIMIT {
-            self.records.pop_front();
-        }
-        self.records.push_back(serde_json::json!({
-            "sequence": event.sequence,
-            "press_id": event.press_id.0,
-            "source_epoch": event.source_epoch.0,
-            "action": format!("{:?}", event.action).to_ascii_lowercase(),
-            "phase": match event.phase {
-                InputPhase::Pressed => "pressed",
-                InputPhase::Released => "released",
-            },
-            "kind": kind,
-            "captured_at_us": event.captured_at_us,
-            "dispatch_at_us": dispatch_at_us,
-            "dispatch_latency_us": dispatch_latency_us,
-        }));
-        self.dirty = true;
-    }
-
-    fn flush_if_due(&mut self, now: Instant, router: &InputRouter) {
-        if !self.enabled
-            || !self.dirty
-            || now.saturating_duration_since(self.last_write) < Duration::from_millis(50)
-        {
-            return;
-        }
-        let mut latencies = self.dispatch_latencies_us.clone();
-        latencies.sort_unstable();
-        let p99_index = latencies.len().saturating_sub(1) * 99 / 100;
-        let payload = serde_json::json!({
-            "schema": "mister-magik-input-integrity-trace-v1",
-            "initial_presses": self.initial_presses,
-            "releases": self.releases,
-            "repeats": self.repeats,
-            "final_down_held": router.action_held(LogicalAction::Down),
-            "final_right_held": router.action_held(LogicalAction::Right),
-            "queue_high_water": self.queue_high_water,
-            "dispatch_p99_us": latencies.get(p99_index).copied().unwrap_or(0),
-            "dispatch_max_us": latencies.last().copied().unwrap_or(0),
-            "records": self.records,
-        });
-        if let Some(parent) = std::path::Path::new(INPUT_INTEGRITY_TRACE_PATH).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if std::fs::write(INPUT_INTEGRITY_TRACE_PATH, format!("{}\n", payload)).is_ok() {
-            self.dirty = false;
-            self.last_write = now;
-        }
     }
 }
 
@@ -3210,11 +997,6 @@ impl LauncherWakeReasons {
     fn is_empty(self) -> bool {
         self.0 == 0
     }
-
-    #[inline]
-    fn bits(self) -> u64 {
-        self.0
-    }
 }
 
 impl std::ops::BitOr for LauncherWakeReasons {
@@ -3269,18 +1051,6 @@ fn startup_catalog_ready_for_reveal(
     refresh_done: bool,
 ) -> bool {
     catalog_ready && (!intro_active || refresh_done)
-}
-
-fn cold_boot_profile_completion_ready(
-    includes_catalog_build: bool,
-    catalog_ready: bool,
-    refresh_done: bool,
-) -> bool {
-    if includes_catalog_build {
-        refresh_done
-    } else {
-        catalog_ready
-    }
 }
 
 fn launcher_bridge_sync_plan(
@@ -3505,7 +1275,6 @@ impl CatalogScanBlink {
 #[allow(clippy::too_many_arguments)]
 fn can_preempt_home_latch_wait(
     screen: Screen,
-    response_frame_stamped: bool,
     feedback_frame_stamped: bool,
     transition_active: bool,
     screensaver_active: bool,
@@ -3514,7 +1283,6 @@ fn can_preempt_home_latch_wait(
     startup_intro_frame_posted: bool,
 ) -> bool {
     screen == Screen::Home
-        && !response_frame_stamped
         && !feedback_frame_stamped
         && !transition_active
         && !screensaver_active
@@ -3778,8 +1546,7 @@ fn begin_cold_collection_entry(
     requested_at: Instant,
     trace_source: &'static str,
     open_game_list_directly: bool,
-    arcade_entry_latency: &mut ArcadeEntryLatencyTracker,
-    lifecycle: &LauncherLifecycle,
+    system_entry: &mut SystemEntryAdoption,
     start: Instant,
 ) -> ColdCollectionEntryStart {
     // The Arcade shell exists independently of installed games. Do not ask
@@ -3841,14 +1608,7 @@ fn begin_cold_collection_entry(
     }
     let pending = (hydration_requested || nav.catalog_system_hydration_is_loading(collection_id))
         .then(|| {
-            arcade_entry_latency.record_collection_enter_input(
-                start,
-                requested_at,
-                lifecycle,
-                collection_id,
-                trace_source,
-                false,
-            );
+            system_entry.note_enter();
             print_startup_event(
                 start,
                 "catalog_system_entry_pending",
@@ -4366,13 +2126,10 @@ struct LatchWait<'a> {
     frame_t3: Instant,
     #[cfg(feature = "tooling")]
     frame_t4: Instant,
-    gui_profiling: &'a GuiProfilingController,
     input_observation: crate::input_hub::InputObservation,
     launcher_card_home:
         &'a mut Option<crate::ui_runner::launcher_card_home::LauncherCardHomeSession>,
     launcher_presenter: &'a mut LauncherPresenter,
-    launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
-    launcher_response_trace: &'a mut LauncherResponseTrace,
     nav: &'a LauncherNav,
     pacer: &'a mut VsyncPacer,
     pad: &'a PadPool,
@@ -4380,7 +2137,6 @@ struct LatchWait<'a> {
     preview_presentation_commit: &'a Option<crate::preview_state::PreviewPresentationCommit>,
     #[cfg(feature = "tooling")]
     run_start: Instant,
-    scheduler_phase: &'a mut LauncherResponseSchedulerBoundary,
     screensaver: &'a ScreensaverControl,
     selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
     startup_intro_frame_posted: bool,
@@ -4432,12 +2188,9 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
         frame_t3,
         #[cfg(feature = "tooling")]
         frame_t4,
-        gui_profiling,
         input_observation,
         launcher_card_home,
         launcher_presenter,
-        launcher_response_frame_stamp,
-        launcher_response_trace,
         nav,
         pacer,
         pad,
@@ -4445,7 +2198,6 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
         preview_presentation_commit,
         #[cfg(feature = "tooling")]
         run_start,
-        scheduler_phase,
         screensaver,
         selection_feedback_stamp,
         startup_intro_frame_posted,
@@ -4482,11 +2234,8 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
         }
     }
     let wait_start = Instant::now();
-    *scheduler_phase = launcher_response_trace
-        .record_scheduler_interval("post-submit-accounting", *scheduler_phase);
     let interruptible_home_wait = can_preempt_home_latch_wait(
         nav.screen,
-        launcher_response_frame_stamp.is_some(),
         !selection_feedback_stamp.entries.is_empty(),
         director.navigation.is_active()
             || director.orientation.is_active()
@@ -4506,13 +2255,6 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
     }) {
         VsyncWaitOutcome::Pace(pace) => pace,
         VsyncWaitOutcome::Interrupted => {
-            launcher_response_trace.record_lab(Some(serde_json::json!({
-                "phase": "latch-wait-interrupted-input",
-                "interrupted_at_us": crate::input_hub::monotonic_us(),
-                "posted_sequence": presented_frame.main_present_sequence,
-            })));
-            let _ = launcher_response_trace
-                .record_scheduler_interval("latch-confirmation-wait-interrupted", *scheduler_phase);
             record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
             window.request_redraw();
             record_launcher_frame_phase!(LauncherFramePhase::Yielded);
@@ -4553,18 +2295,14 @@ fn post_accounting_and_latch_wait(ctx: LatchWait<'_>) -> ControlFlow<(), LatchWa
     };
     let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
     let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
-    let completion_poll_pmu = gui_profiling.span("gui.latch.completion-polling");
     let completion = wait_for_latch_completion(
         f,
         presented_frame.main_present_sequence,
         completion_remaining,
     );
-    drop(completion_poll_pmu);
     let wait_done = Instant::now();
     #[cfg(feature = "tooling")]
     super::launcher_frame_accounting::capture_evidence_cpu(tooling_frame_evidence, 5, run_start);
-    *scheduler_phase = launcher_response_trace
-        .record_scheduler_interval("latch-confirmation-wait", *scheduler_phase);
     let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
     let wait_trace = LauncherPacingTrace::from_pace_with_present_phase(
         Some(&pace),
@@ -4857,12 +2595,12 @@ fn record_tooling_presentation(ctx: ToolingPresentation<'_>) {
                                         telemetry_observed_us: duration_us(run_start, observed_at),
                                         refresh_period_us: pacer.period_us(),
                                         frame_start_phase_us,
-                                        present_start_phase_us: launcher_response_u64(presented_frame.present_phase_us),
+                                        present_start_phase_us: u128_to_u64(presented_frame.present_phase_us),
                                         tooling_tick_us,
-                                        pre_render_wait_us: launcher_response_u64(pre_render_wait_us),
-                                        hidden_copy_us: launcher_response_u64(presented_frame.main_present_hidden_copy_us),
-                                        hidden_publish_us: launcher_response_u64(presented_frame.main_present_hidden_publish_us),
-                                        latch_request_us: launcher_response_u64(presented_frame.main_present_request_us),
+                                        pre_render_wait_us: u128_to_u64(pre_render_wait_us),
+                                        hidden_copy_us: u128_to_u64(presented_frame.main_present_hidden_copy_us),
+                                        hidden_publish_us: u128_to_u64(presented_frame.main_present_hidden_publish_us),
+                                        latch_request_us: u128_to_u64(presented_frame.main_present_request_us),
                                         post_status_us: presented_frame.main_present_wait_us,
                                         completion_poll_us: presented_frame.main_present_completion_poll_wall_us,
                                         previous_active_sequence: previous.active_sequence,
@@ -4950,10 +2688,9 @@ fn record_tooling_presentation(ctx: ToolingPresentation<'_>) {
 struct ConfirmedPresent<'a> {
     accepted_and_active_confirmed: &'a mut bool,
     animation_now: Instant,
+    system_entry: &'a mut SystemEntryAdoption,
     #[cfg(feature = "tooling")]
     app: &'a slint_ui::launcher::Launcher,
-    arcade_entry_latency: &'a mut ArcadeEntryLatencyTracker,
-    bridge_churn_playback: &'a mut BridgeChurnPlayback,
     #[cfg(feature = "tooling")]
     card_direct_frame_rendered: bool,
     #[cfg(feature = "tooling")]
@@ -4962,12 +2699,7 @@ struct ConfirmedPresent<'a> {
     card_presentation_measurement_enabled: bool,
     #[cfg(feature = "tooling")]
     card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
-    catalog: &'a ArcadeCatalog,
-    catalog_version: usize,
-    composition_status: UiCompositionStatus,
-    confirm_visible: bool,
     confirmed_present_sequence: &'a mut u16,
-    crt_backdrop: &'a Option<CrtBackdropController>,
     #[cfg(feature = "tooling")]
     custom_draw_done: Instant,
     #[cfg(feature = "tooling")]
@@ -4986,20 +2718,14 @@ struct ConfirmedPresent<'a> {
     frame_t3: Instant,
     #[cfg(feature = "tooling")]
     frame_t4: Instant,
-    frames: u64,
     full_screen_transition_live_endpoint_rendered: bool,
     full_screen_transition_release_raster_rendered: bool,
-    gui_profiling: &'a mut GuiProfilingController,
-    gui_raster_phase: GuiRasterProfilePhase,
     #[cfg(feature = "tooling")]
     home_horizontal_input_held: bool,
     #[cfg(feature = "tooling")]
     launcher_card_home: &'a Option<crate::ui_runner::launcher_card_home::LauncherCardHomeSession>,
     launcher_presenter: &'a mut LauncherPresenter,
     launcher_readiness: &'a mut crate::ui_runner::launcher_readiness::LauncherReadiness,
-    launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
-    launcher_response_present_receipt: LauncherResponsePresentReceipt,
-    launcher_response_trace: &'a mut LauncherResponseTrace,
     layer_target: &'a mut LayerTarget<'a>,
     lifecycle: &'a LauncherLifecycle,
     nav: &'a LauncherNav,
@@ -5019,27 +2745,19 @@ struct ConfirmedPresent<'a> {
     post_timing: Option<(Instant, Instant)>,
     #[cfg(feature = "tooling")]
     pre_render_wait_us: u128,
-    prepare_us: u128,
     presented_copied_rows: u32,
     presented_frame: &'a LauncherPresentedFrame,
-    preview: &'a PreviewState,
-    preview_compositor: &'a Option<PreviewCompositor>,
-    preview_route: PreviewRoutePolicy,
-    profile_config: &'a crate::process_config::ProfileProcessConfig,
     readiness_post: Option<crate::ui_runner::launcher_readiness::ConfirmedLatchPost>,
     readiness_source_evidence:
         Option<crate::ui_runner::launcher_readiness::PostedSourceFrameEvidence>,
-    redraw_pending_for_trace: bool,
     #[cfg(feature = "tooling")]
     run_start: Instant,
     #[cfg(feature = "tooling")]
     screensaver: &'a ScreensaverControl,
-    screensaver_cpu_profile: &'a mut cpu_profile::ScreensaverProfiler,
     selection_feedback_confirmed_at: &'a mut Option<Instant>,
     start: Instant,
     startup_intro: &'a mut Option<StartupIntroSession>,
     startup_intro_frame_posted: bool,
-    system_entry_cpu_profile: &'a mut Option<crate::cpu_profile::CpuProfiler>,
     #[cfg(feature = "tooling")]
     tooling: &'a mut Option<mister_magik_tooling_support::Session>,
     #[cfg(feature = "tooling")]
@@ -5069,8 +2787,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         animation_now,
         #[cfg(feature = "tooling")]
         app,
-        arcade_entry_latency,
-        bridge_churn_playback,
         #[cfg(feature = "tooling")]
         card_direct_frame_rendered,
         #[cfg(feature = "tooling")]
@@ -5079,12 +2795,7 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         card_presentation_measurement_enabled,
         #[cfg(feature = "tooling")]
         card_work_timing,
-        catalog,
-        catalog_version,
-        composition_status,
-        confirm_visible,
         confirmed_present_sequence,
-        crt_backdrop,
         #[cfg(feature = "tooling")]
         custom_draw_done,
         #[cfg(feature = "tooling")]
@@ -5103,20 +2814,14 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         frame_t3,
         #[cfg(feature = "tooling")]
         frame_t4,
-        frames,
         full_screen_transition_live_endpoint_rendered,
         full_screen_transition_release_raster_rendered,
-        gui_profiling,
-        gui_raster_phase,
         #[cfg(feature = "tooling")]
         home_horizontal_input_held,
         #[cfg(feature = "tooling")]
         launcher_card_home,
         launcher_presenter,
         launcher_readiness,
-        launcher_response_frame_stamp,
-        launcher_response_present_receipt,
-        launcher_response_trace,
         layer_target,
         lifecycle,
         nav,
@@ -5136,26 +2841,19 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         post_timing,
         #[cfg(feature = "tooling")]
         pre_render_wait_us,
-        prepare_us,
         presented_copied_rows,
         presented_frame,
-        preview,
-        preview_compositor,
-        preview_route,
-        profile_config,
         readiness_post,
         readiness_source_evidence,
-        redraw_pending_for_trace,
         #[cfg(feature = "tooling")]
         run_start,
         #[cfg(feature = "tooling")]
         screensaver,
-        screensaver_cpu_profile,
         selection_feedback_confirmed_at,
         start,
         startup_intro,
         startup_intro_frame_posted,
-        system_entry_cpu_profile,
+        system_entry,
         #[cfg(feature = "tooling")]
         tooling,
         #[cfg(feature = "tooling")]
@@ -5182,7 +2880,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
     if *accepted_and_active_confirmed {
         record_launcher_frame_phase!(LauncherFramePhase::ActiveConfirmed);
         *confirmed_present_sequence = presented_frame.main_present_sequence;
-        let confirmed_at = pace.hit_at.unwrap_or(wait_done);
         // Feedback dwell is counted in frames: the frame that carried
         // the highlight is the one that confirmed it.
         *selection_feedback_confirmed_at = Some(animation_now);
@@ -5192,28 +2889,7 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
                 .restart_animation(animation_now + frame_clock.period());
             window.request_redraw();
         }
-        if arcade_entry_latency.record_ready_presented_frame(
-            start,
-            confirmed_at,
-            lifecycle,
-            catalog,
-            nav,
-            preview,
-            frames,
-            prepare_us,
-            presented_copied_rows,
-            true,
-            catalog_version,
-            *confirmed_present_sequence,
-            f.read_magik_presentation_telemetry().ok(),
-            presented_frame.main_present_drop_count,
-            SystemEntryPublicationPhases::from_presented_frame(presented_frame),
-        ) && let Err(error) = cpu_profile::finish_system_entry_async(
-            system_entry_cpu_profile.take(),
-            profile_config.cpu(),
-        ) {
-            crate::ui_errln!("system-entry cpu profile finish failed: {error}");
-        }
+        system_entry.note_ready_frame(nav.screen, presented_copied_rows, true);
     }
     if *accepted_and_active_confirmed
         && (full_screen_transition_release_raster_rendered
@@ -5236,16 +2912,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         }
     }
     if *accepted_and_active_confirmed {
-        launcher_response_trace.confirm(
-            launcher_response_frame_stamp.as_ref(),
-            launcher_response_present_receipt,
-            frames,
-            presented_frame.main_present_sequence,
-        );
-        if launcher_response_trace.launcher_profile_start_ready() {
-            launcher_response_trace.start_pmu_if_ready();
-            screensaver_cpu_profile.begin_launcher_response(frames.saturating_add(1));
-        }
         #[cfg(feature = "tooling")]
         record_tooling_presentation(ToolingPresentation {
             app,
@@ -5285,74 +2951,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
             wait_done,
             wait_start,
         });
-        if let Ok(telemetry) = f.read_magik_presentation_telemetry() {
-            launcher_response_trace.observe_presentation(
-                telemetry,
-                pace.period_us,
-                presented_frame.main_present_drop_count.into(),
-            );
-            gui_profiling.record_presentation(
-                frames,
-                telemetry,
-                presented_frame.main_present_drop_count.into(),
-                presented_frame.main_present_sequence,
-            );
-        }
-        let terminal_preview = preview_terminal_for_route(
-            preview_route,
-            preview.trace_cache_state(),
-            preview.presentation_label(),
-            preview.raw_frame_status() == PreviewRawFrameStatus::Ready,
-            preview.terminal_empty(),
-            crt_backdrop
-                .as_ref()
-                .is_some_and(|backdrop| backdrop.selection_matches(nav.arcade.selected)),
-            crt_backdrop
-                .as_ref()
-                .is_some_and(CrtBackdropController::is_transitioning),
-        );
-        if gui_profiling.pmu_requested()
-            && gui_profiling.settled_arcade_phase_pending()
-            && let Some(worker) = preview_compositor.as_ref()
-            && !worker.flush_pmu_profile(Duration::from_millis(100))
-        {
-            crate::ui_errln!("preview_compositor_pmu_flush_timeout");
-        }
-        gui_profiling.observe_route_presentation(
-            frames,
-            screen_label(nav.screen),
-            nav.arcade.is_scroll_active(),
-            terminal_preview,
-            confirm_visible,
-            redraw_pending_for_trace && gui_raster_phase == GuiRasterProfilePhase::Ordinary,
-            &composition_status,
-            Instant::now(),
-            crate::input_hub::monotonic_us(),
-        );
-        if let Some(transition) = bridge_churn_playback.note_presented() {
-            let now = Instant::now();
-            let monotonic_us = crate::input_hub::monotonic_us();
-            match transition {
-                BridgeChurnPlaybackTransition::Advance { completed, next } => {
-                    if gui_profiling
-                        .confirm_phase_presented(completed, now, monotonic_us)
-                        .is_ok()
-                    {
-                        let _ = gui_profiling.request_phase(next, now);
-                    }
-                }
-                BridgeChurnPlaybackTransition::Finish { completed, summary } => {
-                    gui_profiling.set_bridge_churn_summary(summary);
-                    let _ = gui_profiling.confirm_phase_presented(completed, now, monotonic_us);
-                }
-            }
-        }
-        if gui_profiling.settled_arcade_phase_pending() {
-            screensaver_cpu_profile.complete_arcade_velocity_scroll(frames.saturating_add(1));
-        }
-        if gui_profiling.needs_presentation() {
-            window.request_redraw();
-        }
         if let Some(post) = readiness_post {
             if launcher_readiness.source_evidence_request().is_some()
                 && lifecycle.startup_can_present_frame()
@@ -5434,22 +3032,15 @@ struct FrameCloseout<'a> {
     confirmed_present_sequence: u16,
     confirmed_presentation: PresentationOutcome,
     director: &'a mut PresentationDirector,
-    frame_accounting: &'a mut LauncherFrameAccounting,
     frame_clock: &'a mut mister_magik_core::frame_clock::FrameClock,
     frames: &'a mut u64,
-    input_latency_lab: &'a mut InputLatencyLab,
-    input_observation: crate::input_hub::InputObservation,
     latch_backend_active: bool,
     latch_trace_flush_deferred: bool,
     latency_critical_input_pending: &'a mut bool,
-    launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
-    launcher_response_trace: &'a mut LauncherResponseTrace,
     preview: &'a mut PreviewState,
     preview_presentation_commit: Option<crate::preview_state::PreviewPresentationCommit>,
     #[cfg(feature = "tooling")]
     run_start: Instant,
-    scheduler_phase: &'a mut LauncherResponseSchedulerBoundary,
-    screensaver_cpu_profile: &'a mut cpu_profile::ScreensaverProfiler,
     selection_feedback_confirmed_at: Option<Instant>,
     selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
     #[cfg(feature = "tooling")]
@@ -5470,22 +3061,15 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) {
         confirmed_present_sequence,
         confirmed_presentation,
         director,
-        frame_accounting,
         frame_clock,
         frames,
-        input_latency_lab,
-        input_observation,
         latch_backend_active,
         latch_trace_flush_deferred,
         latency_critical_input_pending,
-        launcher_response_frame_stamp,
-        launcher_response_trace,
         preview,
         preview_presentation_commit,
         #[cfg(feature = "tooling")]
         run_start,
-        scheduler_phase,
-        screensaver_cpu_profile,
         selection_feedback_confirmed_at,
         selection_feedback_stamp,
         #[cfg(feature = "tooling")]
@@ -5496,19 +3080,10 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) {
         window,
     } = closeout;
 
-    let post_confirmation_pmu = launcher_response_trace.input_pmu_span(
-        launcher_response_frame_stamp.is_some(),
-        "launcher-response.post-confirmation",
-    );
     if let Some(confirmed_at) = selection_feedback_confirmed_at {
         for confirmation in
             bridge_models.confirm_selection_feedback(selection_feedback_stamp, confirmed_at)
         {
-            launcher_response_trace.record_feedback_confirmation(
-                &confirmation,
-                *frames,
-                confirmed_present_sequence,
-            );
             match confirmation {
                 crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
                     event_id,
@@ -5551,21 +3126,6 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) {
             }
         }
     }
-    drop(post_confirmation_pmu);
-    *scheduler_phase =
-        launcher_response_trace.record_scheduler_interval("post-confirmation", *scheduler_phase);
-    launcher_response_trace.flush();
-    if launcher_response_trace.take_frame_trace_finalize_pending() {
-        frame_accounting.finish_preview_scroll_trace();
-        if let Err(error) = launcher_response_trace.finish_pmu() {
-            crate::ui_errln!("launcher response PMU finalization failed: {error}");
-        }
-        screensaver_cpu_profile.complete_launcher_response(frames.saturating_add(1));
-    }
-    let frame_tail_pmu = launcher_response_trace.input_pmu_span(
-        launcher_response_frame_stamp.is_some(),
-        "launcher-response.frame-tail",
-    );
     record_launcher_frame_phase!(LauncherFramePhase::FrameAccounted);
     let preview_present_confirmed = if latch_trace_flush_deferred {
         accepted_and_active_confirmed
@@ -5618,9 +3178,6 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) {
     }
     *frames += 1;
     frame_clock.advance();
-    launcher_response_trace.record_lab(input_latency_lab.cooperative_quantum(input_observation));
-    drop(frame_tail_pmu);
-    let _ = launcher_response_trace.record_scheduler_interval("frame-tail", *scheduler_phase);
     record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
 }
 
@@ -5729,24 +3286,6 @@ impl PreviewRoutePolicy {
     }
 }
 
-fn preview_terminal_for_route(
-    policy: PreviewRoutePolicy,
-    cache_state: &str,
-    presentation_label: &str,
-    raw_frame_ready: bool,
-    terminal_empty: bool,
-    crt_selection_matches: bool,
-    crt_transitioning: bool,
-) -> bool {
-    if policy.allows_crt_backdrop() {
-        return ((cache_state == "exact" && raw_frame_ready) || terminal_empty)
-            && crt_selection_matches
-            && !crt_transitioning;
-    }
-    matches!(cache_state, "exact" | "cached" | "empty")
-        && matches!(presentation_label, "visible" | "detached")
-}
-
 fn catalog_build_media_gate(
     catalog_refresh_done: bool,
     base: MediaInteractionGate,
@@ -5807,7 +3346,6 @@ struct CatalogDomain<'a> {
 fn process_catalog_worker_message(
     message: CatalogWorkerMessage,
     prepare_trace: &mut LauncherPrepareTrace,
-    launcher_response_trace: &mut LauncherResponseTrace,
     loop_start: Instant,
     app: &slint_ui::launcher::Launcher,
     domain: CatalogDomain<'_>,
@@ -5841,7 +3379,6 @@ fn process_catalog_worker_message(
     );
     apply_catalog_session_effects(
         effects,
-        launcher_response_trace,
         app,
         CatalogDomain {
             nav,
@@ -6367,7 +3904,6 @@ fn apply_lifecycle_effects(
 
 fn apply_catalog_session_effects(
     effects: CatalogSessionEffects,
-    launcher_response_trace: &mut LauncherResponseTrace,
     app: &slint_ui::launcher::Launcher,
     domain: CatalogDomain<'_>,
     defer_bridge_ui: bool,
@@ -6710,7 +4246,6 @@ fn apply_catalog_session_effects(
                 base_catalog_version,
                 game_count,
                 prepare_us,
-                profile,
                 preview_prelude,
             } => {
                 if base_catalog_version != *catalog_version {
@@ -6735,44 +4270,18 @@ fn apply_catalog_session_effects(
                     continue;
                 }
                 let adoption_started = Instant::now();
-                let phase = launcher_response_trace.begin_catalog_phase("hydration-state");
                 nav.catalog_system_hydration_finished(&system_id);
-                launcher_response_trace.end_catalog_phase(phase);
-                let phase = launcher_response_trace.begin_catalog_phase("catalog-replacement");
                 let retired_catalog = std::mem::replace(catalog, prepared_catalog);
                 *catalog_version = (*catalog_version).wrapping_add(1);
-                launcher_response_trace.end_catalog_phase(phase);
                 if let Some(prelude) = preview_prelude
                     && let Some(game) = catalog.system_game_at(&system_id, 0)
                 {
                     preview.adopt_system_entry_preview(game, prelude);
                 }
-                let phase = launcher_response_trace.begin_catalog_phase("catalog-retirement");
                 scheduler.retire_catalog(retired_catalog);
-                launcher_response_trace.end_catalog_phase(phase);
-                let taxonomy_start = launcher_response_trace.catalog_boundary();
-                let mut taxonomy_end = None;
-                let taxonomy_timing = nav.sync_launcher_taxonomy_with_timing(catalog, &mut || {
-                    taxonomy_end = Some(launcher_response_trace.catalog_boundary());
-                });
-                let taxonomy_end = taxonomy_end.unwrap_or(taxonomy_start);
-                let navigation_end = launcher_response_trace.catalog_boundary();
-                launcher_response_trace.record_catalog_interval(
-                    "taxonomy-construction",
-                    taxonomy_start,
-                    taxonomy_end,
-                    taxonomy_timing.taxonomy_build_us,
-                );
-                launcher_response_trace.record_catalog_interval(
-                    "navigation-reconciliation",
-                    taxonomy_end,
-                    navigation_end,
-                    taxonomy_timing.navigation_reconcile_us,
-                );
-                let phase = launcher_response_trace.begin_catalog_phase("return-state-restore");
+                nav.sync_launcher_taxonomy(catalog);
                 let return_restored =
                     reapply_pending_launch_return_state(nav, catalog, launch_return_session);
-                launcher_response_trace.end_catalog_phase(phase);
                 if return_restored {
                     launch_return_session.mark_system_shard_authoritative();
                     emit_return_context_restored(
@@ -6786,32 +4295,8 @@ fn apply_catalog_session_effects(
                     );
                     lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
                 }
-                let phase = launcher_response_trace.begin_catalog_phase("bridge-invalidation");
                 *full_bridge_dirty = true;
-                launcher_response_trace.end_catalog_phase(phase);
                 let adoption_us = adoption_started.elapsed().as_micros();
-                if let Some(path) = launcher_response_trace.system_entry_profile_path.as_deref() {
-                    let path = std::path::Path::new(path);
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let evidence = serde_json::json!({
-                        "schema": "mister-magik-system-entry-profile-v1",
-                        "system": system_id,
-                        "catalog": profile,
-                        "adoption_us": adoption_us,
-                        "pmu": mister_magik_perf_events::take_process_profiles(),
-                    });
-                    if let Err(error) = std::fs::write(
-                        path,
-                        format!(
-                            "{}\n",
-                            serde_json::to_string_pretty(&evidence).unwrap_or_default()
-                        ),
-                    ) {
-                        crate::ui_errln!("system-entry profile write failed: {error}");
-                    }
-                }
                 print_startup_event(
                     start,
                     "catalog_system_shard_ready",
@@ -7136,6 +4621,7 @@ fn summary_seed_catalog_worker_starts_immediately(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input_event::InputSourceKind;
 
     #[test]
     fn queued_settings_activation_retains_its_transition_source_on_the_settling_tick() {
@@ -7367,49 +4853,6 @@ mod tests {
     }
 
     #[test]
-    fn disjoint_damage_exposes_bounding_box_false_positive() {
-        let left = DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: 10,
-            y1: 10,
-        };
-        let right = DirtyRect {
-            x0: 90,
-            y0: 0,
-            x1: 100,
-            y1: 10,
-        };
-        let target = DirtyRect {
-            x0: 40,
-            y0: 0,
-            x1: 60,
-            y1: 10,
-        };
-        let mut damage = DirtyRectList::from_one(left);
-        damage.push(right);
-
-        assert_eq!(
-            custom_damage_invalidation_comparison(
-                Some(DirtyRect {
-                    x0: 0,
-                    y0: 0,
-                    x1: 100,
-                    y1: 10,
-                }),
-                &damage,
-                target,
-                false,
-            ),
-            (true, false, true)
-        );
-        assert_eq!(
-            custom_damage_invalidation_comparison(None, &damage, target, true),
-            (true, true, false)
-        );
-    }
-
-    #[test]
     fn base_damage_is_shielded_only_by_a_full_reapply_publication() {
         let full = DirtyRect {
             x0: 0,
@@ -7453,112 +4896,6 @@ mod tests {
             shield_base_damage_under_publication(damage, &mut None),
             damage
         );
-    }
-
-    #[test]
-    fn system_entry_ready_marker_requires_main_active_confirmation() {
-        assert!(!system_entry_ready_frame_eligible(
-            true,
-            true,
-            true,
-            false,
-            Screen::Arcade,
-            240,
-            false,
-        ));
-        assert!(system_entry_ready_frame_eligible(
-            true,
-            true,
-            true,
-            false,
-            Screen::Arcade,
-            240,
-            true,
-        ));
-    }
-
-    #[test]
-    fn system_entry_publication_evidence_keeps_cpu_and_confirmation_wait_distinct() {
-        let phases = SystemEntryPublicationPhases {
-            bridge_model_assembly_us: 101,
-            bridge_updates_us: 102,
-            list_projection_us: 103,
-            slint_raster_us: 104,
-            overlay_composition_us: 105,
-            latch_copy_us: 106,
-            post_us: 107,
-            confirmation_wait_wall_us: 16_667,
-            confirmation_poll_cpu_us: 108,
-        };
-
-        let evidence = phases.json();
-
-        assert_eq!(evidence["bridge_model_assembly"], 101);
-        assert_eq!(evidence["list_projection"], 103);
-        assert_eq!(evidence["slint_raster"], 104);
-        assert_eq!(evidence["overlay_composition"], 105);
-        assert_eq!(evidence["latch_copy"], 106);
-        assert_eq!(evidence["post"], 107);
-        assert_eq!(evidence["confirmation_wait_wall"], 16_667);
-        assert_eq!(evidence["confirmation_poll_cpu"], 108);
-    }
-
-    #[test]
-    fn system_entry_ready_marker_requires_rows_and_terminal_preview() {
-        assert!(!system_entry_ready_frame_eligible(
-            true,
-            false,
-            true,
-            false,
-            Screen::Arcade,
-            240,
-            true,
-        ));
-        assert!(!system_entry_ready_frame_eligible(
-            true,
-            true,
-            false,
-            false,
-            Screen::Arcade,
-            240,
-            true,
-        ));
-    }
-
-    #[test]
-    fn system_entry_destination_requires_list_and_terminal_preview_in_one_frame() {
-        assert!(system_entry_destination_frame_eligible(
-            true,
-            true,
-            true,
-            false,
-            Screen::Arcade,
-            240,
-        ));
-        assert!(!system_entry_destination_frame_eligible(
-            true,
-            true,
-            false,
-            false,
-            Screen::Arcade,
-            240,
-        ));
-        assert!(!system_entry_destination_frame_eligible(
-            true,
-            true,
-            true,
-            false,
-            Screen::Arcade,
-            0,
-        ));
-    }
-
-    #[test]
-    fn system_entry_no_preview_requires_confirmed_terminal_empty_state() {
-        assert!(!system_entry_preview_terminal(false, "empty", false));
-        assert!(system_entry_preview_terminal(false, "empty", true));
-        assert!(!system_entry_preview_terminal(true, "empty", true));
-        assert!(system_entry_preview_terminal(true, "exact", false));
     }
 
     #[test]
@@ -7711,10 +5048,9 @@ mod tests {
             false,
             false,
             false,
-            false,
         ));
-        for blocked in 0..7 {
-            let mut conditions = [false; 7];
+        for blocked in 0..6 {
+            let mut conditions = [false; 6];
             conditions[blocked] = true;
             assert!(!can_preempt_home_latch_wait(
                 Screen::Home,
@@ -7724,12 +5060,10 @@ mod tests {
                 conditions[3],
                 conditions[4],
                 conditions[5],
-                conditions[6],
             ));
         }
         assert!(!can_preempt_home_latch_wait(
             Screen::Settings,
-            false,
             false,
             false,
             false,
@@ -7813,477 +5147,6 @@ mod tests {
         assert!(!should_restart_for_urgent_input(false, false, true));
         assert!(!should_restart_for_urgent_input(true, true, true));
         assert!(!should_restart_for_urgent_input(true, false, false));
-    }
-
-    #[test]
-    fn launcher_response_trace_confirms_the_visible_state_change() {
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Arcade;
-        nav.system_page_mode = launcher::SystemPageMode::Hub;
-        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
-        trace.enable_execution_for_test();
-        let mut event = normalized_test_press(LogicalAction::Right);
-        event.source.kind = InputSourceKind::MainProxy;
-        trace
-            .published_at_us
-            .insert(event.sequence, event.captured_at_us + 10);
-        trace
-            .drained_at_us
-            .insert(event.sequence, event.captured_at_us + 20);
-        trace
-            .drained_execution
-            .insert(event.sequence, ThreadExecutionStamp::capture());
-        let context = ContextId {
-            target: FocusTarget {
-                kind: InputContextKind::Screen,
-                owner: 1,
-            },
-            generation: 1,
-        };
-        trace.record_route(
-            event,
-            InputOutcome::Dispatch {
-                event,
-                context,
-                kind: DispatchKind::Initial,
-            },
-        );
-        nav.system_hub_selected = 1;
-        trace.observe_state(&nav, false);
-        let applied_at_us = trace.records[0].state_applied_at_us.unwrap();
-        assert!(
-            trace
-                .frame_stamp(
-                    &nav,
-                    applied_at_us.saturating_sub(1),
-                    None,
-                    applied_at_us,
-                    None,
-                    applied_at_us,
-                    None,
-                )
-                .is_none()
-        );
-        let stamp = trace.frame_stamp(
-            &nav,
-            applied_at_us,
-            Some(ThreadExecutionStamp::capture()),
-            applied_at_us + 1,
-            Some(ThreadExecutionStamp::capture()),
-            applied_at_us + 2,
-            Some(ThreadExecutionStamp::capture()),
-        );
-        trace.confirm(
-            stamp.as_ref(),
-            LauncherResponsePresentReceipt {
-                post_accepted_at_us: applied_at_us + 3,
-                post_accepted_execution: Some(ThreadExecutionStamp::capture()),
-                ..LauncherResponsePresentReceipt::default()
-            },
-            42,
-            7,
-        );
-
-        assert_eq!(trace.records.len(), 1);
-        assert_eq!(trace.records[0].disposition, "confirmed");
-        assert_eq!(trace.records[0].confirmed_frame, Some(42));
-        assert_eq!(trace.records[0].confirmed_sequence, Some(7));
-        assert_eq!(
-            trace.records[0].published_at_us,
-            Some(event.captured_at_us + 10)
-        );
-        assert_eq!(
-            trace.records[0].drained_at_us,
-            Some(event.captured_at_us + 20)
-        );
-        assert_eq!(
-            trace.records[0]
-                .frame
-                .as_ref()
-                .map(|frame| frame.selected.selected_index),
-            Some(1)
-        );
-        let (snapshot, _, _, _) = trace.partial_snapshot();
-        let payload: serde_json::Value =
-            serde_json::from_str(&snapshot.payload()).expect("response trace payload");
-        assert_eq!(payload["schema"], "mister-magik-launcher-response-trace-v6");
-        assert_eq!(payload["execution_attribution"]["enabled"], true);
-        assert_eq!(payload["lab_records"][0]["type"], "input-route-outcome");
-        assert_eq!(payload["lab_records"][0]["result"], "dispatch-initial");
-        assert!(payload["records"][0]["execution"]["stamps"]["drained"].is_object());
-        assert!(payload["records"][0]["frame"]["execution"]["intervals"]["raster"].is_object());
-    }
-
-    #[test]
-    fn launcher_response_trace_records_rejected_batches_and_consumed_presses() {
-        let nav = LauncherNav::new();
-        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
-        let mut event = normalized_test_press(LogicalAction::Right);
-        event.source.kind = InputSourceKind::MainProxy;
-        let batch = crate::input_event::InputBatch {
-            source_epoch: event.source_epoch,
-            first_sequence: Some(event.sequence),
-            last_sequence: Some(event.sequence),
-            events: vec![event],
-            health: crate::input_event::InputHealth {
-                protocol: crate::input_event::InputProtocolHealth::ProxyV2,
-                ..crate::input_event::InputHealth::default()
-            },
-            ..crate::input_event::InputBatch::default()
-        };
-        trace.record_input_batch_gate(&batch, Some(InputFault::Desync));
-        trace.record_route(
-            event,
-            InputOutcome::Consumed {
-                press_id: event.press_id,
-                reason: ConsumedReason::OpposingDirections,
-            },
-        );
-
-        assert!(trace.records.is_empty());
-        assert_eq!(trace.lab_records.len(), 2);
-        assert_eq!(trace.lab_records[0]["type"], "input-batch-gate");
-        assert_eq!(trace.lab_records[0]["result"], "rejected-desync");
-        assert_eq!(trace.lab_records[1]["type"], "input-route-outcome");
-        assert_eq!(
-            trace.lab_records[1]["result"],
-            "consumed-opposingdirections"
-        );
-    }
-
-    #[test]
-    fn launcher_response_confirmation_uses_the_stamped_frame_state() {
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Arcade;
-        nav.system_page_mode = launcher::SystemPageMode::Hub;
-        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
-        let mut event = normalized_test_press(LogicalAction::Right);
-        event.source.kind = InputSourceKind::MainProxy;
-        let context = ContextId {
-            target: FocusTarget {
-                kind: InputContextKind::Screen,
-                owner: 1,
-            },
-            generation: 1,
-        };
-        trace.record_route(
-            event,
-            InputOutcome::Dispatch {
-                event,
-                context,
-                kind: DispatchKind::Initial,
-            },
-        );
-        nav.system_hub_selected = 1;
-        trace.observe_state(&nav, false);
-        let applied_at_us = trace.records[0].state_applied_at_us.unwrap();
-        let mut stamp = trace.frame_stamp(
-            &nav,
-            applied_at_us,
-            None,
-            applied_at_us + 1,
-            None,
-            applied_at_us + 2,
-            None,
-        );
-        stamp
-            .as_mut()
-            .expect("response frame stamp")
-            .slint_damage_rects
-            .push((10, 20, 30, 40));
-        nav.system_hub_selected = 2;
-        trace.confirm(
-            stamp.as_ref(),
-            LauncherResponsePresentReceipt {
-                present_bytes: 1_234,
-                hidden_copy_us: 321,
-                hidden_rect_count: 2,
-                ..LauncherResponsePresentReceipt::default()
-            },
-            5,
-            9,
-        );
-
-        assert_eq!(trace.records[0].disposition, "confirmed");
-        assert_eq!(
-            trace.records[0]
-                .frame
-                .as_ref()
-                .map(|frame| frame.selected.selected_index),
-            Some(1)
-        );
-        let frame = trace.records[0].frame.as_ref().expect("frame evidence");
-        assert_eq!(frame.slint_damage_rects, vec![(10, 20, 30, 40)]);
-        assert_eq!(frame.present_bytes, 1_234);
-        assert_eq!(frame.hidden_copy_us, 321);
-        assert_eq!(frame.hidden_rect_count, 2);
-    }
-
-    #[test]
-    fn launcher_response_trace_records_exact_feedback_on_and_off_frames() {
-        let nav = LauncherNav::new();
-        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
-        let target = SelectionFeedbackTarget::new("menu:computers", "menu:computers:other");
-        let visible_at = Instant::now();
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
-                event_id: 9,
-                target: target.clone(),
-                confirmed_at: visible_at,
-            },
-            40,
-            6,
-        );
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
-                event_id: 9,
-                target,
-                visible_for: Duration::from_millis(84),
-                confirmed_at: visible_at + Duration::from_millis(84),
-            },
-            45,
-            11,
-        );
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
-                event_id: 10,
-                target: SelectionFeedbackTarget::new("menu:computers", "apple-ii"),
-                confirmed_at: visible_at + Duration::from_millis(85),
-            },
-            46,
-            12,
-        );
-
-        assert_eq!(trace.feedback_records.len(), 3);
-        assert_eq!(trace.feedback_records[0].phase, "visible");
-        assert_eq!(trace.feedback_records[0].confirmed_frame, 40);
-        assert_eq!(trace.feedback_records[1].phase, "hidden");
-        assert_eq!(trace.feedback_records[1].dwell_us, Some(84_000));
-        assert_eq!(trace.feedback_records[1].confirmed_sequence, 11);
-        assert_eq!(trace.feedback_records[2].phase, "cancelled");
-        assert_eq!(trace.cancelled_feedback_count, 1);
-    }
-
-    #[test]
-    fn launcher_response_partial_snapshot_streams_bounded_lab_records_only() {
-        let nav = LauncherNav::new();
-        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
-        let mut event = normalized_test_press(LogicalAction::Right);
-        event.source.kind = InputSourceKind::MainProxy;
-        trace.record_route(
-            event,
-            InputOutcome::Dispatch {
-                event,
-                context: ContextId {
-                    target: FocusTarget {
-                        kind: InputContextKind::Screen,
-                        owner: 1,
-                    },
-                    generation: 1,
-                },
-                kind: DispatchKind::Initial,
-            },
-        );
-        trace
-            .catalog_phases
-            .push(serde_json::json!({"phase": "catalog"}));
-        trace
-            .scheduler_phases
-            .push(serde_json::json!({"phase": "scheduler"}));
-        trace.lab_records.push(serde_json::json!({"phase": "lab"}));
-
-        let (mut partial, _, _, lab_count) = trace.partial_snapshot();
-        assert!(partial.catalog_phases.is_empty());
-        assert!(partial.scheduler_phases.is_empty());
-        assert_eq!(lab_count, 2);
-        assert_eq!(partial.lab_records.len(), 2);
-        let payload = serde_json::from_str::<serde_json::Value>(&partial.payload())
-            .expect("partial response trace payload");
-        assert_eq!(payload["completion"]["state"], "running");
-        assert_eq!(payload["records"][0]["disposition"], "dispatched");
-
-        let (next, _, _, _) = trace.partial_snapshot();
-        partial.merge_partial(next);
-        assert_eq!(partial.records.len(), 1);
-
-        trace.complete = true;
-        let complete = trace.snapshot();
-        assert_eq!(complete.catalog_phases.len(), 1);
-        assert_eq!(complete.scheduler_phases.len(), 1);
-        assert_eq!(complete.lab_records.len(), 2);
-        let (partial_after_completion, _, _, _) = trace.partial_snapshot();
-        assert!(!partial_after_completion.complete);
-        assert!(partial_after_completion.catalog_phases.is_empty());
-        assert!(partial_after_completion.scheduler_phases.is_empty());
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&complete.payload())
-                .expect("complete response trace payload")["completion"]["state"],
-            "complete"
-        );
-    }
-
-    #[test]
-    fn launcher_response_partial_snapshots_send_only_new_feedback() {
-        let nav = LauncherNav::new();
-        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
-        let target = SelectionFeedbackTarget::new("menu:computers", "menu:computers:other");
-        let visible_at = Instant::now();
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
-                event_id: 9,
-                target: target.clone(),
-                confirmed_at: visible_at,
-            },
-            40,
-            6,
-        );
-        trace
-            .lab_records
-            .push(serde_json::json!({"phase": "first"}));
-        let (mut accumulated, confirmed_count, feedback_count, lab_count) =
-            trace.partial_snapshot();
-        assert_eq!(confirmed_count, 0);
-        assert_eq!(feedback_count, 1);
-        assert_eq!(lab_count, 1);
-        assert_eq!(accumulated.feedback_records.len(), 1);
-        assert_eq!(accumulated.lab_records.len(), 1);
-        trace.partial_feedback_sent = feedback_count;
-        trace.partial_lab_sent = lab_count;
-
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
-                event_id: 9,
-                target,
-                visible_for: Duration::from_millis(84),
-                confirmed_at: visible_at + Duration::from_millis(84),
-            },
-            45,
-            11,
-        );
-        trace
-            .lab_records
-            .push(serde_json::json!({"phase": "second"}));
-        let (next, _, feedback_count, lab_count) = trace.partial_snapshot();
-        assert_eq!(feedback_count, 2);
-        assert_eq!(lab_count, 2);
-        assert_eq!(next.feedback_records.len(), 1);
-        assert_eq!(next.lab_records.len(), 1);
-
-        accumulated.merge_partial(next);
-        assert_eq!(accumulated.feedback_records.len(), 2);
-        assert_eq!(accumulated.lab_records.len(), 2);
-        assert_eq!(accumulated.feedback_records[0].phase, "visible");
-        assert_eq!(accumulated.feedback_records[1].phase, "hidden");
-    }
-
-    #[test]
-    fn launcher_response_trace_completes_after_focus_and_feedback_removal() {
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Arcade;
-        nav.system_page_mode = launcher::SystemPageMode::Hub;
-        let mut trace = LauncherResponseTrace::configured_for_test(&nav, 1, 1);
-        let mut event = normalized_test_press(LogicalAction::Right);
-        event.source.kind = InputSourceKind::MainProxy;
-        let context = ContextId {
-            target: FocusTarget {
-                kind: InputContextKind::Screen,
-                owner: 1,
-            },
-            generation: 1,
-        };
-        trace.record_route(
-            event,
-            InputOutcome::Dispatch {
-                event,
-                context,
-                kind: DispatchKind::Initial,
-            },
-        );
-        nav.system_hub_selected = 1;
-        trace.observe_state(&nav, false);
-        let applied_at_us = trace.records[0].state_applied_at_us.unwrap();
-        let stamp = trace.frame_stamp(
-            &nav,
-            applied_at_us,
-            None,
-            applied_at_us + 1,
-            None,
-            applied_at_us + 2,
-            None,
-        );
-        trace.confirm(
-            stamp.as_ref(),
-            LauncherResponsePresentReceipt::default(),
-            42,
-            7,
-        );
-        assert!(!trace.complete);
-
-        let target = SelectionFeedbackTarget::new("system-hub", "recent");
-        let visible_at = Instant::now();
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
-                event_id: 9,
-                target: target.clone(),
-                confirmed_at: visible_at,
-            },
-            42,
-            7,
-        );
-        assert!(!trace.complete);
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
-                event_id: 9,
-                target,
-                visible_for: Duration::from_millis(84),
-                confirmed_at: visible_at + Duration::from_millis(84),
-            },
-            47,
-            12,
-        );
-
-        assert!(trace.complete);
-        assert!(trace.take_frame_trace_finalize_pending());
-        assert!(!trace.take_frame_trace_finalize_pending());
-    }
-
-    #[test]
-    fn launcher_response_trace_completes_after_never_visible_feedback_is_cancelled() {
-        let nav = LauncherNav::new();
-        let mut trace = LauncherResponseTrace::configured_for_test(&nav, 1, 1);
-        trace.record_feedback_confirmation(
-            &crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
-                event_id: 9,
-                target: SelectionFeedbackTarget::new("system-hub", "recent"),
-                confirmed_at: Instant::now(),
-            },
-            42,
-            7,
-        );
-
-        assert!(trace.complete);
-        assert_eq!(trace.cancelled_feedback_count, 1);
-        assert!(trace.outstanding_feedback.is_empty());
-    }
-
-    #[test]
-    fn arcade_response_confirmation_waits_for_first_visible_motion() {
-        let mut before = LauncherNav::new();
-        before.screen = Screen::Arcade;
-        let before = LauncherResponseState::capture(&before);
-        let mut selected = before.clone();
-        selected.selected_index = 1;
-        let mut stationary = selected.clone();
-        stationary.arcade_visual_index_milli = before.arcade_visual_index_milli;
-        let mut moved = stationary.clone();
-        moved.arcade_visual_index_milli =
-            Some(before.arcade_visual_index_milli.unwrap_or_default() + 25);
-
-        assert!(!selected.matches_presented(&before, &stationary));
-        assert!(selected.matches_presented(&before, &moved));
-        let mut hub = stationary;
-        hub.arcade_visual_index_milli = None;
-        assert!(!selected.matches_presented(&before, &hub));
     }
 
     #[test]
@@ -8523,56 +5386,6 @@ mod tests {
     }
 
     #[test]
-    fn main_proxy_press_moves_root_card_after_idle() {
-        let catalog = empty_arcade_catalog("/tmp");
-        let mut nav = LauncherNav::new();
-        let focus = launcher_screen_input_focus(&nav);
-        let mut router = InputRouter::new(focus);
-        let start = Instant::now();
-        let press_at = start + Duration::from_secs(2);
-        nav.handle_held_tick_with_navigation_intents(&PadState::default(), start, &catalog);
-        nav.handle_held_tick_with_navigation_intents(
-            &PadState::default(),
-            press_at - Duration::from_millis(16),
-            &catalog,
-        );
-
-        let mut press = normalized_test_press(LogicalAction::Right);
-        press.source.kind = InputSourceKind::MainProxy;
-        let InputOutcome::Dispatch { event, .. } = router.route_event(press, focus, press_at)
-        else {
-            panic!("root card press should dispatch");
-        };
-        nav.handle_action_with_navigation_intents(&event, press_at, &catalog);
-        let mut held = PadState::default();
-        held.set_logical_action(
-            LogicalAction::Right,
-            router.action_held(LogicalAction::Right),
-        );
-        nav.handle_held_tick_with_navigation_intents(&held, press_at, &catalog);
-        assert_eq!(nav.selected, 1);
-
-        let release_at = press_at + Duration::from_millis(80);
-        let mut release = press;
-        release.sequence += 1;
-        release.phase = InputPhase::Released;
-        assert!(matches!(
-            router.route_event(release, focus, release_at),
-            InputOutcome::Released { .. }
-        ));
-        nav.handle_action_with_navigation_intents(&release, release_at, &catalog);
-        nav.handle_held_tick_with_navigation_intents(&PadState::default(), release_at, &catalog);
-        for frame in 1..=120 {
-            nav.handle_held_tick_with_navigation_intents(
-                &PadState::default(),
-                release_at + Duration::from_millis(frame * 16),
-                &catalog,
-            );
-        }
-        assert_eq!(nav.selected, 1);
-    }
-
-    #[test]
     fn library_reset_reboot_wait_expires_and_resumes_input_without_retrying() {
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut reset = LibraryResetState::Deleting(receiver);
@@ -8628,54 +5441,6 @@ mod tests {
             assert!(matches!(reset, LibraryResetState::Idle));
             assert_eq!(reset.poll(Instant::now()), Ok(false));
         }
-    }
-
-    #[test]
-    fn refresh_hold_keeps_initial_press_capture_through_confirmation() {
-        let catalog = empty_arcade_catalog("/tmp");
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Settings;
-        nav.settings_selected = 6;
-        let initial_focus = launcher_screen_input_focus(&nav);
-        let mut router = InputRouter::new(initial_focus);
-        let now = Instant::now();
-        let mut press = normalized_test_press(LogicalAction::Activate);
-        press.source.kind = InputSourceKind::MainProxy;
-        let InputOutcome::Dispatch { event, .. } = router.route_event(press, initial_focus, now)
-        else {
-            panic!("refresh press should dispatch");
-        };
-        assert!(
-            nav.handle_action_with_navigation_intents(&event, now, &catalog)
-                .is_none()
-        );
-        assert_eq!(
-            nav.confirm_action,
-            Some(launcher::ConfirmAction::RefreshDatabase)
-        );
-        assert_eq!(nav.confirm_selected, 0);
-
-        let focus = launcher_input_focus(true, false, false, false, true, false, &nav);
-        router.set_focus(focus);
-        assert_eq!(focus, initial_focus);
-        let held = PadState {
-            btn_a: router.action_held(LogicalAction::Activate),
-            ..PadState::default()
-        };
-        assert!(held.btn_a);
-        assert!(
-            nav.handle_held_tick_with_navigation_intents(
-                &held,
-                now + Duration::from_millis(6999),
-                &catalog
-            )
-            .is_none()
-        );
-        let reset = nav
-            .handle_held_tick_with_navigation_intents(&held, now + Duration::from_secs(7), &catalog)
-            .expect("continuous initial press should reset");
-        assert_eq!(reset.action, LauncherAction::PurgeLibraryData);
-        assert_eq!(nav.confirm_action, None);
     }
 
     #[test]
@@ -8970,31 +5735,6 @@ mod tests {
     use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
 
     #[test]
-    fn crt_profile_terminal_tracks_the_composed_backdrop_not_hdmi_layer_state() {
-        let crt = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Crt240p60);
-        assert!(preview_terminal_for_route(
-            crt, "exact", "loading", true, false, true, false,
-        ));
-        assert!(preview_terminal_for_route(
-            crt, "empty", "loading", false, true, true, false,
-        ));
-        assert!(!preview_terminal_for_route(
-            crt, "exact", "loading", true, false, false, false,
-        ));
-        assert!(!preview_terminal_for_route(
-            crt, "exact", "loading", true, false, true, true,
-        ));
-
-        let hdmi = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Hdmi);
-        assert!(preview_terminal_for_route(
-            hdmi, "exact", "visible", true, false, false, true,
-        ));
-        assert!(!preview_terminal_for_route(
-            hdmi, "exact", "loading", true, false, true, false,
-        ));
-    }
-
-    #[test]
     fn crt_route_policy_is_fixed_to_the_supported_backdrop_matrix() {
         let hdmi = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Hdmi);
         assert!(hdmi.allows_hdmi_preview());
@@ -9173,13 +5913,6 @@ mod tests {
         assert!(startup_catalog_ready_for_reveal(true, true, true));
         assert!(startup_catalog_ready_for_reveal(false, true, false));
         assert!(!startup_catalog_ready_for_reveal(true, false, true));
-    }
-
-    #[test]
-    fn cold_boot_catalog_profile_waits_for_the_complete_refresh() {
-        assert!(!cold_boot_profile_completion_ready(true, true, false));
-        assert!(cold_boot_profile_completion_ready(true, true, true));
-        assert!(cold_boot_profile_completion_ready(false, true, false));
     }
 
     #[test]
@@ -11348,5 +8081,194 @@ mod tests {
             ScreensaverStartMode::Inactive,
             false,
         ));
+    }
+
+    #[test]
+    fn main_proxy_press_moves_root_card_after_idle() {
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        let focus = launcher_screen_input_focus(&nav);
+        let mut router = InputRouter::new(focus);
+        let start = Instant::now();
+        let press_at = start + Duration::from_secs(2);
+        nav.handle_held_tick_with_navigation_intents(&PadState::default(), start, &catalog);
+        nav.handle_held_tick_with_navigation_intents(
+            &PadState::default(),
+            press_at - Duration::from_millis(16),
+            &catalog,
+        );
+
+        let mut press = normalized_test_press(LogicalAction::Right);
+        press.source.kind = InputSourceKind::MainProxy;
+        let InputOutcome::Dispatch { event, .. } = router.route_event(press, focus, press_at)
+        else {
+            panic!("root card press should dispatch");
+        };
+        nav.handle_action_with_navigation_intents(&event, press_at, &catalog);
+        let mut held = PadState::default();
+        held.set_logical_action(
+            LogicalAction::Right,
+            router.action_held(LogicalAction::Right),
+        );
+        nav.handle_held_tick_with_navigation_intents(&held, press_at, &catalog);
+        assert_eq!(nav.selected, 1);
+
+        let release_at = press_at + Duration::from_millis(80);
+        let mut release = press;
+        release.sequence += 1;
+        release.phase = InputPhase::Released;
+        assert!(matches!(
+            router.route_event(release, focus, release_at),
+            InputOutcome::Released { .. }
+        ));
+        nav.handle_action_with_navigation_intents(&release, release_at, &catalog);
+        nav.handle_held_tick_with_navigation_intents(&PadState::default(), release_at, &catalog);
+        for frame in 1..=120 {
+            nav.handle_held_tick_with_navigation_intents(
+                &PadState::default(),
+                release_at + Duration::from_millis(frame * 16),
+                &catalog,
+            );
+        }
+        assert_eq!(nav.selected, 1);
+    }
+
+    #[test]
+    fn refresh_hold_keeps_initial_press_capture_through_confirmation() {
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 6;
+        let initial_focus = launcher_screen_input_focus(&nav);
+        let mut router = InputRouter::new(initial_focus);
+        let now = Instant::now();
+        let mut press = normalized_test_press(LogicalAction::Activate);
+        press.source.kind = InputSourceKind::MainProxy;
+        let InputOutcome::Dispatch { event, .. } = router.route_event(press, initial_focus, now)
+        else {
+            panic!("refresh press should dispatch");
+        };
+        assert!(
+            nav.handle_action_with_navigation_intents(&event, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(
+            nav.confirm_action,
+            Some(launcher::ConfirmAction::RefreshDatabase)
+        );
+        assert_eq!(nav.confirm_selected, 0);
+
+        let focus = launcher_input_focus(true, false, false, false, true, false, &nav);
+        router.set_focus(focus);
+        assert_eq!(focus, initial_focus);
+        let held = PadState {
+            btn_a: router.action_held(LogicalAction::Activate),
+            ..PadState::default()
+        };
+        assert!(held.btn_a);
+        assert!(
+            nav.handle_held_tick_with_navigation_intents(
+                &held,
+                now + Duration::from_millis(6999),
+                &catalog
+            )
+            .is_none()
+        );
+        let reset = nav
+            .handle_held_tick_with_navigation_intents(&held, now + Duration::from_secs(7), &catalog)
+            .expect("continuous initial press should reset");
+        assert_eq!(reset.action, LauncherAction::PurgeLibraryData);
+        assert_eq!(nav.confirm_action, None);
+    }
+
+    #[test]
+    fn system_entry_destination_needs_rows_and_preview_in_one_frame() {
+        let mut ready = SystemEntryAdoption {
+            entered: true,
+            rows_ready: true,
+            preview_exact: true,
+            ..SystemEntryAdoption::default()
+        };
+        ready.note_destination_frame(Screen::Arcade, 0);
+        assert!(!ready.destination_prepared);
+        ready.note_destination_frame(Screen::Arcade, 240);
+        assert!(ready.destination_prepared);
+
+        let mut waiting = SystemEntryAdoption {
+            entered: true,
+            rows_ready: true,
+            ..SystemEntryAdoption::default()
+        };
+        waiting.note_destination_frame(Screen::Arcade, 240);
+        assert!(!waiting.destination_prepared);
+    }
+
+    #[test]
+    fn system_entry_ready_frame_needs_main_active_confirmation() {
+        let mut entry = SystemEntryAdoption {
+            entered: true,
+            rows_ready: true,
+            preview_exact: true,
+            destination_prepared: true,
+            ..SystemEntryAdoption::default()
+        };
+        entry.note_ready_frame(Screen::Arcade, 240, false);
+        assert!(!entry.ready_presented);
+        assert!(entry.preview_adoption_in_progress());
+        entry.note_ready_frame(Screen::Arcade, 240, true);
+        assert!(entry.ready_presented);
+        assert!(!entry.preview_adoption_in_progress());
+    }
+
+    #[test]
+    fn system_entry_holds_preview_work_only_between_rows_and_the_ready_frame() {
+        let mut entry = SystemEntryAdoption::default();
+        assert!(!entry.preview_adoption_in_progress());
+        entry.note_rows_ready();
+        assert!(
+            !entry.preview_adoption_in_progress(),
+            "rows without an entry press"
+        );
+        entry.note_enter();
+        entry.note_rows_ready();
+        assert!(entry.preview_adoption_in_progress());
+        entry.cancel();
+        assert!(!entry.preview_adoption_in_progress());
+    }
+
+    #[test]
+    fn launcher_idle_wait_rejects_active_work() {
+        for reason in [
+            LauncherWakeReasons::REDRAW_PENDING,
+            LauncherWakeReasons::LAUNCHING,
+            LauncherWakeReasons::SETUP_ACTIVE,
+            LauncherWakeReasons::TOOLING_SEQUENCE_ACTIVE,
+            LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
+            LauncherWakeReasons::BRIDGE_DIRTY,
+            LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
+            LauncherWakeReasons::MEDIA_MESSAGE_SEEN,
+            LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
+            LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
+            LauncherWakeReasons::HOME_HORIZONTAL_INPUT_HELD,
+            LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP,
+            LauncherWakeReasons::ARCADE_SCROLL_ACTIVE,
+            LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE,
+            LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
+            LauncherWakeReasons::PREVIEW_DIRTY,
+            LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
+            LauncherWakeReasons::CRT_BACKDROP_PREPARED,
+            LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
+            LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
+            LauncherWakeReasons::LATENCY_CRITICAL_INPUT,
+        ] {
+            assert!(
+                !LauncherRenderIntent {
+                    first_visible_copy_done: true,
+                    startup_input_enabled: true,
+                    wake_reasons: reason,
+                }
+                .can_sleep()
+            );
+        }
     }
 }
