@@ -157,21 +157,6 @@ aliases = []
 documentation = { summary = "Controls background affinity behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_BENCH_CATALOG_SEARCH_FORCE_PERSISTED"
-owner = "apps/mister/src/launcher.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses in-memory catalog search unless explicitly enabled"
-visibility = "benchmark only"
-parser = "bool"
-typed_default = false
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Forces persisted catalog search for benchmark comparison", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_BOOT_ANALYTICS"
 owner = "mister/platform/runtime/src/boot_analytics.rs"
 classification = "production"
@@ -667,20 +652,6 @@ aliases = []
 documentation = { summary = "Selects the fixed GUI frame profiling route", accepted_values = ["arcade-velocity", "settled-composition", "bridge-churn"], value_policy = "document" }
 
 [[control]]
-name = "MISTER_HOME_SELECTED_INDEX"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "benchmark only"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls home selected index behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_INPUT_INTEGRITY_STALL_MS"
 owner = "apps/mister/src/process_config.rs"
 classification = "test"
@@ -763,20 +734,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls input latency lab session behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_LOCK_SCREEN"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher lock screen behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_COMPLETE"
@@ -903,129 +860,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls launcher response trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_START_SCREEN"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher start screen behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_START_SYSTEM"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher start system behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCH_HANDOFF_DELAY_MS"
-owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch handoff delay ms behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCH_HANDOFF_ITERATIONS"
-owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch handoff iterations behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCH_HANDOFF_LABEL"
-owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch handoff label behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCH_HANDOFF_MODE"
-owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
-classification = "production"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "internal runtime"
-parser = "enum"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch handoff mode behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCH_HANDOFF_TRACE"
-owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch handoff trace behavior", accepted_values = [], value_policy = "document" }
-
-
-
-
-
-
-
-[[control]]
-name = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "benchmark only"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls launch return pmu handoff out behavior", accepted_values = [], value_policy = "redact" }
-
-
-
-
-
 
 [[control]]
 name = "MISTER_LIBRARY_NAMESPACE_BACKEND"

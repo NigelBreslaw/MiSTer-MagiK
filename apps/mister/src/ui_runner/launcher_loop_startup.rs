@@ -50,11 +50,7 @@ pub(super) struct LoopState {
     pub(super) lifecycle_effects: LifecycleEffects,
     pub(super) preview_systems_entered: BTreeSet<String>,
     pub(super) preview_initial_lists_ready: BTreeSet<String>,
-    pub(super) start_screen: Screen,
-    pub(super) lock_screen: Option<Screen>,
     pub(super) launch_return_session: LaunchReturnSession,
-    pub(super) arcade_catalog_required_at_start: bool,
-    pub(super) pending_start_system: Option<String>,
     pub(super) crt_layout: bool,
     pub(super) crt_metrics: CrtUiMetrics,
     pub(super) preview_route: PreviewRoutePolicy,
@@ -121,7 +117,6 @@ pub(super) struct LoopState {
     pub(super) card_prefetch_key: (String, usize),
     pub(super) card_frame_rendered_last_iteration: bool,
     pub(super) launcher_card_home: Option<LauncherCardHomeSession>,
-    pub(super) arcade_screen_pending: bool,
     pub(super) update_check: UpdateCheck,
     pub(super) startup_intro: Option<StartupIntroSession>,
     pub(super) startup_intro_launcher_frame_ready: bool,
@@ -156,7 +151,6 @@ pub(super) fn build_loop_state(
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let frames = 0u64;
     let profile_config = launcher_config.profiles().clone();
-    let benchmark_config = launcher_config.benchmark().clone();
     let screensaver_start_mode = launcher_config.screensaver().start_mode();
     let screensaver_preview_waits_for_analytics =
         launcher_config.screensaver().preview_waits_for_analytics();
@@ -177,13 +171,9 @@ pub(super) fn build_loop_state(
         launcher_config.readiness().clone(),
     );
     let mut scheduler = LauncherScheduler::with_runtime_config(
-        false,
         launcher_config.catalog_paths().clone(),
         launcher_config.archive_cache().clone(),
         launcher_config.media_worker().clone(),
-        benchmark_config
-            .launch_return_pmu_handoff_out()
-            .map(str::to_owned),
     );
     let catalog_events = CatalogJobEventBuf::new();
     let deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
@@ -197,21 +187,7 @@ pub(super) fn build_loop_state(
     let mut lifecycle_effects = LifecycleEffects::new();
     let preview_systems_entered = BTreeSet::new();
     let preview_initial_lists_ready = BTreeSet::new();
-    let env_start_screen = benchmark_config.start_screen();
-    let env_start_system = benchmark_config.start_system().map(str::to_owned);
-    let start_screen = env_start_screen
-        .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
-        .unwrap_or(Screen::Home);
-    let lock_screen = benchmark_config.lock_screen().or_else(|| {
-        env_start_system.as_ref().map(|_| {
-            env_start_screen
-                .filter(|screen| *screen == Screen::Arcade)
-                .unwrap_or(Screen::Arcade)
-        })
-    });
-    let launch_return_restore_allowed = launcher_return_to_launcher_requested()
-        && env_start_screen.is_none()
-        && lock_screen.is_none();
+    let launch_return_restore_allowed = launcher_return_to_launcher_requested();
     let mut launch_return_session = LaunchReturnSession::new(
         launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed),
     );
@@ -220,9 +196,6 @@ pub(super) fn build_loop_state(
     }
     let startup_return_requested = launch_return_session.requested();
     let mut launch_return_restored = false;
-    let arcade_catalog_required_at_start =
-        matches!(start_screen, Screen::Arcade) || matches!(lock_screen, Some(Screen::Arcade));
-    let pending_start_system = env_start_system.clone();
     let crt_layout = ui.output_route().is_crt();
     let crt_metrics = crate::ui_display::CrtUiMetrics::for_display(ui);
     let preview_route = PreviewRoutePolicy::for_output_route(ui.output_route());
@@ -259,7 +232,6 @@ pub(super) fn build_loop_state(
         OrientationTransitionRuntime::new(ui.render_w(), ui.render_h()),
     );
     let settings_cog_render_ahead = SettingsCogSession::new();
-    nav.screen = start_screen;
     let mut display_confirmation = DisplayConfirmation::new();
     let orientation_confirmation = OrientationConfirmation::new(orientation_store);
     let orientation_full_redraw_pending = layout.is_portrait();
@@ -338,14 +310,6 @@ pub(super) fn build_loop_state(
         "launcher",
         production_label()
     );
-    crate::ui_logln!(
-        "launcher_start_screen={} launcher_lock_screen={}",
-        screen_label(start_screen),
-        lock_screen.map(screen_label).unwrap_or("none")
-    );
-    if let Some(system_id) = env_start_system.as_ref() {
-        crate::ui_logln!("launcher_start_system={system_id}");
-    }
     boot_analytics::event(
         "launcher_loop_start",
         format!("label={label} pads={}", pad.len()),
@@ -717,7 +681,6 @@ pub(super) fn build_loop_state(
         }
     }
     nav.set_arcade_exit_locked(return_capsule_active);
-    apply_home_selected(&mut nav, &catalog, benchmark_config.home_selected(), start);
     crate::device_art::warm_in_background();
     // One snapshot of the visible card level, rebuilt only when it no longer
     // matches navigation so the render loop does not allocate labels per frame.
@@ -738,9 +701,6 @@ pub(super) fn build_loop_state(
         }
     };
     let bridge_systems_t = Instant::now();
-    let arcade_screen_pending = (start_screen == Screen::Arcade
-        || lock_screen == Some(Screen::Arcade))
-        && !arcade_navigation_ready(catalog_ready, &catalog);
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let menu_title = slint::SharedString::from(nav.current_menu_title());
     let menu_breadcrumb = slint::SharedString::from(nav.current_menu_breadcrumb());
@@ -884,7 +844,6 @@ pub(super) fn build_loop_state(
     let startup_intro_eligible = startup_intro_is_eligible(
         startup_mode,
         predecessor_catalog_migration_required,
-        false,
         screensaver_start_mode,
         layout.is_portrait(),
     );
@@ -977,11 +936,7 @@ pub(super) fn build_loop_state(
         lifecycle_effects,
         preview_systems_entered,
         preview_initial_lists_ready,
-        start_screen,
-        lock_screen,
         launch_return_session,
-        arcade_catalog_required_at_start,
-        pending_start_system,
         crt_layout,
         crt_metrics,
         preview_route,
@@ -1048,7 +1003,6 @@ pub(super) fn build_loop_state(
         card_prefetch_key,
         card_frame_rendered_last_iteration,
         launcher_card_home,
-        arcade_screen_pending,
         update_check,
         startup_intro,
         startup_intro_launcher_frame_ready,

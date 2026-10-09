@@ -294,28 +294,14 @@ pub enum BridgeSyncPlan {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LauncherEffect {
-    StartupEvent {
-        name: &'static str,
-        detail: String,
-    },
-    BeginLoadingFrame {
-        launch_ref: String,
-    },
-    BeginLaunchHandoff {
-        launch_ref: String,
-        presented_at: Instant,
-    },
+    StartupEvent { name: &'static str, detail: String },
+    BeginLoadingFrame { launch_ref: String },
+    BeginLaunchHandoff { launch_ref: String },
     PresentRecoveryFrame,
     ReturnToIdle,
-    StartCatalogRetry {
-        root: String,
-    },
-    StartCatalogRebuild {
-        root: String,
-    },
-    StartFreshCatalogBuild {
-        root: String,
-    },
+    StartCatalogRetry { root: String },
+    StartCatalogRebuild { root: String },
+    StartFreshCatalogBuild { root: String },
     ExitToMister,
 }
 
@@ -444,7 +430,6 @@ pub enum LauncherLifecycleInput {
     LaunchSucceeded {
         spawned_mister: bool,
     },
-    BenchmarkLaunchCompleted,
     LaunchTimedOut,
 }
 
@@ -1151,20 +1136,6 @@ impl LauncherLifecycle {
                     );
                 }
             }
-            LauncherLifecycleInput::BenchmarkLaunchCompleted => {
-                if matches!(
-                    self.state,
-                    LauncherLifecycleState::Launching { .. }
-                        | LauncherLifecycleState::Handoff { .. }
-                ) {
-                    out.push(LauncherEffect::ReturnToIdle);
-                    self.transition(
-                        LauncherLifecycleState::Idle,
-                        out,
-                        "benchmark_launch_completed",
-                    );
-                }
-            }
             LauncherLifecycleInput::LaunchTimedOut => {
                 if matches!(self.state, LauncherLifecycleState::Launching { .. }) {
                     out.push(LauncherEffect::PresentRecoveryFrame);
@@ -1192,10 +1163,7 @@ impl LauncherLifecycle {
             } => launch_ref.clone(),
             _ => return,
         };
-        out.push(LauncherEffect::BeginLaunchHandoff {
-            launch_ref,
-            presented_at: at,
-        });
+        out.push(LauncherEffect::BeginLaunchHandoff { launch_ref });
         self.transition(
             LauncherLifecycleState::Launching {
                 phase: LaunchingPhase::HandoffPending,
@@ -2058,11 +2026,6 @@ mod tests {
             &mut lifecycle,
             &mut effects,
             LauncherLifecycleInput::LaunchTimedOut,
-        );
-        assert_input_ignored(
-            &mut lifecycle,
-            &mut effects,
-            LauncherLifecycleInput::BenchmarkLaunchCompleted,
         );
     }
 

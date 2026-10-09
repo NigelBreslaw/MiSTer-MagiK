@@ -5041,12 +5041,7 @@ impl LauncherNav {
             self.clear_arcade_search_results(system_id);
             return;
         }
-        let force_persisted_search = crate::process_config::LAB_HOOKS_ENABLED
-            && std::env::var_os("MISTER_BENCH_CATALOG_SEARCH_FORCE_PERSISTED")
-                .is_some_and(|value| value != "0" && value != "off" && value != "false");
-        let Some(results) = (!force_persisted_search)
-            .then(|| catalog.try_search_game_indexes(system_id, &self.arcade_search.query))
-            .flatten()
+        let Some(results) = catalog.try_search_game_indexes(system_id, &self.arcade_search.query)
         else {
             self.queue_arcade_search_request(system_id);
             return;
@@ -6274,110 +6269,6 @@ pub fn mister_running_arcade_core() -> bool {
 pub fn execute_game_launch(launch_target: &LaunchTarget) -> Result<bool, LaunchError> {
     let mut io = SystemLaunchIo;
     execute_game_launch_with(launch_target, &mut io)
-}
-
-#[derive(Debug)]
-pub struct LaunchHandoffBenchResult {
-    pub result: Result<bool, LaunchError>,
-    pub prepare_us: u64,
-    pub handoff_us: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LaunchHandoffBenchMode {
-    SlowFail,
-    Success,
-}
-
-pub fn execute_game_launch_handoff_bench(
-    launch_target: &LaunchTarget,
-    fifo_delay: Duration,
-    mode: LaunchHandoffBenchMode,
-) -> LaunchHandoffBenchResult {
-    struct BenchLaunchIo {
-        fifo_delay: Duration,
-        mode: LaunchHandoffBenchMode,
-        handoff_us: u64,
-    }
-
-    impl LaunchIo for BenchLaunchIo {
-        fn target_exists(&mut self, path: &str) -> bool {
-            Path::new(path).exists()
-        }
-
-        fn mister_running(&mut self) -> bool {
-            true
-        }
-
-        fn magik_running(&mut self) -> bool {
-            true
-        }
-
-        fn simple_joystick_handling(&mut self) -> bool {
-            false
-        }
-
-        fn prepare_simple_input_profiles(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn start_mister(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn wait_for_started_mister(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn wait_for_command_fifo(&mut self) -> Result<(), String> {
-            let start = Instant::now();
-            thread::sleep(self.fifo_delay);
-            self.handoff_us = self
-                .handoff_us
-                .saturating_add(start.elapsed().as_micros() as u64);
-            if self.mode == LaunchHandoffBenchMode::Success {
-                Ok(())
-            } else {
-                Err("benchmark command FIFO timeout".to_string())
-            }
-        }
-
-        fn write_input_policy_marker(
-            &mut self,
-            _simple_joystick_handling: bool,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn write_button_overrides(
-            &mut self,
-            _selection: &EffectLaunchSelection,
-            _simple_joystick_handling: bool,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn write_mister_command(&mut self, _command: &MainCommand) -> Result<(), String> {
-            if self.mode == LaunchHandoffBenchMode::Success {
-                Ok(())
-            } else {
-                Err("benchmark handoff does not write the real MiSTer FIFO".to_string())
-            }
-        }
-    }
-
-    let mut io = BenchLaunchIo {
-        fifo_delay,
-        mode,
-        handoff_us: 0,
-    };
-    let prepare = Instant::now();
-    let result = execute_game_launch_with(launch_target, &mut io);
-    LaunchHandoffBenchResult {
-        result,
-        prepare_us: prepare.elapsed().as_micros() as u64,
-        handoff_us: io.handoff_us,
-    }
 }
 
 fn effect_selection_from_launch_target(

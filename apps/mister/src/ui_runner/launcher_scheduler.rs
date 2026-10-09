@@ -622,35 +622,26 @@ pub(super) struct LauncherScheduler {
 
 impl LauncherScheduler {
     #[cfg(test)]
-    pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
+    pub(super) fn new() -> Self {
         let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
         let archive_cache =
             mister_magik_catalog::catalog_config::ArchiveCacheConfig::capture_process(&paths);
-        Self::with_catalog_config(launch_handoff_bench_enabled, paths, archive_cache)
+        Self::with_catalog_config(paths, archive_cache)
     }
 
     #[cfg(test)]
     pub(super) fn with_catalog_config(
-        launch_handoff_bench_enabled: bool,
         catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
         archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
     ) -> Self {
         let media_config = MediaWorkerConfig::capture_process(&catalog_paths);
-        Self::with_runtime_config(
-            launch_handoff_bench_enabled,
-            catalog_paths,
-            archive_cache,
-            media_config,
-            None,
-        )
+        Self::with_runtime_config(catalog_paths, archive_cache, media_config)
     }
 
     pub(super) fn with_runtime_config(
-        launch_handoff_bench_enabled: bool,
         catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
         archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
         media_config: Result<MediaWorkerConfig, String>,
-        launch_return_pmu_handoff_out: Option<String>,
     ) -> Self {
         let now = Instant::now();
         Self {
@@ -672,10 +663,7 @@ impl LauncherScheduler {
             next_system_entry_sequence: 1,
             system_entry_prepare: SystemEntryPrepareWorker::start(catalog_paths),
             media: MediaJobState::Idle,
-            launch_handoff: LaunchHandoffSession::from_env(
-                launch_handoff_bench_enabled,
-                launch_return_pmu_handoff_out.as_deref(),
-            ),
+            launch_handoff: LaunchHandoffSession::from_env(),
         }
     }
 
@@ -1468,10 +1456,6 @@ impl LauncherScheduler {
         }
     }
 
-    pub(super) fn record_loading_frame(&mut self, loop_start: Instant) {
-        self.launch_handoff.record_loading_frame(loop_start);
-    }
-
     pub(super) fn launch_loading_title(&self) -> &str {
         self.launch_handoff.loading_title()
     }
@@ -1489,29 +1473,19 @@ impl LauncherScheduler {
         self.launch_handoff.has_pending_launch()
     }
 
-    pub(super) fn launch_benchmark_enabled(&self) -> bool {
-        self.launch_handoff.benchmark_enabled()
-    }
-
-    pub(super) fn should_request_benchmark_launch(&self) -> bool {
-        self.launch_handoff.should_request_benchmark_launch()
-    }
-
     pub(super) fn begin_launch(
         &mut self,
         nav: &LauncherNav,
         catalog: &ArcadeCatalog,
         durable_catalog_fingerprint: Option<&str>,
         launch_ref: &str,
-        now: Instant,
     ) -> bool {
         self.launch_handoff
-            .begin_launch(nav, catalog, durable_catalog_fingerprint, launch_ref, now)
+            .begin_launch(nav, catalog, durable_catalog_fingerprint, launch_ref)
     }
 
-    pub(super) fn complete_loading_frame(&mut self, loading_presented: Instant) {
-        self.launch_handoff
-            .complete_loading_frame(loading_presented);
+    pub(super) fn complete_loading_frame(&mut self) {
+        self.launch_handoff.complete_loading_frame();
     }
 
     pub(super) fn poll_launch_completion(
@@ -1525,9 +1499,8 @@ impl LauncherScheduler {
         self.launch_handoff.stop_spawned_mister_for_recovery()
     }
 
-    pub(super) fn finish_launch_failure_recovery(&mut self, recovery_presented: Instant) {
-        self.launch_handoff
-            .finish_failure_recovery(recovery_presented);
+    pub(super) fn finish_launch_failure_recovery(&mut self) {
+        self.launch_handoff.finish_failure_recovery();
     }
 
     pub(super) fn launch_runtime_action(&self, now: Instant) -> Option<LaunchHandoffRuntimeAction> {
@@ -1674,20 +1647,19 @@ mod tests {
 
     #[test]
     fn scheduler_starts_with_idle_system_entry_worker() {
-        let scheduler = LauncherScheduler::new(false);
+        let scheduler = LauncherScheduler::new();
 
         assert!(!scheduler.catalog_worker_running());
         assert!(scheduler.catalog_worker_available());
         assert!(scheduler.system_entry_prepare.is_some());
         assert!(!scheduler.media_worker_running());
         assert!(!scheduler.media_worker_unavailable());
-        assert!(!scheduler.launch_benchmark_enabled());
     }
 
     #[test]
     fn starting_catalog_worker_does_not_detach_existing_worker() {
         let (_tx, rx) = mpsc::channel();
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(rx.into());
 
         assert!(!scheduler.catalog_worker_available());
@@ -1702,7 +1674,7 @@ mod tests {
 
     #[test]
     fn system_shard_requests_deduplicate_without_replacing_the_original_request() {
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
@@ -1734,7 +1706,7 @@ mod tests {
 
     #[test]
     fn system_shard_requests_remain_fifo() {
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
@@ -1766,7 +1738,7 @@ mod tests {
 
     #[test]
     fn system_shard_generation_change_clears_attempts_and_queue() {
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
@@ -1789,7 +1761,7 @@ mod tests {
 
     #[test]
     fn explicit_retry_requeues_a_failed_attempt() {
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
@@ -1810,7 +1782,7 @@ mod tests {
 
     #[test]
     fn system_shard_request_requires_authoritative_generation() {
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
 
         assert!(!scheduler.request_system_shard(
             "c64".to_string(),
@@ -1875,7 +1847,7 @@ mod tests {
         let results = Arc::new(PreparedSystemEntryMailbox::default());
         let (requests, request_rx) = mpsc::channel();
         let (_liveness_tx, liveness) = mpsc::channel();
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
             results: Arc::clone(&results),
@@ -1911,7 +1883,7 @@ mod tests {
         let results = Arc::new(PreparedSystemEntryMailbox::default());
         let (requests, _request_rx) = mpsc::channel();
         let (_liveness_tx, liveness) = mpsc::channel();
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
             results: Arc::clone(&results),
@@ -1954,7 +1926,7 @@ mod tests {
             })
             .unwrap();
         }
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(rx.into());
         let mut events = CatalogJobEventBuf::new();
 
@@ -1998,7 +1970,7 @@ mod tests {
                 error: "deferred".to_string(),
             })
             .unwrap();
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(catalog_rx.into());
         scheduler.search_query = SearchQueryJobState::Running(search_rx);
         let mut events = CatalogJobEventBuf::new();
@@ -2049,7 +2021,7 @@ mod tests {
         let results = Arc::new(PreparedSystemEntryMailbox::default());
         let (requests, _request_rx) = mpsc::channel();
         let (_liveness_tx, liveness) = mpsc::channel();
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(catalog_rx.into());
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
@@ -2098,7 +2070,7 @@ mod tests {
         let results = Arc::new(PreparedSystemEntryMailbox::default());
         let (requests, _request_rx) = mpsc::channel();
         let (_liveness_tx, liveness) = mpsc::channel();
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(catalog_rx.into());
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
@@ -2149,7 +2121,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         tx.send(CatalogWorkerMessage::Done).unwrap();
         drop(tx);
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(rx.into());
         let mut events = CatalogJobEventBuf::new();
 
@@ -2162,7 +2134,7 @@ mod tests {
     fn catalog_poll_surfaces_unexpected_disconnect_as_terminal_failure() {
         let (tx, rx) = mpsc::channel();
         drop(tx);
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(rx.into());
         let mut events = CatalogJobEventBuf::new();
 
@@ -2183,7 +2155,7 @@ mod tests {
         })
         .unwrap();
         let control = Arc::new(CatalogChildControl::test_unreaped());
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(rx.into());
         scheduler.catalog_child_control = Some(Arc::clone(&control));
         let mut events = CatalogJobEventBuf::new();
@@ -2208,7 +2180,7 @@ mod tests {
         let start = Instant::now();
         let (_tx, rx) = mpsc::channel();
         let control = Arc::new(CatalogChildControl::test_unreaped());
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         scheduler.catalog = CatalogJobState::Running(rx.into());
         scheduler.catalog_child_control = Some(Arc::clone(&control));
         let _ = scheduler.catalog_progress.start(

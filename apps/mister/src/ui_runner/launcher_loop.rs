@@ -3180,7 +3180,7 @@ impl LauncherWakeReasons {
     const REDRAW_PENDING: Self = Self(1 << 0);
     const LAUNCHING: Self = Self(1 << 1);
     const SETUP_ACTIVE: Self = Self(1 << 2);
-    const SCRIPTED_INPUT_ACTIVE: Self = Self(1 << 4);
+    const TOOLING_SEQUENCE_ACTIVE: Self = Self(1 << 4);
     const ROUTE_FORCES_FULL_PRESENT: Self = Self(1 << 5);
     const BRIDGE_DIRTY: Self = Self(1 << 6);
     const CATALOG_MESSAGES_ACTIVE: Self = Self(1 << 7);
@@ -5747,10 +5747,6 @@ fn preview_terminal_for_route(
         && matches!(presentation_label, "visible" | "detached")
 }
 
-fn preview_scroll_exit_after_trace_deadline(_run_start: Instant) -> Option<Instant> {
-    None
-}
-
 fn catalog_build_media_gate(
     catalog_refresh_done: bool,
     base: MediaInteractionGate,
@@ -6311,11 +6307,8 @@ fn apply_lifecycle_effects(
                     format!("launch_ref={launch_ref}"),
                 );
             }
-            LauncherEffect::BeginLaunchHandoff {
-                launch_ref,
-                presented_at,
-            } => {
-                scheduler.complete_loading_frame(presented_at);
+            LauncherEffect::BeginLaunchHandoff { launch_ref } => {
+                scheduler.complete_loading_frame();
                 print_startup_event(
                     start,
                     "launcher_lifecycle_handoff_requested",
@@ -6990,15 +6983,12 @@ fn catalog_startup_without_registry_plan(
 fn startup_intro_is_eligible(
     startup_mode: StartupMode,
     predecessor_catalog_migration_required: bool,
-    benchmark_active: bool,
     screensaver_start_mode: ScreensaverStartMode,
     portrait: bool,
 ) -> bool {
     startup_mode == StartupMode::ColdNoCatalog
         && (predecessor_catalog_migration_required
-            || (!benchmark_active
-                && screensaver_start_mode == ScreensaverStartMode::Inactive
-                && !portrait))
+            || (screensaver_start_mode == ScreensaverStartMode::Inactive && !portrait))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7065,14 +7055,6 @@ fn initial_catalog_scan_visible(
         && (foreground_update || !catalog_ready)
 }
 
-fn arcade_catalog_rows_ready(catalog: &ArcadeCatalog) -> bool {
-    !catalog.games.is_empty() || catalog.systems.iter().all(|system| system.count == 0)
-}
-
-fn arcade_navigation_ready(catalog_ready: bool, catalog: &ArcadeCatalog) -> bool {
-    catalog_ready && arcade_catalog_rows_ready(catalog)
-}
-
 fn should_draw_arcade_overlay(
     nav: &LauncherNav,
     launching: bool,
@@ -7101,17 +7083,6 @@ fn update_arcade_physical_layer_tracking(
             content_offset.y = content_offset.y.saturating_add(delta_y as i64);
         }
         _ => {}
-    }
-}
-
-fn effective_lock_screen(
-    lock_screen: Option<Screen>,
-    catalog_ready: bool,
-    catalog: &ArcadeCatalog,
-) -> Option<Screen> {
-    match lock_screen {
-        Some(Screen::Arcade) if !arcade_navigation_ready(catalog_ready, catalog) => None,
-        other => other,
     }
 }
 
@@ -7160,65 +7131,6 @@ fn summary_seed_catalog_worker_starts_immediately(
     return_catalog_hydration_needed: bool,
 ) -> bool {
     request == CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS || return_catalog_hydration_needed
-}
-
-fn apply_start_system_from_env(
-    nav: &mut LauncherNav,
-    catalog: &ArcadeCatalog,
-    system_id: &str,
-    forced_arcade_selected: Option<usize>,
-) -> bool {
-    if !nav.open_system_game_list(catalog, system_id) {
-        return false;
-    }
-    nav.arcade_filter.drawer_open = false;
-    nav.arcade_filter.level = launcher::ArcadeFilterLevel::Top;
-    ui_frame_target::apply_forced_arcade_selected_index(nav, catalog, forced_arcade_selected);
-    true
-}
-
-fn apply_home_selected(
-    nav: &mut LauncherNav,
-    catalog: &ArcadeCatalog,
-    selected: Option<&Result<usize, String>>,
-    start: Instant,
-) {
-    let Some(selected) = selected else {
-        return;
-    };
-    let selected = match selected {
-        Ok(selected) => *selected,
-        Err(value) => {
-            print_startup_event(
-                start,
-                "launcher_home_selected_index_invalid",
-                format!("value={value}"),
-            );
-            return;
-        }
-    };
-    nav.sync_launcher_taxonomy(catalog);
-    let item_count = nav.current_menu_count();
-    if nav.screen != Screen::Home || selected >= item_count {
-        print_startup_event(
-            start,
-            "launcher_home_selected_index_ignored",
-            format!(
-                "value={} screen={} menu_items={}",
-                selected,
-                screen_label(nav.screen),
-                item_count
-            ),
-        );
-        return;
-    }
-    nav.selected = selected;
-    keep_bench_home_visible(&mut nav.scroll_x, nav.selected, item_count);
-    print_startup_event(
-        start,
-        "launcher_home_selected_index_applied",
-        format!("selected={selected}"),
-    );
 }
 
 #[cfg(test)]
@@ -9328,7 +9240,7 @@ mod tests {
 
     #[test]
     fn startup_registry_fingerprint_enables_system_shard_requests() {
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         let generation =
             initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
 
@@ -9346,7 +9258,7 @@ mod tests {
     #[test]
     fn shard_request_state_changes_only_after_scheduler_acceptance() {
         let mut nav = LauncherNav::new();
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         let catalog = empty_arcade_catalog("/tmp");
 
         assert!(!request_system_shard_hydration(
@@ -9399,7 +9311,7 @@ mod tests {
         let registry = arcade_catalog(Vec::new(), vec![arcade_system("c64", 1)]);
         let mut restored_nav = LauncherNav::new();
         restored_nav.sync_launcher_taxonomy(&registry);
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
         let now = Instant::now();
 
@@ -9456,7 +9368,7 @@ mod tests {
         );
         let mut restored_nav = LauncherNav::new();
         restored_nav.sync_launcher_taxonomy(&partial_catalog);
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
         let now = Instant::now();
 
@@ -9571,7 +9483,7 @@ mod tests {
 
         let registry = arcade_catalog(Vec::new(), vec![arcade_system("snes", 3)]);
         restored_nav.sync_launcher_taxonomy(&registry);
-        let mut scheduler = LauncherScheduler::new(false);
+        let mut scheduler = LauncherScheduler::new();
         let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
         let now = Instant::now();
 
@@ -9869,82 +9781,6 @@ mod tests {
     }
 
     #[test]
-    fn start_system_env_selects_matching_system_and_enters_arcade() {
-        let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
-        let mut nav = LauncherNav::new();
-
-        assert!(apply_start_system_from_env(
-            &mut nav, &catalog, "neogeo", None,
-        ));
-
-        assert_eq!(nav.screen, Screen::Arcade);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(nav.arcade.selected, 0);
-        assert_eq!(nav.arcade_filter.active, arcade_catalog::ArcadeFilter::All);
-    }
-
-    #[test]
-    fn start_system_env_preserves_forced_arcade_selected_index() {
-        let catalog = arcade_catalog(
-            vec![
-                arcade_game("Arcade Game")
-                    .path("/media/fat/_Arcade/arcade.mra")
-                    .system_id("arcade")
-                    .build(),
-                arcade_game("Neo Geo First")
-                    .path("/media/fat/_Arcade/neogeo-first.mra")
-                    .system_id("neogeo")
-                    .build(),
-                arcade_game("Neo Geo Second")
-                    .path("/media/fat/_Arcade/neogeo-second.mra")
-                    .system_id("neogeo")
-                    .build(),
-                arcade_game("Saturn Game")
-                    .path("/media/fat/_Arcade/saturn.mra")
-                    .system_id("saturn")
-                    .build(),
-            ],
-            vec![
-                arcade_system("arcade", 1),
-                arcade_system("neogeo", 2),
-                arcade_system("saturn", 1),
-            ],
-        );
-        let mut nav = LauncherNav::new();
-        let applied = apply_start_system_from_env(&mut nav, &catalog, "neogeo", Some(1));
-        assert!(applied);
-        assert_eq!(nav.screen, Screen::Arcade);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(nav.arcade.selected, 1);
-    }
-
-    #[test]
-    fn start_system_env_matches_case_insensitively() {
-        let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
-        let mut nav = LauncherNav::new();
-
-        assert!(apply_start_system_from_env(
-            &mut nav, &catalog, "SATURN", None,
-        ));
-
-        assert_eq!(nav.screen, Screen::Arcade);
-        assert_eq!(nav.selected, 2);
-    }
-
-    #[test]
-    fn start_system_env_fails_without_changing_nav_for_missing_system() {
-        let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
-        let mut nav = LauncherNav::new();
-
-        assert!(!apply_start_system_from_env(
-            &mut nav, &catalog, "psx", None,
-        ));
-
-        assert_eq!(nav.screen, Screen::Home);
-        assert_eq!(nav.selected, 0);
-    }
-
-    #[test]
     fn cold_collection_sequence_keeps_home_until_populated_commit() {
         let empty = ArcadeCatalog::new(
             std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
@@ -10238,30 +10074,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_projection_without_hot_rows_is_not_ready_for_arcade_navigation() {
-        let catalog = summary_catalog_for_media_systems(&["arcade", "amiga"]);
-
-        assert!(!arcade_catalog_rows_ready(&catalog));
-        assert!(!arcade_navigation_ready(true, &catalog));
-        assert_eq!(
-            effective_lock_screen(Some(Screen::Arcade), true, &catalog),
-            None
-        );
-    }
-
-    #[test]
-    pub(super) fn full_catalog_is_ready_for_arcade_navigation() {
-        let catalog = catalog_for_media_systems(&["arcade", "amiga"]);
-
-        assert!(arcade_catalog_rows_ready(&catalog));
-        assert!(arcade_navigation_ready(true, &catalog));
-        assert_eq!(
-            effective_lock_screen(Some(Screen::Arcade), true, &catalog),
-            Some(Screen::Arcade)
-        );
-    }
-
-    #[test]
     pub(super) fn launch_return_restore_requires_volatile_main_flag() {
         assert!(!return_to_launcher_env_is_set(None));
         assert!(!return_to_launcher_env_is_set(Some("0")));
@@ -10450,15 +10262,6 @@ mod tests {
         let first_item_active = cache.items(&catalog, &nav, 7)[0].active;
         assert_eq!(cache.rebuilds, 3);
         assert!(first_item_active);
-    }
-
-    #[test]
-    pub(super) fn genuinely_empty_catalog_rows_are_not_pending_summary_rows() {
-        let catalog = empty_arcade_catalog("/media/fat/_Arcade");
-
-        assert!(!active_system_games_loading(&catalog, &LauncherNav::new()));
-        assert!(arcade_catalog_rows_ready(&catalog));
-        assert!(!arcade_navigation_ready(false, &catalog));
     }
 
     #[test]
@@ -11471,28 +11274,19 @@ mod tests {
 
     #[test]
     pub(super) fn first_build_survives_non_intro_startup_sequences() {
-        for (startup_mode, benchmark_active, screensaver_start_mode, portrait) in [
+        for (startup_mode, screensaver_start_mode, portrait) in [
             (
                 StartupMode::ColdNoCatalog,
-                true,
-                ScreensaverStartMode::Inactive,
-                false,
-            ),
-            (
-                StartupMode::ColdNoCatalog,
-                false,
                 ScreensaverStartMode::IdleWhenReady,
                 false,
             ),
             (
                 StartupMode::ColdNoCatalog,
-                false,
                 ScreensaverStartMode::Inactive,
                 true,
             ),
             (
                 StartupMode::ReturnFromGame,
-                false,
                 ScreensaverStartMode::Inactive,
                 false,
             ),
@@ -11500,7 +11294,6 @@ mod tests {
             assert!(!startup_intro_is_eligible(
                 startup_mode,
                 false,
-                benchmark_active,
                 screensaver_start_mode,
                 portrait,
             ));
@@ -11546,14 +11339,12 @@ mod tests {
         assert!(startup_intro_is_eligible(
             StartupMode::ColdNoCatalog,
             true,
-            true,
             ScreensaverStartMode::IdleWhenReady,
             true,
         ));
         assert!(!startup_intro_is_eligible(
             StartupMode::WarmCatalog,
             true,
-            false,
             ScreensaverStartMode::Inactive,
             false,
         ));

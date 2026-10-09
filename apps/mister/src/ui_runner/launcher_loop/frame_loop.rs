@@ -35,10 +35,7 @@ pub(super) struct Library {
     pub(super) lifecycle_effects: LifecycleEffects,
     pub(super) preview_systems_entered: BTreeSet<String>,
     pub(super) preview_initial_lists_ready: BTreeSet<String>,
-    pub(super) start_screen: Screen,
-    pub(super) lock_screen: Option<Screen>,
     pub(super) launch_return_session: LaunchReturnSession,
-    pub(super) pending_start_system: Option<String>,
     pub(super) loading_title: String,
     pub(super) preview: PreviewState,
     pub(super) catalog_version: usize,
@@ -54,7 +51,6 @@ pub(super) struct Library {
     pub(super) catalog_generation: CatalogGenerationState,
     pub(super) card_level: crate::launcher_home::CardLevelSnapshot,
     pub(super) card_prefetch_key: (String, usize),
-    pub(super) arcade_screen_pending: bool,
     pub(super) update_check: UpdateCheck,
     pub(super) memory_guard: crate::memory_pressure::MemoryPressureGuard,
     pub(super) catalog_contention_quiet_previews: bool,
@@ -152,7 +148,7 @@ pub(super) struct Effects {
     pub(super) startup_intro_catalog_shells_pending: bool,
 }
 
-/// Profiling, accounting, tooling and benchmark hooks.
+/// Profiling, accounting and tooling.
 pub(super) struct Diagnostics {
     pub(super) ui_action_sequence: u64,
     pub(super) startup_monotonic_us: u64,
@@ -168,7 +164,6 @@ pub(super) struct Diagnostics {
     pub(super) cpu: Option<cpu_profile::CpuProfiler>,
     pub(super) system_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     pub(super) screensaver_cpu_profile: cpu_profile::ScreensaverProfiler,
-    pub(super) preview_scroll_exit_at: Option<Instant>,
     pub(super) first_render_logged: bool,
     pub(super) first_vsync_logged: bool,
     pub(super) first_launcher_frame_logged: bool,
@@ -205,11 +200,8 @@ pub(super) struct FrameLoop<'a> {
     pub(super) diag: Diagnostics,
 }
 
-/// Why a phase ended the frame early.
-enum Exit {
-    /// Start the next frame.
-    Skip,
-}
+/// A phase ended the frame early: the loop starts the next one.
+struct EndFrame;
 
 /// Records when pre-input step `$index` ended, for the tooling frame evidence.
 macro_rules! note_pre_input_boundary {
@@ -454,11 +446,7 @@ impl<'a> FrameLoop<'a> {
             lifecycle_effects,
             preview_systems_entered,
             preview_initial_lists_ready,
-            start_screen,
-            lock_screen,
             launch_return_session,
-            arcade_catalog_required_at_start,
-            pending_start_system,
             crt_layout,
             crt_metrics,
             preview_route,
@@ -525,7 +513,6 @@ impl<'a> FrameLoop<'a> {
             card_prefetch_key,
             card_frame_rendered_last_iteration,
             launcher_card_home,
-            arcade_screen_pending,
             update_check,
             startup_intro,
             startup_intro_launcher_frame_ready,
@@ -542,14 +529,7 @@ impl<'a> FrameLoop<'a> {
             process_entry_cpu_profile,
             &launcher_config,
         );
-        let run_start = if arcade_catalog_required_at_start
-            && arcade_navigation_ready(catalog_ready, &catalog)
-        {
-            Instant::now()
-        } else {
-            start
-        };
-        let preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
+        let run_start = start;
         let first_render_logged = false;
         let first_vsync_logged = false;
         let first_launcher_frame_logged = false;
@@ -667,10 +647,7 @@ impl<'a> FrameLoop<'a> {
                 lifecycle_effects,
                 preview_systems_entered,
                 preview_initial_lists_ready,
-                start_screen,
-                lock_screen,
                 launch_return_session,
-                pending_start_system,
                 loading_title,
                 preview,
                 catalog_version,
@@ -686,7 +663,6 @@ impl<'a> FrameLoop<'a> {
                 catalog_generation,
                 card_level,
                 card_prefetch_key,
-                arcade_screen_pending,
                 update_check,
                 memory_guard,
                 catalog_contention_quiet_previews,
@@ -789,7 +765,6 @@ impl<'a> FrameLoop<'a> {
                 cpu,
                 system_entry_cpu_profile,
                 screensaver_cpu_profile,
-                preview_scroll_exit_at,
                 first_render_logged,
                 first_vsync_logged,
                 first_launcher_frame_logged,
@@ -819,9 +794,7 @@ impl<'a> FrameLoop<'a> {
 
     pub(super) fn run(&mut self) {
         while self.keep_running() {
-            match self.frame() {
-                Err(Exit::Skip) | Ok(()) => {}
-            }
+            let _ = self.frame();
         }
         if self.fx.startup_intro.take().is_some() {
             self.out
@@ -861,15 +834,11 @@ impl<'a> FrameLoop<'a> {
 
     /// Whether the loop should run another frame.
     fn keep_running(&self) -> bool {
-        (self.env.secs == 0 || self.out.run_start.elapsed().as_secs() < self.env.secs)
-            && self
-                .diag
-                .preview_scroll_exit_at
-                .is_none_or(|deadline| Instant::now() < deadline)
+        self.env.secs == 0 || self.out.run_start.elapsed().as_secs() < self.env.secs
     }
 
     /// One pass of the loop: each phase in order, stopping early when one ends the frame.
-    fn frame(&mut self) -> Result<(), Exit> {
+    fn frame(&mut self) -> Result<(), EndFrame> {
         let mut begin = self.begin()?;
         let mut pre_input = self.pre_input(&mut begin)?;
         let mut input = self.input(&mut begin, &mut pre_input)?;
@@ -880,7 +849,7 @@ impl<'a> FrameLoop<'a> {
     }
 
     /// Opens the frame: tooling evidence, pending Slint callbacks and the tooling session tick.
-    fn begin(&mut self) -> Result<BeginFrame, Exit> {
+    fn begin(&mut self) -> Result<BeginFrame, EndFrame> {
         #[cfg(feature = "tooling")]
         let tooling_frame_begin = Instant::now();
         #[cfg(feature = "tooling")]
@@ -1007,12 +976,12 @@ impl<'a> FrameLoop<'a> {
         })
     }
 
-    /// Everything that runs before input is read: timers, lifecycle, catalog and media workers, launch completion, pending starts, the benchmark hooks and the screensaver.
+    /// Everything that runs before input is read: timers, lifecycle, catalog and media workers, launch completion, pending starts and the screensaver.
     fn pre_input(
         &mut self,
         #[cfg_attr(not(feature = "tooling"), allow(unused_variables, unused_mut))]
         begin: &mut BeginFrame,
-    ) -> Result<PreInputFrame, Exit> {
+    ) -> Result<PreInputFrame, EndFrame> {
         self.diag.gui_profiling.tick(Instant::now());
         let mut scheduler_phase = self.diag.launcher_response_trace.scheduler_boundary();
         note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 0);
@@ -1031,7 +1000,7 @@ impl<'a> FrameLoop<'a> {
         match self.inp.library_reset.poll(loop_start) {
             Ok(true) => {
                 let _pace = self.out.pacer.wait();
-                return Err(Exit::Skip);
+                return Err(EndFrame);
             }
             Ok(false) => {}
             Err(error) => {
@@ -1275,7 +1244,6 @@ impl<'a> FrameLoop<'a> {
             &mut self.lib.scheduler,
             self.out.start,
         );
-        self.lib.scheduler.record_loading_frame(loop_start);
         if self
             .out
             .launcher_presenter
@@ -1722,17 +1690,13 @@ impl<'a> FrameLoop<'a> {
 
         if let Some(completion) = self.lib.scheduler.poll_launch_completion(Instant::now()) {
             match completion {
-                LaunchHandoffCompletion::Success { benchmark_terminal } => {
-                    let input = if benchmark_terminal {
-                        LauncherLifecycleInput::BenchmarkLaunchCompleted
-                    } else {
+                LaunchHandoffCompletion::Success => {
+                    self.lib.lifecycle.handle(
                         LauncherLifecycleInput::LaunchSucceeded {
                             spawned_mister: false,
-                        }
-                    };
-                    self.lib
-                        .lifecycle
-                        .handle(input, &mut self.lib.lifecycle_effects);
+                        },
+                        &mut self.lib.lifecycle_effects,
+                    );
                     apply_lifecycle_effects(
                         &mut self.lib.lifecycle_effects,
                         &mut self.lib.scheduler,
@@ -1799,11 +1763,8 @@ impl<'a> FrameLoop<'a> {
                             self.env.ui.render_h(),
                         );
                     }
-                    let recovery_presented = Instant::now();
                     self.env.window.request_redraw();
-                    self.lib
-                        .scheduler
-                        .finish_launch_failure_recovery(recovery_presented);
+                    self.lib.scheduler.finish_launch_failure_recovery();
                     record_launcher_frame_phase!(LauncherFramePhase::LaunchRecoveryApplied);
                     crate::ui_errln!("game launch failed: {error}");
                 }
@@ -1814,25 +1775,6 @@ impl<'a> FrameLoop<'a> {
             .launcher_response_trace
             .record_scheduler_interval("pre-input-launch-lifecycle", scheduler_phase);
         note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 7);
-
-        if self.lib.arcade_screen_pending
-            && arcade_navigation_ready(self.lib.catalog_ready, &self.lib.catalog)
-        {
-            let before = LauncherProjectionKey::from_nav(&self.ui.nav);
-            if self.ui.nav.active_collection().is_none() {
-                let _ = self.ui.nav.open_default_arcade(&self.lib.catalog);
-            } else {
-                self.ui.nav.screen = Screen::Arcade;
-            }
-            self.lib.arcade_screen_pending = false;
-            full_bridge_dirty = true;
-            let after = LauncherProjectionKey::from_nav(&self.ui.nav);
-            if before != after {
-                self.lib
-                    .media_session
-                    .note_nav_change(&before, &after, Instant::now());
-            }
-        }
 
         if !self.out.director.navigation.is_active()
             && commit_pending_collection_entry(
@@ -1936,54 +1878,11 @@ impl<'a> FrameLoop<'a> {
             self.env.window.request_redraw();
         }
 
-        if let Some(system_id) = self.lib.pending_start_system.take() {
-            if arcade_navigation_ready(self.lib.catalog_ready, &self.lib.catalog) {
-                let before = LauncherProjectionKey::from_nav(&self.ui.nav);
-                if apply_start_system_from_env(
-                    &mut self.ui.nav,
-                    &self.lib.catalog,
-                    &system_id,
-                    ui_frame_target::forced_arcade_selected_index(),
-                ) {
-                    print_startup_event(
-                        self.out.start,
-                        "launcher_start_system_applied",
-                        format!("system={system_id}"),
-                    );
-                    let after = LauncherProjectionKey::from_nav(&self.ui.nav);
-                    if before != after {
-                        self.lib
-                            .media_session
-                            .note_nav_change(&before, &after, Instant::now());
-                        full_bridge_dirty = true;
-                    }
-                } else {
-                    print_startup_event(
-                        self.out.start,
-                        "launcher_start_system_fallback",
-                        format!("system={system_id} reason=missing"),
-                    );
-                    self.ui.nav.go_root();
-                    full_bridge_dirty = true;
-                }
-            } else {
-                self.lib.pending_start_system = Some(system_id);
-            }
-        }
-
         scheduler_phase = self
             .diag
             .launcher_response_trace
             .record_scheduler_interval("pre-input-navigation", scheduler_phase);
         note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 8);
-
-        if let Some(screen) = effective_lock_screen(
-            self.lib.lock_screen,
-            self.lib.catalog_ready,
-            &self.lib.catalog,
-        ) {
-            self.ui.nav.screen = screen;
-        }
 
         let catalog_build_busy = screensaver_catalog_busy(
             self.lib.scheduler.catalog_worker_running(),
@@ -2072,7 +1971,7 @@ impl<'a> FrameLoop<'a> {
         #[cfg_attr(not(feature = "tooling"), allow(unused_variables, unused_mut))]
         begin: &mut BeginFrame,
         pre_input: &mut PreInputFrame,
-    ) -> Result<InputFrame, Exit> {
+    ) -> Result<InputFrame, EndFrame> {
         let input_fault_notice: Option<&'static str>;
         record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance);
         let (input_phase_yielded, input_batch_empty) = 'input_phase: {
@@ -2625,25 +2524,6 @@ impl<'a> FrameLoop<'a> {
                                     pre_input.full_bridge_dirty = true;
                                 }
                                 None
-                            } else if self.lib.scheduler.should_request_benchmark_launch()
-                                && self.lib.catalog_ready
-                                && self.ui.nav.screen == Screen::Arcade
-                            {
-                                active_system(&self.lib.catalog, &self.ui.nav)
-                                    .and_then(|system| {
-                                        self.ui.nav.active_arcade_game_at(
-                                            &self.lib.catalog,
-                                            &system.id,
-                                            self.ui.nav.arcade.selected,
-                                        )
-                                    })
-                                    .map(|game| launcher::LauncherEvent {
-                                        action: LauncherAction::LaunchGame,
-                                        path: Some(game.mra_path.to_string()),
-                                        settings: None,
-                                    })
-                            } else if self.lib.scheduler.launch_benchmark_enabled() {
-                                None
                             } else if let Some(input_event) = routed_event_this_loop.as_ref() {
                                 self.ui.nav.handle_action_with_navigation_intents(
                                     input_event,
@@ -2912,7 +2792,7 @@ impl<'a> FrameLoop<'a> {
                                             self.out.start,
                                         );
                                         self.env.window.request_redraw();
-                                        return Err(Exit::Skip);
+                                        return Err(EndFrame);
                                     }
                                     LauncherAction::Restart | LauncherAction::PurgeLibraryData => {
                                         let resetting =
@@ -2924,7 +2804,7 @@ impl<'a> FrameLoop<'a> {
                                             self.ui.nav.show_library_reset_error("Catalog or screenshot work is still running. Wait for it to finish, then hold A for 7 seconds again.".into());
                                             self.inp.library_reset_bridge_dirty = true;
                                             self.env.window.request_redraw();
-                                            return Err(Exit::Skip);
+                                            return Err(EndFrame);
                                         }
                                         self.lib.loading_title = if resetting {
                                             "Deleting database and screenshot packs…"
@@ -2986,11 +2866,11 @@ impl<'a> FrameLoop<'a> {
                                                     self.env.window.request_redraw();
                                                 }
                                             }
-                                            return Err(Exit::Skip);
+                                            return Err(EndFrame);
                                         }
                                         std::thread::sleep(Duration::from_millis(250));
                                         match launcher::reboot_mister() {
-                                            Ok(()) => return Err(Exit::Skip),
+                                            Ok(()) => return Err(EndFrame),
                                             Err(e) => {
                                                 crate::ui_errln!("restart failed: {e}");
                                                 self.lib.loading_title.clear();
@@ -3010,7 +2890,7 @@ impl<'a> FrameLoop<'a> {
                                             self.out.start,
                                         );
                                         self.env.window.request_redraw();
-                                        return Err(Exit::Skip);
+                                        return Err(EndFrame);
                                     }
                                     LauncherAction::RebuildLibrary => {
                                         let effects = self
@@ -3027,7 +2907,7 @@ impl<'a> FrameLoop<'a> {
                                             self.out.start,
                                         );
                                         self.env.window.request_redraw();
-                                        return Err(Exit::Skip);
+                                        return Err(EndFrame);
                                     }
                                     LauncherAction::ApplyDisplayResolution => {
                                         if let Some(id) = event.path.as_deref() {
@@ -3136,7 +3016,7 @@ impl<'a> FrameLoop<'a> {
                                             self.fx.screensaver.preview(frame_now);
                                         }
                                         self.env.window.request_redraw();
-                                        return Err(Exit::Skip);
+                                        return Err(EndFrame);
                                     }
                                     LauncherAction::PersistSettings => {
                                         if let Some(settings) = event.settings.as_ref() {
@@ -3230,7 +3110,6 @@ impl<'a> FrameLoop<'a> {
                                         &self.lib.catalog,
                                         self.lib.catalog_generation.durable.as_deref(),
                                         &mra,
-                                        Instant::now(),
                                     ) {
                                         self.lib.lifecycle.handle(
                                             LauncherLifecycleInput::LaunchFailed {
@@ -3398,14 +3277,6 @@ impl<'a> FrameLoop<'a> {
                 self.diag
                     .input_integrity_trace
                     .flush_if_due(Instant::now(), &self.inp.input_router);
-
-                if let Some(screen) = effective_lock_screen(
-                    self.lib.lock_screen,
-                    self.lib.catalog_ready,
-                    &self.lib.catalog,
-                ) {
-                    self.ui.nav.screen = screen;
-                }
             } else {
                 if let Some(action) = self.lib.scheduler.launch_runtime_action(Instant::now()) {
                     match action {
@@ -3466,9 +3337,9 @@ impl<'a> FrameLoop<'a> {
         begin: &mut BeginFrame,
         pre_input: &mut PreInputFrame,
         input: &mut InputFrame,
-    ) -> Result<ProjectFrame, Exit> {
+    ) -> Result<ProjectFrame, EndFrame> {
         if input.input_phase_yielded {
-            return Err(Exit::Skip);
+            return Err(EndFrame);
         }
         let interaction_projection_pmu = self.diag.launcher_response_trace.input_pmu_span(
             self.inp.latency_critical_input_pending,
@@ -4310,7 +4181,7 @@ impl<'a> FrameLoop<'a> {
         #[cfg(not(feature = "tooling"))]
         let tooling_sequence_pending = false;
         wake_reasons.insert_if(
-            LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
+            LauncherWakeReasons::TOOLING_SEQUENCE_ACTIVE,
             tooling_sequence_pending,
         );
         wake_reasons.insert_if(
@@ -4436,7 +4307,7 @@ impl<'a> FrameLoop<'a> {
                 .diag
                 .launcher_response_trace
                 .record_scheduler_interval("input-priority-restart", pre_input.scheduler_phase);
-            return Err(Exit::Skip);
+            return Err(EndFrame);
         }
         if render_intent.can_sleep() {
             #[cfg(feature = "tooling")]
@@ -4454,7 +4325,7 @@ impl<'a> FrameLoop<'a> {
                 .cooperative_quantum(self.inp.input_observation)
             {
                 self.diag.launcher_response_trace.record_lab(Some(record));
-                return Err(Exit::Skip);
+                return Err(EndFrame);
             }
             self.diag.frame_accounting.finish_idle_loop(
                 self.out.frames,
@@ -4477,8 +4348,6 @@ impl<'a> FrameLoop<'a> {
                     confirm_visible,
                     confirm_selected,
                     status_text: status_text.as_ref(),
-                    start_screen: self.lib.start_screen,
-                    lock_screen: self.lib.lock_screen,
                     route_reassert_count: self.env.display_session.reassert_count(),
                     last_route_reassert_frame: self.env.display_session.last_reassert_frame(),
                     last_route_reassert_ok: self.env.display_session.last_reassert_ok(),
@@ -4536,7 +4405,7 @@ impl<'a> FrameLoop<'a> {
                 .launcher_response_trace
                 .record_scheduler_interval("idle-input-wait", pre_input.scheduler_phase);
             record_launcher_frame_phase!(LauncherFramePhase::Yielded);
-            return Err(Exit::Skip);
+            return Err(EndFrame);
         }
 
         Ok(ProjectFrame {
@@ -4587,7 +4456,7 @@ impl<'a> FrameLoop<'a> {
         pre_input: &mut PreInputFrame,
         input: InputFrame,
         project: &mut ProjectFrame,
-    ) -> Result<RenderFrame, Exit> {
+    ) -> Result<RenderFrame, EndFrame> {
         let active_arcade_games = if !pre_input.launching && self.ui.nav.screen == Screen::Arcade {
             active_system_game_view(&self.lib.catalog, &self.ui.nav)
         } else {
@@ -4651,7 +4520,7 @@ impl<'a> FrameLoop<'a> {
                         pre_input.scheduler_phase,
                     );
                     self.env.window.request_redraw();
-                    return Err(Exit::Skip);
+                    return Err(EndFrame);
                 }
             }
         } else {
@@ -5619,7 +5488,7 @@ impl<'a> FrameLoop<'a> {
                 Instant::now(),
             );
             self.env.window.request_redraw();
-            return Err(Exit::Skip);
+            return Err(EndFrame);
         }
         let frame_plan_pmu = self.diag.launcher_response_trace.input_pmu_span(
             self.inp.latency_critical_input_pending,
@@ -7021,7 +6890,7 @@ impl<'a> FrameLoop<'a> {
         mut pre_input: PreInputFrame,
         project: ProjectFrame,
         mut render: RenderFrame,
-    ) -> Result<(), Exit> {
+    ) -> Result<(), EndFrame> {
         let mut layer_target = LayerTarget::new_oriented_with_epoch(
             self.env.target,
             self.out.layout,
@@ -7489,8 +7358,6 @@ impl<'a> FrameLoop<'a> {
             confirm_visible: project.confirm_visible,
             confirm_selected: project.confirm_selected,
             status_text: project.status_text.as_ref(),
-            start_screen: self.lib.start_screen,
-            lock_screen: self.lib.lock_screen,
             route_reassert_count: self.env.display_session.reassert_count(),
             last_route_reassert_frame: self.env.display_session.last_reassert_frame(),
             last_route_reassert_ok: self.env.display_session.last_reassert_ok(),
@@ -7558,7 +7425,7 @@ impl<'a> FrameLoop<'a> {
                 window: self.env.window,
             })
             else {
-                return Err(Exit::Skip);
+                return Err(EndFrame);
             };
             account_confirmed_present(ConfirmedPresent {
                 accepted_and_active_confirmed: &mut accepted_and_active_confirmed,

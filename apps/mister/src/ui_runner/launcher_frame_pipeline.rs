@@ -114,7 +114,7 @@ mod tests {
         assert!(input.contains("(false,input_batch_empty)"));
         let project = function("project");
         assert!(
-            project.contains("ifinput.input_phase_yielded{returnErr(Exit::Skip);}"),
+            project.contains("ifinput.input_phase_yielded{returnErr(EndFrame);}"),
             "a yielded input phase must end the frame before projection"
         );
     }

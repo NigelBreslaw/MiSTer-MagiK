@@ -166,8 +166,6 @@ launcher_status_types! {
         direct_layer_retirement_receipt,
         last_composition_invariant_kind,
         last_composition_invariant_detail,
-        start_screen,
-        lock_screen,
         last_route_reassert_error,
         launch_state,
         loading_title,
@@ -1013,8 +1011,6 @@ fn write_launcher_status_json_tail(
         "last_composition_invariant_detail",
         status.last_composition_invariant_detail
     );
-    field!("start_screen", status.start_screen);
-    field!("lock_screen", status.lock_screen);
     field!("route_reassert_count", status.route_reassert_count);
     field!(
         "last_route_reassert_frame",
@@ -1316,8 +1312,6 @@ fn launcher_status_value(
         "last_composition_invariant_detail",
         status.last_composition_invariant_detail
     );
-    insert!("start_screen", status.start_screen);
-    insert!("lock_screen", status.lock_screen);
     insert!("route_reassert_count", status.route_reassert_count);
     insert!(
         "last_route_reassert_frame",
@@ -1929,8 +1923,6 @@ mod tests {
                 direct_layer_retirement_receipt_route_epoch: 0,
                 last_composition_invariant_kind: "",
                 last_composition_invariant_detail: "",
-                start_screen: "arcade",
-                lock_screen: "arcade",
                 route_reassert_count: 2,
                 last_route_reassert_frame: 120,
                 last_route_reassert_ok: true,
@@ -2485,8 +2477,6 @@ mod tests {
             direct_layer_retirement_receipt_route_epoch: 0,
             last_composition_invariant_kind: "",
             last_composition_invariant_detail: "",
-            start_screen: "home",
-            lock_screen: "none",
             route_reassert_count: 0,
             last_route_reassert_frame: 0,
             last_route_reassert_ok: false,
