@@ -2087,6 +2087,7 @@ mod tests {
                         present_phase_us: 321,
                     }],
                 },
+                phase_profile: PhaseProfileStatus::default(),
             },
             5678,
             101,
@@ -2496,11 +2497,10 @@ mod tests {
     fn streamed_launcher_status_is_value_equivalent_to_legacy_document() {
         let counters = RuntimeStatusPublisherCounters::default();
         let mut bytes = Vec::new();
-        let owned = OwnedLauncherStatus::from(publisher_status(1, "arcade", "disabled"));
+        let owned = OwnedLauncherStatus::from(publisher_status(1, "arcade"));
         write_launcher_status_json(&mut bytes, &owned, 123, 99, &counters).unwrap();
         let mut streamed: Value = serde_json::from_slice(&bytes).unwrap();
-        let mut expected =
-            launcher_status_value(publisher_status(1, "arcade", "disabled"), 123, 99);
+        let mut expected = launcher_status_value(publisher_status(1, "arcade"), 123, 99);
         let map = expected.as_object_mut().unwrap();
         map.insert("status_publish_mode".into(), json!("async"));
         map.insert("status_submitted_sequence".into(), json!(1));
@@ -2522,7 +2522,7 @@ mod tests {
     fn runtime_status_publisher_replaces_status_file_atomically() {
         let path = std::env::temp_dir().join(unique_name("runtime-status.json"));
         let publisher = RuntimeStatusPublisher::new_for_test(path.clone(), Duration::ZERO);
-        publisher.submit(publisher_status(1, "arcade", "disabled"));
+        publisher.submit(publisher_status(1, "arcade"));
         drop(publisher);
 
         let text = fs::read_to_string(&path).expect("status json should be written");
@@ -2565,8 +2565,8 @@ mod tests {
         let path = std::env::temp_dir().join(unique_name("runtime-status-coalesce.json"));
         let publisher =
             RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(50));
-        publisher.submit(publisher_status(1, "home", "active"));
-        publisher.submit(publisher_status(2, "settings", "active"));
+        publisher.submit(publisher_status(1, "home"));
+        publisher.submit(publisher_status(2, "settings"));
         publisher.submit(publisher_status(3, "arcade"));
         let metrics = wait_for_publisher(&publisher, |metrics| metrics.written_sequence == 3);
         assert_eq!(metrics.submitted_sequence, 3);
@@ -2584,7 +2584,7 @@ mod tests {
         let path = std::env::temp_dir().join(unique_name("runtime-status-failure"));
         fs::create_dir_all(&path).unwrap();
         let publisher = RuntimeStatusPublisher::new_for_test(path.clone(), Duration::ZERO);
-        publisher.submit(publisher_status(4, "home", "active"));
+        publisher.submit(publisher_status(4, "home"));
         let metrics = wait_for_publisher(&publisher, |metrics| metrics.worker_errors > 0);
         assert_eq!(metrics.written_sequence, 0);
         assert!(metrics.worker_errors > 0);
@@ -2611,7 +2611,7 @@ mod tests {
         let publisher =
             RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(100));
         let started = Instant::now();
-        publisher.submit(publisher_status(1, "home", "active"));
+        publisher.submit(publisher_status(1, "home"));
         assert!(started.elapsed() < Duration::from_millis(50));
         drop(publisher);
         let _ = fs::remove_file(path);
