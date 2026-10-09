@@ -363,17 +363,17 @@ with tempfile.TemporaryDirectory() as directory:
                 },
             ):
                 build._write_build_identity(
-                    root, "runtime-device", "release-device", "ui,profile", "cross"
+                    root, "runtime-device", "release-device", "ui", "cross"
                 )
 
             self.assertEqual(
                 artifact.with_name(f"{artifact.name}.features").read_text(),
-                "ui,profile",
+                "ui",
             )
             receipt = artifact.with_name(f"{artifact.name}.build-receipt.tsv")
             receipt_text = receipt.read_text()
             self.assertIn("profile=release-device", receipt_text)
-            self.assertIn("features=ui,profile", receipt_text)
+            self.assertIn("features=ui", receipt_text)
             self.assertIn("build_number=42", receipt_text)
             self.assertIn("version=0.2.42", receipt_text)
 

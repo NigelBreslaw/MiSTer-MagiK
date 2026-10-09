@@ -104,7 +104,7 @@ def test_inventory_uses_the_shipped_arm_features():
     ) as metadata:
         licenses.metadata()
     command = metadata.call_args.args[0]
-    assert command[command.index("--features") + 1] == "ui,profile"
+    assert command[command.index("--features") + 1] == "ui"
     assert (
         command[command.index("--filter-platform") + 1]
         == "armv7-unknown-linux-gnueabihf"

@@ -25,7 +25,6 @@ pub(super) struct LauncherFrameAccounting {
     crt_font_experiment: &'static str,
     framebuffer_width: usize,
     framebuffer_height: usize,
-    fps_log_enabled: bool,
     fps_window_start: Instant,
     fps_frames: u64,
     prepare_us: u128,
@@ -38,13 +37,10 @@ pub(super) struct LauncherFrameAccounting {
     direct_preview_present_us: u128,
     arcade_list_present_us: u128,
     rows: u128,
-    #[cfg(feature = "profile")]
-    boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
     runtime_status_publisher: runtime_status::RuntimeStatusPublisher,
     last_status_write: Instant,
     status_sequence: u64,
     last_media_receipt: String,
-    profile_completion_submitted: bool,
     first_copy_logged: bool,
     first_frame_logged: bool,
     first_visible_copy_done: bool,
@@ -461,14 +457,12 @@ impl LauncherFrameAccounting {
         crt_font_experiment: &'static str,
         framebuffer_width: usize,
         framebuffer_height: usize,
-        profile_fps_log_enabled: bool,
     ) -> Self {
         Self {
             output_route,
             crt_font_experiment,
             framebuffer_width,
             framebuffer_height,
-            fps_log_enabled: profile_fps_log_enabled,
             fps_window_start: run_start,
             fps_frames: 0,
             prepare_us: 0,
@@ -481,13 +475,10 @@ impl LauncherFrameAccounting {
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
             rows: 0,
-            #[cfg(feature = "profile")]
-            boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
             runtime_status_publisher: runtime_status::RuntimeStatusPublisher::new(),
             last_status_write: Instant::now() - Duration::from_secs(2),
             status_sequence: 0,
             last_media_receipt: String::new(),
-            profile_completion_submitted: false,
             first_copy_logged: false,
             first_frame_logged: false,
             first_visible_copy_done: false,
@@ -572,8 +563,6 @@ impl LauncherFrameAccounting {
 
     pub(super) fn status_write_due(&self) -> bool {
         self.last_status_write.elapsed() >= Duration::from_secs(1)
-            || (!self.profile_completion_submitted
-                && cpu_profile::screensaver_profile_state() == "complete")
     }
 
     pub(super) fn runtime_status_worker_active(&self) -> bool {
@@ -659,8 +648,6 @@ impl LauncherFrameAccounting {
         self.record_stable_samples(frame.frames, disp);
         self.last_rendered_frame_at = frame.frame_t4;
         self.idle_loops_since_status = 0;
-        #[cfg(feature = "profile")]
-        self.record_boot_frame_profile(frame, disp);
         self.record_first_frame(frame, start, catalog_ready);
     }
 
@@ -783,22 +770,6 @@ impl LauncherFrameAccounting {
             self.last_rolling_vsync_us = (self.vsync_us / n) as u64;
             self.last_rolling_present_us = (self.copy_us / n) as u64;
             self.last_rolling_rows = (self.rows / n) as u64;
-            if self.fps_log_enabled {
-                crate::ui_logln!(
-                    "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us hidden-compose {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
-                    self.fps_frames,
-                    self.prepare_us / n,
-                    self.render_us / n,
-                    self.custom_draw_us / n,
-                    self.vsync_us / n,
-                    self.copy_us / n,
-                    self.cached_present_us / n,
-                    self.hidden_compose_us / n,
-                    self.direct_preview_present_us / n,
-                    self.arcade_list_present_us / n,
-                    self.rows / n
-                );
-            }
             self.fps_window_start = Instant::now();
             self.fps_frames = 0;
             self.prepare_us = 0;
@@ -1347,51 +1318,6 @@ impl LauncherFrameAccounting {
         }
     }
 
-    #[cfg(feature = "profile")]
-    fn record_boot_frame_profile(
-        &mut self,
-        frame: &LauncherPresentedFrame,
-        disp: &MappedRgb565Framebuffer,
-    ) {
-        let reasserted = false;
-        if self
-            .boot_frame_profile
-            .as_ref()
-            .is_some_and(|profile| !profile.should_record(frame.frames))
-        {
-            self.boot_frame_profile = None;
-        }
-        if let Some(profile) = self.boot_frame_profile.as_mut() {
-            let (edge1_hash, edge1_nonzero) = disp.right_edge_signature(1);
-            let (edge8_hash, edge8_nonzero) = disp.right_edge_signature(8);
-            let (left8_hash, left8_nonzero) = disp.left_edge_signature(8);
-            let (top8_hash, top8_nonzero) = disp.top_edge_signature(8);
-            let (bottom8_hash, bottom8_nonzero) = disp.bottom_edge_signature(8);
-            let (full_sample_hash, full_sample_nonzero) = disp.sampled_signature();
-            profile.record(
-                frame.frames,
-                (frame.frame_t1 - frame.frame_t0).as_micros() as u64,
-                (frame.frame_t2 - frame.frame_t1).as_micros() as u64,
-                (frame.frame_t3 - frame.frame_t2).as_micros() as u64,
-                (frame.frame_t4 - frame.frame_t3).as_micros() as u64,
-                frame.copied_rows,
-                reasserted,
-                edge1_hash,
-                edge1_nonzero,
-                edge8_hash,
-                edge8_nonzero,
-                left8_hash,
-                left8_nonzero,
-                top8_hash,
-                top8_nonzero,
-                bottom8_hash,
-                bottom8_nonzero,
-                full_sample_hash,
-                full_sample_nonzero,
-            );
-        }
-    }
-
     fn record_first_frame(
         &mut self,
         frame: &LauncherPresentedFrame,
@@ -1510,13 +1436,12 @@ impl LauncherFrameAccounting {
             crate::media_diagnostics::record("preview_presentation_receipt", &media_receipt, false);
             self.last_media_receipt = media_receipt;
         }
-        let screensaver_profile_state = cpu_profile::screensaver_profile_state();
         let build_identity = crate::build_identity::BuildIdentity::current();
         let selected_system_id = nav.active_collection_scope_id(catalog);
         let selected_game = (nav.screen == Screen::Arcade)
             .then(|| nav.active_arcade_game_at(catalog, selected_system_id, nav.arcade.selected))
             .flatten();
-        let status_submitted = self.runtime_status_publisher.submit(LauncherStatus {
+        self.runtime_status_publisher.submit(LauncherStatus {
             build_package_version: build_identity.package_version,
             build_version: build_identity.version,
             build_number: build_identity.build_number,
@@ -1575,7 +1500,6 @@ impl LauncherFrameAccounting {
             catalog_refresh_policy: catalog_refresh_policy().label(),
             catalog_worker_enabled: catalog_refresh_policy().worker_enabled(),
             selected_game_has_preview: selected_game.is_some_and(|game| game.has_preview),
-            screensaver_profile_state,
             catalog_scan_visible,
             catalog_scan_message,
             catalog_scan_title,
@@ -1664,9 +1588,6 @@ impl LauncherFrameAccounting {
             frame_budget,
             phase_profile: super::phase_profile::latest(),
         });
-        if screensaver_profile_state == "complete" && status_submitted {
-            self.profile_completion_submitted = true;
-        }
         if !idle {
             self.last_frame_budget_status =
                 last_frame_budget_status.expect("rendered status has a cached summary");
@@ -2331,8 +2252,7 @@ mod tests {
     #[test]
     fn completed_latch_frames_preserve_pacing_and_maintenance_evidence() {
         let start = Instant::now();
-        let mut accounting =
-            LauncherFrameAccounting::new(start, "hdmi", "baseline", 960, 540, false);
+        let mut accounting = LauncherFrameAccounting::new(start, "hdmi", "baseline", 960, 540);
         accounting.frame_analytics_mode = FrameAnalyticsMode::Process;
         let mut frame = presented_frame(49, start, 16_667);
         frame.screensaver_active = true;
@@ -2426,7 +2346,7 @@ mod tests {
     fn slow_frame_samples_are_bounded_and_survive_recent_frame_clears() {
         let start = Instant::now();
         let mut accounting =
-            LauncherFrameAccounting::new(start, "crt-576p50", "baseline", 640, 576, false);
+            LauncherFrameAccounting::new(start, "crt-576p50", "baseline", 640, 576);
         for frame in 0..40 {
             accounting.accumulate_frame_budget(
                 &presented_frame(frame, start + Duration::from_micros(frame * 25_000), 22_000),
@@ -2464,7 +2384,7 @@ mod tests {
     fn cadence_warning_samples_are_retained_before_budget_overrun() {
         let start = Instant::now();
         let mut accounting =
-            LauncherFrameAccounting::new(start, "crt-576p50", "baseline", 640, 576, false);
+            LauncherFrameAccounting::new(start, "crt-576p50", "baseline", 640, 576);
         accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_CADENCE_WARNING_US), 0);
 
         let status = accounting.current_frame_budget_status();

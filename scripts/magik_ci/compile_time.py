@@ -17,25 +17,25 @@ from typing import Any
 TARGETS = {
     "magik-full-app-macos": ("dev", "ui-preview", "launcher"),
     "magik-full-app-arm": ("release-live", "ui", "launcher"),
-    "magik-release-device-arm-all": ("release-device", "ui,profile", "all"),
+    "magik-release-device-arm-all": ("release-device", "ui", "all"),
     "magik-release-device-arm-production": (
         "release-device",
-        "ui,profile",
+        "ui",
         "production",
     ),
     "magik-release-device-arm-thin": (
         "release-device-thin",
-        "ui,profile",
+        "ui",
         "production",
     ),
     "magik-release-device-arm-thin-stripped": (
         "release-device-thin-stripped",
-        "ui,profile",
+        "ui",
         "production",
     ),
     "magik-release-device-arm-thin-cgu32": (
         "release-device-thin-cgu32",
-        "ui,profile",
+        "ui",
         "production",
     ),
 }
@@ -79,8 +79,7 @@ def command(root: Path, target: str, target_dir: Path, container: str | None = N
         "CFLAGS": "-I" + dist + "/include",
         "HOST_CFLAGS": "-I" + dist + "/include",
         "RUST_FONTCONFIG_DLOPEN": "1",
-        "RUSTFLAGS": "-C target-cpu=cortex-a9"
-        + (" -C force-frame-pointers=yes" if "profile" in features else ""),
+        "RUSTFLAGS": "-C target-cpu=cortex-a9",
     }
     env_args = [
         part for key, value in values.items() for part in ("--env", f"{key}={value}")

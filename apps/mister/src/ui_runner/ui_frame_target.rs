@@ -429,16 +429,6 @@ pub(super) fn arcade_list_needs_forced_redraw(
         || slint_dirty.is_some_and(|rect| rect.intersection(renderer.dirty_rect()).is_some())
 }
 
-#[cfg(not(mister_ui_scope_launcher))]
-pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
-    FrameRect {
-        x0: rect.x0 as u32,
-        y0: rect.y0 as u32,
-        x1: rect.x1 as u32,
-        y1: rect.y1 as u32,
-    }
-}
-
 pub(super) fn configure_window_layout(
     layout: &UiLayoutGeometry,
     window: &Rc<MisterSoftwareWindow>,

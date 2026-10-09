@@ -337,6 +337,15 @@ fn growing_video_exposes_no_background(previous: DirtyRect, current: DirtyRect) 
     }
 }
 
+/// The per-frame figures the one-second playback log averages.
+#[derive(Clone, Copy)]
+pub(super) struct VideoFrameTimes {
+    slint_render_us: u64,
+    vsync_us: u64,
+    fb_present_us: u64,
+    rows: u32,
+}
+
 #[derive(Default)]
 pub(super) struct VideoFramePhases {
     frame_updated: bool,
@@ -379,7 +388,7 @@ impl VideoWindowTotals {
     pub(super) fn record(
         &mut self,
         phases: VideoFramePhases,
-        sample: FrameSample,
+        sample: VideoFrameTimes,
         copy_rect: Option<DirtyRect>,
     ) {
         self.frames += 1;
@@ -436,7 +445,6 @@ pub(super) fn run_video_playback_loop(
     mut pad: PadPool,
     _app: slint_ui::video_playback::VideoPlayback,
     animation_clock: &AnimationClock,
-    profiles: &mister_magik_fb::process_config::ProfileProcessConfig,
 ) {
     let initial_doubled = match crate::video_player::video_starts_doubled_from_env() {
         Ok(doubled) => doubled,
@@ -477,9 +485,6 @@ pub(super) fn run_video_playback_loop(
     let mut next_video_at = Duration::ZERO;
     let frame_interval = frame_worker.frame_interval();
     let mut frames = 0u64;
-    let mut profiler = FrameProfiler::from_config(profiles.frame().clone());
-    let cpu = cpu_profile::start(profiles.cpu());
-    let profile_on = profiler.enabled();
     let frame_order = if std::env::var_os("MISTER_FRAME_ORDER").is_some() {
         FrameOrder::from_env()
     } else {
@@ -491,7 +496,6 @@ pub(super) fn run_video_playback_loop(
     let mut fps_frames = 0u64;
     let mut video_totals = VideoWindowTotals::default();
     let mut audio_stats = AudioWindowStats::default();
-    let mut video_cpu = VideoCpuSampler::new();
     let mut size_animation = VideoSizeAnimation::new(initial_doubled);
     let mut button_edge = VideoButtonEdge::default();
     let mut auto_toggle = VideoAutoToggle::from_env();
@@ -511,12 +515,9 @@ pub(super) fn run_video_playback_loop(
     );
     crate::ui_logln!("video_render_mode=direct-blit");
     crate::ui_logln!(
-        "video_controls queue_depth=2 scale={} a=toggle-320x240-640x480 animation=spring-smooth response_ms={} profile={}",
+        "video_controls queue_depth=2 scale={} a=toggle-320x240-640x480 animation=spring-smooth response_ms={}",
         std::env::var("MISTER_VIDEO_SCALE").unwrap_or_else(|_| "source".into()),
-        VIDEO_SCALE_ANIMATION_RESPONSE.as_millis(),
-        std::env::var("MISTER_VIDEO_PROFILE")
-            .or_else(|_| std::env::var("MISTER_PROFILE"))
-            .unwrap_or_else(|_| "off".into())
+        VIDEO_SCALE_ANIMATION_RESPONSE.as_millis()
     );
     crate::ui_logln!(
         "video_dirty_clip=on rect={}x{}+{},{}",
@@ -530,15 +531,10 @@ pub(super) fn run_video_playback_loop(
         if !drain_audio_write_results(&audio_writer, &frame_worker, &mut audio_stats) {
             break;
         }
-        let frame_start = Instant::now();
         let t0 = Instant::now();
         let mut this_rect: Option<DirtyRect> = None;
         let mut phases = VideoFramePhases::default();
         phases.queue_depth = frame_worker.queue_depth();
-        let mut video_profile = VideoFrameProfile {
-            video_queue_depth: phases.queue_depth,
-            ..Default::default()
-        };
         let now = start.elapsed();
         // UI animation time: one display period per loop iteration, never wall time.
         let ui_time = animation_clock
@@ -572,9 +568,6 @@ pub(super) fn run_video_playback_loop(
         let (presentation_width, presentation_height) = size_animation.dimensions();
         let presentation_rect = video_frame_rect(presentation_width, presentation_height);
         let geometry_changed = previous_video_rect != Some(presentation_rect);
-        video_profile.video_present_width = presentation_width as u32;
-        video_profile.video_present_height = presentation_height as u32;
-        video_profile.video_size_animating = size_animation.is_active();
 
         match frame_order {
             FrameOrder::RenderThenVsync => {
@@ -601,22 +594,6 @@ pub(super) fn run_video_playback_loop(
                             phases.audio_resample_us = metrics.audio_resample_us;
                             phases.audio_buffer_frames = metrics.audio_buffer_frames;
                             phases.queue_depth = frame_worker.queue_depth();
-                            video_profile = VideoFrameProfile {
-                                video_decode_us: phases.video_decode_us,
-                                video_scale_us: phases.video_scale_us,
-                                video_recv_us: phases.recv_us,
-                                video_frame_updated: true,
-                                video_queue_depth: phases.queue_depth,
-                                audio_decode_us: phases.audio_decode_us,
-                                audio_resample_us: phases.audio_resample_us,
-                                audio_buffer_frames: phases.audio_buffer_frames,
-                                video_file: metrics.video_file,
-                                video_width: metrics.video_width,
-                                video_height: metrics.video_height,
-                                video_codec: metrics.video_codec,
-                                audio_codec: metrics.audio_codec,
-                                ..Default::default()
-                            };
                             if let Some(previous) = retained_frame.replace(frame) {
                                 frame_worker.recycle_pixels(previous.pixels);
                             }
@@ -628,7 +605,6 @@ pub(super) fn run_video_playback_loop(
                                 audio_requested_frames,
                                 loop_count,
                                 &mut phases,
-                                &mut video_profile,
                             ) {
                                 break;
                             }
@@ -653,7 +629,6 @@ pub(super) fn run_video_playback_loop(
                             phases.missed_deadlines = phases.missed_deadlines.saturating_add(1);
                         }
                     }
-                    video_profile.video_missed_deadlines = phases.missed_deadlines;
                 }
                 let t1 = Instant::now();
                 window.draw_if_needed(|renderer| {
@@ -661,7 +636,7 @@ pub(super) fn run_video_playback_loop(
                     this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
                 });
                 let t2 = Instant::now();
-                let pace = pacer.wait();
+                pacer.wait();
                 let t3 = Instant::now();
                 let mut copied_rect = None;
                 let should_present_video = retained_frame.is_some()
@@ -698,43 +673,25 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
-                video_profile.video_scale_us = phases.video_scale_us;
-                video_profile.video_present_width = presentation_width as u32;
-                video_profile.video_present_height = presentation_height as u32;
-                video_profile.video_size_animating = size_animation.is_active();
-                video_profile.video_missed_deadlines = phases.missed_deadlines;
                 let t4 = Instant::now();
-                let sample = FrameSample {
-                    prepare_us: 0,
-                    anim_us: (t1 - t0).as_micros() as u64,
+                let sample = VideoFrameTimes {
                     slint_render_us: (t2 - t1).as_micros() as u64,
-                    custom_draw_us: 0,
                     vsync_us: (t3 - t2).as_micros() as u64,
                     fb_present_us: (t4 - t3).as_micros() as u64,
-                    cached_present_us: (t4 - t3).as_micros() as u64,
-                    arcade_list_present_us: 0,
                     rows,
-                    present_rect: copied_rect.map(frame_rect),
-                    wall_us: frame_start.elapsed().as_micros() as u64,
-                    vsync_source: pace.source,
-                    vsync_period_us: pace.period_us,
-                    vsync_miss_streak: pace.miss_streak,
-                    video: video_profile,
                 };
                 record_video_sample(
                     phases,
                     sample,
                     copied_rect,
-                    &mut profiler,
                     &mut fps_window_start,
                     &mut fps_frames,
                     &mut video_totals,
                     &mut audio_stats,
-                    &mut video_cpu,
                 );
             }
             FrameOrder::VsyncThenRender => {
-                let pace = pacer.wait();
+                pacer.wait();
                 let t1 = Instant::now();
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
@@ -759,22 +716,6 @@ pub(super) fn run_video_playback_loop(
                             phases.audio_resample_us = metrics.audio_resample_us;
                             phases.audio_buffer_frames = metrics.audio_buffer_frames;
                             phases.queue_depth = frame_worker.queue_depth();
-                            video_profile = VideoFrameProfile {
-                                video_decode_us: phases.video_decode_us,
-                                video_scale_us: phases.video_scale_us,
-                                video_recv_us: phases.recv_us,
-                                video_frame_updated: true,
-                                video_queue_depth: phases.queue_depth,
-                                audio_decode_us: phases.audio_decode_us,
-                                audio_resample_us: phases.audio_resample_us,
-                                audio_buffer_frames: phases.audio_buffer_frames,
-                                video_file: metrics.video_file,
-                                video_width: metrics.video_width,
-                                video_height: metrics.video_height,
-                                video_codec: metrics.video_codec,
-                                audio_codec: metrics.audio_codec,
-                                ..Default::default()
-                            };
                             if let Some(previous) = retained_frame.replace(frame) {
                                 frame_worker.recycle_pixels(previous.pixels);
                             }
@@ -786,7 +727,6 @@ pub(super) fn run_video_playback_loop(
                                 audio_requested_frames,
                                 loop_count,
                                 &mut phases,
-                                &mut video_profile,
                             ) {
                                 break;
                             }
@@ -811,7 +751,6 @@ pub(super) fn run_video_playback_loop(
                             phases.missed_deadlines = phases.missed_deadlines.saturating_add(1);
                         }
                     }
-                    video_profile.video_missed_deadlines = phases.missed_deadlines;
                 }
                 let t2 = Instant::now();
                 window.draw_if_needed(|renderer| {
@@ -854,39 +793,21 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
-                video_profile.video_scale_us = phases.video_scale_us;
-                video_profile.video_present_width = presentation_width as u32;
-                video_profile.video_present_height = presentation_height as u32;
-                video_profile.video_size_animating = size_animation.is_active();
-                video_profile.video_missed_deadlines = phases.missed_deadlines;
                 let t4 = Instant::now();
-                let sample = FrameSample {
-                    prepare_us: 0,
-                    anim_us: (t2 - t1).as_micros() as u64,
+                let sample = VideoFrameTimes {
                     slint_render_us: (t3 - t2).as_micros() as u64,
-                    custom_draw_us: 0,
                     vsync_us: (t1 - t0).as_micros() as u64,
                     fb_present_us: (t4 - t3).as_micros() as u64,
-                    cached_present_us: (t4 - t3).as_micros() as u64,
-                    arcade_list_present_us: 0,
                     rows,
-                    present_rect: copied_rect.map(frame_rect),
-                    wall_us: frame_start.elapsed().as_micros() as u64,
-                    vsync_source: pace.source,
-                    vsync_period_us: pace.period_us,
-                    vsync_miss_streak: pace.miss_streak,
-                    video: video_profile,
                 };
                 record_video_sample(
                     phases,
                     sample,
                     copied_rect,
-                    &mut profiler,
                     &mut fps_window_start,
                     &mut fps_frames,
                     &mut video_totals,
                     &mut audio_stats,
-                    &mut video_cpu,
                 );
             }
         }
@@ -904,20 +825,6 @@ pub(super) fn run_video_playback_loop(
     );
     if let Ok(status) = crate::mr_audio::read_status() {
         crate::ui_log!("video_playback audio status: {status}");
-    }
-    if let Some(cpu) = video_cpu.final_sample() {
-        crate::ui_logln!(
-            "video_cpu final main={:.1}% decode={:.1}% process={:.1}%",
-            cpu.main_pct,
-            cpu.decode_pct,
-            cpu.process_pct
-        );
-    }
-    if profile_on {
-        profiler.finish();
-    }
-    if let Err(e) = cpu_profile::finish(cpu) {
-        crate::ui_errln!("{e}");
     }
 }
 
@@ -1117,7 +1024,6 @@ fn enqueue_audio_write(
     requested_frames: usize,
     loop_count: u64,
     phases: &mut VideoFramePhases,
-    video_profile: &mut VideoFrameProfile,
 ) -> bool {
     let audio_t0 = Instant::now();
     let job = AudioWriteJob {
@@ -1128,14 +1034,11 @@ fn enqueue_audio_write(
     match audio_writer.try_send(job) {
         Ok(()) => {
             phases.audio_write_us = audio_t0.elapsed().as_micros() as u64;
-            video_profile.audio_write_us = phases.audio_write_us;
             true
         }
         Err(mpsc::TrySendError::Full(job)) => {
             phases.audio_write_us = audio_t0.elapsed().as_micros() as u64;
             phases.audio_underrun = true;
-            video_profile.audio_write_us = phases.audio_write_us;
-            video_profile.audio_underrun = true;
             audio_stats.add(
                 Duration::from_micros(phases.audio_write_us),
                 job.requested_frames,
@@ -1156,29 +1059,13 @@ fn enqueue_audio_write(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_video_sample(
     phases: VideoFramePhases,
-    sample: FrameSample,
+    sample: VideoFrameTimes,
     copy_rect: Option<DirtyRect>,
-    profiler: &mut FrameProfiler,
     fps_window_start: &mut Instant,
     fps_frames: &mut u64,
     totals: &mut VideoWindowTotals,
     audio_stats: &mut AudioWindowStats,
-    cpu_sampler: &mut VideoCpuSampler,
 ) {
-    let cpu_window = cpu_sampler.window_sample();
-    if profiler.enabled() {
-        profiler.record(sample);
-        if let Some(cpu) = cpu_window {
-            crate::ui_logln!(
-                "  video-cpu | main={:.1}% decode={:.1}% process={:.1}%",
-                cpu.main_pct,
-                cpu.decode_pct,
-                cpu.process_pct
-            );
-        }
-        return;
-    }
-
     *fps_frames += 1;
     totals.record(phases, sample, copy_rect);
     if fps_window_start.elapsed().as_millis() >= 1000 {
@@ -1206,14 +1093,6 @@ pub(super) fn record_video_sample(
             totals.audio_underruns,
             audio_stats.loop_count
         );
-        if let Some(cpu) = cpu_window {
-            crate::ui_logln!(
-                "  video-cpu | main={:.1}% decode={:.1}% process={:.1}%",
-                cpu.main_pct,
-                cpu.decode_pct,
-                cpu.process_pct
-            );
-        }
         *fps_frames = 0;
         totals.reset();
         audio_stats.reset();

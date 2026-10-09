@@ -59,34 +59,6 @@ sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls amiga preview archive behavior", accepted_values = [], value_policy = "document" }
 [[control]]
-name = "MISTER_ARCADE_ENTRY_RUN_ID"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls arcade entry run id behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_ARCADE_ENTRY_TRACE"
-owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls arcade entry trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_ARCADE_ROOT"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "production"
@@ -183,34 +155,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls boot black settle frames behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_BOOT_FRAME_PROFILE_FILE"
-owner = "mister/platform/runtime/src/boot_analytics.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "developer diagnostic"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls boot frame profile file behavior", accepted_values = [], value_policy = "redact" }
-
-[[control]]
-name = "MISTER_BOOT_FRAME_PROFILE_FRAMES"
-owner = "mister/platform/runtime/src/boot_analytics.rs"
-classification = "diagnostic"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls boot frame profile frames behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_ARTIFACT_COPY"
@@ -635,132 +579,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls input latency lab session behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_COMPLETE"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response complete behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE"
-owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response execution trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response expected confirmed behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response expected feedback hidden behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response frame complete behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_PMU"
-owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "enum"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response pmu behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE"
-owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response pmu complete behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_RUN_ID"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response run id behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_RESPONSE_TRACE"
-owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher response trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LIBRARY_NAMESPACE_BACKEND"
@@ -1463,118 +1281,6 @@ aliases = []
 documentation = { summary = "Controls pmu sample every behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_PPROF"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls pprof behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PPROF_COMPLETE"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls pprof complete behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PPROF_DURATION_SECS"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls pprof duration secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PPROF_FOLDED_OUT"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "developer diagnostic"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls pprof folded out behavior", accepted_values = [], value_policy = "redact" }
-
-[[control]]
-name = "MISTER_PPROF_HZ"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls pprof hz behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PPROF_OUT"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "developer diagnostic"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls pprof out behavior", accepted_values = [], value_policy = "redact" }
-
-[[control]]
-name = "MISTER_PPROF_TRIGGER"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls pprof trigger behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PPROF_WARMUP_SECS"
-owner = "apps/mister/src/cpu_profile.rs"
-classification = "diagnostic"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls pprof warmup secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_PRESENT_BACKEND"
 owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
@@ -1925,48 +1631,6 @@ aliases = []
 documentation = { summary = "Controls preview visual pct behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_PROFILE"
-owner = "apps/mister/src/frame_profile.rs"
-classification = "diagnostic"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "enum"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls profile behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PROFILE_FILE"
-owner = "apps/mister/src/frame_profile.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "developer diagnostic"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls profile file behavior", accepted_values = [], value_policy = "redact" }
-
-[[control]]
-name = "MISTER_PROFILE_SLOW_US"
-owner = "apps/mister/src/frame_profile.rs"
-classification = "diagnostic"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls profile slow us behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_RGB565_NEON"
 owner = "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
 classification = "production"
@@ -2107,48 +1771,6 @@ aliases = []
 documentation = { summary = "Controls snes preview archive behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_SYSTEM_ENTRY_PROFILE_OUT"
-owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "developer diagnostic"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls system entry profile out behavior", accepted_values = [], value_policy = "redact" }
-
-[[control]]
-name = "MISTER_SYSTEM_ENTRY_RUN_ID"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls system entry run id behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SYSTEM_ENTRY_TRACE"
-owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls system entry trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_THREAD_POLICY"
 owner = "crates/catalog/src/runtime_thread.rs"
 classification = "production"
@@ -2161,20 +1783,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls thread policy behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TRACE_FILE"
-owner = "apps/mister/src/frame_profile.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "developer diagnostic"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls trace file behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_UI_FB_SIZE"
@@ -2259,20 +1867,6 @@ conflicts = []
 sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls video path behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_VIDEO_PROFILE"
-owner = "apps/mister/src/frame_profile.rs"
-classification = "diagnostic"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "enum"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls video profile behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_VIDEO_SCALE"

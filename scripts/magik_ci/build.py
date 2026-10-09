@@ -11,7 +11,7 @@ from pathlib import Path
 TARGET = "armv7-unknown-linux-gnueabihf"
 COMMANDS = {
     "runtime-ci": ("apps/mister/Cargo.toml", "ci-fast", "ui"),
-    "runtime-device": ("apps/mister/Cargo.toml", "release-device", "ui,profile"),
+    "runtime-device": ("apps/mister/Cargo.toml", "release-device", "ui"),
     "manager-device": ("mister/tools/manager/Cargo.toml", "release", ""),
 }
 CHECKS = {
@@ -28,7 +28,6 @@ def _environment(
     repository: Path, intent: str, profile: str, features: str, runner: str
 ) -> dict[str, str]:
     environment = {key: value for key, value in os.environ.items()}
-    feature_set = set(features.split(","))
     if intent in {"runtime-ci", "runtime-library-ci"}:
         environment.setdefault("MISTER_UI_BUILD_SCOPE", "all")
     elif intent == "runtime-device":
@@ -37,9 +36,6 @@ def _environment(
         return environment
 
     rustflags = "-D warnings -C target-cpu=cortex-a9"
-    if "profile" in feature_set:
-        rustflags += " -C force-frame-pointers=yes"
-        environment["CFLAGS_armv7_unknown_linux_gnueabihf"] = "-fno-omit-frame-pointer"
     environment["RUSTFLAGS"] = rustflags
 
     if intent in {"runtime-ci", "runtime-device"}:

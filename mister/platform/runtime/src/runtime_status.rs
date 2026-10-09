@@ -146,7 +146,6 @@ launcher_status_types! {
         latch_failure_reason,
         latch_failure_detail,
         catalog_refresh_policy,
-        screensaver_profile_state,
         catalog_scan_message,
         catalog_scan_title,
         catalog_scan_detail,
@@ -848,10 +847,6 @@ fn write_launcher_status_json(
     field!("catalog_refresh_done", status.catalog_refresh_done);
     field!("catalog_refresh_policy", status.catalog_refresh_policy);
     field!("catalog_worker_enabled", status.catalog_worker_enabled);
-    field!(
-        "screensaver_profile_state",
-        status.screensaver_profile_state
-    );
     field!("catalog_scan_visible", status.catalog_scan_visible);
     field!("catalog_scan_message", status.catalog_scan_message);
     field!("catalog_scan_title", status.catalog_scan_title);
@@ -1167,10 +1162,6 @@ fn launcher_status_value(
     insert!("catalog_refresh_done", status.catalog_refresh_done);
     insert!("catalog_refresh_policy", status.catalog_refresh_policy);
     insert!("catalog_worker_enabled", status.catalog_worker_enabled);
-    insert!(
-        "screensaver_profile_state",
-        status.screensaver_profile_state
-    );
     insert!("catalog_scan_visible", status.catalog_scan_visible);
     insert!("catalog_scan_message", status.catalog_scan_message);
     insert!("catalog_scan_title", status.catalog_scan_title);
@@ -1881,7 +1872,6 @@ mod tests {
                 catalog_refresh_policy: "off",
                 catalog_worker_enabled: false,
                 selected_game_has_preview: true,
-                screensaver_profile_state: "active",
                 catalog_scan_visible: false,
                 catalog_scan_message: "Scanning for games",
                 catalog_scan_title: "",
@@ -2371,11 +2361,7 @@ mod tests {
         assert!(indices.len() > 10);
     }
 
-    fn publisher_status(
-        status_sequence: u64,
-        screen: &'static str,
-        screensaver_profile_state: &'static str,
-    ) -> LauncherStatus<'static> {
+    fn publisher_status(status_sequence: u64, screen: &'static str) -> LauncherStatus<'static> {
         LauncherStatus {
             build_package_version: "0.1.0",
             build_version: "0.2.2429",
@@ -2435,7 +2421,6 @@ mod tests {
             catalog_refresh_policy: "default",
             catalog_worker_enabled: true,
             selected_game_has_preview: false,
-            screensaver_profile_state,
             catalog_scan_visible: true,
             catalog_scan_message: "Updating Library",
             catalog_scan_title: "Indexing library",
@@ -2582,7 +2567,7 @@ mod tests {
             RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(50));
         publisher.submit(publisher_status(1, "home", "active"));
         publisher.submit(publisher_status(2, "settings", "active"));
-        publisher.submit(publisher_status(3, "arcade", "complete"));
+        publisher.submit(publisher_status(3, "arcade"));
         let metrics = wait_for_publisher(&publisher, |metrics| metrics.written_sequence == 3);
         assert_eq!(metrics.submitted_sequence, 3);
         assert_eq!(metrics.written_sequence, 3);
@@ -2592,7 +2577,6 @@ mod tests {
         let _ = fs::remove_file(path);
         assert_eq!(value["status_sequence"], 3);
         assert_eq!(value["screen"], "arcade");
-        assert_eq!(value["screensaver_profile_state"], "complete");
     }
 
     #[test]
@@ -2613,13 +2597,12 @@ mod tests {
         let path = std::env::temp_dir().join(unique_name("runtime-status-final.json"));
         let publisher =
             RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(20));
-        publisher.submit(publisher_status(9, "settings", "complete"));
+        publisher.submit(publisher_status(9, "settings"));
         drop(publisher);
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let _ = fs::remove_file(path);
         assert_eq!(value["status_sequence"], 9);
         assert_eq!(value["status_written_sequence"], 9);
-        assert_eq!(value["screensaver_profile_state"], "complete");
     }
 
     #[test]

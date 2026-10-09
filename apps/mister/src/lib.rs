@@ -57,17 +57,6 @@ pub mod catalog_failure_report;
 pub mod catalog_progress_report;
 pub mod command_args;
 pub mod controller_db;
-#[cfg(feature = "ui")]
-#[cfg_attr(
-    any(
-        test,
-        mister_ui_scope_launcher,
-        not(all(target_os = "linux", target_arch = "arm"))
-    ),
-    allow(dead_code)
-)]
-#[doc(hidden)]
-pub mod cpu_profile;
 pub mod crash_report;
 pub mod crt_arcade_overlay;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -85,9 +74,6 @@ pub use mister_magik_core::{input_event, input_info, input_repeat, input_state};
 #[cfg(feature = "ui")]
 pub use mister_magik_mister_runtime::fpga;
 pub use mister_magik_mister_runtime::framebuffer;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod frame_profile;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod input;

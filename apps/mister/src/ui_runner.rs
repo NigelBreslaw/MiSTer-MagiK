@@ -27,11 +27,8 @@ use crate::arcade_list_renderer::{
 use crate::boot_analytics;
 #[cfg(not(mister_ui_scope_launcher))]
 use crate::controller_db::ControllerDb;
-use crate::cpu_profile;
 use crate::crt_arcade_overlay::CrtArcadeOverlayState;
 use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
-#[cfg(not(mister_ui_scope_launcher))]
-use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::preview_state::{
@@ -425,16 +422,7 @@ pub fn run_ui(
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
-                run_video_playback_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    &window,
-                    pad,
-                    app,
-                    &animation_clock,
-                    launcher_config.profiles(),
-                );
+                run_video_playback_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
@@ -452,14 +440,7 @@ pub fn run_ui(
             with_scene_app!(tear_pattern::TearPattern, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
-                run_tear_pattern_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    &window,
-                    &animation_clock,
-                    launcher_config.profiles(),
-                );
+                run_tear_pattern_loop(secs, &ui, &mut disp, &window, &animation_clock);
             });
         }
         "launcher" => {

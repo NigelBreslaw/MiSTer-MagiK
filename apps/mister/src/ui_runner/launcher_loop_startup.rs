@@ -34,7 +34,6 @@ pub(super) fn build_domains(
     let ui_action_sequence = 0u64;
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let frames = 0u64;
-    let profile_config = launcher_config.profiles().clone();
     let screensaver_start_mode = launcher_config.screensaver().start_mode();
     let screensaver_preview_waits_for_analytics =
         launcher_config.screensaver().preview_waits_for_analytics();
@@ -773,7 +772,6 @@ pub(super) fn build_domains(
         ui.crt_font_experiment().label(),
         ui.fb_w(),
         ui.fb_h(),
-        profile_config.frame().fps_log_enabled(),
     );
     if let Some(failure) = launcher_presenter.latch_failure() {
         frame_accounting.record_latch_failure(failure);
