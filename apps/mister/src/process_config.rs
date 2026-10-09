@@ -16,7 +16,6 @@ use crate::screenshot_transitions::PreviewTransitionConfig;
 #[cfg(feature = "ui")]
 use crate::ui_display::UiDisplayInputs;
 #[cfg(feature = "ui")]
-use crate::ui_runner::latch_v5_qualification::QualificationConfig;
 #[cfg(feature = "ui")]
 use crate::ui_runner::launcher_bench::LauncherBenchmarkConfig;
 #[cfg(feature = "ui")]
@@ -195,7 +194,6 @@ pub struct LauncherProcessConfig {
     #[cfg(feature = "ui")]
     benchmark: LauncherBenchmarkConfig,
     #[cfg(feature = "ui")]
-    qualification: QualificationConfig,
     tests: LauncherTestConfig,
     presentation_backend: PresentBackendConfig,
 }
@@ -256,10 +254,6 @@ impl LauncherProcessConfig {
     }
 
     #[cfg(feature = "ui")]
-    pub fn qualification(&self) -> QualificationConfig {
-        self.qualification
-    }
-
     pub fn tests(&self) -> &LauncherTestConfig {
         &self.tests
     }
@@ -915,7 +909,6 @@ impl ProcessConfig {
             #[cfg(feature = "ui")]
             benchmark: LauncherBenchmarkConfig::capture_with(|name| lab_environment.get(name)),
             #[cfg(feature = "ui")]
-            qualification: QualificationConfig::capture_with(|name| lab_environment.get(name)),
             tests: LauncherTestConfig::capture(lab_environment),
             presentation_backend: PresentBackendConfig::capture(environment),
         });
@@ -1272,7 +1265,6 @@ mod tests {
             (TEST_CATALOG_RECOVERY_DIALOG, "retry"),
             ("MISTER_LAUNCHER_BENCH_SCENARIO", "arcade-scroll"),
             ("MISTER_LAUNCHER_START_SCREEN", "arcade"),
-            ("MISTER_LATCH_V5_QUALIFICATION", "1"),
             ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
             (
                 "MISTER_FS_FAULT_SESSION",
@@ -1317,11 +1309,6 @@ mod tests {
             let unset = LauncherBenchmarkConfig::default();
             assert_ne!(lab_launcher.benchmark(), &unset);
             assert_eq!(release_launcher.benchmark(), &unset);
-            assert_ne!(lab_launcher.qualification(), QualificationConfig::default());
-            assert_eq!(
-                release_launcher.qualification(),
-                QualificationConfig::default()
-            );
         }
     }
 

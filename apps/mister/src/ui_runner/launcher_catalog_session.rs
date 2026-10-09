@@ -3,9 +3,8 @@
 
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, cached_catalog_validation_intent, catalog_build_status_intent,
-    catalog_rebuild_started_intent, catalog_system_discovering_intent,
-    catalog_system_update_checking_intent, catalog_system_update_preparing_intent,
-    catalog_system_update_progress_intent,
+    catalog_system_discovering_intent, catalog_system_update_checking_intent,
+    catalog_system_update_preparing_intent, catalog_system_update_progress_intent,
 };
 use super::*;
 use crate::preview_state::SystemEntryPreviewPrelude;
@@ -519,31 +518,6 @@ impl LauncherCatalogSession {
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
         ));
-        effects
-    }
-
-    pub(super) fn qualification_fresh_rebuild(&mut self, root: String) -> CatalogSessionEffects {
-        let mut effects = CatalogSessionEffects::default();
-        effects.event(
-            "library_fresh_rebuild_requested",
-            "source=latch-v5-qualification",
-        );
-        self.refresh_done = false;
-        self.foreground_update = true;
-        self.deferred_worker = None;
-        self.refresh_failed = false;
-        self.system_update_total = None;
-        self.completed_system_updates.clear();
-        self.displayed_system_updates = 0;
-        effects.push(CatalogSessionEffect::StartCatalogWorker(
-            CatalogWorkerStart {
-                root,
-                request: CatalogWorkerRequest::FreshBuild,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            },
-        ));
-        effects.ui(catalog_rebuild_started_intent(self.foreground_update));
         effects
     }
 
@@ -1393,25 +1367,6 @@ mod tests {
         assert!(session.system_update_total.is_none());
         assert!(session.completed_system_updates.is_empty());
         assert_eq!(session.displayed_system_updates, 0);
-    }
-
-    #[test]
-    fn qualification_rebuild_is_a_fresh_foreground_generation() {
-        let mut session = LauncherCatalogSession::new(false);
-        let effects = session.qualification_fresh_rebuild("/media/fat/_Arcade".to_string());
-        let worker = effects
-            .effects
-            .iter()
-            .find_map(|effect| match effect {
-                CatalogSessionEffect::StartCatalogWorker(worker) => Some(worker),
-                _ => None,
-            })
-            .expect("catalog worker");
-        assert_eq!(worker.request, CatalogWorkerRequest::FreshBuild);
-        assert_eq!(
-            worker.execution_mode,
-            CatalogExecutionMode::ForegroundExclusive
-        );
     }
 
     #[test]

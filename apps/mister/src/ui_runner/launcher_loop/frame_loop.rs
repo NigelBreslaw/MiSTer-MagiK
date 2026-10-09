@@ -40,7 +40,6 @@ pub(super) struct Library {
     pub(super) lock_screen: Option<Screen>,
     pub(super) launch_return_session: LaunchReturnSession,
     pub(super) pending_start_system: Option<String>,
-    pub(super) pending_start_menu: Option<String>,
     pub(super) loading_title: String,
     pub(super) preview: PreviewState,
     pub(super) catalog_version: usize,
@@ -110,7 +109,6 @@ pub(super) struct Output {
     pub(super) preview_compositor_start_attempted: bool,
     pub(super) director: PresentationDirector,
     pub(super) orientation_full_redraw_pending: bool,
-    pub(super) dirty_opt: bool,
     pub(super) pacer: VsyncPacer,
     pub(super) pacing_policy: LauncherFramePacingPolicy,
     pub(super) phase_alignment: LauncherPhaseAlignment,
@@ -161,21 +159,6 @@ pub(super) struct Diagnostics {
     pub(super) ui_action_sequence: u64,
     pub(super) startup_monotonic_us: u64,
     pub(super) profile_config: mister_magik_fb::process_config::ProfileProcessConfig,
-    pub(super) benchmark_config: LauncherBenchmarkConfig,
-    pub(super) launcher_bench_scenario: Option<LauncherBenchScenario>,
-    pub(super) settings_navigation_benchmark: SettingsNavigationBenchmark,
-    pub(super) settings_navigation_benchmark_completed_at: Option<Instant>,
-    pub(super) settings_navigation_status_baseline: Option<u64>,
-    pub(super) orientation_benchmark: OrientationTransitionBenchmark,
-    pub(super) orientation_benchmark_completed_at: Option<Instant>,
-    pub(super) orientation_benchmark_terminal_status_requested: bool,
-    pub(super) orientation_benchmark_requires_analytics: bool,
-    pub(super) latch_v5_qualification: LatchV5Qualification,
-    pub(super) latch_v5_bench_state: LauncherBenchState,
-    pub(super) launcher_bench_after_input_script: bool,
-    pub(super) launcher_bench_launch_handoff: bool,
-    pub(super) media_benchmark_contention: bool,
-    pub(super) benchmark_media_interaction_active: bool,
     pub(super) orientation_preparation_trace: OrientationPreparationTrace,
     pub(super) input_integrity_stall: Option<u64>,
     pub(super) input_integrity_trace: InputIntegrityTrace,
@@ -183,19 +166,14 @@ pub(super) struct Diagnostics {
     pub(super) gui_profiling: GuiProfilingController,
     pub(super) bridge_churn_playback: BridgeChurnPlayback,
     pub(super) input_latency_lab: InputLatencyLab,
-    pub(super) launcher_bench_state: LauncherBenchState,
-    pub(super) launcher_bench_active: bool,
     pub(super) auto_launch_selected: bool,
     pub(super) auto_launch_selected_done: bool,
-    pub(super) launcher_bench_waiting_for_initial_preview: bool,
     pub(super) preview_transition: PreviewTransitionDemo,
-    pub(super) transition_picker_enabled: bool,
     pub(super) cpu: Option<cpu_profile::CpuProfiler>,
     pub(super) system_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     pub(super) screensaver_cpu_profile: cpu_profile::ScreensaverProfiler,
     pub(super) catalog_publication_test: CatalogPublicationTestDriver,
     pub(super) library_changed_dialog_test: LibraryChangedDialogTestDriver,
-    pub(super) launcher_input_script: LauncherInputScriptDriver,
     pub(super) launcher_automation: LauncherAutomation,
     pub(super) modal_input_test_dialog_pending: bool,
     pub(super) auto_launch_gate: Option<PathBuf>,
@@ -226,7 +204,6 @@ pub(super) struct Diagnostics {
     pub(super) tooling_input_epoch: u64,
     #[cfg(feature = "tooling")]
     pub(super) tooling_produced_id: u64,
-    pub(super) launcher_bench_next_step: Instant,
 }
 
 /// The launcher frame loop: its state grouped by domain.
@@ -244,8 +221,6 @@ pub(super) struct FrameLoop<'a> {
 enum Exit {
     /// Start the next frame.
     Skip,
-    /// Leave the loop.
-    Stop,
 }
 
 /// Records when pre-input step `$index` ended, for the tooling frame evidence.
@@ -404,7 +379,6 @@ pub(super) struct RenderFrame {
     #[cfg(feature = "tooling")]
     pub(super) card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
     pub(super) accepted_startup_intro_frame: bool,
-    pub(super) navigation_capture_source_carrier_rendered: bool,
     pub(super) orientation_capture_source_carrier_rendered: bool,
     pub(super) card_direct_waiting_on_slot: bool,
     pub(super) full_screen_transition_release_raster_rendered: bool,
@@ -468,7 +442,6 @@ impl<'a> FrameLoop<'a> {
             startup_monotonic_us,
             frames,
             profile_config,
-            benchmark_config,
             screensaver_preview_waits_for_analytics,
             screensaver,
             screensaver_pipeline,
@@ -481,18 +454,6 @@ impl<'a> FrameLoop<'a> {
             screensaver_starvation_count,
             launcher_presenter,
             launcher_readiness,
-            launcher_bench_scenario,
-            settings_navigation_benchmark,
-            settings_navigation_benchmark_completed_at,
-            settings_navigation_status_baseline,
-            orientation_benchmark,
-            orientation_benchmark_completed_at,
-            orientation_benchmark_terminal_status_requested,
-            orientation_benchmark_requires_analytics,
-            latch_v5_qualification,
-            latch_v5_bench_state,
-            launcher_bench_after_input_script,
-            launcher_bench_launch_handoff,
             scheduler,
             catalog_events,
             deferred_catalog_events,
@@ -506,15 +467,12 @@ impl<'a> FrameLoop<'a> {
             lifecycle_effects,
             preview_systems_entered,
             preview_initial_lists_ready,
-            media_benchmark_contention,
-            benchmark_media_interaction_active,
             pending_system_entry_benchmark,
             start_screen,
             lock_screen,
             launch_return_session,
             arcade_catalog_required_at_start,
             pending_start_system,
-            pending_start_menu,
             crt_layout,
             crt_metrics,
             preview_route,
@@ -549,19 +507,14 @@ impl<'a> FrameLoop<'a> {
             library_reset_bridge_dirty,
             last_clock_update,
             last_clock_text,
-            launcher_bench_state,
-            launcher_bench_active,
             auto_launch_selected,
             auto_launch_selected_done,
-            dirty_opt,
             pacer,
             pacing_policy,
             phase_alignment,
             present_timing,
             preview,
-            launcher_bench_waiting_for_initial_preview,
             preview_transition,
-            transition_picker_enabled,
             arcade_list_renderer,
             crt_backdrop,
             crt_arcade_overlay,
@@ -589,7 +542,6 @@ impl<'a> FrameLoop<'a> {
             catalog_publication_test,
             media_session,
             library_changed_dialog_test,
-            launcher_input_script,
             launcher_automation,
             catalog_generation,
             card_level,
@@ -623,14 +575,7 @@ impl<'a> FrameLoop<'a> {
         } else {
             start
         };
-        let launcher_bench_next_step: Instant = frame_clock.now();
-        // Post-navigation benchmarks do not begin until their target UI state is
-        // active. A boot-time deadline would otherwise accept an inactive trace.
-        let preview_scroll_exit_at = if launcher_bench_after_input_script {
-            None
-        } else {
-            preview_scroll_exit_after_trace_deadline(run_start)
-        };
+        let preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
         let first_render_logged = false;
         let first_vsync_logged = false;
         let first_launcher_frame_logged = false;
@@ -644,10 +589,6 @@ impl<'a> FrameLoop<'a> {
         );
         if let Some(failure) = launcher_presenter.latch_failure() {
             frame_accounting.record_latch_failure(failure);
-        }
-        if launcher_bench_after_input_script {
-            // Activation below replaces accounting and opens the measured trace.
-            frame_accounting.close_preview_scroll_trace_for_restart();
         }
         let arcade_entry_latency =
             ArcadeEntryLatencyTracker::from_config(launcher_config.readiness().entry_trace());
@@ -757,7 +698,6 @@ impl<'a> FrameLoop<'a> {
                 lock_screen,
                 launch_return_session,
                 pending_start_system,
-                pending_start_menu,
                 loading_title,
                 preview,
                 catalog_version,
@@ -821,7 +761,6 @@ impl<'a> FrameLoop<'a> {
                 preview_compositor_start_attempted,
                 director,
                 orientation_full_redraw_pending,
-                dirty_opt,
                 pacer,
                 pacing_policy,
                 phase_alignment,
@@ -867,21 +806,6 @@ impl<'a> FrameLoop<'a> {
                 ui_action_sequence,
                 startup_monotonic_us,
                 profile_config,
-                benchmark_config,
-                launcher_bench_scenario,
-                settings_navigation_benchmark,
-                settings_navigation_benchmark_completed_at,
-                settings_navigation_status_baseline,
-                orientation_benchmark,
-                orientation_benchmark_completed_at,
-                orientation_benchmark_terminal_status_requested,
-                orientation_benchmark_requires_analytics,
-                latch_v5_qualification,
-                latch_v5_bench_state,
-                launcher_bench_after_input_script,
-                launcher_bench_launch_handoff,
-                media_benchmark_contention,
-                benchmark_media_interaction_active,
                 orientation_preparation_trace,
                 input_integrity_stall,
                 input_integrity_trace,
@@ -889,19 +813,14 @@ impl<'a> FrameLoop<'a> {
                 gui_profiling,
                 bridge_churn_playback,
                 input_latency_lab,
-                launcher_bench_state,
-                launcher_bench_active,
                 auto_launch_selected,
                 auto_launch_selected_done,
-                launcher_bench_waiting_for_initial_preview,
                 preview_transition,
-                transition_picker_enabled,
                 cpu,
                 system_entry_cpu_profile,
                 screensaver_cpu_profile,
                 catalog_publication_test,
                 library_changed_dialog_test,
-                launcher_input_script,
                 launcher_automation,
                 modal_input_test_dialog_pending,
                 auto_launch_gate,
@@ -932,7 +851,6 @@ impl<'a> FrameLoop<'a> {
                 tooling_input_epoch,
                 #[cfg(feature = "tooling")]
                 tooling_produced_id,
-                launcher_bench_next_step,
             },
         }
     }
@@ -940,7 +858,6 @@ impl<'a> FrameLoop<'a> {
     pub(super) fn run(&mut self) {
         while self.keep_running() {
             match self.frame() {
-                Err(Exit::Stop) => break,
                 Err(Exit::Skip) | Ok(()) => {}
             }
         }
@@ -1265,63 +1182,6 @@ impl<'a> FrameLoop<'a> {
             full_bridge_dirty = true;
             self.env.window.request_redraw();
         }
-        if (!self.diag.orientation_benchmark_requires_analytics
-            || self.diag.frame_accounting.frame_analytics_mode() != FrameAnalyticsMode::Off)
-            && let Some(leg) = self.diag.orientation_benchmark.take_next_leg(
-                self.ui.nav.settings.screen_orientation,
-                self.out.frames,
-                loop_start,
-            )
-        {
-            if !self.out.director.orientation.set_effect(leg.effect) {
-                self.diag
-                    .orientation_benchmark
-                    .fail("benchmark-effect-changed-during-transition");
-                return Err(Exit::Skip);
-            }
-            let animated = begin_orientation_transition(
-                &self.env.app,
-                self.env.window,
-                self.env.ui,
-                self.env.target,
-                leg.from,
-                leg.to,
-                animation_now,
-                false,
-                &mut self.ui.nav,
-                &mut self.out.layout,
-                &mut self.out.layout_epoch,
-                &mut self.out.director,
-                &mut self.diag.orientation_preparation_trace,
-                OrientationIntent::Benchmark,
-            );
-            if animated {
-                if leg.index == 0 {
-                    self.diag
-                        .screensaver_cpu_profile
-                        .begin_orientation_transitions(self.out.frames);
-                }
-                print_startup_event(
-                    self.out.start,
-                    "orientation_transition_benchmark_leg_started",
-                    format!(
-                        "leg={} effect={} label={} from={} to={} frame={frames}",
-                        leg.index + 1,
-                        leg.effect.id(),
-                        leg.label(),
-                        leg.from.id(),
-                        leg.to.id(),
-                        frames = self.out.frames
-                    ),
-                );
-            } else {
-                self.diag
-                    .orientation_benchmark
-                    .fail("benchmark-transition-did-not-animate");
-            }
-            self.out.orientation_full_redraw_pending = true;
-            full_bridge_dirty = true;
-        }
         if let Some(collection_id) = self.lib.deferred_navigation_hydration_finish.take() {
             self.ui
                 .nav
@@ -1631,9 +1491,7 @@ impl<'a> FrameLoop<'a> {
                 let bridge = self.env.app.global::<slint_ui::launcher::ArcadeView>();
                 self.lib.preview.clear(&bridge);
                 apply_screenshot_media_update_effects(
-                    self.lib
-                        .media_session
-                        .pause_for_low_memory(self.diag.media_benchmark_contention),
+                    self.lib.media_session.pause_for_low_memory(),
                     &self.env.app,
                     &mut self.lib.catalog,
                     &mut self.lib.scheduler,
@@ -1682,7 +1540,7 @@ impl<'a> FrameLoop<'a> {
         if clock_update_due {
             if self.fx.startup_intro.is_some() {
                 self.fx.startup_intro_bridge_dirty_pending = true;
-            } else if self.out.dirty_opt {
+            } else {
                 let clock_text = forced_clock
                     .map(str::to_owned)
                     .unwrap_or_else(launcher_clock_text);
@@ -1691,13 +1549,6 @@ impl<'a> FrameLoop<'a> {
                     self.inp.last_clock_text = clock_text;
                     light_bridge_dirty = true;
                 }
-            } else {
-                let clock_text = forced_clock
-                    .map(str::to_owned)
-                    .unwrap_or_else(launcher_clock_text);
-                set_launcher_clock_text(&self.env.app, &clock_text);
-                self.inp.last_clock_text = clock_text;
-                full_bridge_dirty = true;
             }
             self.inp.last_clock_update = Instant::now();
         }
@@ -2224,36 +2075,6 @@ impl<'a> FrameLoop<'a> {
             self.env.window.request_redraw();
         }
 
-        if let Some(menu_id) = self.lib.pending_start_menu.take() {
-            if self.lib.catalog_ready {
-                let before = LauncherProjectionKey::from_nav(&self.ui.nav);
-                if self.ui.nav.open_menu(&menu_id) {
-                    print_startup_event(
-                        self.out.start,
-                        "launcher_start_menu_applied",
-                        format!("menu={menu_id}"),
-                    );
-                    let after = LauncherProjectionKey::from_nav(&self.ui.nav);
-                    if before != after {
-                        self.lib
-                            .media_session
-                            .note_nav_change(&before, &after, Instant::now());
-                        full_bridge_dirty = true;
-                    }
-                } else {
-                    print_startup_event(
-                        self.out.start,
-                        "launcher_start_menu_fallback",
-                        format!("menu={menu_id} reason=missing-or-empty"),
-                    );
-                    self.ui.nav.go_root();
-                    full_bridge_dirty = true;
-                }
-            } else {
-                self.lib.pending_start_menu = Some(menu_id);
-            }
-        }
-
         if let Some(system_id) = self.lib.pending_start_system.take() {
             if arcade_navigation_ready(self.lib.catalog_ready, &self.lib.catalog) {
                 let before = LauncherProjectionKey::from_nav(&self.ui.nav);
@@ -2263,7 +2084,6 @@ impl<'a> FrameLoop<'a> {
                     &system_id,
                     ui_frame_target::forced_arcade_selected_index(),
                 ) {
-                    self.ui.nav.system_page_mode = self.diag.benchmark_config.start_page_mode();
                     print_startup_event(
                         self.out.start,
                         "launcher_start_system_applied",
@@ -2296,180 +2116,6 @@ impl<'a> FrameLoop<'a> {
             .record_scheduler_interval("pre-input-navigation", scheduler_phase);
         note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 8);
 
-        self.diag.latch_v5_qualification.poll_control(loop_start);
-        self.diag.latch_v5_qualification.observe_catalog_worker(
-            self.lib.scheduler.catalog_worker_running(),
-            self.lib.catalog_session.refresh_done(),
-        );
-        if self
-            .diag
-            .latch_v5_qualification
-            .take_catalog_request(self.lib.scheduler.catalog_worker_running())
-        {
-            let effects = self
-                .lib
-                .catalog_session
-                .qualification_fresh_rebuild(self.lib.arcade_root.clone());
-            apply_catalog_session_effects(
-                effects,
-                &mut self.diag.launcher_response_trace,
-                &self.env.app,
-                catalog_domain!(self, full_bridge_dirty),
-                false,
-                loop_start,
-                self.out.start,
-            );
-            self.env.window.request_redraw();
-        }
-        if self.diag.latch_v5_qualification.enabled()
-            && self.out.launcher_presenter.latch_failure().is_none()
-            && arcade_navigation_ready(self.lib.catalog_ready, &self.lib.catalog)
-            && let Some(scenario) = self
-                .diag
-                .latch_v5_qualification
-                .stress_class()
-                .bench_scenario()
-        {
-            let before = LauncherProjectionKey::from_nav(&self.ui.nav);
-            if launcher_bench_step(
-                scenario,
-                &self.diag.benchmark_config,
-                &mut self.ui.nav,
-                &self.lib.catalog,
-                None,
-                &mut self.diag.latch_v5_bench_state,
-                loop_start,
-            ) {
-                self.diag.latch_v5_bench_state.advance_if(true);
-                let after = LauncherProjectionKey::from_nav(&self.ui.nav);
-                if before != after {
-                    self.lib
-                        .media_session
-                        .note_nav_change(&before, &after, loop_start);
-                    full_bridge_dirty = true;
-                }
-                self.env.window.request_redraw();
-            }
-        }
-
-        scheduler_phase = self
-            .diag
-            .launcher_response_trace
-            .record_scheduler_interval("pre-input-qualification", scheduler_phase);
-        note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 9);
-
-        if let Some(scenario) = self.diag.launcher_bench_scenario {
-            let latch_failure_active = self.out.launcher_presenter.latch_failure().is_some();
-            let after_input_script_ready = match scenario {
-                LauncherBenchScenario::ScreensaverShow => self.fx.screensaver.active,
-                _ => {
-                    self.ui.nav.screen == Screen::Arcade
-                        && arcade_navigation_ready(self.lib.catalog_ready, &self.lib.catalog)
-                }
-            };
-            if self.diag.launcher_bench_after_input_script
-                && !self.diag.launcher_bench_active
-                && !self.diag.launcher_input_script.active()
-                && after_input_script_ready
-            {
-                self.out.run_start = Instant::now();
-                self.diag
-                    .frame_accounting
-                    .close_preview_scroll_trace_for_restart();
-                self.diag.frame_accounting = LauncherFrameAccounting::new(
-                    self.out.run_start,
-                    self.env.ui.output_route().label(),
-                    self.env.ui.crt_font_experiment().label(),
-                    self.env.ui.fb_w(),
-                    self.env.ui.fb_h(),
-                    self.diag.profile_config.frame().fps_log_enabled(),
-                );
-                self.diag.launcher_bench_active = true;
-                self.diag.launcher_bench_waiting_for_initial_preview = false;
-                self.diag.launcher_bench_next_step = animation_now;
-                self.diag.preview_scroll_exit_at =
-                    preview_scroll_exit_after_trace_deadline(self.out.run_start);
-                self.diag.arcade_entry_latency.record_first_nav_input(
-                    self.out.start,
-                    self.out.run_start,
-                    &self.lib.lifecycle,
-                    &self.lib.catalog,
-                    &self.ui.nav,
-                );
-                print_startup_event(
-                    self.out.start,
-                    "launcher_bench_after_input_script_start",
-                    format!("scenario={}", scenario.label()),
-                );
-            }
-            let catalog_ready_for_bench = if scenario.starts_on_arcade() {
-                arcade_navigation_ready(self.lib.catalog_ready, &self.lib.catalog)
-            } else {
-                self.lib.catalog_ready
-            };
-            if self.diag.launcher_bench_active
-                && !latch_failure_active
-                && catalog_ready_for_bench
-                && self.diag.launcher_bench_waiting_for_initial_preview
-            {
-                let cache_state = self.lib.preview.trace_cache_state();
-                let selected_has_preview =
-                    selected_arcade_game_has_preview(&self.ui.nav, &self.lib.catalog);
-                if launcher_bench_initial_preview_ready(scenario, cache_state, selected_has_preview)
-                {
-                    self.diag.launcher_bench_waiting_for_initial_preview = false;
-                    self.diag.launcher_bench_next_step = animation_now;
-                    print_startup_event(
-                        self.out.start,
-                        "launcher_bench_preview_ready",
-                        format!("cache_state={cache_state}"),
-                    );
-                }
-            }
-            if self.diag.launcher_bench_active
-                && !latch_failure_active
-                && catalog_ready_for_bench
-                && !self.diag.launcher_bench_waiting_for_initial_preview
-                && animation_now.saturating_duration_since(self.diag.launcher_bench_next_step)
-                    >= scenario.period()
-            {
-                let before = LauncherProjectionKey::from_nav(&self.ui.nav);
-                let bench_step_ran = launcher_bench_step(
-                    scenario,
-                    &self.diag.benchmark_config,
-                    &mut self.ui.nav,
-                    &self.lib.catalog,
-                    None,
-                    &mut self.diag.launcher_bench_state,
-                    animation_now,
-                );
-                if bench_step_ran {
-                    let after = LauncherProjectionKey::from_nav(&self.ui.nav);
-                    if before != after {
-                        self.lib
-                            .media_session
-                            .note_nav_change(&before, &after, Instant::now());
-                        if !self.out.dirty_opt
-                            || before.screen != after.screen
-                            || before.menu_id != after.menu_id
-                        {
-                            full_bridge_dirty = true;
-                        } else {
-                            light_bridge_dirty = true;
-                        }
-                    }
-                }
-                self.diag.launcher_bench_state.advance_if(bench_step_ran);
-                self.diag.launcher_bench_next_step = animation_now;
-            }
-        }
-
-        scheduler_phase = self
-            .diag
-            .launcher_response_trace
-            .record_scheduler_interval("pre-input-benchmark", scheduler_phase);
-        note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 10);
-
         if let Some(screen) = effective_lock_screen(
             self.lib.lock_screen,
             self.lib.catalog_ready,
@@ -2481,11 +2127,6 @@ impl<'a> FrameLoop<'a> {
         let catalog_build_busy = screensaver_catalog_busy(
             self.lib.scheduler.catalog_worker_running(),
             self.lib.catalog_session.refresh_done(),
-        );
-        self.fx.screensaver.set_qualification_particles(
-            loop_start,
-            self.diag.latch_v5_qualification.enabled(),
-            self.diag.latch_v5_qualification.stress_class() == LatchV5StressClass::Particles,
         );
         let restore_before = self.fx.screensaver.restore_full_frame;
         // A screensaver measurement starts it at once and keeps it up for the
@@ -2655,27 +2296,11 @@ impl<'a> FrameLoop<'a> {
                     self.inp.setup.is_active(),
                     pre_input.animation_now,
                 ));
-                if let Some(event) = self.diag.settings_navigation_benchmark.event_for(
-                    self.ui.nav.screen,
-                    self.ui.nav.selected,
-                    self.ui.nav.settings_selected,
-                    self.out.director.chart.is_live(),
-                    pre_input.animation_us,
-                ) {
-                    incoming_input_events.push_back(event);
-                }
                 if let Some(event) = self.diag.library_changed_dialog_test.event_for(
                     &self.ui.nav,
                     pre_input.animation_now,
                     self.out.start,
                 ) {
-                    incoming_input_events.push_back(event);
-                }
-                if let Some(event) = self
-                    .diag
-                    .launcher_input_script
-                    .event_for(pre_input.animation_us)
-                {
                     incoming_input_events.push_back(event);
                 }
             }
@@ -2994,10 +2619,7 @@ impl<'a> FrameLoop<'a> {
                         accepted_selection_feedback_input(routed_event_this_loop.as_ref())
                             || direct_ui_action_this_loop.is_some();
 
-                    if self.diag.launcher_bench_scenario.is_none()
-                        && !self.diag.settings_navigation_benchmark.enabled()
-                        && self.inp.setup.is_active()
-                    {
+                    if self.inp.setup.is_active() {
                         let setup_before = SetupBridgeKey::from_setup(&self.inp.setup);
                         let target_device = self
                             .inp
@@ -3067,11 +2689,7 @@ impl<'a> FrameLoop<'a> {
                         }
                         let setup_after = SetupBridgeKey::from_setup(&self.inp.setup);
                         pre_input.full_bridge_dirty |= pad_changed || setup_before != setup_after;
-                    } else if self.diag.launcher_bench_scenario.is_none()
-                        || self.diag.launcher_bench_launch_handoff
-                        || (self.diag.launcher_bench_after_input_script
-                            && !self.diag.launcher_bench_active)
-                    {
+                    } else {
                         if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
                             let setup_before = SetupBridgeKey::from_setup(&self.inp.setup);
                             self.inp.setup.maybe_open(
@@ -3089,55 +2707,6 @@ impl<'a> FrameLoop<'a> {
                         if !self.inp.setup.is_active() {
                             let nav_before = LauncherProjectionKey::from_nav(&self.ui.nav);
                             let arcade_selected_before_input = self.ui.nav.arcade.selected;
-                            if self.diag.transition_picker_enabled
-                                && self.ui.nav.screen == Screen::Arcade
-                            {
-                                let left = routed_event_this_loop.as_ref().is_some_and(|event| {
-                                    event.phase == InputPhase::Pressed
-                                        && event.action == LogicalAction::Left
-                                });
-                                let right = routed_event_this_loop.as_ref().is_some_and(|event| {
-                                    event.phase == InputPhase::Pressed
-                                        && event.action == LogicalAction::Right
-                                });
-                                let changed = if left {
-                                    self.diag.preview_transition.cycle_picker(-1)
-                                } else if right {
-                                    self.diag.preview_transition.cycle_picker(1)
-                                } else {
-                                    false
-                                };
-                                if changed {
-                                    crate::ui_logln!(
-                                        "preview_transition_picker={}",
-                                        self.diag
-                                            .preview_transition
-                                            .current_label(self.out.frame_clock.elapsed())
-                                    );
-                                    self.env.window.request_redraw();
-                                }
-                            }
-                            if let Some(orientation) = self
-                                .diag
-                                .settings_navigation_benchmark
-                                .take_orientation_change(
-                                    self.ui.nav.screen,
-                                    self.out.director.chart.is_live(),
-                                )
-                            {
-                                apply_orientation_layout(
-                                    &self.env.app,
-                                    self.env.window,
-                                    self.env.ui,
-                                    orientation,
-                                    &mut self.ui.nav,
-                                    &mut self.out.layout,
-                                    &mut self.out.layout_epoch,
-                                    &mut self.out.director.navigation,
-                                );
-                                pre_input.full_bridge_dirty = true;
-                                self.env.window.request_redraw();
-                            }
                             let lifecycle_view = self.lib.lifecycle.view();
                             let launch_failure_visible =
                                 lifecycle_view.launch_failure_dialog().is_some();
@@ -3223,7 +2792,6 @@ impl<'a> FrameLoop<'a> {
                                 None
                             } else if self.lib.scheduler.should_request_benchmark_launch()
                                 && self.lib.catalog_ready
-                                && !self.diag.launcher_bench_waiting_for_initial_preview
                                 && self.ui.nav.screen == Screen::Arcade
                             {
                                 active_system(&self.lib.catalog, &self.ui.nav)
@@ -3330,17 +2898,6 @@ impl<'a> FrameLoop<'a> {
                                         status_quiesce_started_at: None,
                                     })
                                 {
-                                    self.diag.settings_navigation_benchmark.note_started(
-                                        route,
-                                        direction,
-                                        self.out.director.navigation.request().map_or(
-                                            "",
-                                            NavigationTransitionRequest::renderer_label,
-                                        ),
-                                        source_screen,
-                                        self.ui.nav.screen,
-                                        self.out.frames,
-                                    );
                                     pre_input.full_bridge_dirty = true;
                                     self.env.window.request_redraw();
                                 } else if started {
@@ -3996,9 +3553,7 @@ impl<'a> FrameLoop<'a> {
                                     Instant::now(),
                                 );
                             }
-                            if pad_changed
-                                && (self.ui.nav.screen == Screen::Controller || !self.out.dirty_opt)
-                            {
+                            if pad_changed && self.ui.nav.screen == Screen::Controller {
                                 pre_input.full_bridge_dirty = true;
                             }
                             if nav_before != nav_after {
@@ -4037,8 +3592,7 @@ impl<'a> FrameLoop<'a> {
                                         &self.ui.nav,
                                     );
                                 }
-                                if !self.out.dirty_opt
-                                    || nav_before.screen != nav_after.screen
+                                if nav_before.screen != nav_after.screen
                                     || nav_before.menu_id != nav_after.menu_id
                                 {
                                     pre_input.full_bridge_dirty = true;
@@ -4322,7 +3876,6 @@ impl<'a> FrameLoop<'a> {
                     active_games,
                     &mut self.lib.preview,
                     should_defer_arcade_overlay_bridge(
-                        self.out.dirty_opt,
                         pre_input.launching,
                         &self.ui.nav,
                         &self.lib.catalog,
@@ -4402,8 +3955,6 @@ impl<'a> FrameLoop<'a> {
             let media_gate = self.lib.media_session.current_gate(
                 self.diag.frame_accounting.first_visible_copy_done(),
                 self.lib.scheduler.has_pending_launch() || pre_input.launching,
-                self.diag.benchmark_media_interaction_active,
-                self.diag.media_benchmark_contention,
                 pre_input.loop_start,
             );
             let media_gate = if self.lib.memory_guard.active() {
@@ -4580,8 +4131,7 @@ impl<'a> FrameLoop<'a> {
             arcade_turbo_active,
         );
         let preview_schedule_trace_start = pre_input.prepare_trace_enabled.then(Instant::now);
-        if self.out.dirty_opt
-            && preview_work_allowed
+        if preview_work_allowed
             && !pre_input.preview_scheduled_this_loop
             && !pre_input.launching
             && self.ui.nav.screen == Screen::Arcade
@@ -5045,10 +4595,8 @@ impl<'a> FrameLoop<'a> {
             &mut self.out.home_pan_present_until,
             pre_input.loop_start,
         ) || custom_home_motion_active;
-        let home_repeat_bench_active =
-            home_repeat_benchmark_active(self.diag.launcher_bench_scenario);
         let home_horizontal_input_held = self.ui.nav.screen == Screen::Home
-            && (pad_state_home_horizontal_held(self.env.pad.state()) || home_repeat_bench_active);
+            && pad_state_home_horizontal_held(self.env.pad.state());
         if home_frame_driven_redraw_active(
             self.ui.nav.screen,
             home_pan_present_active,
@@ -5092,10 +4640,6 @@ impl<'a> FrameLoop<'a> {
         );
         wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, pre_input.launching);
         wake_reasons.insert_if(LauncherWakeReasons::SETUP_ACTIVE, pre_input.setup_active);
-        wake_reasons.insert_if(
-            LauncherWakeReasons::BENCHMARK_ACTIVE,
-            self.diag.launcher_bench_active,
-        );
         #[cfg(feature = "tooling")]
         let tooling_sequence_pending = self
             .diag
@@ -5106,9 +4650,7 @@ impl<'a> FrameLoop<'a> {
         let tooling_sequence_pending = false;
         wake_reasons.insert_if(
             LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
-            self.diag.launcher_input_script.active()
-                || self.diag.launcher_automation.active()
-                || tooling_sequence_pending,
+            self.diag.launcher_automation.active() || tooling_sequence_pending,
         );
         wake_reasons.insert_if(
             LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
@@ -5274,7 +4816,6 @@ impl<'a> FrameLoop<'a> {
                     confirm_visible,
                     confirm_selected,
                     status_text: status_text.as_ref(),
-                    launcher_bench_scenario: self.diag.launcher_bench_scenario,
                     start_screen: self.lib.start_screen,
                     lock_screen: self.lib.lock_screen,
                     route_reassert_count: self.env.display_session.reassert_count(),
@@ -7170,9 +6711,6 @@ impl<'a> FrameLoop<'a> {
             project.full_frame_present = true;
             self.env.window.request_redraw();
             if self.out.director.navigation.frame().phase == NavigationTransitionPhase::Settled {
-                self.diag
-                    .settings_navigation_benchmark
-                    .note_rendered_endpoint(self.out.frames);
                 let endpoint_is_live = navigation_home_endpoint_is_live(
                     self.out.director.navigation.route(),
                     self.out.director.navigation.request(),
@@ -7331,7 +6869,6 @@ impl<'a> FrameLoop<'a> {
             } else {
                 ""
             },
-            settings_navigation_benchmark_leg: self.diag.settings_navigation_benchmark.active_leg(),
             navigation_snapshot_locked: navigation_snapshot_locked_before_render,
             navigation_slint_render_called: !self.fx.screensaver.active
                 && !navigation_snapshot_locked_before_render,
@@ -7632,11 +7169,6 @@ impl<'a> FrameLoop<'a> {
             custom_draw_trace.orientation_transition_active = true;
             custom_draw_trace.orientation_transition_from = transition_from.id();
             custom_draw_trace.orientation_transition_to = transition_to.id();
-            custom_draw_trace.orientation_transition_leg = self
-                .diag
-                .orientation_benchmark
-                .active_leg()
-                .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
             custom_draw_trace.orientation_transition_effect =
                 self.out.director.orientation.effect().id();
             let preparation_trace = std::mem::take(&mut self.diag.orientation_preparation_trace);
@@ -7712,11 +7244,6 @@ impl<'a> FrameLoop<'a> {
                             self.inp
                                 .orientation_confirmation
                                 .start_countdown(Instant::now());
-                        }
-                        Some(OrientationIntent::Benchmark) => {
-                            self.diag
-                                .orientation_benchmark
-                                .note_rendered_endpoint(self.out.frames);
                         }
                         Some(OrientationIntent::Rollback) | None => {}
                     }
@@ -7796,7 +7323,6 @@ impl<'a> FrameLoop<'a> {
             #[cfg(feature = "tooling")]
             card_work_timing,
             accepted_startup_intro_frame,
-            navigation_capture_source_carrier_rendered,
             orientation_capture_source_carrier_rendered,
             card_direct_waiting_on_slot,
             full_screen_transition_release_raster_rendered,
@@ -8043,15 +7569,9 @@ impl<'a> FrameLoop<'a> {
         let startup_intro_frame_posted =
             visible_frame_presented && render.accepted_startup_intro_frame;
         if render.navigation_transition_frame_active && visible_frame_presented {
-            if self.diag.settings_navigation_benchmark.enabled() {
-                self.diag
-                    .screensaver_cpu_profile
-                    .begin_settings_navigation_transition(self.out.frames.saturating_add(1));
-            } else {
-                self.diag
-                    .screensaver_cpu_profile
-                    .begin_navigation_transition(self.out.frames.saturating_add(1));
-            }
+            self.diag
+                .screensaver_cpu_profile
+                .begin_navigation_transition(self.out.frames.saturating_add(1));
         }
         if self.fx.screensaver.active && visible_frame_presented {
             // Profile only completed screensaver output. Starting when Preview is pressed
@@ -8312,14 +7832,6 @@ impl<'a> FrameLoop<'a> {
         let mut selection_feedback_confirmed_at = (!latch_trace_flush_deferred
             && visible_frame_presented)
             .then_some(pre_input.animation_now);
-        let runtime_status_sequence_before_frame =
-            if self.diag.settings_navigation_benchmark.enabled() {
-                self.diag
-                    .frame_accounting
-                    .runtime_status_submitted_sequence()
-            } else {
-                Default::default()
-            };
         let status = FrameStatusView {
             nav: &self.ui.nav,
             pad: &self.env.pad,
@@ -8337,7 +7849,6 @@ impl<'a> FrameLoop<'a> {
             confirm_visible: project.confirm_visible,
             confirm_selected: project.confirm_selected,
             status_text: project.status_text.as_ref(),
-            launcher_bench_scenario: self.diag.launcher_bench_scenario,
             start_screen: self.lib.start_screen,
             lock_screen: self.lib.lock_screen,
             route_reassert_count: self.env.display_session.reassert_count(),
@@ -8470,8 +7981,6 @@ impl<'a> FrameLoop<'a> {
                 layer_target: &mut layer_target,
                 lifecycle: &self.lib.lifecycle,
                 nav: &self.ui.nav,
-                navigation_capture_source_carrier_rendered: render
-                    .navigation_capture_source_carrier_rendered,
                 #[cfg(feature = "tooling")]
                 navigation_endpoint_rendered: render.navigation_endpoint_rendered,
                 #[cfg(feature = "tooling")]
@@ -8481,7 +7990,6 @@ impl<'a> FrameLoop<'a> {
                 navigation_transition_renderer: render.navigation_transition_renderer,
                 #[cfg(feature = "tooling")]
                 navigation_transition_route: render.navigation_transition_route,
-                orientation_benchmark: &mut self.diag.orientation_benchmark,
                 orientation_capture_source_carrier_rendered: render
                     .orientation_capture_source_carrier_rendered,
                 pace: &pace,
@@ -8507,7 +8015,6 @@ impl<'a> FrameLoop<'a> {
                 screensaver: &self.fx.screensaver,
                 screensaver_cpu_profile: &mut self.diag.screensaver_cpu_profile,
                 selection_feedback_confirmed_at: &mut selection_feedback_confirmed_at,
-                settings_navigation_benchmark: &mut self.diag.settings_navigation_benchmark,
                 start: self.out.start,
                 startup_intro: &mut self.fx.startup_intro,
                 startup_intro_frame_posted,
@@ -8563,64 +8070,38 @@ impl<'a> FrameLoop<'a> {
                 latch_trace_flush_deferred,
             );
         }
-        if matches!(
-            finish_presented_frame(FrameCloseout {
-                accepted_and_active_confirmed,
-                benchmark_config: &self.diag.benchmark_config,
-                bridge_models: &mut self.ui.bridge_models,
-                composition_decision: &project.composition_decision,
-                confirmed_present_sequence,
-                confirmed_presentation,
-                director: &mut self.out.director,
-                f: &mut *self.env.f,
-                frame_accounting: &mut self.diag.frame_accounting,
-                frame_clock: &mut self.out.frame_clock,
-                frames: &mut self.out.frames,
-                input_latency_lab: &mut self.diag.input_latency_lab,
-                input_observation: self.inp.input_observation,
-                latch_backend_active: render.latch_backend_active,
-                latch_trace_flush_deferred,
-                latch_v5_qualification: &mut self.diag.latch_v5_qualification,
-                latency_critical_input_pending: &mut self.inp.latency_critical_input_pending,
-                launcher_response_frame_stamp: &render.launcher_response_frame_stamp,
-                launcher_response_trace: &mut self.diag.launcher_response_trace,
-                nav: &self.ui.nav,
-                orientation_benchmark: &mut self.diag.orientation_benchmark,
-                orientation_benchmark_completed_at: &mut self
-                    .diag
-                    .orientation_benchmark_completed_at,
-                orientation_benchmark_terminal_status_requested: &mut self
-                    .diag
-                    .orientation_benchmark_terminal_status_requested,
-                preview: &mut self.lib.preview,
-                preview_presentation_commit: render.preview_presentation_commit,
-                #[cfg(feature = "tooling")]
-                run_start: self.out.run_start,
-                runtime_status_sequence_before_frame,
-                scheduler: &self.lib.scheduler,
-                scheduler_phase: &mut pre_input.scheduler_phase,
-                screensaver_cpu_profile: &mut self.diag.screensaver_cpu_profile,
-                selection_feedback_confirmed_at,
-                selection_feedback_stamp: &selection_feedback_stamp,
-                settings_navigation_benchmark: &mut self.diag.settings_navigation_benchmark,
-                settings_navigation_benchmark_completed_at: &mut self
-                    .diag
-                    .settings_navigation_benchmark_completed_at,
-                settings_navigation_status_baseline: &mut self
-                    .diag
-                    .settings_navigation_status_baseline,
-                start: self.out.start,
-                #[cfg(feature = "tooling")]
-                tooling: &mut self.diag.tooling,
-                #[cfg(feature = "tooling")]
-                tooling_frame_evidence: &mut begin.tooling_frame_evidence,
-                visible_frame_presented,
-                window: self.env.window,
-            }),
-            FrameFlow::Break
-        ) {
-            return Err(Exit::Stop);
-        }
+        finish_presented_frame(FrameCloseout {
+            accepted_and_active_confirmed,
+            bridge_models: &mut self.ui.bridge_models,
+            composition_decision: &project.composition_decision,
+            confirmed_present_sequence,
+            confirmed_presentation,
+            director: &mut self.out.director,
+            frame_accounting: &mut self.diag.frame_accounting,
+            frame_clock: &mut self.out.frame_clock,
+            frames: &mut self.out.frames,
+            input_latency_lab: &mut self.diag.input_latency_lab,
+            input_observation: self.inp.input_observation,
+            latch_backend_active: render.latch_backend_active,
+            latch_trace_flush_deferred,
+            latency_critical_input_pending: &mut self.inp.latency_critical_input_pending,
+            launcher_response_frame_stamp: &render.launcher_response_frame_stamp,
+            launcher_response_trace: &mut self.diag.launcher_response_trace,
+            preview: &mut self.lib.preview,
+            preview_presentation_commit: render.preview_presentation_commit,
+            #[cfg(feature = "tooling")]
+            run_start: self.out.run_start,
+            scheduler_phase: &mut pre_input.scheduler_phase,
+            screensaver_cpu_profile: &mut self.diag.screensaver_cpu_profile,
+            selection_feedback_confirmed_at,
+            selection_feedback_stamp: &selection_feedback_stamp,
+            #[cfg(feature = "tooling")]
+            tooling: &mut self.diag.tooling,
+            #[cfg(feature = "tooling")]
+            tooling_frame_evidence: &mut begin.tooling_frame_evidence,
+            visible_frame_presented,
+            window: self.env.window,
+        });
         Ok(())
     }
 }

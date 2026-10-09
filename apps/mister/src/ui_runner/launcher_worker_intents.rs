@@ -175,25 +175,6 @@ pub(super) fn cached_catalog_validation_intent(
     ))
 }
 
-pub(super) fn catalog_rebuild_started_intent(foreground_update: bool) -> LauncherWorkerUiIntent {
-    LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
-        foreground_update,
-        !foreground_update,
-        catalog_scan_message(foreground_update),
-        if foreground_update {
-            "Indexing library"
-        } else {
-            "Checking library"
-        },
-        if foreground_update {
-            "Rebuilding catalog with latest games..."
-        } else {
-            "Comparing library changes..."
-        },
-        -1,
-    ))
-}
-
 pub(super) fn catalog_system_update_preparing_intent() -> LauncherWorkerUiIntent {
     LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
         false,

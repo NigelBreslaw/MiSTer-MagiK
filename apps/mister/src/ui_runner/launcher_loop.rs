@@ -46,12 +46,11 @@ use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
 use crate::preview_state::PreviewApplyTrace;
-use crate::preview_worker;
 #[cfg(feature = "ui-device-tests")]
 use crate::ui_test_support::UiTestSandbox;
 #[cfg(test)]
 use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
-use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
+use mister_magik_fb::process_config::ScreensaverStartMode;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::ops::ControlFlow;
@@ -105,11 +104,7 @@ const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_sec
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(1_000);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
-const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
-const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
-const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
-const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 fn card_direct_tile_damage(left: usize, level_trick: bool, split: usize) -> [DirtyRect; 2] {
     // Trick rendering clears from x=268, including root cards whose ordinary
@@ -259,22 +254,6 @@ fn system_entry_benchmark_settled(elapsed_ms: u64, input_enabled_ms: u64) -> boo
     elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_SETTLE_MS
 }
 
-fn settings_navigation_status_drain_complete(elapsed: Duration, status_current: bool) -> bool {
-    elapsed >= SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT
-        || (elapsed >= SETTINGS_NAVIGATION_STATUS_DRAIN_MIN && status_current)
-}
-
-fn settings_navigation_status_drain_plan(
-    sequence_before_frame: u64,
-    sequence_after_frame: u64,
-) -> (u64, bool) {
-    if sequence_after_frame > sequence_before_frame {
-        (sequence_before_frame, false)
-    } else {
-        (sequence_after_frame, true)
-    }
-}
-
 fn discrete_selection_feedback_target(
     nav: &LauncherNav,
     setup: &SetupNav,
@@ -407,9 +386,6 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
         Screen::Arcade | Screen::Controller | Screen::LicenseText => None,
     }
 }
-const ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV: &str =
-    "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR";
-const SETTINGS_NAVIGATION_BENCHMARK_EVIDENCE_ENV: &str = "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR";
 
 fn launcher_screen_input_focus(nav: &LauncherNav) -> FocusRequest {
     let (owner, directional_policy) = match nav.screen {
@@ -476,196 +452,6 @@ fn launcher_input_focus(
         target: FocusTarget { kind, owner },
         directional_policy,
     }
-}
-
-fn orientation_transition_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os(ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV)
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-}
-
-fn settings_navigation_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os(SETTINGS_NAVIGATION_BENCHMARK_EVIDENCE_ENV)
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-}
-
-fn settings_navigation_presentation_snapshot_json(
-    capture: SettingsNavigationPresentationCapture,
-) -> serde_json::Value {
-    let telemetry = capture.telemetry;
-    serde_json::json!({
-        "owned_vblank_count": telemetry.owned_vblank_count,
-        "presented_vblank_count": telemetry.presented_vblank_count,
-        "repeated_vblank_count": telemetry.repeated_vblank_count,
-        "ownership_loss_count": telemetry.ownership_loss_count,
-        "active_sequence": telemetry.active_sequence,
-        "magik_ownership": telemetry.magik_ownership(),
-        "pending": telemetry.pending(),
-        "lifetime_invariant_valid": telemetry.lifetime_invariant_valid(),
-    })
-}
-
-fn orientation_transition_presentation_snapshot_json(
-    capture: OrientationTransitionPresentationCapture,
-) -> serde_json::Value {
-    let telemetry = capture.telemetry;
-    serde_json::json!({
-        "owned_vblank_count": telemetry.owned_vblank_count,
-        "presented_vblank_count": telemetry.presented_vblank_count,
-        "repeated_vblank_count": telemetry.repeated_vblank_count,
-        "ownership_loss_count": telemetry.ownership_loss_count,
-        "active_sequence": telemetry.active_sequence,
-        "magik_ownership": telemetry.magik_ownership(),
-        "pending": telemetry.pending(),
-        "lifetime_invariant_valid": telemetry.lifetime_invariant_valid(),
-    })
-}
-
-fn write_settings_navigation_benchmark_completion(
-    directory: &Path,
-    benchmark: &SettingsNavigationBenchmark,
-    frames: u64,
-) -> std::io::Result<()> {
-    std::fs::create_dir_all(directory)?;
-    let records = benchmark
-        .records()
-        .iter()
-        .enumerate()
-        .map(|(index, record)| {
-            let presentation_start = record
-                .presentation_start
-                .map(settings_navigation_presentation_snapshot_json);
-            let presentation_end = record
-                .presentation_end
-                .map(settings_navigation_presentation_snapshot_json);
-            serde_json::json!({
-                "leg": index + 1,
-                "orientation": record.orientation.id(),
-                "route": record.leg.route.label(),
-                "renderer": record.renderer,
-                "direction": record.leg.direction.label(),
-                "source": screen_label(record.leg.source),
-                "destination": screen_label(record.leg.destination),
-                "start_frame": record.start_frame,
-                "rendered_endpoint_frame": record.rendered_endpoint_frame,
-                "presented_endpoint_frame": record.presented_endpoint_frame,
-                "presented_sequence": record.presented_sequence,
-                "presentation_window": {
-                    "schema": "mister-magik-settings-navigation-presentation-window-v1",
-                    "source": "fpga-owned-vblank-telemetry",
-                    "start": presentation_start,
-                    "end": presentation_end,
-                    "elapsed_us": record.presentation_elapsed_us,
-                    "error": record.presentation_error,
-                },
-            })
-        })
-        .collect::<Vec<_>>();
-    let document = serde_json::json!({
-        "schema": "mister-magik-settings-navigation-transition-v4",
-        "state": if benchmark.complete() { "complete" } else { "failed" },
-        "failure": benchmark.failure(),
-        "orientations": SETTINGS_NAVIGATION_ORIENTATIONS.map(ScreenOrientation::id),
-        "frames": frames,
-        "route": ["home", "settings", "about", "info", "about", "settings", "home", "settings", "about", "info", "about", "settings", "home"],
-        "records": records,
-    });
-    let temporary = directory.join("completion.json.tmp");
-    std::fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(&document).map_err(std::io::Error::other)?,
-    )?;
-    std::fs::rename(temporary, directory.join("completion.json"))
-}
-
-fn write_orientation_transition_benchmark_completion(
-    directory: &Path,
-    benchmark: &OrientationTransitionBenchmark,
-    frames: u64,
-) -> std::io::Result<()> {
-    std::fs::create_dir_all(directory)?;
-    let records = benchmark
-        .records()
-        .iter()
-        .map(|record| {
-            let presentation_start = record
-                .presentation_start
-                .map(orientation_transition_presentation_snapshot_json);
-            let presentation_end = record
-                .presentation_end
-                .map(orientation_transition_presentation_snapshot_json);
-            serde_json::json!({
-                "leg": record.leg.index + 1,
-                "effect": record.leg.effect.id(),
-                "label": record.leg.label(),
-                "from": record.leg.from.id(),
-                "to": record.leg.to.id(),
-                "start_frame": record.start_frame,
-                "rendered_endpoint_frame": record.rendered_endpoint_frame,
-                "presented_endpoint_frame": record.presented_endpoint_frame,
-                "presented_sequence": record.presented_sequence,
-                "presentation_window": {
-                    "schema": "mister-magik-orientation-transition-presentation-window-v1",
-                    "source": "fpga-owned-vblank-telemetry",
-                    "start": presentation_start,
-                    "end": presentation_end,
-                    "elapsed_us": record.presentation_elapsed_us,
-                    "error": record.presentation_error,
-                },
-            })
-        })
-        .collect::<Vec<_>>();
-    let document = serde_json::json!({
-        "schema": "mister-magik-orientation-transition-v2",
-        "state": if benchmark.complete() { "complete" } else { "failed" },
-        "failure": benchmark.failure(),
-        "effect": benchmark.effect().id(),
-        "frames": frames,
-        "route": ORIENTATION_TRANSITION_BENCHMARK_ROUTE
-            .iter()
-            .map(|orientation| orientation.id())
-            .collect::<Vec<_>>(),
-        "records": records,
-    });
-    let temporary = directory.join("completion.json.tmp");
-    std::fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(&document).map_err(std::io::Error::other)?,
-    )?;
-    std::fs::rename(temporary, directory.join("completion.json"))
-}
-
-fn write_orientation_transition_pmu_completion(
-    path: Option<&str>,
-    effect: OrientationTransitionEffect,
-) -> std::io::Result<()> {
-    let Some(path) = path else {
-        return Ok(());
-    };
-    let path = std::path::PathBuf::from(path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let profile = mister_magik_perf_events::take_thread_profile();
-    let document = serde_json::json!({
-        "schema": "mister-magik-orientation-transition-pmu-v2",
-        "state": if profile.enabled && profile.failure.is_none() && !profile.records.is_empty() && profile.dropped_spans == 0 {
-            "complete"
-        } else {
-            "failed"
-        },
-        "route": ORIENTATION_TRANSITION_BENCHMARK_ROUTE
-            .iter()
-            .map(|orientation| orientation.id())
-            .collect::<Vec<_>>(),
-        "effect": effect.id(),
-        "profile": profile,
-    });
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(&document).map_err(std::io::Error::other)?,
-    )
 }
 
 impl LauncherPresentBackend {
@@ -1778,13 +1564,11 @@ fn system_entry_ready_frame_eligible(
 }
 
 fn should_defer_arcade_overlay_bridge(
-    dirty_opt: bool,
     launching: bool,
     nav: &LauncherNav,
     catalog: &ArcadeCatalog,
 ) -> bool {
-    dirty_opt
-        && !launching
+    !launching
         && nav.screen == Screen::Arcade
         && !nav.arcade_search.is_active(&nav.arcade_filter.active)
         && !active_system_game_view(catalog, nav).is_empty()
@@ -3568,205 +3352,6 @@ impl LibraryChangedDialogTestDriver {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LauncherInputScriptButton {
-    Up,
-    Down,
-    Left,
-    Right,
-    A,
-    B,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LauncherInputScriptStep {
-    Button(LauncherInputScriptButton),
-    Wait(usize),
-}
-
-impl LauncherInputScriptStep {
-    fn parse(value: &str) -> Option<Self> {
-        let value = value.trim();
-        if let Some(frames) = value
-            .strip_prefix("wait:")
-            .or_else(|| value.strip_prefix("wait="))
-            .and_then(|frames| frames.parse::<usize>().ok())
-        {
-            return Some(Self::Wait(frames.min(600)));
-        }
-        LauncherInputScriptButton::parse(value).map(Self::Button)
-    }
-
-    fn label(self) -> String {
-        match self {
-            Self::Button(button) => button.label().to_string(),
-            Self::Wait(frames) => format!("wait:{frames}"),
-        }
-    }
-}
-
-impl LauncherInputScriptButton {
-    fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "up" => Some(Self::Up),
-            "down" => Some(Self::Down),
-            "left" => Some(Self::Left),
-            "right" => Some(Self::Right),
-            "a" => Some(Self::A),
-            "b" | "back" => Some(Self::B),
-            _ => None,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Up => "up",
-            Self::Down => "down",
-            Self::Left => "left",
-            Self::Right => "right",
-            Self::A => "a",
-            Self::B => "b",
-        }
-    }
-}
-
-struct LauncherInputScriptDriver {
-    steps: Vec<LauncherInputScriptStep>,
-    step_idx: usize,
-    frame_in_step: usize,
-    wait_frames: usize,
-    event_sequence: u64,
-    press_sequence: u64,
-    active_press: Option<(LauncherInputScriptButton, crate::input_event::PressId)>,
-}
-
-impl LauncherInputScriptDriver {
-    fn from_config(config: &ScriptedInputConfig, start: Instant) -> Self {
-        match config.script() {
-            Some(value) => Self::from_script_with_wait_frames(value, start, config.wait_frames()),
-            None => Self::empty(),
-        }
-    }
-
-    #[cfg(test)]
-    fn from_script(value: &str, start: Instant) -> Self {
-        Self::from_script_with_wait_frames(value, start, 60)
-    }
-
-    fn from_script_with_wait_frames(value: &str, start: Instant, wait_frames: usize) -> Self {
-        let mut steps = Vec::new();
-        for token in value.split([',', ';', ' ']) {
-            let token = token.trim();
-            if token.is_empty() {
-                continue;
-            }
-            match LauncherInputScriptStep::parse(token) {
-                Some(step) => steps.push(step),
-                None => print_startup_event(
-                    start,
-                    "launcher_input_script_invalid_token",
-                    format!("token={token}"),
-                ),
-            }
-        }
-        if !steps.is_empty() {
-            let labels = steps
-                .iter()
-                .map(|step| step.label())
-                .collect::<Vec<_>>()
-                .join(",");
-            print_startup_event(
-                start,
-                "launcher_input_script_loaded",
-                format!("buttons={labels}"),
-            );
-        }
-        Self {
-            steps,
-            step_idx: 0,
-            frame_in_step: 0,
-            wait_frames,
-            event_sequence: 0,
-            press_sequence: 0,
-            active_press: None,
-        }
-    }
-
-    fn empty() -> Self {
-        Self {
-            steps: Vec::new(),
-            step_idx: 0,
-            frame_in_step: 0,
-            wait_frames: 0,
-            event_sequence: 0,
-            press_sequence: 0,
-            active_press: None,
-        }
-    }
-
-    fn event_for(&mut self, captured_at_us: u64) -> Option<crate::input_event::InputEvent> {
-        let step = *self.steps.get(self.step_idx)?;
-        if self.frame_in_step < self.wait_frames {
-            self.frame_in_step += 1;
-            return None;
-        }
-        let local_frame = self.frame_in_step - self.wait_frames;
-        self.frame_in_step += 1;
-        if let LauncherInputScriptStep::Wait(frames) = step {
-            if local_frame >= frames {
-                self.step_idx += 1;
-                self.frame_in_step = 0;
-            }
-            return None;
-        }
-        let LauncherInputScriptStep::Button(button) = step else {
-            unreachable!();
-        };
-        let (phase, press_id) = if local_frame == 0 {
-            self.press_sequence = self.press_sequence.saturating_add(1).max(1);
-            let press_id = crate::input_event::PressId((1_u64 << 62) | self.press_sequence);
-            self.active_press = Some((button, press_id));
-            (crate::input_event::InputPhase::Pressed, press_id)
-        } else if local_frame == LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
-            let (_, press_id) = self.active_press.take()?;
-            (crate::input_event::InputPhase::Released, press_id)
-        } else {
-            if local_frame
-                >= LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES + LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES
-            {
-                self.step_idx += 1;
-                self.frame_in_step = 0;
-            }
-            return None;
-        };
-        self.event_sequence = self.event_sequence.saturating_add(1).max(1);
-        let action = match button {
-            LauncherInputScriptButton::Up => crate::input_event::LogicalAction::Up,
-            LauncherInputScriptButton::Down => crate::input_event::LogicalAction::Down,
-            LauncherInputScriptButton::Left => crate::input_event::LogicalAction::Left,
-            LauncherInputScriptButton::Right => crate::input_event::LogicalAction::Right,
-            LauncherInputScriptButton::A => crate::input_event::LogicalAction::Activate,
-            LauncherInputScriptButton::B => crate::input_event::LogicalAction::Back,
-        };
-        Some(crate::input_event::InputEvent {
-            source: crate::input_event::InputSourceId {
-                kind: crate::input_event::InputSourceKind::Automation,
-                instance: 2,
-            },
-            source_epoch: crate::input_event::SourceEpoch(1),
-            sequence: self.event_sequence,
-            press_id,
-            captured_at_us,
-            action,
-            phase,
-        })
-    }
-
-    fn active(&self) -> bool {
-        self.step_idx < self.steps.len()
-    }
-}
-
 #[cfg(test)]
 fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
     let mut state = PadState::default();
@@ -3806,7 +3391,6 @@ impl LauncherWakeReasons {
     const REDRAW_PENDING: Self = Self(1 << 0);
     const LAUNCHING: Self = Self(1 << 1);
     const SETUP_ACTIVE: Self = Self(1 << 2);
-    const BENCHMARK_ACTIVE: Self = Self(1 << 3);
     const SCRIPTED_INPUT_ACTIVE: Self = Self(1 << 4);
     const ROUTE_FORCES_FULL_PRESENT: Self = Self(1 << 5);
     const BRIDGE_DIRTY: Self = Self(1 << 6);
@@ -4282,10 +3866,6 @@ fn visible_frame_was_presented(
             && copy_path == LatchCopyPath::ExternalDirect.label())
 }
 
-fn home_repeat_benchmark_active(scenario: Option<LauncherBenchScenario>) -> bool {
-    scenario == Some(LauncherBenchScenario::HomeRepeatHold)
-}
-
 fn read_sharded_registry_seed(
     root: &str,
     storage: &Path,
@@ -4747,24 +4327,6 @@ impl ScreensaverControl {
                     self.waiting_for_input_release = false;
                 }
             }
-        }
-    }
-
-    fn set_qualification_particles(
-        &mut self,
-        now: Instant,
-        qualification_enabled: bool,
-        particles_requested: bool,
-    ) {
-        if !qualification_enabled {
-            return;
-        }
-        if particles_requested {
-            if !self.active {
-                self.start_mode = ScreensaverStartMode::IdleWhenReady;
-            }
-        } else if self.active || self.start_mode != ScreensaverStartMode::Inactive {
-            self.cancel_for_exclusive_view(now);
         }
     }
 
@@ -5680,7 +5242,6 @@ struct ConfirmedPresent<'a> {
     layer_target: &'a mut LayerTarget<'a>,
     lifecycle: &'a LauncherLifecycle,
     nav: &'a LauncherNav,
-    navigation_capture_source_carrier_rendered: bool,
     #[cfg(feature = "tooling")]
     navigation_endpoint_rendered: bool,
     #[cfg(feature = "tooling")]
@@ -5689,7 +5250,6 @@ struct ConfirmedPresent<'a> {
     navigation_transition_renderer: &'static str,
     #[cfg(feature = "tooling")]
     navigation_transition_route: &'static str,
-    orientation_benchmark: &'a mut OrientationTransitionBenchmark,
     orientation_capture_source_carrier_rendered: bool,
     pace: &'a mister_magik_fb::framebuffer::vsync::VsyncPace,
     #[cfg(feature = "tooling")]
@@ -5715,7 +5275,6 @@ struct ConfirmedPresent<'a> {
     screensaver: &'a ScreensaverControl,
     screensaver_cpu_profile: &'a mut cpu_profile::ScreensaverProfiler,
     selection_feedback_confirmed_at: &'a mut Option<Instant>,
-    settings_navigation_benchmark: &'a mut SettingsNavigationBenchmark,
     start: Instant,
     startup_intro: &'a mut Option<StartupIntroSession>,
     startup_intro_frame_posted: bool,
@@ -5801,7 +5360,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         layer_target,
         lifecycle,
         nav,
-        navigation_capture_source_carrier_rendered,
         #[cfg(feature = "tooling")]
         navigation_endpoint_rendered,
         #[cfg(feature = "tooling")]
@@ -5810,7 +5368,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         navigation_transition_renderer,
         #[cfg(feature = "tooling")]
         navigation_transition_route,
-        orientation_benchmark,
         orientation_capture_source_carrier_rendered,
         pace,
         #[cfg(feature = "tooling")]
@@ -5835,7 +5392,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         screensaver,
         screensaver_cpu_profile,
         selection_feedback_confirmed_at,
-        settings_navigation_benchmark,
         start,
         startup_intro,
         startup_intro_frame_posted,
@@ -5871,22 +5427,10 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         // the highlight is the one that confirmed it.
         *selection_feedback_confirmed_at = Some(animation_now);
         if orientation_capture_source_carrier_rendered {
-            if !director
+            director
                 .orientation
-                .restart_animation(animation_now + frame_clock.period())
-            {
-                orientation_benchmark.fail("orientation-carrier-restart-failed");
-            } else if orientation_benchmark.enabled() {
-                orientation_benchmark.capture_presentation_start(
-                    Instant::now(),
-                    f.read_magik_presentation_telemetry(),
-                );
-            }
+                .restart_animation(animation_now + frame_clock.period());
             window.request_redraw();
-        }
-        if navigation_capture_source_carrier_rendered && settings_navigation_benchmark.enabled() {
-            let telemetry = f.read_magik_presentation_telemetry();
-            settings_navigation_benchmark.capture_presentation_start(Instant::now(), telemetry);
         }
         if arcade_entry_latency.record_ready_presented_frame(
             start,
@@ -5910,52 +5454,14 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         ) {
             crate::ui_errln!("system-entry cpu profile finish failed: {error}");
         }
-        settings_navigation_benchmark.note_orientation_presented(nav.settings.screen_orientation);
     }
     if *accepted_and_active_confirmed
         && (full_screen_transition_release_raster_rendered
             || full_screen_transition_live_endpoint_rendered)
         && let Some(generation) = director.chart.generation()
     {
-        let owner = director.chart.owner();
         match director.chart.live_frame_presented(generation) {
             Ok(retained_redraw) => {
-                if owner == Some(FullScreenTransitionOwner::Navigation) {
-                    let benchmark_record = if settings_navigation_benchmark.enabled() {
-                        let telemetry = f.read_magik_presentation_telemetry();
-                        settings_navigation_benchmark.note_confirmed_presentation(
-                            nav.screen,
-                            frames,
-                            *confirmed_present_sequence,
-                            Instant::now(),
-                            telemetry,
-                        )
-                    } else {
-                        None
-                    };
-                    if let Some(record) = benchmark_record {
-                        print_startup_event(
-                            start,
-                            "settings_navigation_benchmark_leg_completed",
-                            format!(
-                                concat!(
-                                    "leg={} route={} direction={} source={} destination={} ",
-                                    "start_frame={} rendered_endpoint_frame={} ",
-                                    "presented_endpoint_frame={} sequence={}"
-                                ),
-                                settings_navigation_benchmark.records().len(),
-                                record.leg.route.label(),
-                                record.leg.direction.label(),
-                                screen_label(record.leg.source),
-                                screen_label(record.leg.destination),
-                                record.start_frame,
-                                record.rendered_endpoint_frame,
-                                record.presented_endpoint_frame,
-                                record.presented_sequence,
-                            ),
-                        );
-                    }
-                }
                 // Reverse card/cog endpoints already contain the current
                 // Home raster. Transition-owned redraw requests made while
                 // the snapshot was locked must not replace them with a
@@ -6188,23 +5694,15 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
     }
 }
 
-/// Whether the launcher loop carries on after a frame phase.
-enum FrameFlow {
-    Continue,
-    Break,
-}
-
 /// What the end of a presented frame reads and updates: confirmation logging, presentation
 /// acknowledgement, the benchmark completion checks and the frame-tail accounting.
 struct FrameCloseout<'a> {
     accepted_and_active_confirmed: bool,
-    benchmark_config: &'a LauncherBenchmarkConfig,
     bridge_models: &'a mut LauncherViewPresenters,
     composition_decision: &'a UiCompositionDecision,
     confirmed_present_sequence: u16,
     confirmed_presentation: PresentationOutcome,
     director: &'a mut PresentationDirector,
-    f: &'a mut Fpga,
     frame_accounting: &'a mut LauncherFrameAccounting,
     frame_clock: &'a mut mister_magik_core::frame_clock::FrameClock,
     frames: &'a mut u64,
@@ -6212,28 +5710,17 @@ struct FrameCloseout<'a> {
     input_observation: crate::input_hub::InputObservation,
     latch_backend_active: bool,
     latch_trace_flush_deferred: bool,
-    latch_v5_qualification: &'a mut LatchV5Qualification,
     latency_critical_input_pending: &'a mut bool,
     launcher_response_frame_stamp: &'a Option<LauncherResponseFrameStamp>,
     launcher_response_trace: &'a mut LauncherResponseTrace,
-    nav: &'a LauncherNav,
-    orientation_benchmark: &'a mut OrientationTransitionBenchmark,
-    orientation_benchmark_completed_at: &'a mut Option<Instant>,
-    orientation_benchmark_terminal_status_requested: &'a mut bool,
     preview: &'a mut PreviewState,
     preview_presentation_commit: Option<crate::preview_state::PreviewPresentationCommit>,
     #[cfg(feature = "tooling")]
     run_start: Instant,
-    runtime_status_sequence_before_frame: u64,
-    scheduler: &'a LauncherScheduler,
     scheduler_phase: &'a mut LauncherResponseSchedulerBoundary,
     screensaver_cpu_profile: &'a mut cpu_profile::ScreensaverProfiler,
     selection_feedback_confirmed_at: Option<Instant>,
     selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
-    settings_navigation_benchmark: &'a mut SettingsNavigationBenchmark,
-    settings_navigation_benchmark_completed_at: &'a mut Option<Instant>,
-    settings_navigation_status_baseline: &'a mut Option<u64>,
-    start: Instant,
     #[cfg(feature = "tooling")]
     tooling: &'a mut Option<mister_magik_tooling_support::Session>,
     #[cfg(feature = "tooling")]
@@ -6244,16 +5731,14 @@ struct FrameCloseout<'a> {
 }
 
 /// Runs the end of the frame; `Break` ends the launcher loop.
-fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
+fn finish_presented_frame(closeout: FrameCloseout<'_>) {
     let FrameCloseout {
         accepted_and_active_confirmed,
-        benchmark_config,
         bridge_models,
         composition_decision,
         confirmed_present_sequence,
         confirmed_presentation,
         director,
-        f,
         frame_accounting,
         frame_clock,
         frames,
@@ -6261,28 +5746,17 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
         input_observation,
         latch_backend_active,
         latch_trace_flush_deferred,
-        latch_v5_qualification,
         latency_critical_input_pending,
         launcher_response_frame_stamp,
         launcher_response_trace,
-        nav,
-        orientation_benchmark,
-        orientation_benchmark_completed_at,
-        orientation_benchmark_terminal_status_requested,
         preview,
         preview_presentation_commit,
         #[cfg(feature = "tooling")]
         run_start,
-        runtime_status_sequence_before_frame,
-        scheduler,
         scheduler_phase,
         screensaver_cpu_profile,
         selection_feedback_confirmed_at,
         selection_feedback_stamp,
-        settings_navigation_benchmark,
-        settings_navigation_benchmark_completed_at,
-        settings_navigation_status_baseline,
-        start,
         #[cfg(feature = "tooling")]
         tooling,
         #[cfg(feature = "tooling")]
@@ -6361,41 +5835,6 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
         launcher_response_frame_stamp.is_some(),
         "launcher-response.frame-tail",
     );
-    latch_v5_qualification.record_present(
-        accepted_and_active_confirmed,
-        scheduler.catalog_worker_running(),
-    );
-    if accepted_and_active_confirmed
-        && orientation_benchmark.enabled()
-        && director.chart.is_live()
-        && let Some(record) = orientation_benchmark.note_confirmed_presentation(
-            nav.settings.screen_orientation,
-            *frames,
-            confirmed_present_sequence,
-            Instant::now(),
-            f.read_magik_presentation_telemetry(),
-        )
-    {
-        print_startup_event(
-            start,
-            "orientation_transition_benchmark_leg_completed",
-            format!(
-                concat!(
-                    "leg={} effect={} label={} from={} to={} start_frame={} ",
-                    "rendered_endpoint_frame={} presented_endpoint_frame={} sequence={}"
-                ),
-                record.leg.index + 1,
-                record.leg.effect.id(),
-                record.leg.label(),
-                record.leg.from.id(),
-                record.leg.to.id(),
-                record.start_frame,
-                record.rendered_endpoint_frame,
-                record.presented_endpoint_frame,
-                record.presented_sequence,
-            ),
-        );
-    }
     record_launcher_frame_phase!(LauncherFramePhase::FrameAccounted);
     let preview_present_confirmed = if latch_trace_flush_deferred {
         accepted_and_active_confirmed
@@ -6421,7 +5860,6 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
     if preview.frame_intent().is_actionable() {
         window.request_redraw();
     }
-    latch_v5_qualification.write_state_if_due(Instant::now());
     if if latch_backend_active {
         accepted_and_active_confirmed
     } else {
@@ -6449,143 +5887,10 @@ fn finish_presented_frame(closeout: FrameCloseout<'_>) -> FrameFlow {
     }
     *frames += 1;
     frame_clock.advance();
-    if settings_navigation_benchmark.complete()
-        && settings_navigation_benchmark_completed_at.is_none()
-    {
-        if let Some(directory) = settings_navigation_benchmark_evidence_dir()
-            && let Err(error) = write_settings_navigation_benchmark_completion(
-                &directory,
-                settings_navigation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!("settings_navigation_benchmark_completion_write_failed error={error}");
-            settings_navigation_benchmark.fail("completion-write-failed");
-        }
-        if settings_navigation_benchmark.complete() {
-            let (status_baseline, request_status_write) = settings_navigation_status_drain_plan(
-                runtime_status_sequence_before_frame,
-                frame_accounting.runtime_status_submitted_sequence(),
-            );
-            *settings_navigation_status_baseline = Some(status_baseline);
-            print_startup_event(
-                start,
-                "settings_navigation_benchmark_complete",
-                format!(
-                    "orientations=normal,monitor-counterclockwise legs={} frames={frames}",
-                    settings_navigation_benchmark.records().len(),
-                ),
-            );
-            *settings_navigation_benchmark_completed_at = Some(Instant::now());
-            screensaver_cpu_profile.complete_settings_navigation_transitions(*frames);
-            if request_status_write {
-                frame_accounting.request_status_write();
-                window.request_redraw();
-            }
-        }
-    }
-    if settings_navigation_benchmark_completed_at.is_some_and(|completed| {
-        settings_navigation_status_drain_complete(
-            completed.elapsed(),
-            settings_navigation_status_baseline
-                .is_some_and(|sequence| frame_accounting.runtime_status_written_after(sequence)),
-        )
-    }) {
-        return FrameFlow::Break;
-    }
-    if settings_navigation_benchmark.failed() {
-        if let Some(directory) = settings_navigation_benchmark_evidence_dir()
-            && let Err(error) = write_settings_navigation_benchmark_completion(
-                &directory,
-                settings_navigation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!("settings_navigation_benchmark_failure_write_failed error={error}");
-        }
-        print_startup_event(
-            start,
-            "settings_navigation_benchmark_failed",
-            format!(
-                "failure={} orientation={} legs={} frames={frames}",
-                settings_navigation_benchmark.failure().unwrap_or("unknown"),
-                settings_navigation_benchmark.orientation().id(),
-                settings_navigation_benchmark.records().len(),
-            ),
-        );
-        return FrameFlow::Break;
-    }
-    if orientation_benchmark.complete() && orientation_benchmark_completed_at.is_none() {
-        if let Some(directory) = orientation_transition_benchmark_evidence_dir()
-            && let Err(error) = write_orientation_transition_benchmark_completion(
-                &directory,
-                orientation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!(
-                "orientation_transition_benchmark_completion_write_failed error={error}"
-            );
-            orientation_benchmark.fail("completion-write-failed");
-        }
-        if orientation_benchmark.complete() {
-            print_startup_event(
-                start,
-                "orientation_transition_benchmark_complete",
-                format!(
-                    "legs={} frames={frames}",
-                    orientation_benchmark.records().len()
-                ),
-            );
-            *orientation_benchmark_completed_at = Some(Instant::now());
-            screensaver_cpu_profile.complete_orientation_transitions(*frames);
-            if let Err(error) = write_orientation_transition_pmu_completion(
-                benchmark_config.orientation_pmu_completion(),
-                orientation_benchmark.effect(),
-            ) {
-                crate::ui_errln!("orientation_transition_benchmark_pmu_write_failed error={error}");
-            }
-        }
-    }
-    if let Some(completed) = *orientation_benchmark_completed_at {
-        let elapsed = completed.elapsed();
-        if elapsed >= Duration::from_millis(300)
-            && !*orientation_benchmark_terminal_status_requested
-        {
-            *orientation_benchmark_terminal_status_requested = true;
-            frame_accounting.request_status_write();
-            window.request_redraw();
-        }
-        if elapsed >= Duration::from_millis(800) {
-            return FrameFlow::Break;
-        }
-    }
-    if orientation_benchmark.failed() {
-        if let Some(directory) = orientation_transition_benchmark_evidence_dir()
-            && let Err(error) = write_orientation_transition_benchmark_completion(
-                &directory,
-                orientation_benchmark,
-                *frames,
-            )
-        {
-            crate::ui_errln!("orientation_transition_benchmark_failure_write_failed error={error}");
-        }
-        print_startup_event(
-            start,
-            "orientation_transition_benchmark_failed",
-            format!(
-                "failure={} legs={} frames={frames}",
-                orientation_benchmark.failure().unwrap_or("unknown"),
-                orientation_benchmark.records().len(),
-            ),
-        );
-        return FrameFlow::Break;
-    }
     launcher_response_trace.record_lab(input_latency_lab.cooperative_quantum(input_observation));
     drop(frame_tail_pmu);
     let _ = launcher_response_trace.record_scheduler_interval("frame-tail", *scheduler_phase);
     record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
-    FrameFlow::Continue
 }
 
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
@@ -6731,19 +6036,6 @@ fn preview_scroll_exit_after_trace_deadline(run_start: Instant) -> Option<Instan
     (secs > 0).then(|| run_start + Duration::from_secs(secs))
 }
 
-#[cfg(feature = "bench-tools")]
-fn media_benchmark_contention_enabled() -> bool {
-    matches!(
-        std::env::var("MISTER_MEDIA_BENCH_CONTENTION").as_deref(),
-        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-    )
-}
-
-#[cfg(not(feature = "bench-tools"))]
-fn media_benchmark_contention_enabled() -> bool {
-    false
-}
-
 fn catalog_build_media_gate(
     catalog_refresh_done: bool,
     base: MediaInteractionGate,
@@ -6756,13 +6048,6 @@ fn catalog_build_media_gate(
             reason: "catalog-build",
         }
     }
-}
-
-fn benchmark_media_interaction_gate_active(
-    benchmark_active: bool,
-    media_benchmark_contention: bool,
-) -> bool {
-    benchmark_active && !media_benchmark_contention
 }
 
 fn apply_catalog_system_scanning_presentation(
@@ -8235,21 +7520,6 @@ fn summary_seed_catalog_worker_starts_immediately(
     return_catalog_hydration_needed: bool,
 ) -> bool {
     request == CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS || return_catalog_hydration_needed
-}
-
-fn launcher_bench_initial_preview_ready(
-    scenario: LauncherBenchScenario,
-    preview_cache_state: &str,
-    selected_has_preview: bool,
-) -> bool {
-    if !scenario.starts_on_arcade() {
-        return true;
-    }
-    if selected_has_preview {
-        preview_cache_state == "exact"
-    } else {
-        matches!(preview_cache_state, "exact" | "empty")
-    }
 }
 
 fn apply_start_system_from_env(
@@ -10360,13 +9630,6 @@ mod tests {
     }
 
     #[test]
-    fn media_benchmark_contention_disables_only_the_benchmark_media_gate() {
-        assert!(benchmark_media_interaction_gate_active(true, false));
-        assert!(!benchmark_media_interaction_gate_active(true, true));
-        assert!(!benchmark_media_interaction_gate_active(false, false));
-    }
-
-    #[test]
     fn media_stays_gated_through_ready_and_opens_after_completion() {
         let mut session = LauncherCatalogSession::new(false);
         let idle = MediaInteractionGate {
@@ -10400,12 +9663,6 @@ mod tests {
             CatalogWorkerMessage::Done,
         );
         assert_eq!(catalog_build_media_gate(session.refresh_done(), idle), idle);
-    }
-
-    #[cfg(not(feature = "bench-tools"))]
-    #[test]
-    fn production_build_cannot_enable_media_benchmark_contention() {
-        assert!(!media_benchmark_contention_enabled());
     }
 
     #[test]
@@ -11531,32 +10788,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn settings_evidence_waits_for_fresh_status_with_a_bounded_fallback() {
-        assert!(!settings_navigation_status_drain_complete(
-            SETTINGS_NAVIGATION_STATUS_DRAIN_MIN - Duration::from_millis(1),
-            true,
-        ));
-        assert!(settings_navigation_status_drain_complete(
-            SETTINGS_NAVIGATION_STATUS_DRAIN_MIN,
-            true,
-        ));
-        assert!(!settings_navigation_status_drain_complete(
-            SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT - Duration::from_millis(1),
-            false,
-        ));
-        assert!(settings_navigation_status_drain_complete(
-            SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT,
-            false,
-        ));
-    }
-
-    #[test]
-    pub(super) fn settings_evidence_reuses_completion_frame_status_submission() {
-        assert_eq!(settings_navigation_status_drain_plan(7, 8), (7, false));
-        assert_eq!(settings_navigation_status_drain_plan(8, 8), (8, true));
-    }
-
-    #[test]
     pub(super) fn arcade_overlay_draws_for_closed_arcade_list() {
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
@@ -11756,7 +10987,7 @@ mod tests {
 
     #[test]
     fn display_transactions_rearm_vsync_after_every_stable_boundary() {
-        let source = include_str!("launcher_loop.rs");
+        let source = include_str!("launcher_loop/frame_loop.rs");
         let call = ["pacer", ".rearm_after_display_mode_change()"].concat();
         assert_eq!(source.matches(&call).count(), 3);
     }
@@ -11836,100 +11067,6 @@ mod tests {
             .expect("A should confirm rebuild");
         assert_eq!(event.action, LauncherAction::RebuildLibrary);
         assert_eq!(nav.confirm_action, None);
-    }
-
-    #[test]
-    pub(super) fn launcher_input_script_presses_and_releases_each_button() {
-        let start = Instant::now();
-        let mut driver = LauncherInputScriptDriver::from_script("left,down,right", start);
-        driver.wait_frames = 0;
-        let mut frame = 0_u64;
-
-        let left = driver.event_for(frame).expect("left press");
-        assert_eq!(left.action, LogicalAction::Left);
-        assert_eq!(left.phase, InputPhase::Pressed);
-
-        for _ in 1..LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
-            frame += 1;
-            assert!(driver.event_for(frame).is_none());
-        }
-        frame += 1;
-        let release = driver.event_for(frame).expect("left release");
-        assert_eq!(release.action, LogicalAction::Left);
-        assert_eq!(release.phase, InputPhase::Released);
-        for _ in 1..LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES {
-            frame += 1;
-            assert!(driver.event_for(frame).is_none());
-        }
-        frame += 1;
-        assert!(driver.event_for(frame).is_none());
-
-        frame += 1;
-        let down = driver.event_for(frame).expect("down press");
-        assert_eq!(down.action, LogicalAction::Down);
-        assert_eq!(down.phase, InputPhase::Pressed);
-    }
-
-    #[test]
-    fn screensaver_show_navigation_script_uses_production_settings() {
-        let start = Instant::now();
-        let catalog = empty_arcade_catalog("/tmp");
-        let mut nav = LauncherNav::new();
-        nav.selected = 5;
-        let mut driver = LauncherInputScriptDriver::from_script("a,down,down,down,down,a", start);
-        driver.wait_frames = 0;
-        let mut action = None;
-        let mut frame = 0_u64;
-
-        while driver.active() {
-            let frame_now = start + Duration::from_millis(frame * 17);
-            if let Some(input) = driver.event_for(frame * 17_000)
-                && let Some(event) =
-                    nav.handle_action_with_navigation_intents(&input, frame_now, &catalog)
-            {
-                action = Some(event.action);
-            }
-            frame += 1;
-        }
-
-        assert_eq!(nav.screen, Screen::Settings);
-        assert_eq!(nav.settings_selected, 4);
-        assert_eq!(action, Some(LauncherAction::PreviewScreensaver));
-    }
-
-    #[test]
-    pub(super) fn arcade_bench_waits_for_initial_visible_preview() {
-        let scenario = LauncherBenchScenario::HeldScroll;
-
-        assert!(!launcher_bench_initial_preview_ready(
-            scenario,
-            "placeholder",
-            true
-        ));
-        assert!(!launcher_bench_initial_preview_ready(
-            scenario, "cached", true
-        ));
-        assert!(!launcher_bench_initial_preview_ready(
-            scenario, "stale", true
-        ));
-        assert!(!launcher_bench_initial_preview_ready(
-            scenario, "empty", true
-        ));
-        assert!(launcher_bench_initial_preview_ready(
-            scenario, "exact", true
-        ));
-        assert!(launcher_bench_initial_preview_ready(
-            scenario, "empty", false
-        ));
-    }
-
-    #[test]
-    pub(super) fn non_arcade_bench_does_not_wait_for_preview() {
-        assert!(launcher_bench_initial_preview_ready(
-            LauncherBenchScenario::HomeNav,
-            "placeholder",
-            true
-        ));
     }
 
     #[test]
@@ -12038,43 +11175,6 @@ mod tests {
         assert_eq!(telemetry.paused_us, 3_000);
         assert_eq!(telemetry.burst_us, 6_000);
         assert_eq!(telemetry.transitions, 2);
-    }
-
-    #[test]
-    pub(super) fn launcher_idle_wait_rejects_active_work() {
-        for reason in [
-            LauncherWakeReasons::REDRAW_PENDING,
-            LauncherWakeReasons::LAUNCHING,
-            LauncherWakeReasons::SETUP_ACTIVE,
-            LauncherWakeReasons::BENCHMARK_ACTIVE,
-            LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
-            LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
-            LauncherWakeReasons::BRIDGE_DIRTY,
-            LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
-            LauncherWakeReasons::MEDIA_MESSAGE_SEEN,
-            LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
-            LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
-            LauncherWakeReasons::HOME_HORIZONTAL_INPUT_HELD,
-            LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP,
-            LauncherWakeReasons::ARCADE_SCROLL_ACTIVE,
-            LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE,
-            LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
-            LauncherWakeReasons::PREVIEW_DIRTY,
-            LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
-            LauncherWakeReasons::CRT_BACKDROP_PREPARED,
-            LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
-            LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
-            LauncherWakeReasons::LATENCY_CRITICAL_INPUT,
-        ] {
-            assert!(
-                !LauncherRenderIntent {
-                    first_visible_copy_done: true,
-                    startup_input_enabled: true,
-                    wake_reasons: reason,
-                }
-                .can_sleep()
-            );
-        }
     }
 
     #[test]
@@ -12246,17 +11346,6 @@ mod tests {
             FrameProductionClass::Prepared,
             true,
         ));
-    }
-
-    #[test]
-    pub(super) fn home_repeat_benchmark_counts_as_active_home_motion() {
-        assert!(home_repeat_benchmark_active(Some(
-            LauncherBenchScenario::HomeRepeatHold
-        )));
-        assert!(!home_repeat_benchmark_active(Some(
-            LauncherBenchScenario::HomeNav
-        )));
-        assert!(!home_repeat_benchmark_active(None));
     }
 
     #[test]
@@ -12762,44 +11851,18 @@ mod tests {
     }
 
     #[test]
-    fn disabled_qualification_preserves_preview_for_pipeline_start() {
+    fn preview_is_preserved_for_pipeline_start() {
         let start = Instant::now();
         let next_frame = start + Duration::from_millis(16);
         let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
 
         saver.preview(start);
-        saver.set_qualification_particles(next_frame, false, true);
         saver.update(next_frame, false, Duration::from_secs(300), true, true);
 
         assert!(saver.active);
         assert!(saver.preview_active);
         assert!(!saver.restore_full_frame);
         assert!(screensaver_pipeline_start_allowed(saver.active, false));
-    }
-
-    #[test]
-    fn enabled_qualification_particles_start_and_stop_screensaver() {
-        let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
-
-        saver.set_qualification_particles(start, true, true);
-        assert_eq!(saver.start_mode, ScreensaverStartMode::IdleWhenReady);
-        assert!(!saver.active);
-
-        saver.update(
-            start + Duration::from_millis(16),
-            false,
-            Duration::from_secs(300),
-            false,
-            true,
-        );
-        assert!(saver.active);
-        assert_eq!(saver.start_mode, ScreensaverStartMode::Inactive);
-
-        saver.set_qualification_particles(start + Duration::from_millis(32), true, false);
-        assert!(!saver.active);
-        assert_eq!(saver.start_mode, ScreensaverStartMode::Inactive);
-        assert!(saver.restore_full_frame);
     }
 
     #[test]

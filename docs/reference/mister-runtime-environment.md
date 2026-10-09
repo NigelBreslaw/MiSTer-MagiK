@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Current controls: 255. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Current controls: 254. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -88,7 +88,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Current controls: 255. H
 | `MISTER_INPUT_LATENCY_LAB_READER_POLICY` | diagnostic | enum token | uses the owner-defined mode when unset or unrecognized | enum | — | instrumentation | — | public | — | Controls input latency lab reader policy behavior; value policy: document | developer diagnostic | `apps/mister/src/input_hub.rs` |
 | `MISTER_INPUT_LATENCY_LAB_READER_SCHEDSTAT` | diagnostic | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | instrumentation | — | public | — | Controls input latency lab reader schedstat behavior; value policy: document | developer diagnostic | `apps/mister/src/input_hub.rs` |
 | `MISTER_INPUT_LATENCY_LAB_SESSION` | benchmark | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls input latency lab session behavior; value policy: document | benchmark only | `apps/mister/src/process_config.rs` |
-| `MISTER_LATCH_V5_QUALIFICATION` | benchmark | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls latch v5 qualification behavior; value policy: document | benchmark only | `apps/mister/src/ui_runner/latch_v5_qualification.rs` |
 | `MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED` | benchmark | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls launcher auto launch selected behavior; value policy: document | benchmark only | `apps/mister/src/ui_runner/launcher_bench.rs` |
 | `MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT` | benchmark | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls launcher bench after input script behavior; value policy: document | benchmark only | `apps/mister/src/ui_runner/launcher_bench.rs` |
 | `MISTER_LAUNCHER_BENCH_SCENARIO` | benchmark | enum token | uses the owner-defined mode when unset or unrecognized | enum | — | instrumentation | — | public | — | Controls launcher bench scenario behavior; value policy: document | benchmark only | `apps/mister/src/ui_runner/launcher_bench.rs` |

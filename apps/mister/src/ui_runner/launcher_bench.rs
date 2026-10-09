@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use crate::input_state::PadState;
 
 const BENCH_SCENARIO: &str = "MISTER_LAUNCHER_BENCH_SCENARIO";
 const START_SCREEN: &str = "MISTER_LAUNCHER_START_SCREEN";
@@ -25,7 +24,6 @@ const ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS: &str =
     "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS";
 const SETTINGS_NAVIGATION_BENCHMARK: &str = "MISTER_SETTINGS_NAVIGATION_BENCHMARK";
 const ARCADE_BENCHMARK_ORIENTATION: &str = "MISTER_ARCADE_BENCHMARK_ORIENTATION";
-const HOME_REPEAT_LEFT_HOLD: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LauncherBenchmarkConfig {
@@ -106,13 +104,6 @@ impl LauncherBenchmarkConfig {
         }
     }
 
-    pub(super) fn scenario(&self) -> Option<LauncherBenchScenario> {
-        self.scenario
-    }
-    pub(super) fn start_page_mode(&self) -> launcher::SystemPageMode {
-        self.start_page_mode
-    }
-
     pub(super) fn start_screen(&self) -> Option<Screen> {
         self.start_screen
     }
@@ -122,14 +113,8 @@ impl LauncherBenchmarkConfig {
     pub(super) fn system_entry_system(&self) -> Option<&str> {
         self.system_entry_system.as_deref()
     }
-    pub(super) fn start_menu(&self) -> Option<&str> {
-        self.start_menu.as_deref()
-    }
     pub(super) fn lock_screen(&self) -> Option<Screen> {
         self.lock_screen
-    }
-    pub(super) fn after_input_script(&self) -> bool {
-        self.after_input_script
     }
     pub(super) fn home_selected(&self) -> Option<&Result<usize, String>> {
         self.home_selected.as_ref()
@@ -137,20 +122,11 @@ impl LauncherBenchmarkConfig {
     pub(super) fn auto_launch_selected(&self) -> bool {
         self.auto_launch_selected
     }
-    pub(super) fn orientation_pmu_completion(&self) -> Option<&str> {
-        self.orientation_pmu_completion.as_deref()
-    }
     pub(super) fn launch_return_pmu_handoff_out(&self) -> Option<&str> {
         self.launch_return_pmu_handoff_out.as_deref()
     }
     pub(super) fn orientation_transitions(&self) -> bool {
         self.orientation_transitions
-    }
-    pub(super) fn orientation_transition_effect(&self) -> Option<OrientationTransitionEffect> {
-        self.orientation_transition_effect
-    }
-    pub(super) fn orientation_requires_analytics(&self) -> bool {
-        self.orientation_requires_analytics
     }
     pub(super) fn settings_navigation(&self) -> bool {
         self.settings_navigation
@@ -194,23 +170,16 @@ pub(super) enum LauncherBenchScenario {
         allow(dead_code)
     )]
     HomeNav,
-    HomeRepeatHold,
-    QuickTap,
-    RapidTaps,
     #[cfg_attr(
         not(any(feature = "bench-tools", feature = "diagnostics")),
         allow(dead_code)
     )]
     HeldScroll,
-    HumanTurboHold,
     #[cfg_attr(
         not(any(feature = "bench-tools", feature = "diagnostics")),
         allow(dead_code)
     )]
     TurboHold,
-    PreviewStepHold,
-    ModelSync,
-    LaunchHandoff,
     #[cfg_attr(
         not(any(feature = "bench-tools", feature = "diagnostics")),
         allow(dead_code)
@@ -251,55 +220,6 @@ impl LauncherBenchScenario {
             }
         }
     }
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::PreviewIdle => "preview-idle",
-            Self::HomeNav => "home-nav",
-            Self::HomeRepeatHold => "home-repeat-hold",
-            Self::QuickTap => "quick-tap",
-            Self::RapidTaps => "rapid-taps",
-            Self::HeldScroll => "held-scroll",
-            Self::HumanTurboHold => "human-turbo-hold",
-            Self::TurboHold => "turbo-hold",
-            Self::PreviewStepHold => "preview-step-hold",
-            Self::ModelSync => "model-sync",
-            Self::LaunchHandoff => "launch-handoff",
-            Self::ScreensaverShow => "screensaver-show",
-        }
-    }
-
-    pub(super) fn period(self) -> Duration {
-        match self {
-            Self::Idle | Self::PreviewIdle | Self::LaunchHandoff | Self::ScreensaverShow => {
-                Duration::MAX
-            }
-            Self::HomeNav => Duration::from_millis(300),
-            Self::HomeRepeatHold => Duration::ZERO,
-            Self::ModelSync => Duration::from_millis(300),
-            Self::QuickTap
-            | Self::RapidTaps
-            | Self::HeldScroll
-            | Self::HumanTurboHold
-            | Self::TurboHold
-            | Self::PreviewStepHold => Duration::ZERO,
-        }
-    }
-
-    pub(super) fn starts_on_arcade(self) -> bool {
-        matches!(
-            self,
-            Self::QuickTap
-                | Self::RapidTaps
-                | Self::HeldScroll
-                | Self::HumanTurboHold
-                | Self::TurboHold
-                | Self::PreviewIdle
-                | Self::PreviewStepHold
-                | Self::LaunchHandoff
-        )
-    }
 }
 
 fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
@@ -314,229 +234,6 @@ fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
         "license-text" => Some(Screen::LicenseText),
         _ => None,
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub(super) struct LauncherBenchState {
-    step: usize,
-    home_repeat_started_at: Option<Instant>,
-}
-
-impl LauncherBenchState {
-    pub(super) fn advance_if(&mut self, step_ran: bool) {
-        if step_ran {
-            self.step = self.step.wrapping_add(1);
-        }
-    }
-}
-
-pub(super) fn launcher_bench_step(
-    scenario: LauncherBenchScenario,
-    config: &LauncherBenchmarkConfig,
-    nav: &mut LauncherNav,
-    catalog: &ArcadeCatalog,
-    active_game_count: Option<usize>,
-    state: &mut LauncherBenchState,
-    now: Instant,
-) -> bool {
-    nav.sync_launcher_taxonomy(catalog);
-    match scenario {
-        LauncherBenchScenario::Idle
-        | LauncherBenchScenario::PreviewIdle
-        | LauncherBenchScenario::LaunchHandoff
-        | LauncherBenchScenario::ScreensaverShow => false,
-        LauncherBenchScenario::HomeNav => {
-            let count = nav.current_menu_count();
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Home;
-            let selected = state.step % count;
-            if selected < nav.selected {
-                nav.scroll_x = 0;
-            }
-            nav.selected = selected;
-            keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
-            true
-        }
-        LauncherBenchScenario::HomeRepeatHold => {
-            let count = nav.home_navigation_count();
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Home;
-            if nav.selected >= count {
-                nav.selected = count - 1;
-                keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
-            }
-
-            let started_at = *state.home_repeat_started_at.get_or_insert(now);
-            let mut input = PadState::default();
-            if now.saturating_duration_since(started_at) < HOME_REPEAT_LEFT_HOLD {
-                input.dpad_left = true;
-            } else {
-                input.dpad_right = true;
-            }
-            let _ = nav.handle_held_tick_with_navigation_intents(&input, now, catalog);
-            true
-        }
-        LauncherBenchScenario::ModelSync => {
-            nav.go_root();
-            let count = nav.current_menu_count();
-            if count == 0 {
-                return false;
-            }
-            let selected = (state.step / 2) % count;
-            if selected < nav.selected {
-                nav.scroll_x = 0;
-            }
-            nav.selected = selected;
-            if state.step.is_multiple_of(2) {
-                nav.screen = Screen::Home;
-                keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
-            } else {
-                if !nav.open_default_arcade(catalog) {
-                    return false;
-                }
-                let game_count = nav
-                    .active_collection_id()
-                    .map(|id| catalog.system_game_count(id))
-                    .unwrap_or(0);
-                nav.arcade.selected = nav.arcade.selected.min(game_count.saturating_sub(1));
-                nav.arcade.snap_to_selected();
-                keep_bench_arcade_visible(
-                    &mut nav.arcade.scroll_y,
-                    nav.arcade.selected,
-                    game_count,
-                );
-            }
-            true
-        }
-        LauncherBenchScenario::HeldScroll => {
-            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
-            else {
-                return false;
-            };
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Arcade;
-            let previous_dir = if state.step == 0 { 0 } else { 1 };
-            nav.arcade.bench_direction_tick(1, previous_dir, count, now);
-            true
-        }
-        LauncherBenchScenario::HumanTurboHold => {
-            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
-            else {
-                return false;
-            };
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Arcade;
-            let idle_frames = config.human_turbo_idle_frames;
-            let normal_frames = config.human_turbo_normal_frames;
-            let pause_frames = config.human_turbo_pause_frames;
-            if state.step < idle_frames {
-                nav.arcade.bench_direction_tick(0, 0, count, now);
-            } else if state.step < idle_frames.saturating_add(normal_frames) {
-                let previous_dir = if state.step == idle_frames { 0 } else { 1 };
-                nav.arcade.bench_direction_tick(1, previous_dir, count, now);
-            } else if state.step
-                < idle_frames
-                    .saturating_add(normal_frames)
-                    .saturating_add(pause_frames)
-            {
-                let previous_dir = if state.step == idle_frames.saturating_add(normal_frames) {
-                    1
-                } else {
-                    0
-                };
-                nav.arcade.bench_direction_tick(0, previous_dir, count, now);
-            } else {
-                nav.arcade.bench_turbo_bounce_tick(count, now);
-            }
-            true
-        }
-        LauncherBenchScenario::PreviewStepHold => {
-            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
-            else {
-                return false;
-            };
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Arcade;
-            if state.step.is_multiple_of(config.preview_step_hold_frames) {
-                nav.arcade.handle_direction_input(1, 0, now, count);
-            }
-            nav.arcade.tick(count, now);
-            true
-        }
-        LauncherBenchScenario::QuickTap => {
-            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
-            else {
-                return false;
-            };
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Arcade;
-            let (dir, previous_dir) = match state.step {
-                0 => (1, 0),
-                1 => (0, 1),
-                _ => (0, 0),
-            };
-            nav.arcade
-                .bench_direction_tick(dir, previous_dir, count, now);
-            true
-        }
-        LauncherBenchScenario::RapidTaps => {
-            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
-            else {
-                return false;
-            };
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Arcade;
-            let (dir, previous_dir) = if state.step < 10 {
-                if state.step.is_multiple_of(2) {
-                    (1, 0)
-                } else {
-                    (0, 1)
-                }
-            } else {
-                (0, 0)
-            };
-            nav.arcade
-                .bench_direction_tick(dir, previous_dir, count, now);
-            true
-        }
-        LauncherBenchScenario::TurboHold => {
-            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
-            else {
-                return false;
-            };
-            if count == 0 {
-                return false;
-            }
-            nav.screen = Screen::Arcade;
-            nav.arcade.bench_turbo_bounce_tick(count, now);
-            true
-        }
-    }
-}
-
-pub(super) fn launcher_bench_active_game_count(
-    catalog: &ArcadeCatalog,
-    nav: &LauncherNav,
-    active_game_count: Option<usize>,
-) -> Option<usize> {
-    if let Some(count) = active_game_count {
-        return Some(count);
-    }
-    Some(catalog.system_game_count(nav.active_collection_id()?))
 }
 
 pub(super) fn keep_bench_home_visible(scroll_x: &mut i32, selected: usize, count: usize) {
@@ -776,179 +473,4 @@ pub(super) fn sync_device_info_controller(
         )
         .into(),
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn benchmark_defaults_preserve_unarmed_configuration_and_timing() {
-        let config = LauncherBenchmarkConfig::default();
-        assert!(config.scenario.is_none());
-        assert!(config.start_screen.is_none());
-        assert!(config.start_system.is_none());
-        assert!(config.system_entry_system.is_none());
-        assert!(config.start_menu.is_none());
-        assert!(config.lock_screen.is_none());
-        assert!(!config.after_input_script);
-        assert_eq!(config.preview_step_hold_frames, 300);
-        assert_eq!(config.human_turbo_idle_frames, 30);
-        assert_eq!(config.human_turbo_normal_frames, 30);
-        assert_eq!(config.human_turbo_pause_frames, 30);
-        assert!(config.home_selected.is_none());
-        assert!(!config.auto_launch_selected);
-        assert!(config.orientation_pmu_completion.is_none());
-        assert!(config.launch_return_pmu_handoff_out.is_none());
-    }
-
-    #[test]
-    fn benchmark_config_captures_start_state_and_bounded_timing() {
-        let values = std::collections::BTreeMap::from([
-            (START_SCREEN, "system-hub"),
-            (START_SYSTEM, "  NeoGeo  "),
-            (START_MENU, "consoles"),
-            (LOCK_SCREEN, "arcade"),
-            (PREVIEW_STEP_HOLD_SECS, "999"),
-            (HUMAN_TURBO_IDLE_FRAMES, "999"),
-            (HOME_SELECTED_INDEX, "7"),
-            (AUTO_LAUNCH_SELECTED, "yes"),
-        ]);
-        let config = LauncherBenchmarkConfig::capture_with(|name| values.get(name).copied());
-
-        assert_eq!(config.start_screen(), Some(Screen::Arcade));
-        assert_eq!(config.start_system(), Some("neogeo"));
-        assert_eq!(config.start_menu(), Some("consoles"));
-        assert_eq!(config.lock_screen(), Some(Screen::Arcade));
-        assert_eq!(config.preview_step_hold_frames, 3_600);
-        assert_eq!(config.human_turbo_idle_frames, 180);
-        assert_eq!(config.home_selected(), Some(&Ok(7)));
-        assert!(config.auto_launch_selected());
-    }
-
-    #[test]
-    #[cfg(not(feature = "bench-tools"))]
-    fn production_config_cannot_arm_a_benchmark_scenario() {
-        let values = std::collections::BTreeMap::from([(BENCH_SCENARIO, "rapid-taps")]);
-        let config = LauncherBenchmarkConfig::capture_with(|name| values.get(name).copied());
-
-        assert_eq!(config.scenario(), None);
-    }
-
-    fn empty_catalog() -> ArcadeCatalog {
-        ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), Vec::new())
-    }
-
-    fn system(id: &str) -> arcade_catalog::GameSystemEntry {
-        arcade_catalog::GameSystemEntry {
-            id: id.to_string(),
-            title: id.to_string(),
-            count: 1,
-        }
-    }
-
-    #[test]
-    fn held_scroll_keeps_initial_press_when_summary_has_no_rows() {
-        let catalog = empty_catalog();
-        let mut nav = LauncherNav::new();
-        let mut state = LauncherBenchState::default();
-        let t0 = Instant::now();
-
-        let ran_without_rows = launcher_bench_step(
-            LauncherBenchScenario::HeldScroll,
-            &LauncherBenchmarkConfig::default(),
-            &mut nav,
-            &catalog,
-            Some(0),
-            &mut state,
-            t0,
-        );
-        state.advance_if(ran_without_rows);
-
-        assert!(!ran_without_rows);
-        assert_eq!(state.step, 0);
-        assert_eq!(nav.arcade.selected, 0);
-        assert!(!nav.arcade.is_scroll_active());
-
-        let ran_with_rows = launcher_bench_step(
-            LauncherBenchScenario::HeldScroll,
-            &LauncherBenchmarkConfig::default(),
-            &mut nav,
-            &catalog,
-            Some(10),
-            &mut state,
-            t0 + Duration::from_millis(16),
-        );
-        state.advance_if(ran_with_rows);
-
-        assert!(ran_with_rows);
-        assert_eq!(state.step, 1);
-        assert_eq!(nav.arcade.selected, 1);
-        assert!(nav.arcade.is_scroll_active());
-    }
-
-    #[test]
-    fn home_repeat_hold_runs_left_for_twenty_seconds_then_right() {
-        let catalog = ArcadeCatalog::new(
-            PathBuf::from("/media/fat/_Arcade"),
-            Vec::new(),
-            vec![system("arcade"), system("neogeo"), system("amiga")],
-        );
-        let mut nav = LauncherNav::new();
-        nav.selected = 3;
-        let mut state = LauncherBenchState::default();
-        let t0 = Instant::now();
-
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::HomeRepeatHold,
-            &LauncherBenchmarkConfig::default(),
-            &mut nav,
-            &catalog,
-            None,
-            &mut state,
-            t0,
-        );
-        state.advance_if(ran);
-        assert_eq!(
-            nav.home_horizontal_direction(),
-            Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Left)
-        );
-
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::HomeRepeatHold,
-            &LauncherBenchmarkConfig::default(),
-            &mut nav,
-            &catalog,
-            None,
-            &mut state,
-            t0 + Duration::from_secs(20),
-        );
-        state.advance_if(ran);
-        assert_eq!(
-            nav.home_horizontal_direction(),
-            Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Right)
-        );
-    }
-
-    #[test]
-    fn preview_idle_starts_on_arcade_without_running_steps() {
-        let catalog = empty_catalog();
-        let mut nav = LauncherNav::new();
-        let mut state = LauncherBenchState::default();
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::PreviewIdle,
-            &LauncherBenchmarkConfig::default(),
-            &mut nav,
-            &catalog,
-            Some(10),
-            &mut state,
-            Instant::now(),
-        );
-
-        assert!(LauncherBenchScenario::PreviewIdle.starts_on_arcade());
-        assert_eq!(LauncherBenchScenario::PreviewIdle.period(), Duration::MAX);
-        assert!(!ran);
-        assert_eq!(nav.arcade.selected, 0);
-        assert!(!nav.arcade.is_scroll_active());
-    }
 }

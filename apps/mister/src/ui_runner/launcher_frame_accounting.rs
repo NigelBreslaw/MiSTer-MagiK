@@ -968,11 +968,6 @@ impl Drop for PreviewScrollTrace {
 }
 
 impl LauncherFrameAccounting {
-    pub(super) fn close_preview_scroll_trace_for_restart(&mut self) {
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        self.close_preview_scroll_trace();
-    }
-
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub(super) fn finish_preview_scroll_trace(&mut self) {
         if let Some(trace) = self.preview_scroll_trace.as_mut() {
@@ -1042,13 +1037,11 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) navigation_transition_direction: &'static str,
     pub(super) navigation_transition_renderer: &'static str,
     pub(super) navigation_transition_orientation: &'static str,
-    pub(super) settings_navigation_benchmark_leg: u8,
     pub(super) navigation_snapshot_locked: bool,
     pub(super) navigation_slint_render_called: bool,
     pub(super) navigation_status_quiesce_wait_us: u64,
     pub(super) navigation_status_quiesce_timeout: bool,
     pub(super) orientation_transition_active: bool,
-    pub(super) orientation_transition_leg: u8,
     pub(super) orientation_transition_effect: &'static str,
     pub(super) orientation_transition_from: &'static str,
     pub(super) orientation_transition_to: &'static str,
@@ -1188,7 +1181,6 @@ pub(super) struct FrameStatusView<'a> {
     pub(super) confirm_visible: bool,
     pub(super) confirm_selected: i32,
     pub(super) status_text: Option<&'a LauncherStatusTextSnapshot>,
-    pub(super) launcher_bench_scenario: Option<LauncherBenchScenario>,
     pub(super) start_screen: Screen,
     pub(super) lock_screen: Option<Screen>,
     pub(super) route_reassert_count: u64,
@@ -1433,23 +1425,8 @@ impl LauncherFrameAccounting {
                 && cpu_profile::screensaver_profile_state() == "complete")
     }
 
-    pub(super) fn request_status_write(&mut self) {
-        self.last_status_write = Instant::now() - Duration::from_secs(2);
-    }
-
     pub(super) fn runtime_status_worker_active(&self) -> bool {
         self.runtime_status_publisher.metrics().worker_active
-    }
-
-    pub(super) fn runtime_status_submitted_sequence(&self) -> u64 {
-        self.runtime_status_publisher.metrics().submitted_sequence
-    }
-
-    pub(super) fn runtime_status_written_after(&self, sequence: u64) -> bool {
-        let metrics = self.runtime_status_publisher.metrics();
-        metrics.submitted_sequence > sequence
-            && metrics.written_sequence == metrics.submitted_sequence
-            && !metrics.worker_active
     }
 
     pub(super) fn frame_analytics_mode(&self) -> FrameAnalyticsMode {
@@ -1914,9 +1891,6 @@ impl LauncherFrameAccounting {
                 navigation_transition_orientation: frame
                     .custom_draw_trace
                     .navigation_transition_orientation,
-                settings_navigation_benchmark_leg: frame
-                    .custom_draw_trace
-                    .settings_navigation_benchmark_leg,
                 navigation_transition_us: u128_to_u64_saturating(
                     frame.custom_draw_trace.effect_label_us,
                 ),
@@ -1952,7 +1926,6 @@ impl LauncherFrameAccounting {
                 orientation_transition_active: frame
                     .custom_draw_trace
                     .orientation_transition_active,
-                orientation_transition_leg: frame.custom_draw_trace.orientation_transition_leg,
                 orientation_transition_effect: frame
                     .custom_draw_trace
                     .orientation_transition_effect,
@@ -2438,7 +2411,6 @@ impl LauncherFrameAccounting {
             catalog_background_scan_visible,
             confirm_visible,
             confirm_selected,
-            launcher_bench_scenario,
             start_screen,
             lock_screen,
             route_reassert_count,
@@ -2641,9 +2613,6 @@ impl LauncherFrameAccounting {
                 .retirement_receipt_route_epoch,
             last_composition_invariant_kind: &composition_status.last_invariant_kind,
             last_composition_invariant_detail: &composition_status.last_invariant_detail,
-            bench_scenario: launcher_bench_scenario
-                .map(LauncherBenchScenario::label)
-                .unwrap_or("none"),
             start_screen: screen_label(start_screen),
             lock_screen: lock_screen.map(screen_label).unwrap_or("none"),
             route_reassert_count,

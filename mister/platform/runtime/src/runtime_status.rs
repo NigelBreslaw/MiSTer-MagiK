@@ -170,7 +170,6 @@ launcher_status_types! {
         direct_layer_retirement_receipt,
         last_composition_invariant_kind,
         last_composition_invariant_detail,
-        bench_scenario,
         start_screen,
         lock_screen,
         last_route_reassert_error,
@@ -304,7 +303,6 @@ pub struct FrameBudgetRecentFrame {
     pub navigation_transition_direction: &'static str,
     pub navigation_transition_renderer: &'static str,
     pub navigation_transition_orientation: &'static str,
-    pub settings_navigation_benchmark_leg: u8,
     pub navigation_transition_us: u64,
     pub navigation_transition_base_copy_us: u64,
     pub navigation_transition_settings_blit_us: u64,
@@ -316,7 +314,6 @@ pub struct FrameBudgetRecentFrame {
     pub navigation_status_quiesce_wait_us: u64,
     pub navigation_status_quiesce_timeout: bool,
     pub orientation_transition_active: bool,
-    pub orientation_transition_leg: u8,
     pub orientation_transition_effect: &'static str,
     pub orientation_transition_from: &'static str,
     pub orientation_transition_to: &'static str,
@@ -1027,7 +1024,6 @@ fn write_launcher_status_json_tail(
         "last_composition_invariant_detail",
         status.last_composition_invariant_detail
     );
-    field!("bench_scenario", status.bench_scenario);
     field!("start_screen", status.start_screen);
     field!("lock_screen", status.lock_screen);
     field!("route_reassert_count", status.route_reassert_count);
@@ -1338,7 +1334,6 @@ fn launcher_status_value(
         "last_composition_invariant_detail",
         status.last_composition_invariant_detail
     );
-    insert!("bench_scenario", status.bench_scenario);
     insert!("start_screen", status.start_screen);
     insert!("lock_screen", status.lock_screen);
     insert!("route_reassert_count", status.route_reassert_count);
@@ -1451,10 +1446,6 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!(
         "orientation_transition_active",
         frame.orientation_transition_active
-    );
-    field!(
-        "orientation_transition_leg",
-        frame.orientation_transition_leg
     );
     field!(
         "orientation_transition_effect",
@@ -1960,7 +1951,6 @@ mod tests {
                 direct_layer_retirement_receipt_route_epoch: 0,
                 last_composition_invariant_kind: "",
                 last_composition_invariant_detail: "",
-                bench_scenario: "held-scroll",
                 start_screen: "arcade",
                 lock_screen: "arcade",
                 route_reassert_count: 2,
@@ -2018,7 +2008,6 @@ mod tests {
                         screensaver_active: true,
                         screensaver_renderer: "parade",
                         orientation_transition_active: true,
-                        orientation_transition_leg: 2,
                         orientation_transition_from: "monitor-clockwise",
                         orientation_transition_to: "monitor-counterclockwise",
                         orientation_begin_us: 101,
@@ -2202,10 +2191,6 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["orientation_transition_leg"],
-            2
-        );
-        assert_eq!(
             value["frame_budget"]["recent_frames"][0]["orientation_transition_total_us"],
             4_665
         );
@@ -2330,7 +2315,6 @@ mod tests {
         assert_eq!(value["direct_layer_retirement_receipt"], "");
         assert_eq!(value["last_composition_invariant_kind"], "");
         assert_eq!(value["last_composition_invariant_detail"], "");
-        assert_eq!(value["bench_scenario"], "held-scroll");
         assert_eq!(value["route_reassert_count"], 2);
         assert_eq!(value["last_route_reassert_ok"], true);
         assert_eq!(value["launch_state"], "idle");
@@ -2527,7 +2511,6 @@ mod tests {
             direct_layer_retirement_receipt_route_epoch: 0,
             last_composition_invariant_kind: "",
             last_composition_invariant_detail: "",
-            bench_scenario: "none",
             start_screen: "home",
             lock_screen: "none",
             route_reassert_count: 0,
