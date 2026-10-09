@@ -8,16 +8,6 @@ pub(super) fn frame_target_geometry(ui: &UiDisplay) -> FramebufferTargetGeometry
     FramebufferTargetGeometry::new(ui.render_w(), ui.render_h())
 }
 
-pub(super) fn launcher_dirty_opt_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_LAUNCHER_DIRTY_OPT").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
-        )
-    })
-}
-
 pub(super) fn preview_run_label() -> String {
     std::env::var("MISTER_PREVIEW_RUN_LABEL").unwrap_or_default()
 }

@@ -10722,32 +10722,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn orientation_benchmark_selects_landscape_layout_before_window_creation() {
-        for persisted in [
-            ScreenOrientation::MonitorClockwise,
-            ScreenOrientation::MonitorCounterclockwise,
-        ] {
-            assert_eq!(
-                launcher_startup_orientation(persisted, None, true, false),
-                ScreenOrientation::Normal
-            );
-            assert_eq!(
-                launcher_startup_orientation(persisted, None, false, false),
-                persisted
-            );
-            assert_eq!(
-                launcher_startup_orientation(
-                    persisted,
-                    Some(ScreenOrientation::Normal),
-                    false,
-                    false,
-                ),
-                ScreenOrientation::Normal
-            );
-        }
-    }
-
-    #[test]
     pub(super) fn layout_epoch_advances_for_each_directed_orientation_change() {
         let ui = UiDisplay::for_framebuffer(1280, 720);
         let mut layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::Normal);
@@ -10776,15 +10750,6 @@ mod tests {
             UiLayoutGeometry::for_display(&ui, ScreenOrientation::Normal),
         ));
         assert_eq!(epoch, 7);
-    }
-
-    #[test]
-    pub(super) fn settings_navigation_benchmark_starts_in_landscape() {
-        let persisted = ScreenOrientation::MonitorCounterclockwise;
-        assert_eq!(
-            launcher_startup_orientation(persisted, None, false, true),
-            ScreenOrientation::Normal
-        );
     }
 
     #[test]

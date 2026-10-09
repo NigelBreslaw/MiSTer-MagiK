@@ -92,21 +92,6 @@ use mister_magik_fb::launcher_runtime::transition_spec::TransitionStart;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
 
-fn launcher_startup_orientation(
-    persisted: ScreenOrientation,
-    benchmark_override: Option<ScreenOrientation>,
-    orientation_benchmark: bool,
-    settings_navigation_benchmark: bool,
-) -> ScreenOrientation {
-    if let Some(orientation) = benchmark_override {
-        orientation
-    } else if orientation_benchmark || settings_navigation_benchmark {
-        ScreenOrientation::Normal
-    } else {
-        persisted
-    }
-}
-
 mod arcade_drawer;
 mod catalog_worker;
 pub(crate) use catalog_worker::run_catalog_worker_child;
@@ -505,13 +490,7 @@ pub fn run_ui(
         }
         "launcher" => {
             let launcher_settings = crate::settings::MagikSettings::load();
-            let benchmark = launcher_config.benchmark();
-            let launcher_orientation = launcher_startup_orientation(
-                launcher_settings.screen_orientation,
-                benchmark.arcade_orientation(),
-                benchmark.orientation_transitions(),
-                benchmark.settings_navigation(),
-            );
+            let launcher_orientation = launcher_settings.screen_orientation;
             let launcher_layout = UiLayoutGeometry::for_display(&ui, launcher_orientation);
             with_scene_app_layout!(launcher::Launcher, &ui, &launcher_layout, &window, app, {
                 app.global::<slint_ui::launcher::MisterUi>()

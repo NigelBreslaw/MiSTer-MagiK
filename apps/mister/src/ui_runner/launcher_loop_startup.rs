@@ -415,7 +415,6 @@ pub(super) fn build_loop_state(
     let last_clock_text = launcher_clock_text();
     let auto_launch_selected = benchmark_config.auto_launch_selected();
     let auto_launch_selected_done = false;
-    let dirty_opt = launcher_dirty_opt_enabled();
     let label = if secs == 0 {
         "forever".to_string()
     } else {
@@ -438,10 +437,6 @@ pub(super) fn build_loop_state(
     if let Some(system_id) = env_start_system.as_ref() {
         crate::ui_logln!("launcher_start_system={system_id}");
     }
-    crate::ui_logln!(
-        "launcher_dirty_opt={}",
-        if dirty_opt { "on" } else { "off" }
-    );
     boot_analytics::event(
         "launcher_loop_start",
         format!("label={label} pads={}", pad.len()),

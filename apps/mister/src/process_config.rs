@@ -62,10 +62,6 @@ const INPUT_INTEGRITY_STALL_MS: &str = "MISTER_INPUT_INTEGRITY_STALL_MS";
 const INPUT_LATENCY_LAB_ARM: &str = "MISTER_INPUT_LATENCY_LAB_ARM";
 const INPUT_LATENCY_LAB_SESSION: &str = "MISTER_INPUT_LATENCY_LAB_SESSION";
 const INPUT_INTEGRITY_TRACE: &str = "MISTER_INPUT_INTEGRITY_TRACE";
-#[cfg(any(feature = "bench-tools", test))]
-const LAUNCHER_INPUT_SCRIPT: &str = "MISTER_LAUNCHER_INPUT_SCRIPT";
-#[cfg(any(feature = "bench-tools", test))]
-const LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES: &str = "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES";
 const SCREENSAVER_SEED: &str = "MISTER_SCREENSAVER_SEED";
 const SCREENSAVER_START_ACTIVE: &str = "MISTER_SCREENSAVER_START_ACTIVE";
 const SCREENSAVER_START_IDLE_WHEN_READY: &str = "MISTER_SCREENSAVER_START_IDLE_WHEN_READY";
@@ -545,26 +541,9 @@ impl ScreensaverProcessConfig {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ScriptedInputConfig {
-    script: Option<String>,
-    wait_frames: usize,
-}
-
-impl ScriptedInputConfig {
-    pub fn script(&self) -> Option<&str> {
-        self.script.as_deref()
-    }
-
-    pub fn wait_frames(&self) -> usize {
-        self.wait_frames
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InputProcessConfig {
     integrity_trace: bool,
     integrity_stall_ms: Option<u64>,
-    scripted: ScriptedInputConfig,
     latency_lab: InputLatencyLabConfig,
 }
 
@@ -585,29 +564,15 @@ impl InputLatencyLabConfig {
 }
 
 impl InputProcessConfig {
-    /// The integrity trace only observes; the stall, scripted input and the
+    /// The integrity trace only observes; the stall and the
     /// latency lab alter input handling and come from the lab environment.
     fn capture(environment: &EnvironmentSnapshot, lab_environment: &EnvironmentSnapshot) -> Self {
-        #[cfg(feature = "bench-tools")]
-        let scripted = ScriptedInputConfig {
-            script: lab_environment
-                .get(LAUNCHER_INPUT_SCRIPT)
-                .map(str::to_owned),
-            wait_frames: lab_environment
-                .get(LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES)
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(60)
-                .min(600),
-        };
-        #[cfg(not(feature = "bench-tools"))]
-        let scripted = ScriptedInputConfig::default();
         Self {
             integrity_trace: environment_flag(environment, INPUT_INTEGRITY_TRACE),
             integrity_stall_ms: lab_environment
                 .get(INPUT_INTEGRITY_STALL_MS)
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| (1..=1_000).contains(value)),
-            scripted,
             latency_lab: InputLatencyLabConfig {
                 arm: lab_environment
                     .get(INPUT_LATENCY_LAB_ARM)
@@ -625,10 +590,6 @@ impl InputProcessConfig {
 
     pub fn integrity_stall_ms(&self) -> Option<u64> {
         self.integrity_stall_ms
-    }
-
-    pub fn scripted(&self) -> &ScriptedInputConfig {
-        &self.scripted
     }
 
     pub fn latency_lab(&self) -> &InputLatencyLabConfig {
@@ -1236,34 +1197,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "bench-tools"))]
-    fn production_configuration_cannot_arm_scripted_input() {
-        let environment = EnvironmentSnapshot::from_values([
-            (LAUNCHER_INPUT_SCRIPT, "left,a"),
-            (LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES, "1"),
-        ]);
-        let config = ProcessConfig::from_snapshot(
-            &["mister-magik-fb".into(), "ui".into()],
-            "ui",
-            &environment,
-        );
-        let scripted = config
-            .launcher()
-            .expect("ui captures launcher settings")
-            .input()
-            .scripted();
-
-        assert_eq!(scripted, &ScriptedInputConfig::default());
-    }
-
-    #[test]
     fn release_capture_ignores_every_lab_switch() {
         let environment = EnvironmentSnapshot::from_values([
             (INPUT_INTEGRITY_TRACE, "on"),
             (INPUT_INTEGRITY_STALL_MS, "50"),
             (INPUT_LATENCY_LAB_ARM, "baseline"),
             (TEST_CATALOG_RECOVERY_DIALOG, "retry"),
-            ("MISTER_LAUNCHER_BENCH_SCENARIO", "arcade-scroll"),
             ("MISTER_LAUNCHER_START_SCREEN", "arcade"),
             ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
             (

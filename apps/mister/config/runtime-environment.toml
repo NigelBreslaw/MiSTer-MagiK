@@ -59,20 +59,6 @@ sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls amiga preview archive behavior", accepted_values = [], value_policy = "document" }
 [[control]]
-name = "MISTER_ARCADE_BENCHMARK_ORIENTATION"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "enum token"
-default_behavior = "uses persisted launcher orientation when unset or invalid"
-visibility = "benchmark only"
-parser = "enum"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Selects a one-shot in-memory launcher orientation for Arcade benchmarks", accepted_values = ["normal", "monitor-clockwise", "monitor-counterclockwise"], value_policy = "document" }
-
-[[control]]
 name = "MISTER_ARCADE_ENTRY_RUN_ID"
 owner = "apps/mister/src/process_config.rs"
 classification = "production"
@@ -793,48 +779,6 @@ aliases = []
 documentation = { summary = "Controls home selected index behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_HUMAN_TURBO_IDLE_FRAMES"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "benchmark only"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls human turbo idle frames behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_HUMAN_TURBO_NORMAL_FRAMES"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "benchmark only"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls human turbo normal frames behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_HUMAN_TURBO_PAUSE_FRAMES"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "benchmark only"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls human turbo pause frames behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_INPUT_INTEGRITY_STALL_MS"
 owner = "apps/mister/src/process_config.rs"
 classification = "test"
@@ -931,76 +875,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls launcher auto launch selected behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher bench after input script behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_BENCH_SCENARIO"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "benchmark only"
-parser = "enum"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher bench scenario behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_DIRTY_OPT"
-owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher dirty opt behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_INPUT_SCRIPT"
-owner = "apps/mister/src/process_config.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher input script behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES"
-owner = "apps/mister/src/process_config.rs"
-classification = "benchmark"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher input script wait frames behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_LOCK_SCREEN"
@@ -1141,20 +1015,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls launcher response trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LAUNCHER_START_MENU"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launcher start menu behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_START_SCREEN"
@@ -1826,20 +1686,6 @@ aliases = []
 documentation = { summary = "Controls media asset dir behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_MEDIA_BENCH_CONTENTION"
-owner = "apps/mister/src/launcher_runtime/media.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "benchmark only"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls media bench contention behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_MEDIA_MANIFEST_URL"
 owner = "apps/mister/src/launcher_runtime/media.rs"
 classification = "production"
@@ -1938,20 +1784,6 @@ aliases = []
 documentation = { summary = "Controls nes preview archive behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_ORIENTATION_PMU_COMPLETE"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls orientation pmu complete behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_ORIENTATION_SIMD"
 owner = "apps/mister/src/launcher_runtime/orientation_transition.rs"
 classification = "production"
@@ -1964,62 +1796,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls orientation simd behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "benchmark only"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls orientation transitions benchmark behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls orientation transitions evidence dir behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "benchmark only"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls orientation transitions require analytics behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_ORIENTATION_TRANSITION_EFFECT"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "benchmark only"
-parser = "enum"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls orientation transition effect behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PARTICLE_COHORTS"
@@ -2582,20 +2358,6 @@ aliases = []
 documentation = { summary = "Controls preview scroll trace secs behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_PREVIEW_STEP_HOLD_SECS"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "benchmark only"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls preview step hold secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_PREVIEW_TRACE"
 owner = "apps/mister/src/preview_state.rs"
 classification = "diagnostic"
@@ -2636,20 +2398,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls preview transition ms behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PREVIEW_TRANSITION_PICKER"
-owner = "apps/mister/src/screenshot_transitions.rs"
-classification = "production"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "internal runtime"
-parser = "enum"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls preview transition picker behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_TRANSITION_SEGMENT_SECS"
@@ -2846,34 +2594,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls screensaver start preview when ready behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SETTINGS_NAVIGATION_BENCHMARK"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "benchmark only"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls settings navigation benchmark behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls settings navigation evidence dir behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SHARDED_CATALOG_DIR"

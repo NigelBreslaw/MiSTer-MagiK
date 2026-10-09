@@ -3,51 +3,23 @@
 
 use super::*;
 
-const BENCH_SCENARIO: &str = "MISTER_LAUNCHER_BENCH_SCENARIO";
 const START_SCREEN: &str = "MISTER_LAUNCHER_START_SCREEN";
 const START_SYSTEM: &str = "MISTER_LAUNCHER_START_SYSTEM";
 const SYSTEM_ENTRY_BENCHMARK_SYSTEM: &str = "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM";
-const START_MENU: &str = "MISTER_LAUNCHER_START_MENU";
 const LOCK_SCREEN: &str = "MISTER_LAUNCHER_LOCK_SCREEN";
-const BENCH_AFTER_INPUT_SCRIPT: &str = "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT";
-const PREVIEW_STEP_HOLD_SECS: &str = "MISTER_PREVIEW_STEP_HOLD_SECS";
-const HUMAN_TURBO_IDLE_FRAMES: &str = "MISTER_HUMAN_TURBO_IDLE_FRAMES";
-const HUMAN_TURBO_NORMAL_FRAMES: &str = "MISTER_HUMAN_TURBO_NORMAL_FRAMES";
-const HUMAN_TURBO_PAUSE_FRAMES: &str = "MISTER_HUMAN_TURBO_PAUSE_FRAMES";
 const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
 const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
-const ORIENTATION_PMU_COMPLETE: &str = "MISTER_ORIENTATION_PMU_COMPLETE";
 const LAUNCH_RETURN_PMU_HANDOFF_OUT: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
-const ORIENTATION_TRANSITIONS_BENCHMARK: &str = "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK";
-const ORIENTATION_TRANSITION_EFFECT: &str = "MISTER_ORIENTATION_TRANSITION_EFFECT";
-const ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS: &str =
-    "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS";
-const SETTINGS_NAVIGATION_BENCHMARK: &str = "MISTER_SETTINGS_NAVIGATION_BENCHMARK";
-const ARCADE_BENCHMARK_ORIENTATION: &str = "MISTER_ARCADE_BENCHMARK_ORIENTATION";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LauncherBenchmarkConfig {
-    scenario: Option<LauncherBenchScenario>,
     start_screen: Option<Screen>,
-    start_page_mode: launcher::SystemPageMode,
     start_system: Option<String>,
     system_entry_system: Option<String>,
-    start_menu: Option<String>,
     lock_screen: Option<Screen>,
-    after_input_script: bool,
-    preview_step_hold_frames: usize,
-    human_turbo_idle_frames: usize,
-    human_turbo_normal_frames: usize,
-    human_turbo_pause_frames: usize,
     home_selected: Option<Result<usize, String>>,
     auto_launch_selected: bool,
-    orientation_pmu_completion: Option<String>,
     launch_return_pmu_handoff_out: Option<String>,
-    orientation_transitions: bool,
-    orientation_transition_effect: Option<OrientationTransitionEffect>,
-    orientation_requires_analytics: bool,
-    settings_navigation: bool,
-    arcade_orientation: Option<ScreenOrientation>,
 }
 
 impl Default for LauncherBenchmarkConfig {
@@ -58,49 +30,15 @@ impl Default for LauncherBenchmarkConfig {
 
 impl LauncherBenchmarkConfig {
     pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
-        let scenario = LauncherBenchScenario::from_value(get(BENCH_SCENARIO));
         Self {
-            scenario,
             start_screen: launcher_screen_from_value(get(START_SCREEN)),
-            start_page_mode: if matches!(get(START_SCREEN), Some("system-hub" | "snes-hub")) {
-                launcher::SystemPageMode::Hub
-            } else {
-                launcher::SystemPageMode::List
-            },
             start_system: normalized_nonempty(get(START_SYSTEM)),
             system_entry_system: normalized_nonempty(get(SYSTEM_ENTRY_BENCHMARK_SYSTEM)),
-            start_menu: normalized_nonempty(get(START_MENU)).filter(|value| {
-                matches!(
-                    value.as_str(),
-                    "consoles" | "handhelds" | "computers" | "snk-neogeo"
-                )
-            }),
             lock_screen: launcher_screen_from_value(get(LOCK_SCREEN)),
-            after_input_script: scenario.is_some()
-                && get(BENCH_AFTER_INPUT_SCRIPT).is_some_and(benchmark_flag),
-            preview_step_hold_frames: get(PREVIEW_STEP_HOLD_SECS)
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(5)
-                .clamp(1, 60)
-                .saturating_mul(60)
-                .max(1),
-            human_turbo_idle_frames: bounded_frames(get(HUMAN_TURBO_IDLE_FRAMES), 30, 180),
-            human_turbo_normal_frames: bounded_frames(get(HUMAN_TURBO_NORMAL_FRAMES), 30, 300),
-            human_turbo_pause_frames: bounded_frames(get(HUMAN_TURBO_PAUSE_FRAMES), 30, 300),
             home_selected: get(HOME_SELECTED_INDEX)
                 .map(|value| value.parse::<usize>().map_err(|_| value.to_owned())),
             auto_launch_selected: get(AUTO_LAUNCH_SELECTED).is_some_and(benchmark_flag),
-            orientation_pmu_completion: get(ORIENTATION_PMU_COMPLETE).map(str::to_owned),
             launch_return_pmu_handoff_out: get(LAUNCH_RETURN_PMU_HANDOFF_OUT).map(str::to_owned),
-            orientation_transitions: get(ORIENTATION_TRANSITIONS_BENCHMARK)
-                .is_some_and(benchmark_flag),
-            orientation_transition_effect: get(ORIENTATION_TRANSITION_EFFECT)
-                .and_then(OrientationTransitionEffect::from_id),
-            orientation_requires_analytics: get(ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS)
-                .is_some_and(benchmark_flag),
-            settings_navigation: get(SETTINGS_NAVIGATION_BENCHMARK).is_some_and(benchmark_flag),
-            arcade_orientation: get(ARCADE_BENCHMARK_ORIENTATION)
-                .and_then(ScreenOrientation::parse),
         }
     }
 
@@ -125,15 +63,6 @@ impl LauncherBenchmarkConfig {
     pub(super) fn launch_return_pmu_handoff_out(&self) -> Option<&str> {
         self.launch_return_pmu_handoff_out.as_deref()
     }
-    pub(super) fn orientation_transitions(&self) -> bool {
-        self.orientation_transitions
-    }
-    pub(super) fn settings_navigation(&self) -> bool {
-        self.settings_navigation
-    }
-    pub(super) fn arcade_orientation(&self) -> Option<ScreenOrientation> {
-        self.arcade_orientation
-    }
 }
 
 fn normalized_nonempty(value: Option<&str>) -> Option<String> {
@@ -142,84 +71,8 @@ fn normalized_nonempty(value: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn bounded_frames(value: Option<&str>, default: usize, maximum: usize) -> usize {
-    value
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-        .min(maximum)
-}
-
 fn benchmark_flag(value: &str) -> bool {
     matches!(value, "1" | "on" | "true" | "yes")
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LauncherBenchScenario {
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    Idle,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    PreviewIdle,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    HomeNav,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    HeldScroll,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    TurboHold,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    ScreensaverShow,
-}
-
-impl LauncherBenchScenario {
-    fn from_value(value: Option<&str>) -> Option<Self> {
-        #[cfg(not(feature = "bench-tools"))]
-        {
-            let _ = value;
-            None
-        }
-        #[cfg(feature = "bench-tools")]
-        {
-            match value?.to_ascii_lowercase().as_str() {
-                "idle" => Some(Self::Idle),
-                "preview-idle" | "preview_idle" => Some(Self::PreviewIdle),
-                "home-nav" | "home_nav" => Some(Self::HomeNav),
-                "home-repeat-hold" | "home_repeat_hold" | "home-hold-repeat"
-                | "home_hold_repeat" => Some(Self::HomeRepeatHold),
-                "velocity-scroll" | "velocity_scroll" => Some(Self::HeldScroll),
-                "quick-tap" | "quick_tap" => Some(Self::QuickTap),
-                "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
-                "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
-                "human-turbo-hold" | "human_turbo_hold" | "human-turbo" | "human_turbo" => {
-                    Some(Self::HumanTurboHold)
-                }
-                "turbo-hold" | "turbo_hold" => Some(Self::TurboHold),
-                "preview-step-hold" | "preview_step_hold" | "step-hold" | "step_hold" => {
-                    Some(Self::PreviewStepHold)
-                }
-                "model-sync" | "model_sync" => Some(Self::ModelSync),
-                "launch-handoff" | "launch_handoff" => Some(Self::LaunchHandoff),
-                "screensaver-show" | "screensaver_show" => Some(Self::ScreensaverShow),
-                _ => None,
-            }
-        }
-    }
 }
 
 fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
