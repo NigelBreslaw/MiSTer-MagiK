@@ -255,10 +255,7 @@ use launcher_execution_trace::*;
 use launcher_frame_accounting::*;
 use launcher_gui_profile::*;
 use launcher_input_latency_lab::*;
-use launcher_loop::*;
 
-/// Runs the domain-struct frame loop instead of the original while the port is verified.
-const NEXT_LOOP: bool = true;
 use launcher_present::*;
 use launcher_scheduler::*;
 use launcher_screensaver::LauncherScreensaverLoader;
@@ -538,39 +535,22 @@ pub fn run_ui(
                 let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 let pad = open_pads();
                 init_launcher_bridge(&app, &pad);
-                if NEXT_LOOP {
-                    launcher_loop::run_frame_loop(
-                        launcher_loop::Env {
-                            secs,
-                            ui: &ui,
-                            disp: &mut disp,
-                            f,
-                            display_session: &mut display_session,
-                            window: &window,
-                            target: &mut target,
-                            pad,
-                            app,
-                            animation_clock: &animation_clock,
-                            launcher_config,
-                        },
-                        process_entry_cpu_profile,
-                    );
-                } else {
-                    run_launcher_loop(
+                launcher_loop::run_frame_loop(
+                    launcher_loop::Env {
                         secs,
-                        &ui,
-                        &mut disp,
+                        ui: &ui,
+                        disp: &mut disp,
                         f,
-                        &mut display_session,
-                        &window,
-                        &mut target,
+                        display_session: &mut display_session,
+                        window: &window,
+                        target: &mut target,
                         pad,
                         app,
-                        &animation_clock,
-                        process_entry_cpu_profile,
+                        animation_clock: &animation_clock,
                         launcher_config,
-                    );
-                }
+                    },
+                    process_entry_cpu_profile,
+                );
             });
         }
         _ => unreachable!(),
