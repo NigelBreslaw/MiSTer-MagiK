@@ -2652,20 +2652,6 @@ aliases = []
 documentation = { summary = "Controls stream scalar bench samples behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM"
-owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls system entry benchmark system behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_SYSTEM_ENTRY_PROFILE_OUT"
 owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"

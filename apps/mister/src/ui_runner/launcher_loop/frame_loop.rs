@@ -35,7 +35,6 @@ pub(super) struct Library {
     pub(super) lifecycle_effects: LifecycleEffects,
     pub(super) preview_systems_entered: BTreeSet<String>,
     pub(super) preview_initial_lists_ready: BTreeSet<String>,
-    pub(super) pending_system_entry_benchmark: Option<String>,
     pub(super) start_screen: Screen,
     pub(super) lock_screen: Option<Screen>,
     pub(super) launch_return_session: LaunchReturnSession,
@@ -467,7 +466,6 @@ impl<'a> FrameLoop<'a> {
             lifecycle_effects,
             preview_systems_entered,
             preview_initial_lists_ready,
-            pending_system_entry_benchmark,
             start_screen,
             lock_screen,
             launch_return_session,
@@ -693,7 +691,6 @@ impl<'a> FrameLoop<'a> {
                 lifecycle_effects,
                 preview_systems_entered,
                 preview_initial_lists_ready,
-                pending_system_entry_benchmark,
                 start_screen,
                 lock_screen,
                 launch_return_session,
@@ -1385,77 +1382,6 @@ impl<'a> FrameLoop<'a> {
         );
         let mut launching = effective_view.launch_active();
         let setup_active = self.inp.setup.is_active();
-        let loop_elapsed_ms = loop_start
-            .saturating_duration_since(self.out.start)
-            .as_millis()
-            .min(u64::MAX as u128) as u64;
-        if self.lib.catalog_ready
-            && self.lib.lifecycle.startup_input_enabled()
-            && system_entry_benchmark_settled(
-                loop_elapsed_ms,
-                self.lib.lifecycle.startup_status().input_enabled_ms,
-            )
-            && effective_view.accepts_application_input()
-            && self.ui.nav.screen == Screen::Home
-            && self.lib.pending_collection_entry.is_none()
-            && let Some(collection_id) = self.lib.pending_system_entry_benchmark.take()
-        {
-            let requested_at = Instant::now();
-            mister_magik_perf_events::clear_process_profiles();
-            self.diag.system_entry_cpu_profile =
-                cpu_profile::start_system_entry(self.diag.profile_config.cpu());
-            self.diag.arcade_entry_latency.capture_presentation_start(
-                self.env.f.read_magik_presentation_telemetry().ok(),
-                self.diag.frame_accounting.last_latch_drop_count(),
-            );
-            if collection_has_resident_rows(&self.lib.catalog, &collection_id) {
-                self.diag
-                    .arcade_entry_latency
-                    .record_collection_enter_input(
-                        self.out.start,
-                        requested_at,
-                        &self.lib.lifecycle,
-                        &collection_id,
-                        "benchmark-direct",
-                        true,
-                    );
-                if self.ui.nav.open_system(&self.lib.catalog, &collection_id) {
-                    if self.ui.nav.is_system_hub() {
-                        self.ui.nav.set_arcade_user_list_mode(
-                            &self.lib.catalog,
-                            launcher::ArcadeUserListMode::Games,
-                        );
-                        self.ui.nav.system_page_mode = launcher::SystemPageMode::List;
-                    }
-                    self.diag.arcade_entry_latency.record_rows_ready(
-                        self.out.start,
-                        requested_at,
-                        &self.lib.lifecycle,
-                        &self.lib.catalog,
-                        &self.ui.nav,
-                    );
-                    full_bridge_dirty = true;
-                    self.env.window.request_redraw();
-                }
-            } else {
-                let entry = begin_cold_collection_entry(
-                    &mut self.lib.scheduler,
-                    &mut self.ui.nav,
-                    &mut self.lib.preview,
-                    &self.lib.catalog,
-                    self.lib.catalog_version,
-                    &collection_id,
-                    requested_at,
-                    "benchmark-direct",
-                    true,
-                    &mut self.diag.arcade_entry_latency,
-                    &self.lib.lifecycle,
-                    self.out.start,
-                );
-                full_bridge_dirty |= entry.bridge_dirty;
-                self.lib.pending_collection_entry = entry.pending;
-            }
-        }
         scheduler_phase = self
             .diag
             .launcher_response_trace

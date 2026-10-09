@@ -104,7 +104,6 @@ const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_sec
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(1_000);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
-const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 fn card_direct_tile_damage(left: usize, level_trick: bool, split: usize) -> [DirtyRect; 2] {
     // Trick rendering clears from x=268, including root cards whose ordinary
@@ -248,10 +247,6 @@ fn ui_test_uses_automation_only_input(
         && batch.health.protocol != crate::input_event::InputProtocolHealth::ProxyV2
         && batch.events.is_empty()
         && batch.held_after_last == crate::input_event::HeldState::default()
-}
-
-fn system_entry_benchmark_settled(elapsed_ms: u64, input_enabled_ms: u64) -> bool {
-    elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_SETTLE_MS
 }
 
 fn discrete_selection_feedback_target(
@@ -946,14 +941,6 @@ fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) ->
     catalog.system_game_count(collection_id) > 0
 }
 
-fn system_entry_collection_id(system_id: &str) -> &str {
-    if system_id == "arcade" {
-        arcade_catalog::MENU_ARCADE_SYSTEM_ID
-    } else {
-        system_id
-    }
-}
-
 fn empty_collection_invariant_violated(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
     nav.screen == Screen::Arcade
         && active_system(catalog, nav).is_some_and(|system| {
@@ -1079,17 +1066,6 @@ impl ArcadeEntryLatencyTracker {
         self.first_nav_presented = false;
         self.catalog_resident_at_input = None;
         self.presentation_start = None;
-    }
-
-    fn capture_presentation_start(
-        &mut self,
-        telemetry: Option<mister_magik_latch_contract::PresentationTelemetry>,
-        latch_drop_count: u16,
-    ) {
-        self.presentation_start = telemetry.map(|telemetry| SystemEntryPresentationStart {
-            telemetry,
-            latch_drop_count,
-        });
     }
 
     fn preview_adoption_in_progress(&self) -> bool {
@@ -8038,21 +8014,6 @@ mod tests {
             Screen::Arcade,
             0,
         ));
-    }
-
-    #[test]
-    fn direct_system_entry_measurement_starts_after_home_settles() {
-        assert!(!system_entry_benchmark_settled(2_245, 246));
-        assert!(system_entry_benchmark_settled(2_246, 246));
-    }
-
-    #[test]
-    fn direct_arcade_entry_uses_the_production_root_collection() {
-        assert_eq!(
-            system_entry_collection_id("arcade"),
-            arcade_catalog::MENU_ARCADE_SYSTEM_ID
-        );
-        assert_eq!(system_entry_collection_id("c64"), "c64");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Current controls: 234. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Current controls: 233. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -215,7 +215,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Current controls: 234. H
 | `MISTER_SMS_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls sms preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_SNES_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls snes preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_STREAM_SCALAR_BENCH_SAMPLES` | benchmark | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls stream scalar bench samples behavior; value policy: document | benchmark only | `mister/platform/runtime/src/framebuffer/downsample.rs` |
-| `MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM` | benchmark | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls system entry benchmark system behavior; value policy: document | benchmark only | `apps/mister/src/ui_runner/launcher_bench.rs` |
 | `MISTER_SYSTEM_ENTRY_PROFILE_OUT` | diagnostic | path or path list | uses the owner-defined output, fixture, or disabled path when unset | path | — | instrumentation | — | path | — | Controls system entry profile out behavior; value policy: redact | developer diagnostic | `apps/mister/src/process_config.rs` |
 | `MISTER_SYSTEM_ENTRY_RUN_ID` | production | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | command | — | public | — | Controls system entry run id behavior; value policy: document | internal runtime | `apps/mister/src/process_config.rs` |
 | `MISTER_SYSTEM_ENTRY_TRACE` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls system entry trace behavior; value policy: document | developer diagnostic | `apps/mister/src/process_config.rs` |

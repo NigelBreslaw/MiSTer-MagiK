@@ -5,7 +5,6 @@ use super::*;
 
 const START_SCREEN: &str = "MISTER_LAUNCHER_START_SCREEN";
 const START_SYSTEM: &str = "MISTER_LAUNCHER_START_SYSTEM";
-const SYSTEM_ENTRY_BENCHMARK_SYSTEM: &str = "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM";
 const LOCK_SCREEN: &str = "MISTER_LAUNCHER_LOCK_SCREEN";
 const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
 const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
@@ -15,7 +14,6 @@ const LAUNCH_RETURN_PMU_HANDOFF_OUT: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OU
 pub struct LauncherBenchmarkConfig {
     start_screen: Option<Screen>,
     start_system: Option<String>,
-    system_entry_system: Option<String>,
     lock_screen: Option<Screen>,
     home_selected: Option<Result<usize, String>>,
     auto_launch_selected: bool,
@@ -33,7 +31,6 @@ impl LauncherBenchmarkConfig {
         Self {
             start_screen: launcher_screen_from_value(get(START_SCREEN)),
             start_system: normalized_nonempty(get(START_SYSTEM)),
-            system_entry_system: normalized_nonempty(get(SYSTEM_ENTRY_BENCHMARK_SYSTEM)),
             lock_screen: launcher_screen_from_value(get(LOCK_SCREEN)),
             home_selected: get(HOME_SELECTED_INDEX)
                 .map(|value| value.parse::<usize>().map_err(|_| value.to_owned())),
@@ -47,9 +44,6 @@ impl LauncherBenchmarkConfig {
     }
     pub(super) fn start_system(&self) -> Option<&str> {
         self.start_system.as_deref()
-    }
-    pub(super) fn system_entry_system(&self) -> Option<&str> {
-        self.system_entry_system.as_deref()
     }
     pub(super) fn lock_screen(&self) -> Option<Screen> {
         self.lock_screen

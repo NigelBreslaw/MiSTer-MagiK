@@ -51,7 +51,6 @@ pub(super) struct LoopState {
     pub(super) lifecycle_effects: LifecycleEffects,
     pub(super) preview_systems_entered: BTreeSet<String>,
     pub(super) preview_initial_lists_ready: BTreeSet<String>,
-    pub(super) pending_system_entry_benchmark: Option<String>,
     pub(super) start_screen: Screen,
     pub(super) lock_screen: Option<Screen>,
     pub(super) launch_return_session: LaunchReturnSession,
@@ -219,15 +218,7 @@ pub(super) fn build_loop_state(
     let preview_initial_lists_ready = BTreeSet::new();
     let env_start_screen = benchmark_config.start_screen();
     let env_start_system = benchmark_config.start_system().map(str::to_owned);
-    let system_entry_benchmark_system = benchmark_config.system_entry_system().map(str::to_owned);
-    let pending_system_entry_benchmark = system_entry_benchmark_system
-        .as_deref()
-        .map(system_entry_collection_id)
-        .map(str::to_string);
-    let configured_start_screen = system_entry_benchmark_system
-        .as_ref()
-        .map(|_| Screen::Home)
-        .or(env_start_screen)
+    let configured_start_screen = env_start_screen
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .unwrap_or(Screen::Home);
     #[cfg(feature = "ui-device-tests")]
@@ -247,7 +238,6 @@ pub(super) fn build_loop_state(
     });
     let launch_return_restore_allowed = launcher_return_to_launcher_requested()
         && env_start_screen.is_none()
-        && system_entry_benchmark_system.is_none()
         && lock_screen.is_none();
     let mut launch_return_session = LaunchReturnSession::new(
         launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed),
@@ -1148,7 +1138,6 @@ pub(super) fn build_loop_state(
         lifecycle_effects,
         preview_systems_entered,
         preview_initial_lists_ready,
-        pending_system_entry_benchmark,
         start_screen,
         lock_screen,
         launch_return_session,
