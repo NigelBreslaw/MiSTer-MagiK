@@ -12,7 +12,7 @@ import webbrowser
 from pathlib import Path
 
 from .artwork import ensure as ensure_artwork
-from .apps import APPLICATIONS, application, repository
+from .apps import APPLICATIONS, CANONICAL_MAGIK_APP, application, repository
 from .bootstrap import BootstrapError, SshBootstrap
 from .build import ensure_arm_agent, ensure_arm_application, ensure_arm_package
 from .client import AgentError, NativeAgent
@@ -250,7 +250,11 @@ def main() -> int:
         print(
             f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(remembered MiSTer)')}"
         )
-        print(f"Executable: /media/fat/mister-magik2/{arguments.app}")
+        print(
+            f"Executable: {CANONICAL_MAGIK_APP}"
+            if arguments.app == "magik"
+            else f"Executable: /media/fat/mister-magik2/{arguments.app}"
+        )
         if arguments.app == "magik":
             print("Data: /media/fat/mister-magik-dev; Main: /media/fat/MiSTer_MagiKDev")
         else:
@@ -607,7 +611,24 @@ def ensure_application(
     if changed:
         upload_started = time.monotonic()
         append_event(run, {"phase": "upload", "bytes": len(payload)})
-        agent.upload(app.name, payload)
+        if app.name == "magik":
+            revision = (
+                built.source_revision
+                or os.environ.get("MISTER_MAGIK2_PREBUILT_SOURCE_REVISION")
+                or subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=repository(), text=True
+                ).strip()
+            )
+            dirty = built.source_dirty
+            if dirty is None and not built.prebuilt:
+                from .build import source_metadata
+
+                _, dirty = source_metadata(repository())
+            agent.upload(
+                app.name, payload, source_revision=revision, source_dirty=dirty
+            )
+        else:
+            agent.upload(app.name, payload)
         upload_elapsed_ms = max(1, int((time.monotonic() - upload_started) * 1_000))
         append_event(
             run,

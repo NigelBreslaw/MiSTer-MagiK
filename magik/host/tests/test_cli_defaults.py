@@ -51,7 +51,7 @@ def test_everyday_check_is_real_smoke_and_prints_dev_target(
     assert cli.main() == 0
     assert (seen[0].app, seen[0].scenario, seen[0].profile) == ("magik", "smoke", False)
     output = capsys.readouterr().out
-    assert "/media/fat/mister-magik2/magik" in output
+    assert "/media/fat/mister-magik-dev/mister-magik-fb" in output
     assert "/media/fat/mister-magik-dev" in output
 
 

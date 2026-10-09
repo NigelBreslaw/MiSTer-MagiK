@@ -50,28 +50,34 @@ fn quote(value: &str) -> Result<String, String> {
 }
 
 /// Change only our marked block. The existing file is never executed by this service.
+fn read_env(path: &Path) -> Result<String, String> {
+    Ok(
+        match fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+        {
+            Ok(file) => {
+                if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+                    return Err("launcher environment is not a regular file".into());
+                }
+                let mut text = String::new();
+                file.take((LIMIT + 1) as u64)
+                    .read_to_string(&mut text)
+                    .map_err(|e| e.to_string())?;
+                if text.len() > LIMIT {
+                    return Err("launcher environment exceeds limit".into());
+                }
+                text
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.to_string()),
+        },
+    )
+}
+
 pub fn update(path: &Path, values: Option<&[(&str, String)]>) -> Result<(), String> {
-    let text = match fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-    {
-        Ok(file) => {
-            if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-                return Err("launcher environment is not a regular file".into());
-            }
-            let mut text = String::new();
-            file.take((LIMIT + 1) as u64)
-                .read_to_string(&mut text)
-                .map_err(|e| e.to_string())?;
-            if text.len() > LIMIT {
-                return Err("launcher environment exceeds limit".into());
-            }
-            text
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error.to_string()),
-    };
+    let text = read_env(path)?;
     let mut next = without_block(&text)?;
     if let Some(values) = values {
         if !next.is_empty() && !next.ends_with('\n') {
@@ -93,6 +99,10 @@ pub fn update(path: &Path, values: Option<&[(&str, String)]>) -> Result<(), Stri
         }
         next.push_str(END);
     }
+    write_env(path, &text, &next)
+}
+
+fn write_env(path: &Path, text: &str, next: &str) -> Result<(), String> {
     if next.len() > LIMIT {
         return Err("launcher environment exceeds limit".into());
     }
@@ -118,6 +128,28 @@ pub fn update(path: &Path, values: Option<&[(&str, String)]>) -> Result<(), Stri
     result
 }
 
+/// Restore only the agent-owned block; keep operator edits made during deployment.
+pub(crate) fn restore_managed_block(path: &Path, backup: &Path) -> Result<(), String> {
+    let old = read_env(backup)?;
+    let old_unmanaged = without_block(&old)?;
+    let old_block = if old_unmanaged == old {
+        ""
+    } else {
+        let start = old.find(BEGIN).ok_or("managed block missing")?;
+        let end = old.find(END).ok_or("managed block missing")? + END.len();
+        &old[start..end]
+    };
+    let current = read_env(path)?;
+    let mut next = without_block(&current)?;
+    if !old_block.is_empty() {
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(old_block);
+    }
+    write_env(path, &current, &next)
+}
+
 impl crate::Agent {
     pub(super) fn start_managed_magik(
         &self,
@@ -125,8 +157,11 @@ impl crate::Agent {
         test_server: Option<&str>,
         hash: &str,
     ) -> crate::Envelope {
+        let mut verified_ready = false;
+        let mut entered_dev = false;
         let result = (|| -> Result<(), String> {
             require_dev(&crate::device::status()?)?;
+            entered_dev = true;
             let env_path = Path::new(ENV_PATH);
             if env_path
                 .parent()
@@ -153,10 +188,7 @@ impl crate::Agent {
             let mut values = vec![
                 (
                     "MISTER_MAGIK_PATH",
-                    self.install_root
-                        .join("magik")
-                        .to_string_lossy()
-                        .into_owned(),
+                    self.app_path("magik").to_string_lossy().into_owned(),
                 ),
                 (
                     "MISTER_MAGIK2_STATE_ROOT",
@@ -198,7 +230,9 @@ impl crate::Agent {
                     {
                         return Err("Main launched a different artifact".into());
                     }
+                    verified_ready = true;
                     self.write_owned_process(pid, hash)?;
+                    self.finish_app_install(hash)?;
                     return Ok(());
                 }
                 if std::time::Instant::now() >= deadline {
@@ -213,11 +247,22 @@ impl crate::Agent {
                 "started",
                 serde_json::json!({"already_running":false,"ready":true,"main_managed":true}),
             ),
-            Err(error) => crate::response(
-                &request.id,
-                "error",
-                serde_json::json!({"code":"main-managed-start-failed","detail":error,"main_status":crate::device::status().ok()}),
-            ),
+            Err(error) => {
+                // Cleanup failure after verification must not roll back under
+                // the healthy live app. Before verification, recovery first
+                // suspends/reaps the child, then restores and resumes Main.
+                let restored = if verified_ready || !entered_dev {
+                    Ok(())
+                } else {
+                    self.recover_app_install_after_dev_start()
+                };
+                crate::response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"main-managed-start-failed",
+                    "detail":error,"verified_ready":verified_ready,"app_restoration":restored.err(),"main_status":crate::device::status().ok()}),
+                )
+            }
         }
     }
 }

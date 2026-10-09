@@ -17,6 +17,7 @@ def parser():
 @pytest.mark.parametrize(
     "command",
     [
+        "application-install-recover",
         "status",
         "input-probe",
         "input-probe --seconds 20 --event event0",
@@ -78,6 +79,44 @@ def test_input_probe_requests_only_passive_fields(monkeypatch, tmp_path):
     agent.device_operation.assert_called_once_with(
         "input-probe", {"seconds": 20, "events": ["event0"]}
     )
+
+
+@pytest.mark.parametrize(
+    "command,capability,operation",
+    [
+        (
+            "application-install-recover",
+            "application-install-recover-v1",
+            "application-install-recover",
+        ),
+        (
+            "application-install-inspect",
+            "application-install-inspect-v2",
+            "application-install-inspect",
+        ),
+        (
+            "crash-report read --path /media/fat/mister-magik-dev/crashes/report-fixed.json",
+            "crash-report-read-v1",
+            "crash-report-read",
+        ),
+        (
+            "crash-report delete --path /media/fat/mister-magik-dev/crashes/report-fixed.json --sha256 "
+            + "a" * 64,
+            "crash-report-delete-v2",
+            "crash-report-delete",
+        ),
+    ],
+)
+def test_new_device_commands_require_their_service_capability(
+    monkeypatch, tmp_path, command, capability, operation
+):
+    agent = Mock()
+    agent.device_operation.return_value = {"ok": True}
+    connect = Mock(return_value=(agent, None))
+    monkeypatch.setattr("magik.cli.connect_agent", connect)
+    device.run_device(parser().parse_args(command.split()), tmp_path)
+    connect.assert_called_once_with(tmp_path, {"device-control-v1", capability})
+    assert agent.device_operation.call_args.args[0] == operation
 
 
 def test_publication_failure_retains_stage_and_does_not_retry(tmp_path):

@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 
+CANONICAL_MAGIK_APP = "/media/fat/mister-magik-dev/mister-magik-fb"
+
 
 @dataclass(frozen=True)
 class Application:
@@ -28,7 +30,9 @@ APPLICATIONS = {
         "mister-magik-fb",
         "release-device-ui-tests",
         ("tooling",),
-        frozenset({"main-managed-magik", "card-artwork-v2"}),
+        frozenset(
+            {"main-managed-magik", "card-artwork-v2", "canonical-magik-runtime-v2"}
+        ),
     ),
 }
 

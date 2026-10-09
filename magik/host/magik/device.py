@@ -71,6 +71,16 @@ def add_commands(commands):
     probe.add_argument("--seconds", type=int, choices=range(31), default=0)
     probe.add_argument("--event", action="append", default=[])
     commands.add_parser("status")
+    commands.add_parser("application-install-inspect")
+    commands.add_parser("application-install-recover")
+    crash = commands.add_parser("crash-report").add_subparsers(
+        dest="action", required=True
+    )
+    for action in ("read", "delete"):
+        report = crash.add_parser(action)
+        report.add_argument("--path", required=True)
+        if action == "delete":
+            report.add_argument("--sha256", required=True)
     commands.add_parser("diagnostics")
     evidence = commands.add_parser("fpga-evidence")
     evidence.add_argument("--framebuffer", action="store_true")
@@ -121,6 +131,13 @@ def run_device(arguments, run):
             "layout": arguments.layout,
             "system": arguments.system,
         }
+    elif group in {"application-install-inspect", "application-install-recover"}:
+        operation = group
+    elif group == "crash-report":
+        operation = "crash-report-" + arguments.action
+        fields = {"path": arguments.path}
+        if arguments.action == "delete":
+            fields["sha256"] = arguments.sha256
     elif group in {"status", "launcher"}:
         action = getattr(arguments, "action", "status")
         operation = {
@@ -140,9 +157,19 @@ def run_device(arguments, run):
                 fields["acknowledge_31khz"] = True
     else:
         operation = "device-evidence"
-    required = (
-        {"input-probe-passive-v1"} if group == "input-probe" else {"device-control-v1"}
-    )
+    required = {"device-control-v1"}
+    if group == "input-probe":
+        required = {"input-probe-passive-v1"}
+    elif group == "application-install-inspect":
+        required.add("application-install-inspect-v2")
+    elif group == "application-install-recover":
+        required.add("application-install-recover-v1")
+    elif group == "crash-report":
+        required.add(
+            "crash-report-"
+            + arguments.action
+            + ("-v2" if arguments.action == "delete" else "-v1")
+        )
     agent, _ = connect_agent(run, required)
     report = agent.device_operation(operation, fields)
     path = run / "device-operation.json"

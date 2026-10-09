@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 const MAIN_STATUS: &str = "/tmp/mister-magik/main-status.json";
 pub const OPERATIONS: &[&str] = &[
     "device-status",
+    "application-install-inspect",
+    "application-install-recover",
+    "crash-report-read",
+    "crash-report-delete",
     "input-probe",
     "mode-status",
     "mode-set",
@@ -65,6 +69,166 @@ const CRASH_ROOTS: [&str; 2] = [
     "/media/fat/mister-magik-dev/crashes",
     "/media/fat/mister-magik/crashes",
 ];
+
+fn crash_report_path(path: &str, roots: &[&Path]) -> Result<PathBuf, String> {
+    let path = PathBuf::from(path);
+    if !roots.iter().any(|root| path.parent() == Some(*root))
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+        || !path.file_name().is_some_and(|name| {
+            name == "latest.json" || name.to_string_lossy().starts_with("report-")
+        })
+        || path.extension().is_none_or(|extension| extension != "json")
+        || !fs::symlink_metadata(&path)
+            .map_err(|e| e.to_string())?
+            .is_file()
+        || path.canonicalize().map_err(|e| e.to_string())? != path
+    {
+        return Err("expected a regular report JSON directly inside a crash directory".into());
+    }
+    Ok(path)
+}
+
+fn restore_claim_without_replacing(claimed: &Path, original: &Path) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let source = std::ffi::CString::new(claimed.as_os_str().as_bytes())
+            .map_err(|error| error.to_string())?;
+        let destination = std::ffi::CString::new(original.as_os_str().as_bytes())
+            .map_err(|error| error.to_string())?;
+        // SAFETY: both pathnames are live NUL-terminated strings. No-replace
+        // keeps a newer report published at the original path untouched.
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let result =
+            unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error().to_string())
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        fs::hard_link(claimed, original).map_err(|error| error.to_string())?;
+        fs::remove_file(claimed).map_err(|error| error.to_string())
+    }
+}
+
+fn delete_crash_report(path: &Path, expected: &str) -> Result<Value, String> {
+    delete_crash_report_with(path, expected, || Ok(()))
+}
+
+fn delete_crash_report_with(
+    path: &Path,
+    expected: &str,
+    after_claim: impl FnOnce() -> Result<(), String>,
+) -> Result<Value, String> {
+    // This alias is replaced independently by crash writers. Only immutable,
+    // individually named reports can be deleted after checksum verification.
+    if path.file_name().is_some_and(|name| name == "latest.json") {
+        return Err(
+            "latest.json may be replaced by a crash writer; delete its named report instead".into(),
+        );
+    }
+    let parent = path.parent().ok_or("crash directory missing")?;
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let claimed = parent.join(format!(
+        "report-delete-{unique}-{}.json",
+        std::process::id()
+    ));
+    File::options()
+        .write(true)
+        .create_new(true)
+        .open(&claimed)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = fs::rename(path, &claimed) {
+        let _ = fs::remove_file(&claimed);
+        return Err(error.to_string());
+    }
+    // The owned claim is a readable named report even after service failure.
+    // Writers may now replace the original path; we only unlink this claim.
+    let result = (|| {
+        File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| error.to_string())?;
+        after_claim()?;
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&claimed)
+            .map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("crash report exceeds deletion limit".into());
+        }
+        let actual: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if actual != expected {
+            return Err("crash report changed; deletion refused".into());
+        }
+        let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if report["schema"] != "mister-magik-crash-report-v1" {
+            return Err("unsupported crash report; deletion refused".into());
+        }
+        fs::remove_file(&claimed).map_err(|e| e.to_string())?;
+        File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(
+            json!({"deleted":true,"path":path,"sha256":expected,"report_id":report["report_id"],"replacement_preserved":path.exists()}),
+        )
+    })();
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if !claimed.exists() {
+                return Err(error);
+            }
+            let restored = restore_claim_without_replacing(&claimed, path);
+            let _ = File::open(parent).and_then(|file| file.sync_all());
+            match restored {
+                Ok(()) => Err(error),
+                Err(restore) => Err(format!(
+                    "{error}; report restoration failed: {restore}; retained report: {}",
+                    claimed.display()
+                )),
+            }
+        }
+    }
+}
+
+fn allow_crash_deletion(path: &Path, main: Option<&Value>) -> Result<(), String> {
+    if path.parent() != Some(Path::new(CRASH_ROOTS[0])) {
+        return Err("Dev service cannot delete production crash reports".into());
+    }
+    if main.and_then(reported_crash_path).as_ref() == Some(&path.to_path_buf()) {
+        return Err("Main still identifies this as its current crash; deletion refused".into());
+    }
+    Ok(())
+}
 
 /// The report the main status names as the last crash, if it lies inside a crash
 /// directory. Nothing outside those directories is ever read.
@@ -262,12 +426,48 @@ impl Agent {
                         | "mode-set"
                         | "device-reboot"
                         | "device-recover"
+                        | "crash-report-read"
+                        | "crash-report-delete"
                 ) && !request.fields.is_empty())
             {
                 return Err("unexpected device operation arguments".into());
             }
             match request.op.as_str() {
                 "device-status" => status(),
+                "application-install-inspect" => self.app_install_inspect(),
+                "application-install-recover" => {
+                    self.recover_app_install()?;
+                    self.app_install_inspect()
+                }
+                "crash-report-read" | "crash-report-delete" => {
+                    let deleting = request.op == "crash-report-delete";
+                    if request.fields.len() != if deleting { 2 } else { 1 } {
+                        return Err(
+                            "crash report operation requires path and, for deletion, sha256".into(),
+                        );
+                    }
+                    let path = crash_report_path(
+                        request
+                            .fields
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .ok_or("report path required")?,
+                        &CRASH_ROOTS.map(Path::new),
+                    )?;
+                    if deleting {
+                        allow_crash_deletion(&path, status().ok().as_ref())?;
+                        delete_crash_report(
+                            &path,
+                            request
+                                .fields
+                                .get("sha256")
+                                .and_then(Value::as_str)
+                                .ok_or("report sha256 required")?,
+                        )
+                    } else {
+                        Ok(json!({"report":crash_file(&path),"sha256":crate::media::hash(&path)?}))
+                    }
+                }
                 "input-probe" => crate::input_probe::run(&request.fields),
                 "mode-status" => crate::mode::status(),
                 "mode-set" => crate::mode::set(&request.fields),
@@ -323,6 +523,16 @@ impl Agent {
 mod tests {
     use super::*;
     #[test]
+    fn deletion_is_dev_only_and_does_not_depend_on_readable_main_status() {
+        let dev = Path::new("/media/fat/mister-magik-dev/crashes/report-reviewed.json");
+        let production = Path::new("/media/fat/mister-magik/crashes/report-reviewed.json");
+        assert!(allow_crash_deletion(dev, None).is_ok());
+        assert!(allow_crash_deletion(production, None).is_err());
+        let current = json!({"last_crash_report":dev});
+        assert!(allow_crash_deletion(dev, Some(&current)).is_err());
+        assert!(allow_crash_deletion(dev, Some(&json!({"last_crash_report":""}))).is_ok());
+    }
+    #[test]
     fn display_changes_are_closed_and_attended() {
         let fields = json!({"mode":"crt-240p60","attended":true});
         assert!(display_command(fields.as_object().unwrap()).is_ok());
@@ -354,6 +564,96 @@ mod tests {
         assert!(named("/media/fat/mister-magik-dev/crashes-other/x.json").is_none());
         assert!(reported_crash_path(&json!({})).is_none());
     }
+    #[test]
+    fn latest_report_alias_cannot_be_deleted_even_with_a_matching_digest() {
+        let root = std::env::temp_dir().join(format!("magik-latest-report-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("latest.json");
+        let body = br#"{"schema":"mister-magik-crash-report-v1","report_id":"latest"}"#;
+        fs::write(&path, body).unwrap();
+        let hash = crate::media::hash(&path).unwrap();
+        assert!(
+            delete_crash_report(&path, &hash)
+                .unwrap_err()
+                .contains("latest.json")
+        );
+        assert_eq!(fs::read(&path).unwrap(), body);
+        let replacement =
+            br#"{"schema":"mister-magik-crash-report-v1","report_id":"new-unreviewed"}"#;
+        fs::write(&path, replacement).unwrap();
+        assert!(delete_crash_report(&path, &hash).is_err());
+        assert_eq!(fs::read(&path).unwrap(), replacement);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_report_replacement_is_never_deleted_or_overwritten() {
+        for matching in [true, false] {
+            let root = std::env::temp_dir().join(format!(
+                "magik-report-replace-{matching}-{}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let path = root.join("report-reviewed.json");
+            let old = br#"{"schema":"mister-magik-crash-report-v1","report_id":"reviewed"}"#;
+            let new = br#"{"schema":"mister-magik-crash-report-v1","report_id":"unreviewed"}"#;
+            fs::write(&path, old).unwrap();
+            let hash = if matching {
+                crate::media::hash(&path).unwrap()
+            } else {
+                "0".repeat(64)
+            };
+            let result = delete_crash_report_with(&path, &hash, || {
+                fs::write(&path, new).map_err(|error| error.to_string())
+            });
+            assert_eq!(fs::read(&path).unwrap(), new);
+            if matching {
+                assert_eq!(result.unwrap()["replacement_preserved"], true);
+            } else {
+                let error = result.unwrap_err();
+                let retained = error.split("retained report: ").nth(1).unwrap();
+                assert_eq!(fs::read(retained).unwrap(), old);
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn crash_deletion_requires_a_report_in_the_allowed_directory_and_matching_hash() {
+        let directory =
+            std::env::temp_dir().join(format!("magik-crash-delete-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let directory = directory.canonicalize().unwrap();
+        let path = directory.join("report-fixed.json");
+        fs::write(
+            &path,
+            br#"{"schema":"mister-magik-crash-report-v1","report_id":"fixed"}"#,
+        )
+        .unwrap();
+        let roots = [directory.as_path()];
+        let validated = crash_report_path(path.to_str().unwrap(), &roots).unwrap();
+        assert!(delete_crash_report(&validated, &"0".repeat(64)).is_err());
+        assert!(path.exists());
+        assert!(
+            crash_report_path(
+                directory.join("../report-fixed.json").to_str().unwrap(),
+                &roots
+            )
+            .is_err()
+        );
+        let symlink = directory.join("report-link.json");
+        std::os::unix::fs::symlink(&path, &symlink).unwrap();
+        assert!(crash_report_path(symlink.to_str().unwrap(), &roots).is_err());
+        let hash = crate::media::hash(&path).unwrap();
+        assert_eq!(
+            delete_crash_report(&validated, &hash).unwrap()["deleted"],
+            true
+        );
+        assert!(!path.exists());
+        fs::remove_file(symlink).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
     #[test]
     fn crash_reports_keep_their_head_and_tail_when_large() {
         let path = std::env::temp_dir().join(format!("magik-crash-{}", std::process::id()));

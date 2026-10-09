@@ -2833,21 +2833,15 @@ impl<'a> FrameLoop<'a> {
                                 }
                             }
                             let nav_after = LauncherProjectionKey::from_nav(&self.ui.nav);
+                            if cancel_pending_collection_entry_for_navigation(
+                                &mut self.lib.pending_collection_entry,
+                                &mut self.ui.nav,
+                                self.out.start,
+                            ) {
+                                self.lib.preview.cancel_system_entry_preview();
+                                self.lib.system_entry.cancel();
+                            }
                             if nav_before != nav_after {
-                                if let Some(entry) = self.lib.pending_collection_entry.take() {
-                                    self.lib.preview.cancel_system_entry_preview();
-                                    self.ui
-                                        .nav
-                                        .catalog_system_hydration_finished(&entry.collection_id);
-                                    print_startup_event(
-                                        self.out.start,
-                                        "catalog_system_entry_cancelled",
-                                        format!(
-                                            "system={} reason=navigation-changed",
-                                            entry.collection_id
-                                        ),
-                                    );
-                                }
                                 self.lib.media_session.note_nav_change(
                                     &nav_before,
                                     &nav_after,
