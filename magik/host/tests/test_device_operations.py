@@ -80,6 +80,39 @@ def test_input_probe_requests_only_passive_fields(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "command,capability,operation",
+    [
+        (
+            "application-install-inspect",
+            "application-install-inspect-v1",
+            "application-install-inspect",
+        ),
+        (
+            "crash-report read --path /media/fat/mister-magik-dev/crashes/report-fixed.json",
+            "crash-report-read-v1",
+            "crash-report-read",
+        ),
+        (
+            "crash-report delete --path /media/fat/mister-magik-dev/crashes/report-fixed.json --sha256 "
+            + "a" * 64,
+            "crash-report-delete-v1",
+            "crash-report-delete",
+        ),
+    ],
+)
+def test_new_device_commands_require_their_service_capability(
+    monkeypatch, tmp_path, command, capability, operation
+):
+    agent = Mock()
+    agent.device_operation.return_value = {"ok": True}
+    connect = Mock(return_value=(agent, None))
+    monkeypatch.setattr("magik.cli.connect_agent", connect)
+    device.run_device(parser().parse_args(command.split()), tmp_path)
+    connect.assert_called_once_with(tmp_path, {"device-control-v1", capability})
+    assert agent.device_operation.call_args.args[0] == operation
+
+
 def test_publication_failure_retains_stage_and_does_not_retry(tmp_path):
     artifact = tmp_path / "artifact"
     artifact.write_bytes(b"data")

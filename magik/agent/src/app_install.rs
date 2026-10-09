@@ -15,6 +15,46 @@ const ROOT: &str = "/media/fat/mister-magik-dev";
 const MANIFEST: &str = "/media/fat/mister-magik-dev/platform-v3.manifest";
 const OLD_APP: &str = "/media/fat/mister-magik-dev/.obsolete-app-delete-after-ready";
 const OLD_MANIFEST: &str = "/media/fat/mister-magik-dev/.obsolete-manifest-delete-after-ready";
+
+fn copy_installation_file(source: &Path, backup: &mut File) -> std::io::Result<u64> {
+    let mut source = File::open(source)?;
+    backup.set_permissions(source.metadata()?.permissions())?;
+    std::io::copy(&mut source, backup)
+}
+
+fn create_installation_backups(
+    files: &[(&Path, &Path)],
+    mut copy: impl FnMut(&Path, &mut File) -> std::io::Result<u64>,
+    resume_main: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let mut created = Vec::new();
+    let result = (|| {
+        for &(source, destination) in files {
+            let mut backup = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)?;
+            created.push(destination);
+            copy(source, &mut backup)?;
+            backup.sync_all()?;
+        }
+        Ok::<(), std::io::Error>(())
+    })();
+    if let Err(error) = result {
+        let mut cleanup_errors = Vec::new();
+        for path in created {
+            if let Err(cleanup) = fs::remove_file(path) {
+                cleanup_errors.push(format!("{}: {cleanup}", path.display()));
+            }
+        }
+        // Cleanup failures must never prevent Main from being resumed.
+        let resumed = resume_main();
+        return Err(format!(
+            "backup creation failed: {error}; backup cleanup: {cleanup_errors:?}; Main resumption: {resumed:?}"
+        ));
+    }
+    Ok(())
+}
 fn describe(path: &Path) -> Value {
     json!({"path":path,"exists":path.exists(),"sha256":crate::installed_hash(path)})
 }
@@ -75,8 +115,14 @@ impl Agent {
             .map_err(|e| e.to_string())?;
         self.stop_owned_process()?;
         crate::main_control::handoff("mister_magik_suspend\n")?;
-        fs::copy(APP, OLD_APP).map_err(|e| e.to_string())?;
-        fs::copy(MANIFEST, OLD_MANIFEST).map_err(|e| e.to_string())?;
+        create_installation_backups(
+            &[
+                (Path::new(APP), Path::new(OLD_APP)),
+                (Path::new(MANIFEST), Path::new(OLD_MANIFEST)),
+            ],
+            copy_installation_file,
+            || crate::main_control::handoff("mister_magik_resume\n"),
+        )?;
         let result = (|| {
             staged.publish(Path::new(APP))?;
             let temporary = Path::new(MANIFEST).with_extension("canonical.next");
@@ -151,6 +197,110 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn either_partial_backup_failure_cleans_up_and_resumes_without_changing_installation() {
+        for fail_at in 0..2 {
+            let root = std::env::temp_dir().join(format!(
+                "magik-backup-failure-{}-{fail_at}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let app = root.join("app");
+            let manifest = root.join("manifest");
+            let old_app = root.join("old-app");
+            let old_manifest = root.join("old-manifest");
+            fs::write(&app, b"installed-app").unwrap();
+            fs::set_permissions(&app, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::write(&manifest, b"installed-manifest").unwrap();
+            let mut copies = 0;
+            let resumed = std::cell::Cell::new(false);
+            let error = create_installation_backups(
+                &[(&app, &old_app), (&manifest, &old_manifest)],
+                |source, backup| {
+                    let index = copies;
+                    copies += 1;
+                    if index == fail_at {
+                        backup.write_all(b"partial")?;
+                        return Err(std::io::Error::other("SD full"));
+                    }
+                    copy_installation_file(source, backup)
+                },
+                || {
+                    resumed.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("SD full"));
+            assert!(resumed.get());
+            assert!(!old_app.exists());
+            assert!(!old_manifest.exists());
+            assert_eq!(fs::read(&app).unwrap(), b"installed-app");
+            assert_eq!(fs::read(&manifest).unwrap(), b"installed-manifest");
+            // The cleaned installation accepts a subsequent backup attempt.
+            create_installation_backups(
+                &[(&app, &old_app), (&manifest, &old_manifest)],
+                copy_installation_file,
+                || panic!("successful backup must not resume Main"),
+            )
+            .unwrap();
+            assert_eq!(
+                fs::metadata(&old_app).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn backup_recovery_preserves_preexisting_files_and_reports_resume_failure() {
+        let root =
+            std::env::temp_dir().join(format!("magik-backup-existing-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("app");
+        let destination = root.join("old-app");
+        fs::write(&source, b"installed").unwrap();
+        fs::write(&destination, b"preexisting").unwrap();
+        let error = create_installation_backups(
+            &[(&source, &destination)],
+            |_, _| panic!("must not overwrite an existing backup"),
+            || Err("Main unavailable".into()),
+        )
+        .unwrap_err();
+        assert!(error.contains("Main unavailable"));
+        assert_eq!(fs::read(destination).unwrap(), b"preexisting");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_cleanup_failure_still_resumes_main() {
+        let root =
+            std::env::temp_dir().join(format!("magik-backup-cleanup-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let destination = root.join("old-app");
+        let resumed = std::cell::Cell::new(false);
+        let error = create_installation_backups(
+            &[(root.join("app").as_path(), &destination)],
+            |_, _| {
+                fs::remove_file(&destination)?;
+                fs::create_dir(&destination)?;
+                Err(std::io::Error::other("copy failed"))
+            },
+            || {
+                resumed.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(resumed.get());
+        assert!(error.contains("backup cleanup:"));
+        assert!(error.contains("old-app"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn real_app_resolves_to_canonical_dev_path_not_service_slot() {
         let root = std::env::temp_dir().join(format!("canonical-app-path-{}", std::process::id()));

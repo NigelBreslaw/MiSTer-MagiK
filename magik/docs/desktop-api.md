@@ -73,3 +73,11 @@ signals the supervised child directly. Test/profile settings use the same marked
 block; ending the session replaces them on normal restoration. Mini remains an
 independent bounded workload. Failed starts report the Main state without rebooting
 or silently retrying the deployment.
+
+Installation inspection requires `application-install-inspect-v1`. Crash report
+reading and deletion require `crash-report-read-v1` and `crash-report-delete-v1`,
+respectively; the host supplies missing service capabilities before dispatch.
+Deletion accepts named reports with the reviewed checksum, but rejects
+`latest.json`: crash writers replace that alias independently of agent mutations.
+Backup creation failures remove only files created by the failed attempt and
+resume Main, retaining any cleanup or resumption error in the response.

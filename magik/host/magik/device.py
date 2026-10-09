@@ -156,9 +156,13 @@ def run_device(arguments, run):
                 fields["acknowledge_31khz"] = True
     else:
         operation = "device-evidence"
-    required = (
-        {"input-probe-passive-v1"} if group == "input-probe" else {"device-control-v1"}
-    )
+    required = {"device-control-v1"}
+    if group == "input-probe":
+        required = {"input-probe-passive-v1"}
+    elif group == "application-install-inspect":
+        required.add("application-install-inspect-v1")
+    elif group == "crash-report":
+        required.add("crash-report-" + arguments.action + "-v1")
     agent, _ = connect_agent(run, required)
     report = agent.device_operation(operation, fields)
     path = run / "device-operation.json"

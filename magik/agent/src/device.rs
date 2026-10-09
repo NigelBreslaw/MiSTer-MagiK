@@ -90,6 +90,13 @@ fn crash_report_path(path: &str, roots: &[&Path]) -> Result<PathBuf, String> {
 }
 
 fn delete_crash_report(path: &Path, expected: &str) -> Result<Value, String> {
+    // This alias is replaced independently by crash writers. Only immutable,
+    // individually named reports can be deleted after checksum verification.
+    if path.file_name().is_some_and(|name| name == "latest.json") {
+        return Err(
+            "latest.json may be replaced by a crash writer; delete its named report instead".into(),
+        );
+    }
     if crate::media::hash(path)? != expected {
         return Err("crash report changed; deletion refused".into());
     }
@@ -430,6 +437,28 @@ mod tests {
         assert!(named("/media/fat/mister-magik-dev/crashes-other/x.json").is_none());
         assert!(reported_crash_path(&json!({})).is_none());
     }
+    #[test]
+    fn latest_report_alias_cannot_be_deleted_even_with_a_matching_digest() {
+        let root = std::env::temp_dir().join(format!("magik-latest-report-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("latest.json");
+        let body = br#"{"schema":"mister-magik-crash-report-v1","report_id":"latest"}"#;
+        fs::write(&path, body).unwrap();
+        let hash = crate::media::hash(&path).unwrap();
+        assert!(
+            delete_crash_report(&path, &hash)
+                .unwrap_err()
+                .contains("latest.json")
+        );
+        assert_eq!(fs::read(&path).unwrap(), body);
+        let replacement =
+            br#"{"schema":"mister-magik-crash-report-v1","report_id":"new-unreviewed"}"#;
+        fs::write(&path, replacement).unwrap();
+        assert!(delete_crash_report(&path, &hash).is_err());
+        assert_eq!(fs::read(&path).unwrap(), replacement);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn crash_deletion_requires_a_report_in_the_allowed_directory_and_matching_hash() {
         let directory =
