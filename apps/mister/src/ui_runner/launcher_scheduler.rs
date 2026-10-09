@@ -611,6 +611,39 @@ pub(super) struct LauncherScheduler {
 
 impl LauncherScheduler {
     #[cfg(test)]
+    pub(super) fn pending_test_system_entry() -> (Self, impl FnOnce(ArcadeCatalog)) {
+        let results = Arc::new(PreparedSystemEntryMailbox::default());
+        let (requests, request_rx) = mpsc::channel();
+        let (liveness_tx, liveness) = mpsc::channel();
+        let mut scheduler = Self::new();
+        scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
+            requests,
+            results: Arc::clone(&results),
+            liveness,
+        });
+        scheduler.system_shard_generation = Some("test-generation".into());
+        (scheduler, move |catalog| {
+            let _keep_alive = liveness_tx;
+            let SystemEntryPrepareCommand::Prepare(work) =
+                request_rx.try_recv().expect("queued system entry")
+            else {
+                panic!("expected preparation request");
+            };
+            let game_count = catalog.system_game_count(&work.request.system_id);
+            results.publish(SystemEntryPrepareOutcome::Prepared(PreparedSystemEntry {
+                sequence: work.sequence,
+                generation: work.generation,
+                system_id: work.request.system_id,
+                catalog,
+                base_catalog_version: work.request.base_catalog_version,
+                game_count,
+                prepare_us: 1,
+                profile: Default::default(),
+                preview_prelude: None,
+            }));
+        })
+    }
+    #[cfg(test)]
     pub(super) fn new() -> Self {
         let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
         let archive_cache =
