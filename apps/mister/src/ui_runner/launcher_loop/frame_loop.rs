@@ -373,6 +373,24 @@ pub(super) struct RenderFrame {
     pub(super) preview_presentation_commit: Option<crate::preview_state::PreviewPresentationCommit>,
 }
 
+/// What the end of a presented frame reads and updates: confirmation logging, presentation
+/// acknowledgement, the benchmark completion checks and the frame-tail accounting.
+struct FrameCloseout<'a> {
+    accepted_and_active_confirmed: bool,
+    composition_decision: &'a UiCompositionDecision,
+    confirmed_present_sequence: u16,
+    confirmed_presentation: PresentationOutcome,
+    latch_backend_active: bool,
+    latch_trace_flush_deferred: bool,
+    preview_presentation_commit: Option<crate::preview_state::PreviewPresentationCommit>,
+    selection_feedback_confirmed_at: Option<Instant>,
+    selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
+    #[cfg(feature = "tooling")]
+    tooling_frame_evidence:
+        &'a mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    visible_frame_presented: bool,
+}
+
 impl<'a> FrameLoop<'a> {
     pub(super) fn new(env: Env<'a>) -> Self {
         let Env {
@@ -6803,32 +6821,145 @@ impl<'a> FrameLoop<'a> {
                 latch_trace_flush_deferred,
             );
         }
-        finish_presented_frame(FrameCloseout {
+        self.finish_presented_frame(FrameCloseout {
             accepted_and_active_confirmed,
-            bridge_models: &mut self.ui.bridge_models,
             composition_decision: &project.composition_decision,
             confirmed_present_sequence,
             confirmed_presentation,
-            director: &mut self.out.director,
-            frame_clock: &mut self.out.frame_clock,
-            frames: &mut self.out.frames,
             latch_backend_active: render.latch_backend_active,
             latch_trace_flush_deferred,
-            latency_critical_input_pending: &mut self.inp.latency_critical_input_pending,
-            preview: &mut self.lib.preview,
             preview_presentation_commit: render.preview_presentation_commit,
-            #[cfg(feature = "tooling")]
-            run_start: self.out.run_start,
             selection_feedback_confirmed_at,
             selection_feedback_stamp: &selection_feedback_stamp,
             #[cfg(feature = "tooling")]
-            tooling: &mut self.diag.tooling,
-            #[cfg(feature = "tooling")]
             tooling_frame_evidence: &mut begin.tooling_frame_evidence,
             visible_frame_presented,
-            window: self.env.window,
         });
         Ok(())
+    }
+
+    /// Runs the end of the frame; `Break` ends the launcher loop.
+    fn finish_presented_frame(&mut self, closeout: FrameCloseout<'_>) {
+        let FrameCloseout {
+            accepted_and_active_confirmed,
+            composition_decision,
+            confirmed_present_sequence,
+            confirmed_presentation,
+            latch_backend_active,
+            latch_trace_flush_deferred,
+            preview_presentation_commit,
+            selection_feedback_confirmed_at,
+            selection_feedback_stamp,
+            #[cfg(feature = "tooling")]
+            tooling_frame_evidence,
+            visible_frame_presented,
+        } = closeout;
+
+        if let Some(confirmed_at) = selection_feedback_confirmed_at {
+            for confirmation in self
+                .ui
+                .bridge_models
+                .confirm_selection_feedback(selection_feedback_stamp, confirmed_at)
+            {
+                match confirmation {
+                    crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
+                        event_id,
+                        target,
+                        ..
+                    } => crate::ui_logln!(
+                        "selection_feedback phase=visible event={} surface={} item={} frame={} sequence={}",
+                        event_id,
+                        target.surface,
+                        target.item,
+                        self.out.frames,
+                        confirmed_present_sequence,
+                    ),
+                    crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
+                        event_id,
+                        target,
+                        visible_for,
+                        ..
+                    } => crate::ui_logln!(
+                        "selection_feedback phase=hidden event={} surface={} item={} dwell_us={} frame={} sequence={}",
+                        event_id,
+                        target.surface,
+                        target.item,
+                        visible_for.as_micros(),
+                        self.out.frames,
+                        confirmed_present_sequence,
+                    ),
+                    crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
+                        event_id,
+                        target,
+                        ..
+                    } => crate::ui_logln!(
+                        "selection_feedback phase=cancelled event={} surface={} item={} frame={} sequence={}",
+                        event_id,
+                        target.surface,
+                        target.item,
+                        self.out.frames,
+                        confirmed_present_sequence,
+                    ),
+                }
+            }
+        }
+        record_launcher_frame_phase!(LauncherFramePhase::FrameAccounted);
+        let preview_present_confirmed = if latch_trace_flush_deferred {
+            accepted_and_active_confirmed
+        } else {
+            visible_frame_presented
+        };
+        if preview_present_confirmed && let Some(commit) = preview_presentation_commit {
+            self.lib.preview.confirm_presentation(commit);
+        }
+        let retired = self.out.director.on_presented(
+            composition_decision,
+            PresentationOutcome::resolve(
+                accepted_and_active_confirmed,
+                confirmed_presentation,
+                !latch_trace_flush_deferred && visible_frame_presented,
+                (self.out.frames as u16).wrapping_add(1).max(1),
+            ),
+        );
+        if retired && let Some(generation) = self.lib.preview.retirement_generation() {
+            self.lib.preview.confirm_retirement(generation);
+        }
+        record_launcher_frame_phase!(LauncherFramePhase::PresentationAcknowledged);
+        if self.lib.preview.frame_intent().is_actionable() {
+            self.env.window.request_redraw();
+        }
+        if if latch_backend_active {
+            accepted_and_active_confirmed
+        } else {
+            visible_frame_presented
+        } {
+            self.inp.latency_critical_input_pending = false;
+        }
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            tooling_frame_evidence,
+            6,
+            self.out.run_start,
+        );
+        #[cfg(feature = "tooling")]
+        if let Some(mut frame) = tooling_frame_evidence.take()
+            && let Some(session) = self.diag.tooling.as_mut()
+            && session.frame_evidence_active()
+        {
+            let observer_start = Instant::now();
+            frame.outcome = if accepted_and_active_confirmed {
+                "active"
+            } else if visible_frame_presented {
+                "published"
+            } else {
+                "idle"
+            };
+            frame.finish_us = duration_us(self.out.run_start, observer_start);
+            session.record_frame_evidence(frame, observer_start);
+        }
+        self.out.frames += 1;
+        self.out.frame_clock.advance();
+        record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
     }
 }
 
