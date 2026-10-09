@@ -6,18 +6,19 @@
 use super::*;
 
 /// The borrowed display, framebuffer and window handles the loop runs against.
-pub(super) struct Env<'a> {
-    pub(super) secs: u64,
-    pub(super) ui: &'a UiDisplay,
-    pub(super) disp: &'a mut MappedRgb565Framebuffer,
-    pub(super) f: &'a mut Fpga,
-    pub(super) display_session: &'a mut LauncherDisplaySession,
-    pub(super) window: &'a Rc<MisterSoftwareWindow>,
-    pub(super) target: &'a mut UiFrameTarget,
-    pub(super) pad: PadPool,
-    pub(super) app: slint_ui::launcher::Launcher,
-    pub(super) animation_clock: &'a AnimationClock,
-    pub(super) launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
+pub(in crate::ui_runner) struct Env<'a> {
+    pub(in crate::ui_runner) secs: u64,
+    pub(in crate::ui_runner) ui: &'a UiDisplay,
+    pub(in crate::ui_runner) disp: &'a mut MappedRgb565Framebuffer,
+    pub(in crate::ui_runner) f: &'a mut Fpga,
+    pub(in crate::ui_runner) display_session: &'a mut LauncherDisplaySession,
+    pub(in crate::ui_runner) window: &'a Rc<MisterSoftwareWindow>,
+    pub(in crate::ui_runner) target: &'a mut UiFrameTarget,
+    pub(in crate::ui_runner) pad: PadPool,
+    pub(in crate::ui_runner) app: slint_ui::launcher::Launcher,
+    pub(in crate::ui_runner) animation_clock: &'a AnimationClock,
+    pub(in crate::ui_runner) launcher_config:
+        mister_magik_fb::process_config::LauncherProcessConfig,
 }
 
 /// The catalog, its workers, the preview and media sessions, and the launch lifecycle.
@@ -441,19 +442,22 @@ pub(super) struct RenderFrame {
 
 impl<'a> FrameLoop<'a> {
     pub(super) fn new(
-        secs: u64,
-        ui: &'a UiDisplay,
-        disp: &'a mut MappedRgb565Framebuffer,
-        f: &'a mut Fpga,
-        display_session: &'a mut LauncherDisplaySession,
-        window: &'a Rc<MisterSoftwareWindow>,
-        target: &'a mut UiFrameTarget,
-        mut pad: PadPool,
-        app: slint_ui::launcher::Launcher,
-        animation_clock: &'a AnimationClock,
-        launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
+        env: Env<'a>,
         process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     ) -> Self {
+        let Env {
+            secs,
+            ui,
+            disp,
+            f,
+            display_session,
+            window,
+            target,
+            mut pad,
+            app,
+            animation_clock,
+            launcher_config,
+        } = env;
         let startup::LoopState {
             launcher_ui_actions,
             start,
@@ -8623,32 +8627,8 @@ impl<'a> FrameLoop<'a> {
 
 /// Runs the launcher frame loop to completion.
 pub(in crate::ui_runner) fn run_frame_loop(
-    secs: u64,
-    ui: &UiDisplay,
-    disp: &mut MappedRgb565Framebuffer,
-    f: &mut Fpga,
-    display_session: &mut LauncherDisplaySession,
-    window: &Rc<MisterSoftwareWindow>,
-    target: &mut UiFrameTarget,
-    pad: PadPool,
-    app: slint_ui::launcher::Launcher,
-    animation_clock: &AnimationClock,
+    env: Env<'_>,
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
-    launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
-    FrameLoop::new(
-        secs,
-        ui,
-        disp,
-        f,
-        display_session,
-        window,
-        target,
-        pad,
-        app,
-        animation_clock,
-        launcher_config,
-        process_entry_cpu_profile,
-    )
-    .run();
+    FrameLoop::new(env, process_entry_cpu_profile).run();
 }

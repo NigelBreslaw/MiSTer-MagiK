@@ -9,7 +9,7 @@ macro_rules! record_launcher_frame_phase {
 }
 
 mod frame_loop;
-pub(super) use frame_loop::run_frame_loop;
+pub(super) use frame_loop::{Env, run_frame_loop};
 
 use super::arcade_drawer::{ArcadeDrawerViewCache, arcade_filter_cache_token};
 use super::crt_backdrop_controller::CrtBackdropController;

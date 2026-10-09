@@ -540,18 +540,20 @@ pub fn run_ui(
                 init_launcher_bridge(&app, &pad);
                 if NEXT_LOOP {
                     launcher_loop::run_frame_loop(
-                        secs,
-                        &ui,
-                        &mut disp,
-                        f,
-                        &mut display_session,
-                        &window,
-                        &mut target,
-                        pad,
-                        app,
-                        &animation_clock,
+                        launcher_loop::Env {
+                            secs,
+                            ui: &ui,
+                            disp: &mut disp,
+                            f,
+                            display_session: &mut display_session,
+                            window: &window,
+                            target: &mut target,
+                            pad,
+                            app,
+                            animation_clock: &animation_clock,
+                            launcher_config,
+                        },
                         process_entry_cpu_profile,
-                        launcher_config,
                     );
                 } else {
                     run_launcher_loop(
