@@ -7,7 +7,6 @@ const START_SCREEN: &str = "MISTER_LAUNCHER_START_SCREEN";
 const START_SYSTEM: &str = "MISTER_LAUNCHER_START_SYSTEM";
 const LOCK_SCREEN: &str = "MISTER_LAUNCHER_LOCK_SCREEN";
 const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
-const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
 const LAUNCH_RETURN_PMU_HANDOFF_OUT: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +15,6 @@ pub struct LauncherBenchmarkConfig {
     start_system: Option<String>,
     lock_screen: Option<Screen>,
     home_selected: Option<Result<usize, String>>,
-    auto_launch_selected: bool,
     launch_return_pmu_handoff_out: Option<String>,
 }
 
@@ -34,7 +32,6 @@ impl LauncherBenchmarkConfig {
             lock_screen: launcher_screen_from_value(get(LOCK_SCREEN)),
             home_selected: get(HOME_SELECTED_INDEX)
                 .map(|value| value.parse::<usize>().map_err(|_| value.to_owned())),
-            auto_launch_selected: get(AUTO_LAUNCH_SELECTED).is_some_and(benchmark_flag),
             launch_return_pmu_handoff_out: get(LAUNCH_RETURN_PMU_HANDOFF_OUT).map(str::to_owned),
         }
     }
@@ -51,9 +48,6 @@ impl LauncherBenchmarkConfig {
     pub(super) fn home_selected(&self) -> Option<&Result<usize, String>> {
         self.home_selected.as_ref()
     }
-    pub(super) fn auto_launch_selected(&self) -> bool {
-        self.auto_launch_selected
-    }
     pub(super) fn launch_return_pmu_handoff_out(&self) -> Option<&str> {
         self.launch_return_pmu_handoff_out.as_deref()
     }
@@ -63,10 +57,6 @@ fn normalized_nonempty(value: Option<&str>) -> Option<String> {
     value
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
-}
-
-fn benchmark_flag(value: &str) -> bool {
-    matches!(value, "1" | "on" | "true" | "yes")
 }
 
 fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {

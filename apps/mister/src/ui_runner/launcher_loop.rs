@@ -46,8 +46,6 @@ use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
 use crate::preview_state::PreviewApplyTrace;
-#[cfg(feature = "ui-device-tests")]
-use crate::ui_test_support::UiTestSandbox;
 #[cfg(test)]
 use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
 use mister_magik_fb::process_config::ScreensaverStartMode;
@@ -103,8 +101,6 @@ impl LibraryResetState {
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(1_000);
-const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
-const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 fn card_direct_tile_damage(left: usize, level_trick: bool, split: usize) -> [DirtyRect; 2] {
     // Trick rendering clears from x=268, including root cards whose ordinary
     // carousel starts at x=296. Keep that width on the landing frame as well.
@@ -227,26 +223,6 @@ pub(super) fn selected_device_reveal_image(
 
 fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEvent>) -> bool {
     event.is_some_and(|event| event.phase == InputPhase::Pressed)
-}
-
-#[cfg(feature = "ui-device-tests")]
-fn ui_test_start_screen(feature: Option<&str>) -> Screen {
-    match feature {
-        Some("arcade") => Screen::Arcade,
-        Some("settings") => Screen::Settings,
-        Some("controller") => Screen::Controller,
-        _ => Screen::Home,
-    }
-}
-
-fn ui_test_uses_automation_only_input(
-    ui_test_fixture: bool,
-    batch: &crate::input_event::InputBatch,
-) -> bool {
-    ui_test_fixture
-        && batch.health.protocol != crate::input_event::InputProtocolHealth::ProxyV2
-        && batch.events.is_empty()
-        && batch.held_after_last == crate::input_event::HeldState::default()
 }
 
 fn discrete_selection_feedback_target(
@@ -1585,28 +1561,6 @@ impl LauncherStatusTextSnapshot {
             + self.confirm_left_label.len()
             + self.confirm_right_label.len()
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LibraryChangedDialogTestPhase {
-    Waiting,
-    ContinueReleaseA,
-    RebuildReleaseRight,
-    RebuildPressA,
-    RebuildReleaseA,
-    Done,
-}
-
-struct LibraryChangedDialogTestDriver {
-    choice: Option<launcher::LibraryChangedTestDialogChoice>,
-    dialog_seen_at: Option<Instant>,
-    phase: LibraryChangedDialogTestPhase,
-    next_sequence: u64,
-    next_press_id: u64,
-    active_press: Option<(
-        crate::input_event::LogicalAction,
-        crate::input_event::PressId,
-    )>,
 }
 
 const INPUT_INTEGRITY_TRACE_PATH: &str = "/tmp/mister-magik/input-integrity-trace.json";
@@ -3187,147 +3141,6 @@ impl InputIntegrityTrace {
     }
 }
 
-impl LibraryChangedDialogTestDriver {
-    fn from_config(
-        config: &mister_magik_fb::process_config::LauncherTestConfig,
-        start: Instant,
-    ) -> Self {
-        let choice = library_changed_test_dialog_choice_from_value(
-            config.library_changed_dialog_choice(),
-            start,
-        );
-        Self {
-            choice,
-            dialog_seen_at: None,
-            phase: LibraryChangedDialogTestPhase::Waiting,
-            next_sequence: 0,
-            next_press_id: 0,
-            active_press: None,
-        }
-    }
-
-    fn event_for(
-        &mut self,
-        nav: &LauncherNav,
-        now: Instant,
-        start: Instant,
-    ) -> Option<crate::input_event::InputEvent> {
-        let choice = self.choice?;
-        if nav.confirm_action != Some(launcher::ConfirmAction::LibraryChanged) {
-            self.dialog_seen_at = None;
-            return None;
-        }
-        let seen_at = *self.dialog_seen_at.get_or_insert(now);
-        if now.duration_since(seen_at) < LIBRARY_CHANGED_TEST_ACTION_SETTLE {
-            return None;
-        }
-
-        match choice {
-            launcher::LibraryChangedTestDialogChoice::Continue => match self.phase {
-                LibraryChangedDialogTestPhase::Waiting => {
-                    self.phase = LibraryChangedDialogTestPhase::ContinueReleaseA;
-                    print_startup_event(
-                        start,
-                        "library_changed_test_dialog_input",
-                        "choice=continue button=a",
-                    );
-                    Some(self.press(crate::input_event::LogicalAction::Activate, now, start))
-                }
-                LibraryChangedDialogTestPhase::ContinueReleaseA => {
-                    self.phase = LibraryChangedDialogTestPhase::Done;
-                    self.release(now, start)
-                }
-                _ => None,
-            },
-            launcher::LibraryChangedTestDialogChoice::Rebuild => match self.phase {
-                LibraryChangedDialogTestPhase::Waiting => {
-                    self.phase = LibraryChangedDialogTestPhase::RebuildReleaseRight;
-                    print_startup_event(
-                        start,
-                        "library_changed_test_dialog_input",
-                        "choice=rebuild button=right",
-                    );
-                    Some(self.press(crate::input_event::LogicalAction::Right, now, start))
-                }
-                LibraryChangedDialogTestPhase::RebuildReleaseRight => {
-                    self.phase = LibraryChangedDialogTestPhase::RebuildPressA;
-                    self.release(now, start)
-                }
-                LibraryChangedDialogTestPhase::RebuildPressA => {
-                    self.phase = LibraryChangedDialogTestPhase::RebuildReleaseA;
-                    print_startup_event(
-                        start,
-                        "library_changed_test_dialog_input",
-                        "choice=rebuild button=a",
-                    );
-                    Some(self.press(crate::input_event::LogicalAction::Activate, now, start))
-                }
-                LibraryChangedDialogTestPhase::RebuildReleaseA => {
-                    self.phase = LibraryChangedDialogTestPhase::Done;
-                    self.release(now, start)
-                }
-                LibraryChangedDialogTestPhase::ContinueReleaseA
-                | LibraryChangedDialogTestPhase::Done => None,
-            },
-        }
-    }
-
-    fn press(
-        &mut self,
-        action: crate::input_event::LogicalAction,
-        now: Instant,
-        start: Instant,
-    ) -> crate::input_event::InputEvent {
-        self.next_press_id = self.next_press_id.saturating_add(1).max(1);
-        let press_id = crate::input_event::PressId((1_u64 << 60) | self.next_press_id);
-        self.active_press = Some((action, press_id));
-        self.make_event(
-            action,
-            press_id,
-            crate::input_event::InputPhase::Pressed,
-            now,
-            start,
-        )
-    }
-
-    fn release(&mut self, now: Instant, start: Instant) -> Option<crate::input_event::InputEvent> {
-        let (action, press_id) = self.active_press.take()?;
-        Some(self.make_event(
-            action,
-            press_id,
-            crate::input_event::InputPhase::Released,
-            now,
-            start,
-        ))
-    }
-
-    fn make_event(
-        &mut self,
-        action: crate::input_event::LogicalAction,
-        press_id: crate::input_event::PressId,
-        phase: crate::input_event::InputPhase,
-        now: Instant,
-        start: Instant,
-    ) -> crate::input_event::InputEvent {
-        self.next_sequence = self.next_sequence.saturating_add(1).max(1);
-        crate::input_event::InputEvent {
-            source: crate::input_event::InputSourceId {
-                kind: crate::input_event::InputSourceKind::Automation,
-                instance: 4,
-            },
-            source_epoch: crate::input_event::SourceEpoch(1),
-            sequence: self.next_sequence,
-            press_id,
-            captured_at_us: now
-                .saturating_duration_since(start)
-                .as_micros()
-                .min(u64::MAX as u128) as u64,
-            action,
-            phase,
-        }
-    }
-}
-
 #[cfg(test)]
 fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
     let mut state = PadState::default();
@@ -4122,33 +3935,6 @@ fn catalog_for_ready_source(
     } else {
         nav.catalog_with_build_shells(catalog)
     }
-}
-
-fn modal_input_test_paths_are_isolated<'a>(paths: impl IntoIterator<Item = &'a Path>) -> bool {
-    let root = Path::new(MODAL_INPUT_TEST_ROOT);
-    paths
-        .into_iter()
-        .all(|path| path != root && path.starts_with(root))
-}
-
-fn modal_input_catalog_recovery_test_requested(
-    config: &mister_magik_fb::process_config::LauncherTestConfig,
-    start: Instant,
-) -> bool {
-    if config.catalog_recovery_dialog() != Some("upgrade") {
-        return false;
-    }
-    let paths = config.modal_path_inputs();
-    let isolated =
-        paths.len() == 7 && modal_input_test_paths_are_isolated(paths.iter().map(PathBuf::as_path));
-    if !isolated {
-        print_startup_event(
-            start,
-            "modal_input_test_rejected",
-            "reason=catalog-paths-not-isolated",
-        );
-    }
-    isolated
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5177,7 +4963,6 @@ struct ConfirmedPresent<'a> {
     #[cfg(feature = "tooling")]
     card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
     catalog: &'a ArcadeCatalog,
-    catalog_ready: bool,
     catalog_version: usize,
     composition_status: UiCompositionStatus,
     confirm_visible: bool,
@@ -5199,6 +4984,7 @@ struct ConfirmedPresent<'a> {
     frame_t2: Instant,
     #[cfg(feature = "tooling")]
     frame_t3: Instant,
+    #[cfg(feature = "tooling")]
     frame_t4: Instant,
     frames: u64,
     full_screen_transition_live_endpoint_rendered: bool,
@@ -5207,7 +4993,6 @@ struct ConfirmedPresent<'a> {
     gui_raster_phase: GuiRasterProfilePhase,
     #[cfg(feature = "tooling")]
     home_horizontal_input_held: bool,
-    launcher_automation: &'a mut LauncherAutomation,
     #[cfg(feature = "tooling")]
     launcher_card_home: &'a Option<crate::ui_runner::launcher_card_home::LauncherCardHomeSession>,
     launcher_presenter: &'a mut LauncherPresenter,
@@ -5295,7 +5080,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         #[cfg(feature = "tooling")]
         card_work_timing,
         catalog,
-        catalog_ready,
         catalog_version,
         composition_status,
         confirm_visible,
@@ -5317,6 +5101,7 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         frame_t2,
         #[cfg(feature = "tooling")]
         frame_t3,
+        #[cfg(feature = "tooling")]
         frame_t4,
         frames,
         full_screen_transition_live_endpoint_rendered,
@@ -5325,7 +5110,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         gui_raster_phase,
         #[cfg(feature = "tooling")]
         home_horizontal_input_held,
-        launcher_automation,
         #[cfg(feature = "tooling")]
         launcher_card_home,
         launcher_presenter,
@@ -5452,35 +5236,6 @@ fn account_confirmed_present(ctx: ConfirmedPresent<'_>) {
         }
     }
     if *accepted_and_active_confirmed {
-        launcher_automation.acknowledge_presented(
-            presented_frame.automation,
-            presented_frame.main_present_sequence,
-        );
-        let startup_content_kind = if startup_intro_frame_posted {
-            Some("particle-intro")
-        } else {
-            match lifecycle.startup_status().state {
-                StartupRevealState::CatalogProgressVisible => Some("catalog-progress"),
-                StartupRevealState::RevealLauncher | StartupRevealState::InputEnabled => {
-                    Some("launcher")
-                }
-                _ => None,
-            }
-        };
-        if let Some(kind) = startup_content_kind {
-            launcher_automation.record_startup_presentation(
-                kind,
-                frames,
-                presented_frame.main_present_sequence,
-                frame_t4
-                    .saturating_duration_since(start)
-                    .as_millis()
-                    .try_into()
-                    .unwrap_or(u64::MAX),
-                catalog_ready,
-                lifecycle.startup_input_enabled(),
-            );
-        }
         launcher_response_trace.confirm(
             launcher_response_frame_stamp.as_ref(),
             launcher_response_present_receipt,
@@ -6223,14 +5978,6 @@ fn update_catalog_ready_stationary_edge_since(
     .then_some(current.unwrap_or(now))
 }
 
-fn launcher_auto_launch_gate_ready(path: Option<&Path>) -> bool {
-    launcher_auto_launch_gate_ready_from_value(path.and_then(Path::to_str))
-}
-
-fn launcher_auto_launch_gate_ready_from_value(path: Option<&str>) -> bool {
-    path.is_none_or(|path| path.trim().is_empty() || std::path::Path::new(path.trim()).is_file())
-}
-
 fn launcher_return_to_launcher_requested() -> bool {
     return_to_launcher_env_is_set(
         std::env::var("MISTER_MAGIK_RETURN_TO_LAUNCHER")
@@ -6565,11 +6312,6 @@ fn apply_lifecycle_effects(
     scheduler: &mut LauncherScheduler,
     start: Instant,
 ) {
-    let ui_test_fixture = cfg!(feature = "ui-device-tests")
-        && std::env::var(crate::ui_test_support::FIXTURE_ENV)
-            .ok()
-            .as_deref()
-            == Some(crate::ui_test_support::DETERMINISTIC_FIXTURE);
     for effect in effects.drain() {
         match effect {
             LauncherEffect::StartupEvent { name, detail } => {
@@ -6607,10 +6349,6 @@ fn apply_lifecycle_effects(
                 print_startup_event(start, "launcher_lifecycle_recovered", "state=idle");
             }
             LauncherEffect::StartCatalogRetry { root } => {
-                if ui_test_fixture {
-                    crate::ui_logln!("ui_test_effect_blocked effect=catalog_retry root={root}");
-                    continue;
-                }
                 print_startup_event(start, "catalog_retry_started", &root);
                 scheduler.start_catalog_worker(
                     root,
@@ -6620,10 +6358,6 @@ fn apply_lifecycle_effects(
                 );
             }
             LauncherEffect::StartCatalogRebuild { root } => {
-                if ui_test_fixture {
-                    crate::ui_logln!("ui_test_effect_blocked effect=catalog_rebuild root={root}");
-                    continue;
-                }
                 print_startup_event(start, "catalog_rebuild_started", &root);
                 scheduler.start_catalog_worker(
                     root,
@@ -6633,12 +6367,6 @@ fn apply_lifecycle_effects(
                 );
             }
             LauncherEffect::StartFreshCatalogBuild { root } => {
-                if ui_test_fixture {
-                    crate::ui_logln!(
-                        "ui_test_effect_blocked effect=fresh_catalog_build root={root}"
-                    );
-                    continue;
-                }
                 print_startup_event(start, "catalog_fresh_build_started", &root);
                 scheduler.start_catalog_worker(
                     root,
@@ -6648,10 +6376,6 @@ fn apply_lifecycle_effects(
                 );
             }
             LauncherEffect::ExitToMister => {
-                if ui_test_fixture {
-                    crate::ui_logln!("ui_test_effect_blocked effect=exit_to_mister");
-                    continue;
-                }
                 print_startup_event(start, "catalog_recovery_exit_requested", "target=mister");
                 match launcher::exit_to_mister() {
                     Ok(()) => std::process::exit(0),
@@ -6662,35 +6386,6 @@ fn apply_lifecycle_effects(
             }
         }
     }
-}
-
-fn maybe_present_modal_input_test_dialog(
-    pending: &mut bool,
-    catalog_ready: bool,
-    lifecycle: &mut LauncherLifecycle,
-    lifecycle_effects: &mut LifecycleEffects,
-    scheduler: &mut LauncherScheduler,
-    start: Instant,
-) -> bool {
-    if !*pending || !catalog_ready {
-        return false;
-    }
-    *pending = false;
-    lifecycle.handle(
-        LauncherLifecycleInput::CatalogRecoveryRequired {
-            error: "isolated modal input verification".to_string(),
-            has_stale_catalog: true,
-            mode: CatalogRecoveryMode::UpgradeRequired,
-        },
-        lifecycle_effects,
-    );
-    apply_lifecycle_effects(lifecycle_effects, scheduler, start);
-    print_startup_event(
-        start,
-        "modal_input_test_dialog",
-        "mode=upgrade-required isolated=1",
-    );
-    true
 }
 
 fn apply_catalog_session_effects(
@@ -7375,21 +7070,6 @@ fn deferred_catalog_worker_lifecycle_input(
     }
 }
 
-fn library_changed_test_dialog_choice_from_value(
-    value: Option<&str>,
-    start: Instant,
-) -> Option<launcher::LibraryChangedTestDialogChoice> {
-    let value = value?;
-    match launcher::parse_library_changed_test_dialog_choice(value) {
-        Ok(choice) => choice,
-        Err(e) => {
-            crate::ui_errln!("{e}");
-            print_startup_event(start, "library_changed_test_dialog_choice_invalid", e);
-            None
-        }
-    }
-}
-
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
     catalog_worker_enabled: bool,
@@ -7788,45 +7468,6 @@ mod tests {
         ] {
             assert!(!card_direct_hidden_eligible(blocked));
         }
-    }
-
-    #[cfg(feature = "ui-device-tests")]
-    #[test]
-    fn deterministic_ui_test_start_screen_supports_controller() {
-        assert_eq!(ui_test_start_screen(Some("controller")), Screen::Controller);
-        assert_eq!(ui_test_start_screen(Some("arcade")), Screen::Arcade);
-        assert_eq!(ui_test_start_screen(Some("settings")), Screen::Settings);
-        assert_eq!(ui_test_start_screen(None), Screen::Home);
-    }
-
-    #[test]
-    fn deterministic_ui_test_accepts_neutral_automation_without_main_proxy() {
-        let batch = crate::input_event::InputBatch::default();
-
-        assert!(ui_test_uses_automation_only_input(true, &batch));
-        assert!(!ui_test_uses_automation_only_input(false, &batch));
-    }
-
-    #[test]
-    fn deterministic_ui_test_does_not_bypass_non_neutral_input() {
-        let mut batch = crate::input_event::InputBatch::default();
-        batch
-            .held_after_last
-            .apply_event(&crate::input_event::InputEvent {
-                source: crate::input_event::InputSourceId {
-                    kind: InputSourceKind::RawDevice,
-                    instance: 1,
-                },
-                source_epoch: crate::input_event::SourceEpoch(1),
-                sequence: 1,
-                press_id: crate::input_event::PressId(1),
-                captured_at_us: 1,
-                action: LogicalAction::Activate,
-                phase: InputPhase::Pressed,
-            })
-            .expect("test press is valid");
-
-        assert!(!ui_test_uses_automation_only_input(true, &batch));
     }
 
     #[test]
@@ -8747,22 +8388,6 @@ mod tests {
         let mut hub = stationary;
         hub.arcade_visual_index_milli = None;
         assert!(!selected.matches_presented(&before, &hub));
-    }
-
-    #[test]
-    fn modal_input_test_requires_every_path_below_fixed_tmp_root() {
-        assert!(modal_input_test_paths_are_isolated([
-            Path::new("/tmp/mister-magik/modal-input-benchmark/catalog-v3"),
-            Path::new("/tmp/mister-magik/modal-input-benchmark/library.sqlite3"),
-            Path::new("/tmp/mister-magik/modal-input-benchmark/catalog-ready.snapshot"),
-        ]));
-        assert!(!modal_input_test_paths_are_isolated([
-            Path::new("/tmp/mister-magik/modal-input-benchmark/catalog-v3"),
-            Path::new("/media/fat/mister-magik-dev/library.sqlite3"),
-        ]));
-        assert!(!modal_input_test_paths_are_isolated([Path::new(
-            "/tmp/mister-magik/modal-input-benchmark"
-        ),]));
     }
 
     #[test]
@@ -10323,26 +9948,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_launch_gate_waits_for_requested_file() {
-        let gate = std::env::temp_dir().join(format!(
-            "mister-magik-auto-launch-gate-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&gate);
-        assert!(!launcher_auto_launch_gate_ready_from_value(Some(
-            gate.to_str().expect("gate path")
-        )));
-        std::fs::write(&gate, b"ready\n").expect("write launch gate");
-        assert!(launcher_auto_launch_gate_ready_from_value(Some(
-            gate.to_str().expect("gate path")
-        )));
-
-        let _ = std::fs::remove_file(gate);
-        assert!(launcher_auto_launch_gate_ready_from_value(None));
-        assert!(launcher_auto_launch_gate_ready_from_value(Some("  ")));
-    }
-
-    #[test]
     fn start_system_env_fails_without_changing_nav_for_missing_system() {
         let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
         let mut nav = LauncherNav::new();
@@ -10879,39 +10484,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn library_changed_test_driver_presses_continue_dialog_button() {
-        let start = Instant::now();
-        let mut nav = LauncherNav::new();
-        let mut driver = LibraryChangedDialogTestDriver {
-            choice: Some(launcher::LibraryChangedTestDialogChoice::Continue),
-            dialog_seen_at: None,
-            phase: LibraryChangedDialogTestPhase::Waiting,
-            next_sequence: 0,
-            next_press_id: 0,
-            active_press: None,
-        };
-
-        assert!(driver.event_for(&nav, start, start).is_none());
-        nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
-
-        assert!(driver.event_for(&nav, start, start).is_none());
-        let input = driver
-            .event_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
-            .expect("continue driver should press A");
-        assert_eq!(input.action, LogicalAction::Activate);
-        assert_eq!(input.phase, InputPhase::Pressed);
-        let event = nav
-            .handle_action_with_navigation_intents(
-                &input,
-                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE,
-                &empty_arcade_catalog("/tmp"),
-            )
-            .expect("continue button should choose stale library");
-        assert_eq!(event.action, LauncherAction::ContinueWithStaleLibrary);
-        assert_eq!(nav.confirm_action, None);
-    }
-
-    #[test]
     fn display_transactions_rearm_vsync_after_every_stable_boundary() {
         let source = include_str!("launcher_loop/frame_loop.rs");
         let call = ["pacer", ".rearm_after_display_mode_change()"].concat();
@@ -10924,75 +10496,6 @@ mod tests {
         assert!(
             source.contains("let stream_motion_before_render = navigation_transition.is_active()")
         );
-    }
-
-    #[test]
-    pub(super) fn library_changed_test_driver_selects_rebuild_dialog_button() {
-        let start = Instant::now();
-        let mut nav = LauncherNav::new();
-        nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
-        let mut driver = LibraryChangedDialogTestDriver {
-            choice: Some(launcher::LibraryChangedTestDialogChoice::Rebuild),
-            dialog_seen_at: None,
-            phase: LibraryChangedDialogTestPhase::Waiting,
-            next_sequence: 0,
-            next_press_id: 0,
-            active_press: None,
-        };
-        let catalog = empty_arcade_catalog("/tmp");
-
-        assert!(driver.event_for(&nav, start, start).is_none());
-        let right = driver
-            .event_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
-            .expect("rebuild driver should press right first");
-        assert_eq!(right.action, LogicalAction::Right);
-        assert_eq!(right.phase, InputPhase::Pressed);
-        assert!(
-            nav.handle_action_with_navigation_intents(
-                &right,
-                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE,
-                &catalog,
-            )
-            .is_none()
-        );
-        assert_eq!(nav.confirm_selected, 1);
-
-        let release = driver
-            .event_for(
-                &nav,
-                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(16),
-                start,
-            )
-            .expect("rebuild driver should release right before A");
-        assert_eq!(release.action, LogicalAction::Right);
-        assert_eq!(release.phase, InputPhase::Released);
-        assert!(
-            nav.handle_action_with_navigation_intents(
-                &release,
-                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(16),
-                &catalog,
-            )
-            .is_none()
-        );
-
-        let press_a = driver
-            .event_for(
-                &nav,
-                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(32),
-                start,
-            )
-            .expect("rebuild driver should press A");
-        assert_eq!(press_a.action, LogicalAction::Activate);
-        assert_eq!(press_a.phase, InputPhase::Pressed);
-        let event = nav
-            .handle_action_with_navigation_intents(
-                &press_a,
-                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(32),
-                &catalog,
-            )
-            .expect("A should confirm rebuild");
-        assert_eq!(event.action, LauncherAction::RebuildLibrary);
-        assert_eq!(nav.confirm_action, None);
     }
 
     #[test]

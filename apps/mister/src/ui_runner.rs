@@ -100,7 +100,6 @@ mod controller_loop;
 mod crt_backdrop_controller;
 mod crt_trial_loop;
 mod launch_handoff_session;
-mod launcher_automation;
 pub(crate) mod launcher_bench;
 mod launcher_bridge;
 mod launcher_card_home;
@@ -174,7 +173,6 @@ impl NativeCardPreview {
     }
 }
 
-mod launcher_catalog_publication_test;
 mod launcher_catalog_session;
 mod launcher_compositor;
 mod launcher_confirmation;
@@ -225,10 +223,8 @@ use catalog_worker::*;
 use controller_loop::*;
 use crt_trial_loop::*;
 use launch_handoff_session::*;
-use launcher_automation::*;
 use launcher_bench::*;
 use launcher_bridge::*;
-use launcher_catalog_publication_test::*;
 use launcher_catalog_session::*;
 use launcher_compositor::*;
 use launcher_display_session::*;

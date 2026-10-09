@@ -52,10 +52,6 @@ launcher_status_types! {
         idle: bool,
         idle_loops: u64,
         status_sequence: u64,
-        state_revision: u64,
-        presented_state_revision: u64,
-        action_sequence: u64,
-        presented_action_sequence: u64,
         fps_estimate: f64,
         framebuffer_width: usize,
         framebuffer_height: usize,
@@ -816,13 +812,6 @@ fn write_launcher_status_json(
     field!("idle", status.idle);
     field!("idle_loops", status.idle_loops);
     field!("status_sequence", status.status_sequence);
-    field!("state_revision", status.state_revision);
-    field!("presented_state_revision", status.presented_state_revision);
-    field!("action_sequence", status.action_sequence);
-    field!(
-        "presented_action_sequence",
-        status.presented_action_sequence
-    );
     field!("menu_id", status.menu_id);
     field!("selected_item_id", status.selected_item_id);
     field!("active_collection_id", status.active_collection_id);
@@ -1152,13 +1141,6 @@ fn launcher_status_value(
     insert!("idle", status.idle);
     insert!("idle_loops", status.idle_loops);
     insert!("status_sequence", status.status_sequence);
-    insert!("state_revision", status.state_revision);
-    insert!("presented_state_revision", status.presented_state_revision);
-    insert!("action_sequence", status.action_sequence);
-    insert!(
-        "presented_action_sequence",
-        status.presented_action_sequence
-    );
     insert!("fps_estimate", (status.fps_estimate * 10.0).round() / 10.0);
     insert!("rolling_fps", (status.rolling_fps * 10.0).round() / 10.0);
     insert!("rolling_prepare_us", status.rolling_prepare_us);
@@ -1872,10 +1854,6 @@ mod tests {
                 idle: true,
                 idle_loops: 12,
                 status_sequence: 9,
-                state_revision: 12,
-                presented_state_revision: 12,
-                action_sequence: 4,
-                presented_action_sequence: 4,
                 fps_estimate: 59.94,
                 framebuffer_width: 640,
                 framebuffer_height: 576,
@@ -2432,10 +2410,6 @@ mod tests {
             idle: false,
             idle_loops: 0,
             status_sequence,
-            state_revision: status_sequence,
-            presented_state_revision: status_sequence,
-            action_sequence: status_sequence,
-            presented_action_sequence: status_sequence,
             fps_estimate: 60.04,
             framebuffer_width: 640,
             framebuffer_height: 288,

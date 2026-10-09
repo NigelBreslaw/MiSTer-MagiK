@@ -69,19 +69,6 @@ const SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS: &str =
     "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS";
 const SCREENSAVER_START_PREVIEW_WHEN_READY: &str = "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY";
 const PRESENT_BACKEND: &str = "MISTER_PRESENT_BACKEND";
-const TEST_CATALOG_RECOVERY_DIALOG: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
-const TEST_LIBRARY_CHANGED_DIALOG_CHOICE: &str = "MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE";
-const TEST_AUTO_LAUNCH_GATE: &str = "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE";
-const TEST_CATALOG_PUBLICATION_GATE: &str = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE";
-const TEST_FIRST_FRAME_RELEASE_GATE: &str = "MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE";
-const TEST_CATALOG_PUBLICATION_SESSION: &str = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION";
-const TEST_STARTUP_MODE: &str = "MISTER_UI_TEST_STARTUP_MODE";
-const MODAL_TEST_PATH_INPUTS: &[&str] = &[
-    "MISTER_SHARDED_CATALOG_DIR",
-    "MISTER_LIBRARY_SQLITE",
-    "MISTER_LIBRARY_REFRESH_LOCK",
-    "MISTER_CATALOG_DIAGNOSTICS_DIR",
-];
 
 /// Benchmarks, qualification runs, launcher test drivers and fault injection
 /// are development tooling. Release builds ignore their switches, so none of
@@ -189,8 +176,6 @@ pub struct LauncherProcessConfig {
     profiles: ProfileProcessConfig,
     #[cfg(feature = "ui")]
     benchmark: LauncherBenchmarkConfig,
-    #[cfg(feature = "ui")]
-    tests: LauncherTestConfig,
     presentation_backend: PresentBackendConfig,
 }
 
@@ -249,115 +234,9 @@ impl LauncherProcessConfig {
         &self.benchmark
     }
 
-    #[cfg(feature = "ui")]
-    pub fn tests(&self) -> &LauncherTestConfig {
-        &self.tests
-    }
-
     pub fn presentation_backend(&self) -> &PresentBackendConfig {
         &self.presentation_backend
     }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct LauncherTestConfig {
-    catalog_recovery_dialog: Option<String>,
-    library_changed_dialog_choice: Option<String>,
-    auto_launch_gate: Option<PathBuf>,
-    catalog_publication_gate: Option<PathBuf>,
-    first_frame_release_gate: Option<PathBuf>,
-    catalog_publication_session: Option<PathBuf>,
-    startup_mode: Option<LauncherStartupTestMode>,
-    modal_path_inputs: Vec<PathBuf>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LauncherStartupTestMode {
-    WarmReady,
-    WarmHydrating,
-    ColdDelayed,
-    ColdIntroFailure,
-}
-
-impl LauncherStartupTestMode {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "warm-ready" => Some(Self::WarmReady),
-            "warm-hydrating" => Some(Self::WarmHydrating),
-            "cold-delayed" => Some(Self::ColdDelayed),
-            "cold-intro-failure" => Some(Self::ColdIntroFailure),
-            _ => None,
-        }
-    }
-}
-
-impl LauncherTestConfig {
-    fn capture(environment: &EnvironmentSnapshot) -> Self {
-        Self {
-            catalog_recovery_dialog: environment
-                .get(TEST_CATALOG_RECOVERY_DIALOG)
-                .map(str::to_owned),
-            library_changed_dialog_choice: environment
-                .get(TEST_LIBRARY_CHANGED_DIALOG_CHOICE)
-                .map(str::to_owned),
-            auto_launch_gate: environment
-                .get_path(TEST_AUTO_LAUNCH_GATE)
-                .map(Path::to_path_buf),
-            catalog_publication_gate: volatile_test_path(
-                environment.get_path(TEST_CATALOG_PUBLICATION_GATE),
-            ),
-            first_frame_release_gate: volatile_test_path(
-                environment.get_path(TEST_FIRST_FRAME_RELEASE_GATE),
-            ),
-            catalog_publication_session: volatile_test_path(
-                environment.get_path(TEST_CATALOG_PUBLICATION_SESSION),
-            ),
-            startup_mode: environment
-                .get(TEST_STARTUP_MODE)
-                .and_then(LauncherStartupTestMode::parse),
-            modal_path_inputs: MODAL_TEST_PATH_INPUTS
-                .iter()
-                .filter_map(|name| environment.get_path(name).map(Path::to_path_buf))
-                .collect(),
-        }
-    }
-
-    pub fn catalog_recovery_dialog(&self) -> Option<&str> {
-        self.catalog_recovery_dialog.as_deref()
-    }
-
-    pub fn library_changed_dialog_choice(&self) -> Option<&str> {
-        self.library_changed_dialog_choice.as_deref()
-    }
-
-    pub fn auto_launch_gate(&self) -> Option<&Path> {
-        self.auto_launch_gate.as_deref()
-    }
-
-    pub fn catalog_publication_gate(&self) -> Option<&Path> {
-        self.catalog_publication_gate.as_deref()
-    }
-
-    pub fn first_frame_release_gate(&self) -> Option<&Path> {
-        self.first_frame_release_gate.as_deref()
-    }
-
-    pub fn catalog_publication_session(&self) -> Option<&Path> {
-        self.catalog_publication_session.as_deref()
-    }
-
-    pub fn startup_mode(&self) -> Option<LauncherStartupTestMode> {
-        self.startup_mode
-    }
-
-    pub fn modal_path_inputs(&self) -> &[PathBuf] {
-        &self.modal_path_inputs
-    }
-}
-
-fn volatile_test_path(path: Option<&Path>) -> Option<PathBuf> {
-    path.filter(|path| path.starts_with("/tmp") && path != &Path::new("/tmp"))
-        .map(Path::to_path_buf)
 }
 
 #[derive(Clone, Default)]
@@ -869,8 +748,6 @@ impl ProcessConfig {
             profiles: ProfileProcessConfig::capture(environment),
             #[cfg(feature = "ui")]
             benchmark: LauncherBenchmarkConfig::capture_with(|name| lab_environment.get(name)),
-            #[cfg(feature = "ui")]
-            tests: LauncherTestConfig::capture(lab_environment),
             presentation_backend: PresentBackendConfig::capture(environment),
         });
         let fault = FaultProcessConfig::capture(lab_environment);
@@ -1197,61 +1074,6 @@ mod tests {
     }
 
     #[test]
-    fn release_capture_ignores_every_lab_switch() {
-        let environment = EnvironmentSnapshot::from_values([
-            (INPUT_INTEGRITY_TRACE, "on"),
-            (INPUT_INTEGRITY_STALL_MS, "50"),
-            (INPUT_LATENCY_LAB_ARM, "baseline"),
-            (TEST_CATALOG_RECOVERY_DIALOG, "retry"),
-            ("MISTER_LAUNCHER_START_SCREEN", "arcade"),
-            ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
-            (
-                "MISTER_FS_FAULT_SESSION",
-                "/tmp/mister-magik/fs-fault-session",
-            ),
-        ]);
-        let args = ["mister-magik-fb".into(), "ui".into()];
-        let paths =
-            || DevicePaths::for_layout(mister_magik_platform_manifest_contract::Layout::Public);
-        let lab = ProcessConfig::from_snapshot_with_device_paths(
-            &args,
-            "ui",
-            &environment,
-            paths(),
-            true,
-        );
-        let release = ProcessConfig::from_snapshot_with_device_paths(
-            &args,
-            "ui",
-            &environment,
-            paths(),
-            false,
-        );
-
-        let lab_launcher = lab.launcher().unwrap();
-        assert_eq!(lab_launcher.input().integrity_stall_ms(), Some(50));
-        assert_eq!(lab_launcher.input().latency_lab().arm(), Some("baseline"));
-        assert!(lab_launcher.tests().catalog_recovery_dialog().is_some());
-        assert!(lab.fault().is_some());
-
-        let release_launcher = release.launcher().unwrap();
-        assert!(release_launcher.input().integrity_trace());
-        assert_eq!(release_launcher.input().integrity_stall_ms(), None);
-        assert_eq!(
-            release_launcher.input().latency_lab(),
-            &InputLatencyLabConfig::default()
-        );
-        assert_eq!(release_launcher.tests(), &LauncherTestConfig::default());
-        assert!(release.fault().is_none());
-        #[cfg(feature = "ui")]
-        {
-            let unset = LauncherBenchmarkConfig::default();
-            assert_ne!(lab_launcher.benchmark(), &unset);
-            assert_eq!(release_launcher.benchmark(), &unset);
-        }
-    }
-
-    #[test]
     fn fault_configuration_requires_a_volatile_session_token() {
         let ordinary = EnvironmentSnapshot::from_values([
             ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
@@ -1272,49 +1094,6 @@ mod tests {
         assert!(FaultProcessConfig::capture(&ordinary).armed().is_none());
         assert!(FaultProcessConfig::capture(&persistent).armed().is_none());
         assert!(FaultProcessConfig::capture(&volatile).armed().is_some());
-    }
-
-    #[test]
-    fn launcher_test_paths_reject_persistent_publication_controls() {
-        let environment = EnvironmentSnapshot::from_values([
-            (TEST_CATALOG_PUBLICATION_GATE, "/media/fat/gate"),
-            (TEST_FIRST_FRAME_RELEASE_GATE, "/tmp/release"),
-            (TEST_CATALOG_PUBLICATION_SESSION, "/tmp/session"),
-        ]);
-        let config = LauncherTestConfig::capture(&environment);
-
-        assert!(config.catalog_publication_gate().is_none());
-        assert_eq!(
-            config.first_frame_release_gate(),
-            Some(Path::new("/tmp/release"))
-        );
-        assert_eq!(
-            config.catalog_publication_session(),
-            Some(Path::new("/tmp/session"))
-        );
-    }
-
-    #[test]
-    fn startup_ui_test_modes_are_captured_as_typed_values() {
-        for (value, expected) in [
-            ("warm-ready", Some(LauncherStartupTestMode::WarmReady)),
-            (
-                "warm-hydrating",
-                Some(LauncherStartupTestMode::WarmHydrating),
-            ),
-            ("cold-delayed", Some(LauncherStartupTestMode::ColdDelayed)),
-            (
-                "cold-intro-failure",
-                Some(LauncherStartupTestMode::ColdIntroFailure),
-            ),
-            ("unexpected", None),
-        ] {
-            let environment = EnvironmentSnapshot::from_values([(TEST_STARTUP_MODE, value)]);
-            assert_eq!(
-                LauncherTestConfig::capture(&environment).startup_mode(),
-                expected
-            );
-        }
     }
 
     #[test]

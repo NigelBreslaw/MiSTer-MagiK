@@ -154,7 +154,6 @@ pub(super) struct Effects {
 
 /// Profiling, accounting, tooling and benchmark hooks.
 pub(super) struct Diagnostics {
-    pub(super) ui_test_fixture: bool,
     pub(super) ui_action_sequence: u64,
     pub(super) startup_monotonic_us: u64,
     pub(super) profile_config: mister_magik_fb::process_config::ProfileProcessConfig,
@@ -165,20 +164,10 @@ pub(super) struct Diagnostics {
     pub(super) gui_profiling: GuiProfilingController,
     pub(super) bridge_churn_playback: BridgeChurnPlayback,
     pub(super) input_latency_lab: InputLatencyLab,
-    pub(super) auto_launch_selected: bool,
-    pub(super) auto_launch_selected_done: bool,
     pub(super) preview_transition: PreviewTransitionDemo,
     pub(super) cpu: Option<cpu_profile::CpuProfiler>,
     pub(super) system_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     pub(super) screensaver_cpu_profile: cpu_profile::ScreensaverProfiler,
-    pub(super) catalog_publication_test: CatalogPublicationTestDriver,
-    pub(super) library_changed_dialog_test: LibraryChangedDialogTestDriver,
-    pub(super) launcher_automation: LauncherAutomation,
-    pub(super) modal_input_test_dialog_pending: bool,
-    pub(super) auto_launch_gate: Option<PathBuf>,
-    pub(super) modal_input_test_bridge_sync_pending: bool,
-    #[cfg(feature = "ui-device-tests")]
-    pub(super) _ui_test_sandbox: Option<UiTestSandbox>,
     pub(super) preview_scroll_exit_at: Option<Instant>,
     pub(super) first_render_logged: bool,
     pub(super) first_vsync_logged: bool,
@@ -335,7 +324,6 @@ pub(super) struct ProjectFrame {
     pub(super) preview_cache_state_before_composition: &'static str,
     pub(super) composition_decision: UiCompositionDecision,
     pub(super) composition_status: UiCompositionStatus,
-    pub(super) automation_frame_stamp: AutomationFrameStamp,
     pub(super) native_device_base: bool,
     pub(super) custom_home_active: bool,
     pub(super) custom_home_scene_ready: bool,
@@ -436,7 +424,6 @@ impl<'a> FrameLoop<'a> {
             start,
             frame_clock,
             idle_slept_since,
-            ui_test_fixture,
             ui_action_sequence,
             startup_monotonic_us,
             frames,
@@ -475,10 +462,6 @@ impl<'a> FrameLoop<'a> {
             crt_metrics,
             preview_route,
             nav,
-            // Named, not `_`: it must live to the end of the run, because dropping it
-            // deletes the UI-test sandbox the loop is still writing to.
-            #[cfg(feature = "ui-device-tests")]
-                ui_test_sandbox: _ui_test_sandbox,
             settings_store,
             layout,
             layout_epoch,
@@ -505,8 +488,6 @@ impl<'a> FrameLoop<'a> {
             library_reset_bridge_dirty,
             last_clock_update,
             last_clock_text,
-            auto_launch_selected,
-            auto_launch_selected_done,
             pacer,
             pacing_policy,
             phase_alignment,
@@ -537,10 +518,7 @@ impl<'a> FrameLoop<'a> {
             return_capsule_active,
             lifecycle,
             catalog_session,
-            catalog_publication_test,
             media_session,
-            library_changed_dialog_test,
-            launcher_automation,
             catalog_generation,
             card_level,
             card_prefetch_key,
@@ -548,9 +526,6 @@ impl<'a> FrameLoop<'a> {
             launcher_card_home,
             arcade_screen_pending,
             update_check,
-            modal_input_test_dialog_pending,
-            auto_launch_gate,
-            modal_input_test_bridge_sync_pending,
             startup_intro,
             startup_intro_launcher_frame_ready,
             startup_intro_bridge_dirty_pending,
@@ -799,7 +774,6 @@ impl<'a> FrameLoop<'a> {
                 startup_intro_catalog_shells_pending,
             },
             diag: Diagnostics {
-                ui_test_fixture,
                 ui_action_sequence,
                 startup_monotonic_us,
                 profile_config,
@@ -810,20 +784,10 @@ impl<'a> FrameLoop<'a> {
                 gui_profiling,
                 bridge_churn_playback,
                 input_latency_lab,
-                auto_launch_selected,
-                auto_launch_selected_done,
                 preview_transition,
                 cpu,
                 system_entry_cpu_profile,
                 screensaver_cpu_profile,
-                catalog_publication_test,
-                library_changed_dialog_test,
-                launcher_automation,
-                modal_input_test_dialog_pending,
-                auto_launch_gate,
-                modal_input_test_bridge_sync_pending,
-                #[cfg(feature = "ui-device-tests")]
-                _ui_test_sandbox,
                 preview_scroll_exit_at,
                 first_render_logged,
                 first_vsync_logged,
@@ -1052,14 +1016,6 @@ impl<'a> FrameLoop<'a> {
         let mut scheduler_phase = self.diag.launcher_response_trace.scheduler_boundary();
         note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 0);
         self.diag.screensaver_cpu_profile.poll(self.out.frames);
-        if self
-            .diag
-            .catalog_publication_test
-            .wait_for_first_frame_release(Instant::now(), self.out.start)
-        {
-            std::thread::sleep(Duration::from_millis(16));
-            return Err(Exit::Skip);
-        }
         let loop_start = Instant::now();
         // A launcher that slept with nothing to animate counts that sleep in
         // whole display periods so gaps and holds span it. Produced frames
@@ -1093,8 +1049,7 @@ impl<'a> FrameLoop<'a> {
         let directional_input_held = current_pad_state.dpad_up
             || current_pad_state.dpad_down
             || current_pad_state.dpad_left
-            || current_pad_state.dpad_right
-            || self.diag.launcher_automation.directional_input_held();
+            || current_pad_state.dpad_right;
         let input_pending_before_route = self
             .inp
             .input_observation_probe
@@ -1132,7 +1087,6 @@ impl<'a> FrameLoop<'a> {
         }
         let mut full_bridge_dirty =
             std::mem::take(&mut self.ui.navigation_source_bridge_sync_pending)
-                || std::mem::take(&mut self.diag.modal_input_test_bridge_sync_pending)
                 || std::mem::take(&mut self.inp.library_reset_bridge_dirty);
         // The catalog-side locals, borrowed together for the worker-message handlers.
         if self.fx.startup_intro.is_none() {
@@ -1568,8 +1522,7 @@ impl<'a> FrameLoop<'a> {
                 self.diag.frame_accounting.first_visible_copy_done()
                     || startup_return_waiting_for_catalog
                     || self.lib.lifecycle.startup_waiting_for_initial_catalog(),
-                deferred_worker_policy.allowed
-                    && self.diag.catalog_publication_test.catalog_worker_allowed(),
+                deferred_worker_policy.allowed,
                 loop_start,
                 deferred_worker_policy.delay,
             )
@@ -1593,14 +1546,6 @@ impl<'a> FrameLoop<'a> {
             );
         }
 
-        if background_work_allowed
-            && let Some(message) = self
-                .diag
-                .catalog_publication_test
-                .tick(loop_start, self.out.start)
-        {
-            self.lib.deferred_catalog_events.push_back(message);
-        }
         let system_entry_handoff_only = should_poll_system_entry_handoff(
             background_work_allowed,
             self.lib.pending_collection_entry.is_some(),
@@ -1737,17 +1682,6 @@ impl<'a> FrameLoop<'a> {
             .launcher_response_trace
             .record_scheduler_interval("pre-input-catalog", scheduler_phase);
         note_pre_input_boundary!(begin.tooling_frame_evidence, self.out.run_start, 5);
-        if maybe_present_modal_input_test_dialog(
-            &mut self.diag.modal_input_test_dialog_pending,
-            self.lib.catalog_ready,
-            &mut self.lib.lifecycle,
-            &mut self.lib.lifecycle_effects,
-            &mut self.lib.scheduler,
-            self.out.start,
-        ) {
-            full_bridge_dirty = true;
-            self.env.window.request_redraw();
-        }
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut media_message_seen = false;
         if background_work_allowed {
@@ -2189,12 +2123,7 @@ impl<'a> FrameLoop<'a> {
             let frame_now = Instant::now();
             let mut incoming_input_events = VecDeque::new();
             let mut screensaver_wake = false;
-            let input_batch_result =
-                if ui_test_uses_automation_only_input(self.diag.ui_test_fixture, &input_batch) {
-                    Ok(())
-                } else {
-                    self.inp.input_router.accept_batch(&input_batch)
-                };
+            let input_batch_result = self.inp.input_router.accept_batch(&input_batch);
             self.diag
                 .launcher_response_trace
                 .record_input_batch_gate(&input_batch, input_batch_result.as_ref().err().copied());
@@ -2209,26 +2138,9 @@ impl<'a> FrameLoop<'a> {
                     false
                 }
             };
-            let mut physical_for_automation = PadState::default();
+            let mut held_pad = PadState::default();
             for action in crate::input_event::LogicalAction::ALL {
-                physical_for_automation
-                    .set_logical_action(action, input_batch.held_after_last.is_held(action));
-            }
-            if input_batch_healthy {
-                incoming_input_events.extend(self.diag.launcher_automation.poll_events(
-                    &physical_for_automation,
-                    pre_input.effective_view.accepts_application_input()
-                        && self.lib.lifecycle.startup_input_enabled(),
-                    self.inp.setup.is_active(),
-                    pre_input.animation_now,
-                ));
-                if let Some(event) = self.diag.library_changed_dialog_test.event_for(
-                    &self.ui.nav,
-                    pre_input.animation_now,
-                    self.out.start,
-                ) {
-                    incoming_input_events.push_back(event);
-                }
+                held_pad.set_logical_action(action, input_batch.held_after_last.is_held(action));
             }
             #[cfg(feature = "tooling")]
             if let Some(held) = self
@@ -2373,9 +2285,6 @@ impl<'a> FrameLoop<'a> {
             } else {
                 slint_ui::launcher::InputAvailability::Available
             });
-            self.diag
-                .frame_accounting
-                .set_automation_action_sequence(self.diag.launcher_automation.action_sequence());
 
             let application_input_enabled = pre_input.effective_view.accepts_application_input()
                 && self.lib.lifecycle.startup_input_enabled();
@@ -2417,11 +2326,10 @@ impl<'a> FrameLoop<'a> {
                 }
 
                 let ui_input_pending = self.inp.launcher_ui_actions.has_pending();
-                let raw_screensaver_input_activity = self.env.pad.user_activity()
-                    || self.diag.launcher_automation.active()
-                    || ui_input_pending;
+                let raw_screensaver_input_activity =
+                    self.env.pad.user_activity() || ui_input_pending;
                 let physical_input_held =
-                    input_batch_healthy && pad_state_has_active_input(&physical_for_automation);
+                    input_batch_healthy && pad_state_has_active_input(&held_pad);
                 let screensaver_input_held = self.fx.screensaver.input_held_for_control(
                     screensaver_wake,
                     physical_input_held || ui_input_pending,
@@ -2733,29 +2641,6 @@ impl<'a> FrameLoop<'a> {
                                         path: Some(game.mra_path.to_string()),
                                         settings: None,
                                     })
-                            } else if self.diag.auto_launch_selected
-                                && !self.diag.auto_launch_selected_done
-                                && launcher_auto_launch_gate_ready(
-                                    self.diag.auto_launch_gate.as_deref(),
-                                )
-                                && self.lib.catalog_ready
-                                && self.ui.nav.screen == Screen::Arcade
-                            {
-                                let event = active_system(&self.lib.catalog, &self.ui.nav)
-                                    .and_then(|system| {
-                                        self.ui.nav.active_arcade_game_at(
-                                            &self.lib.catalog,
-                                            &system.id,
-                                            self.ui.nav.arcade.selected,
-                                        )
-                                    })
-                                    .map(|game| launcher::LauncherEvent {
-                                        action: LauncherAction::LaunchGame,
-                                        path: Some(game.mra_path.to_string()),
-                                        settings: None,
-                                    });
-                                self.diag.auto_launch_selected_done = event.is_some();
-                                event
                             } else if self.lib.scheduler.launch_benchmark_enabled() {
                                 None
                             } else if let Some(input_event) = routed_event_this_loop.as_ref() {
@@ -2970,12 +2855,6 @@ impl<'a> FrameLoop<'a> {
                                         }
                                     }
                                     LauncherAction::ExitToMister => {
-                                        if self.diag.ui_test_fixture {
-                                            crate::ui_logln!(
-                                                "ui_test_effect_blocked effect=exit_to_mister"
-                                            );
-                                            return Err(Exit::Skip);
-                                        }
                                         self.lib.loading_title = "Exit to MiSTer".to_string();
                                         sync_bridge_launcher(
                                             &self.env.app,
@@ -3018,12 +2897,6 @@ impl<'a> FrameLoop<'a> {
                                         }
                                     }
                                     LauncherAction::RefreshDatabase => {
-                                        if self.diag.ui_test_fixture {
-                                            crate::ui_logln!(
-                                                "ui_test_effect_blocked effect=refresh_database"
-                                            );
-                                            return Err(Exit::Skip);
-                                        }
                                         let effects = self.lib.catalog_session.refresh_database(
                                             self.lib.arcade_root.clone(),
                                             self.lib.scheduler.catalog_worker_available(),
@@ -3043,17 +2916,6 @@ impl<'a> FrameLoop<'a> {
                                     LauncherAction::Restart | LauncherAction::PurgeLibraryData => {
                                         let resetting =
                                             event.action == LauncherAction::PurgeLibraryData;
-                                        if self.diag.ui_test_fixture {
-                                            crate::ui_logln!(
-                                                "ui_test_effect_blocked effect={}",
-                                                if resetting {
-                                                    "purge_library_data"
-                                                } else {
-                                                    "restart"
-                                                }
-                                            );
-                                            return Err(Exit::Skip);
-                                        }
                                         if resetting
                                             && (!self.lib.scheduler.catalog_worker_available()
                                                 || self.lib.scheduler.media_worker_running())
@@ -3150,12 +3012,6 @@ impl<'a> FrameLoop<'a> {
                                         return Err(Exit::Skip);
                                     }
                                     LauncherAction::RebuildLibrary => {
-                                        if self.diag.ui_test_fixture {
-                                            crate::ui_logln!(
-                                                "ui_test_effect_blocked effect=rebuild_library"
-                                            );
-                                            return Err(Exit::Skip);
-                                        }
                                         let effects = self
                                             .lib
                                             .catalog_session
@@ -3331,16 +3187,7 @@ impl<'a> FrameLoop<'a> {
                                                     i64::try_from(duration.as_secs()).ok()
                                                 })
                                                 .unwrap_or(0);
-                                            if self.diag.ui_test_fixture {
-                                                self.ui.nav.reconcile_favourite_state(
-                                                    &self.lib.catalog,
-                                                    launch_ref,
-                                                    favourite,
-                                                );
-                                                crate::ui_logln!(
-                                                    "ui_test_effect_blocked effect=favourite_persist"
-                                                );
-                                            } else if self.lib.user_state_session.available()
+                                            if self.lib.user_state_session.available()
                                                 && let Err(error) = self
                                                     .lib
                                                     .user_state_session
@@ -3355,12 +3202,6 @@ impl<'a> FrameLoop<'a> {
                                     LauncherAction::LaunchGame => {}
                                 }
                                 if event.action == LauncherAction::LaunchGame {
-                                    if self.diag.ui_test_fixture {
-                                        crate::ui_logln!(
-                                            "ui_test_effect_blocked effect=launch_game"
-                                        );
-                                        return Err(Exit::Skip);
-                                    }
                                     let Some(mra) = event.path else {
                                         continue;
                                     };
@@ -4289,113 +4130,6 @@ impl<'a> FrameLoop<'a> {
         let mut composition_status = composition_decision.status();
         composition_status.preview_state = self.lib.preview.presentation_label();
         composition_status.preview_generation = self.lib.preview.presentation_generation();
-        let automation_frame_stamp = if self.diag.launcher_automation.active() {
-            let selected_system_id = self.ui.nav.active_collection_scope_id(&self.lib.catalog);
-            let selected_game = (self.ui.nav.screen == Screen::Arcade)
-                .then(|| {
-                    self.ui.nav.active_arcade_game_at(
-                        &self.lib.catalog,
-                        selected_system_id,
-                        self.ui.nav.arcade.selected,
-                    )
-                })
-                .flatten();
-            self.diag
-                .launcher_automation
-                .observe_state(AutomationSemanticState {
-                    screen_orientation: self.ui.nav.settings.screen_orientation.label().to_string(),
-                    output_route: self.env.ui.output_route().label().to_string(),
-                    output_width: self.env.ui.output_w(),
-                    output_height: self.env.ui.output_h(),
-                    render_width: self.env.ui.render_w(),
-                    render_height: self.env.ui.render_h(),
-                    effective_view: pre_input.effective_view.label().to_string(),
-                    return_screen: screen_label(self.ui.nav.screen).to_string(),
-                    menu_id: self.ui.nav.current_menu_id().to_string(),
-                    selected_item_id: self.ui.nav.current_menu_selected_item_id().to_string(),
-                    active_collection_id: self
-                        .ui
-                        .nav
-                        .active_collection_id()
-                        .unwrap_or("")
-                        .to_string(),
-                    selected_system_id: selected_system_id.to_string(),
-                    selected_game_id: selected_game
-                        .map_or("", |game| game.mra_path.as_ref())
-                        .to_string(),
-                    selected_game_title: selected_game
-                        .map_or("", |game| game.title.as_ref())
-                        .to_string(),
-                    selected_index: if self.ui.nav.screen == Screen::Arcade {
-                        self.ui.nav.arcade.selected
-                    } else {
-                        self.ui.nav.selected
-                    },
-                    selected_count: if self.ui.nav.screen == Screen::Arcade {
-                        self.ui
-                            .nav
-                            .active_arcade_game_count(&self.lib.catalog, selected_system_id)
-                    } else {
-                        self.ui.nav.current_menu_count()
-                    },
-                    overlay: if confirm_visible {
-                        "confirm"
-                    } else if catalog_scan_visible {
-                        "catalog-scan"
-                    } else if self.inp.setup.is_active() {
-                        "controller-setup"
-                    } else {
-                        "none"
-                    }
-                    .to_string(),
-                    dialog_title: overlay_view.get_confirmation_title().to_string(),
-                    dialog_message: overlay_view.get_confirmation_message().to_string(),
-                    dialog_selected: confirm_selected,
-                    drawer_open: self.ui.nav.arcade_filter.drawer_open,
-                    drawer_level: self.ui.nav.arcade_filter.title().to_string(),
-                    drawer_selected: self.ui.nav.arcade_filter.selected,
-                    search_active: self
-                        .ui
-                        .nav
-                        .arcade_search
-                        .is_active(&self.ui.nav.arcade_filter.active),
-                    search_status: match self.ui.nav.arcade_search.status {
-                        launcher::ArcadeSearchStatus::Idle => "idle",
-                        launcher::ArcadeSearchStatus::Searching => "searching",
-                        launcher::ArcadeSearchStatus::Ready => "ready",
-                        launcher::ArcadeSearchStatus::Failed => "failed",
-                    }
-                    .to_string(),
-                    search_query: self.ui.nav.arcade_search.query.clone(),
-                    search_results: self.ui.nav.arcade_search_result_count(),
-                    preview_state: self.lib.preview.trace_cache_state().to_string(),
-                    launch_state: if pre_input.launching {
-                        "launching"
-                    } else {
-                        "idle"
-                    }
-                    .to_string(),
-                    loading_title: self
-                        .lib
-                        .scheduler
-                        .visible_loading_title(&self.lib.loading_title)
-                        .to_string(),
-                    catalog_generation: self
-                        .lib
-                        .catalog_generation
-                        .current
-                        .clone()
-                        .unwrap_or_default(),
-                    catalog_ready: self.lib.catalog_ready,
-                    settings_selected: self.ui.nav.settings_selected,
-                    composition_state: composition_status.state.to_string(),
-                    composition_recovery_count: composition_status.recovery_count,
-                    navigation_transition_active: self.out.director.navigation.is_active(),
-                    input_enabled: startup_status.input_enabled,
-                })
-        } else {
-            AutomationFrameStamp::default()
-        };
         // The exposed fixed HDMI device plane can bypass RGB8 image rasterization.
         let native_device_base = self.ui.nav.screen == Screen::Arcade
             && !self.out.layout.is_portrait()
@@ -4576,7 +4310,7 @@ impl<'a> FrameLoop<'a> {
         let tooling_sequence_pending = false;
         wake_reasons.insert_if(
             LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
-            self.diag.launcher_automation.active() || tooling_sequence_pending,
+            tooling_sequence_pending,
         );
         wake_reasons.insert_if(
             LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
@@ -4832,7 +4566,6 @@ impl<'a> FrameLoop<'a> {
             preview_cache_state_before_composition,
             composition_decision,
             composition_status,
-            automation_frame_stamp,
             native_device_base,
             custom_home_active,
             custom_home_scene_ready,
@@ -5468,9 +5201,6 @@ impl<'a> FrameLoop<'a> {
         }
         if let Some(error) = startup_intro_failure.take() {
             crate::ui_errln!("startup intro stopped: {error}");
-            self.diag
-                .launcher_automation
-                .note_startup_intro_failure(&error);
             self.fx.startup_intro = None;
             self.out
                 .launcher_presenter
@@ -7534,9 +7264,6 @@ impl<'a> FrameLoop<'a> {
                         u8::from(self.lib.catalog_ready)
                     ),
                 );
-                self.diag
-                    .catalog_publication_test
-                    .hold_first_launcher_frame(self.out.start);
             }
             self.lib.lifecycle.note_startup_frame_presented(
                 self.out.frames,
@@ -7657,7 +7384,6 @@ impl<'a> FrameLoop<'a> {
         let mut presented_frame = LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames: self.out.frames,
-                automation: project.automation_frame_stamp,
                 selection_feedback: self.ui.bridge_models.selection_feedback_stamp(),
                 selected: self.ui.nav.arcade.selected,
                 visual_index: self.ui.nav.arcade.visual_index,
@@ -7864,7 +7590,6 @@ impl<'a> FrameLoop<'a> {
                 #[cfg(feature = "tooling")]
                 card_work_timing: render.card_work_timing,
                 catalog: &self.lib.catalog,
-                catalog_ready: self.lib.catalog_ready,
                 catalog_version: self.lib.catalog_version,
                 composition_status: project.composition_status,
                 confirm_visible: project.confirm_visible,
@@ -7886,6 +7611,7 @@ impl<'a> FrameLoop<'a> {
                 frame_t2: render.frame_t2,
                 #[cfg(feature = "tooling")]
                 frame_t3,
+                #[cfg(feature = "tooling")]
                 frame_t4,
                 frames: self.out.frames,
                 full_screen_transition_live_endpoint_rendered: render
@@ -7896,7 +7622,6 @@ impl<'a> FrameLoop<'a> {
                 gui_raster_phase: render.gui_raster_phase,
                 #[cfg(feature = "tooling")]
                 home_horizontal_input_held: project.home_horizontal_input_held,
-                launcher_automation: &mut self.diag.launcher_automation,
                 #[cfg(feature = "tooling")]
                 launcher_card_home: &self.fx.launcher_card_home,
                 launcher_presenter: &mut self.out.launcher_presenter,
