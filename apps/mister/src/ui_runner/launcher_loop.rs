@@ -810,6 +810,32 @@ fn cancel_pending_collection_entry_for_input(
     true
 }
 
+fn cancel_pending_collection_entry_for_navigation(
+    pending: &mut Option<PendingCollectionEntry>,
+    nav: &mut LauncherNav,
+    start: Instant,
+) -> bool {
+    let Some(entry) = pending.as_ref() else {
+        return false;
+    };
+    let still_selected = match nav.screen {
+        Screen::Home => nav.current_menu_selected_item_id() == entry.collection_id,
+        Screen::Arcade => nav.active_collection_id() == Some(entry.collection_id.as_str()),
+        _ => false,
+    };
+    if still_selected {
+        return false;
+    }
+    let entry = pending.take().expect("checked pending collection entry");
+    nav.catalog_system_hydration_finished(&entry.collection_id);
+    print_startup_event(
+        start,
+        "catalog_system_entry_cancelled",
+        format!("system={} reason=navigation-changed", entry.collection_id),
+    );
+    true
+}
+
 /// One system entry, from the press that opens it to the first frame that shows its rows and
 /// exact preview. Preview work stays off until that frame is out, so it cannot delay it.
 #[derive(Default)]
@@ -5532,6 +5558,104 @@ mod tests {
             assert_eq!(nav.screen, Screen::Arcade);
             assert_eq!(nav.system_page_mode, expected_mode);
         }
+    }
+
+    #[test]
+    fn cold_snes_open_survives_scroll_projection_change_and_commits_loaded_rows() {
+        let registry = ArcadeCatalog::new(
+            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![crate::test_support::arcade_system("snes", 1)],
+        );
+        let hydrated = crate::test_support::arcade_catalog(
+            vec![
+                crate::test_support::arcade_game("F-Zero")
+                    .system_id("snes")
+                    .build(),
+            ],
+            vec![crate::test_support::arcade_system("snes", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&registry);
+        assert!(nav.open_menu("menu:consoles"));
+        nav.scroll_x = 1;
+        let before = LauncherProjectionKey::from_nav(&nav);
+        let event = nav
+            .handle_input_with_navigation_intents(
+                &crate::input_state::PadState {
+                    btn_a: true,
+                    ..Default::default()
+                },
+                Instant::now(),
+                &registry,
+            )
+            .expect("SNES opening intent");
+        assert_eq!(event.path.as_deref(), Some("snes"));
+        nav.catalog_system_hydration_started("snes");
+        let mut pending = Some(PendingCollectionEntry {
+            collection_id: "snes".to_string(),
+            requested_at: Instant::now(),
+            source: nav.home_view_state(),
+            open_game_list_directly: false,
+        });
+        assert!(before != LauncherProjectionKey::from_nav(&nav));
+        assert!(!cancel_pending_collection_entry_for_navigation(
+            &mut pending,
+            &mut nav,
+            Instant::now()
+        ));
+        assert!(nav.catalog_system_hydration_is_loading("snes"));
+        assert!(!empty_collection_invariant_violated(&registry, &nav));
+        assert!(commit_pending_collection_entry(
+            &mut pending,
+            &mut nav,
+            &hydrated,
+            Instant::now()
+        ));
+        assert!(nav.is_system_hub());
+        assert_eq!(nav.active_collection_id(), Some("snes"));
+        assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
+    }
+
+    #[test]
+    fn browsing_away_cancels_cold_entry_without_late_collection_open() {
+        let registry = ArcadeCatalog::new(
+            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![crate::test_support::arcade_system("snes", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&registry);
+        assert!(nav.open_menu("menu:consoles"));
+        nav.catalog_system_hydration_started("snes");
+        let mut pending = Some(PendingCollectionEntry {
+            collection_id: "snes".to_string(),
+            requested_at: Instant::now(),
+            source: nav.home_view_state(),
+            open_game_list_directly: false,
+        });
+        assert!(nav.commit_navigation_intent(
+            &launcher::LauncherEvent {
+                action: LauncherAction::NavigateHome,
+                path: None,
+                settings: None,
+            },
+            &registry
+        ));
+        assert!(cancel_pending_collection_entry_for_navigation(
+            &mut pending,
+            &mut nav,
+            Instant::now()
+        ));
+        assert!(pending.is_none());
+        assert!(!nav.catalog_system_hydration_is_loading("snes"));
+        assert!(!commit_pending_collection_entry(
+            &mut pending,
+            &mut nav,
+            &registry,
+            Instant::now()
+        ));
+        assert_eq!(nav.screen, Screen::Home);
     }
 
     #[test]
