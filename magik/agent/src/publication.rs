@@ -538,7 +538,6 @@ impl crate::Agent {
                     Ok(json!({"activated":true}))
                 }
                 Some("restore") => {
-                    self.stop_owned_process()?;
                     let handoff_required =
                         restore_requires_main_handoff(&crate::device::status()?)?;
                     if handoff_required
@@ -547,6 +546,7 @@ impl crate::Agent {
                         let restored = crate::main_control::handoff("mister_magik_resume\n");
                         return Err(format!("{error}; Main restoration: {restored:?}"));
                     }
+                    self.stop_owned_process()?;
                     let restored = restore_stage(&root);
                     let resumed = if handoff_required {
                         crate::main_control::handoff("mister_magik_resume\n")

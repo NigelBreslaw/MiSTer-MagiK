@@ -71,6 +71,7 @@ def add_commands(commands):
     probe.add_argument("--seconds", type=int, choices=range(31), default=0)
     probe.add_argument("--event", action="append", default=[])
     commands.add_parser("status")
+    commands.add_parser("application-install-inspect")
     commands.add_parser("diagnostics")
     evidence = commands.add_parser("fpga-evidence")
     evidence.add_argument("--framebuffer", action="store_true")
@@ -121,6 +122,8 @@ def run_device(arguments, run):
             "layout": arguments.layout,
             "system": arguments.system,
         }
+    elif group == "application-install-inspect":
+        operation = "application-install-inspect"
     elif group in {"status", "launcher"}:
         action = getattr(arguments, "action", "status")
         operation = {

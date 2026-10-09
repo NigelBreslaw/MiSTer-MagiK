@@ -1,6 +1,7 @@
 //! Bounded native control framing for the independently owned MagiK agent.
 mod mini_display;
 
+mod app_install;
 mod benchmark;
 mod capture;
 mod card_artwork;
@@ -208,6 +209,7 @@ impl Agent {
             "applications",
             "main-input-proxy",
             "main-managed-magik",
+            "canonical-magik-runtime-v1",
             "measurement",
             "measurement-clock-v1",
             "mini-display-plan-v1",
@@ -492,9 +494,22 @@ impl Agent {
                 Err(error) => return write_frame(stream, &error, &[]),
                 _ => {}
             }
-            staged
-                .publish(&self.install_root.join(artifact))
+            if artifact == "magik" {
+                self.publish_app(
+                    &staged,
+                    &hash,
+                    request
+                        .fields
+                        .get("source_revision")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
+                )
                 .map_err(FrameError::Io)?;
+            } else {
+                staged
+                    .publish(&self.app_path(artifact))
+                    .map_err(FrameError::Io)?;
+            }
             if request.op == "transfer-check" {
                 let receive_ms = staged.receive_ms().max(1);
                 let bytes_per_second = (body_length as u128) * 1000 / receive_ms;
@@ -613,10 +628,10 @@ impl Agent {
                     "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),
                     "running": self.running(),
-                    "artifact": self.running_identity().and_then(|record| PathBuf::from(record.executable).file_name().map(|name|name.to_string_lossy().into_owned())),
+                    "artifact": self.running_identity().and_then(|record| if record.executable == self.app_path("magik").to_string_lossy() {Some("magik".to_owned())} else {PathBuf::from(record.executable).file_name().map(|name|name.to_string_lossy().into_owned())}),
                     "pid": self.running_identity().map(|record| record.pid),
                     "artifact_sha256": installed_hash(&self.install_root.join("probe")),
-                    "artifacts": {"mini-magik":installed_hash(&self.install_root.join("mini-magik")), "magik":installed_hash(&self.install_root.join("magik"))},
+                    "artifacts": {"mini-magik":installed_hash(&self.install_root.join("mini-magik")), "magik":installed_hash(&self.app_path("magik"))},
                     "running_sha256": self.running_identity().map(|record| record.sha256),
                     "ready": self.running_identity().is_some_and(|record| self.ready_for(record.pid, &record.sha256)),
                 }),
@@ -730,7 +745,7 @@ impl Agent {
                 serde_json::json!({"code":"unsupported-application"}),
             );
         }
-        let executable = self.install_root.join(artifact);
+        let executable = self.app_path(artifact);
         if !executable.is_file() {
             return response(
                 &request.id,
@@ -1138,7 +1153,7 @@ impl Agent {
             .ok()
             .is_some_and(|path| {
                 path.to_string_lossy().trim_end_matches(" (deleted)")
-                    == self.install_root.join("magik").to_string_lossy()
+                    == self.app_path("magik").to_string_lossy()
             })
             && !device::status()
                 .ok()
@@ -1226,7 +1241,7 @@ impl Agent {
                 .to_owned();
             if !["probe", "mini-magik", "magik"]
                 .iter()
-                .any(|name| self.install_root.join(name).to_string_lossy() == executable)
+                .any(|name| self.app_path(name).to_string_lossy() == executable)
             {
                 return None;
             }

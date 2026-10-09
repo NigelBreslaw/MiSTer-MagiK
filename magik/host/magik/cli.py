@@ -250,7 +250,7 @@ def main() -> int:
         print(
             f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(remembered MiSTer)')}"
         )
-        print(f"Executable: /media/fat/mister-magik2/{arguments.app}")
+        print("Executable: /media/fat/mister-magik-dev/mister-magik-fb" if arguments.app == "magik" else f"Executable: /media/fat/mister-magik2/{arguments.app}")
         if arguments.app == "magik":
             print("Data: /media/fat/mister-magik-dev; Main: /media/fat/MiSTer_MagiKDev")
         else:
@@ -607,7 +607,13 @@ def ensure_application(
     if changed:
         upload_started = time.monotonic()
         append_event(run, {"phase": "upload", "bytes": len(payload)})
-        agent.upload(app.name, payload)
+        if app.name == "magik":
+            revision = os.environ.get("MISTER_MAGIK2_PREBUILT_SOURCE_REVISION") or subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository(), text=True
+            ).strip()
+            agent.upload(app.name, payload, source_revision=revision)
+        else:
+            agent.upload(app.name, payload)
         upload_elapsed_ms = max(1, int((time.monotonic() - upload_started) * 1_000))
         append_event(
             run,

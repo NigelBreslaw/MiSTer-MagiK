@@ -153,10 +153,7 @@ impl crate::Agent {
             let mut values = vec![
                 (
                     "MISTER_MAGIK_PATH",
-                    self.install_root
-                        .join("magik")
-                        .to_string_lossy()
-                        .into_owned(),
+                    self.app_path("magik").to_string_lossy().into_owned(),
                 ),
                 (
                     "MISTER_MAGIK2_STATE_ROOT",
@@ -199,6 +196,7 @@ impl crate::Agent {
                         return Err("Main launched a different artifact".into());
                     }
                     self.write_owned_process(pid, hash)?;
+                    self.finish_app_install(hash)?;
                     return Ok(());
                 }
                 if std::time::Instant::now() >= deadline {
@@ -213,11 +211,16 @@ impl crate::Agent {
                 "started",
                 serde_json::json!({"already_running":false,"ready":true,"main_managed":true}),
             ),
-            Err(error) => crate::response(
-                &request.id,
-                "error",
-                serde_json::json!({"code":"main-managed-start-failed","detail":error,"main_status":crate::device::status().ok()}),
-            ),
+            Err(error) => {
+                let restored = self.restore_app_install();
+                let resumed = crate::main_control::handoff("mister_magik_resume\n");
+                crate::response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"main-managed-start-failed",
+                    "detail":error,"app_restoration":restored.err(),"main_resumption":resumed.err(),"main_status":crate::device::status().ok()}),
+                )
+            }
         }
     }
 }

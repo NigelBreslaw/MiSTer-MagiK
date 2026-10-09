@@ -28,7 +28,7 @@ APPLICATIONS = {
         "mister-magik-fb",
         "release-device-ui-tests",
         ("tooling",),
-        frozenset({"main-managed-magik", "card-artwork-v2"}),
+        frozenset({"main-managed-magik", "card-artwork-v2", "canonical-magik-runtime-v1"}),
     ),
 }
 

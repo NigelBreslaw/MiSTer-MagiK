@@ -40,6 +40,7 @@ def test_deployment_has_no_testing_or_legacy_diagnostic_requirement():
 
 
 def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISTER_MAGIK2_PREBUILT_SOURCE_REVISION", "a" * 40)
     artifact = tmp_path / "real-app"
     artifact.write_bytes(b"real app")
     builds = []
@@ -59,7 +60,7 @@ def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_
     )
     assert builds[0].parts[-2:] == ("apps", "mister")
     assert agent.artifact == "magik"
-    agent.upload.assert_called_once_with("magik", b"real app")
+    agent.upload.assert_called_once_with("magik", b"real app", source_revision="a" * 40)
     agent.start.assert_called_once_with(
         expected_sha256=sha256_hex(b"real app"), restart=False
     )

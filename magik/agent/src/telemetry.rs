@@ -430,7 +430,7 @@ pub fn processes(root: &Path) -> Value {
                 .ok()
                 .is_some_and(|path| {
                     path.to_string_lossy().trim_end_matches(" (deleted)")
-                        == "/media/fat/mister-magik2/magik"
+                        == "/media/fat/mister-magik-dev/mister-magik-fb"
                 }) {
             "mister-magik-fb"
         } else {
@@ -598,7 +598,11 @@ mod tests {
         fs::create_dir_all(&process).unwrap();
         fs::write(process.join("comm"), "magik\n").unwrap();
         fs::write(process.join("status"), "VmRSS: 100 kB\nThreads: 4\n").unwrap();
-        std::os::unix::fs::symlink("/media/fat/mister-magik2/magik", process.join("exe")).unwrap();
+        std::os::unix::fs::symlink(
+            "/media/fat/mister-magik-dev/mister-magik-fb",
+            process.join("exe"),
+        )
+        .unwrap();
         let result = processes(&root);
         assert_eq!(result["mister-magik-fb"]["pids"], json!([42]));
         assert_eq!(result["mister-magik-fb"]["rss_kb"], 100);

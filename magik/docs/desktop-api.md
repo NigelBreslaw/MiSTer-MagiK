@@ -58,7 +58,7 @@ Standalone application packaging and old-agent uninstall remain separate work.
 
 Real MagiK now requires `main-managed-magik`. A compatible native service stays
 installed regardless of its build identifier. The service uses Dev Main's existing
-`launcher.env` hook to select `/media/fat/mister-magik2/magik` and its tooling
+`launcher.env` hook to select `/media/fat/mister-magik-dev/mister-magik-fb` and its tooling
 settings, then resumes Main. It changes only a marked block in
 `/media/fat/mister-magik-dev/launcher.env`; operator settings and production paths
 are preserved. Main retains its startup handshake, input routing and FPGA ownership.
