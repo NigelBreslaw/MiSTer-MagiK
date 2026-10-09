@@ -118,9 +118,38 @@ fn exchange(
     Err("Main did not acknowledge command before deadline".into())
 }
 
+pub(crate) fn resume_after<T>(
+    operation: impl FnOnce() -> Result<T, String>,
+    resume: impl FnOnce() -> Result<(), String>,
+) -> Result<T, String> {
+    let result = operation();
+    let resumed = resume();
+    match (result, resumed) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(format!("Main resumption failed: {error}")),
+        (Err(error), Err(resume)) => Err(format!("{error}; Main resumption failed: {resume}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_stop_or_restore_still_resumes_and_retains_both_errors() {
+        let resumed = std::cell::Cell::new(false);
+        let error = resume_after(
+            || Err::<(), String>("stop failed".into()),
+            || {
+                resumed.set(true);
+                Err("resume failed".into())
+            },
+        )
+        .unwrap_err();
+        assert!(resumed.get());
+        assert!(error.contains("stop failed"));
+        assert!(error.contains("resume failed"));
+    }
     #[test]
     fn missing_fifo_reader_is_bounded() {
         let root = std::env::temp_dir().join(format!("magik-fifo-{}", std::process::id()));

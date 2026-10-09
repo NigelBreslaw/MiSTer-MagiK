@@ -72,6 +72,7 @@ def add_commands(commands):
     probe.add_argument("--event", action="append", default=[])
     commands.add_parser("status")
     commands.add_parser("application-install-inspect")
+    commands.add_parser("application-install-recover")
     crash = commands.add_parser("crash-report").add_subparsers(
         dest="action", required=True
     )
@@ -130,8 +131,8 @@ def run_device(arguments, run):
             "layout": arguments.layout,
             "system": arguments.system,
         }
-    elif group == "application-install-inspect":
-        operation = "application-install-inspect"
+    elif group in {"application-install-inspect", "application-install-recover"}:
+        operation = group
     elif group == "crash-report":
         operation = "crash-report-" + arguments.action
         fields = {"path": arguments.path}
@@ -160,9 +161,15 @@ def run_device(arguments, run):
     if group == "input-probe":
         required = {"input-probe-passive-v1"}
     elif group == "application-install-inspect":
-        required.add("application-install-inspect-v1")
+        required.add("application-install-inspect-v2")
+    elif group == "application-install-recover":
+        required.add("application-install-recover-v1")
     elif group == "crash-report":
-        required.add("crash-report-" + arguments.action + "-v1")
+        required.add(
+            "crash-report-"
+            + arguments.action
+            + ("-v2" if arguments.action == "delete" else "-v1")
+        )
     agent, _ = connect_agent(run, required)
     report = agent.device_operation(operation, fields)
     path = run / "device-operation.json"

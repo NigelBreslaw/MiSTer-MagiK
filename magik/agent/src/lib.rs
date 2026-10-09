@@ -194,8 +194,10 @@ impl Agent {
             "device-identity-v1",
             "device-control-v1",
             "application-install-inspect-v1",
+            "application-install-inspect-v2",
             "crash-report-read-v1",
             "crash-report-delete-v1",
+            "crash-report-delete-v2",
             "fpga-evidence-v1",
             "input-probe-v1",
             "input-probe-runtime-v1",
@@ -213,6 +215,8 @@ impl Agent {
             "main-input-proxy",
             "main-managed-magik",
             "canonical-magik-runtime-v1",
+            "canonical-magik-runtime-v2",
+            "application-install-recover-v1",
             "measurement",
             "measurement-clock-v1",
             "mini-display-plan-v1",
@@ -506,6 +510,10 @@ impl Agent {
                         .get("source_revision")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or(""),
+                    request
+                        .fields
+                        .get("source_dirty")
+                        .and_then(serde_json::Value::as_bool),
                 )
                 .map_err(FrameError::Io)?;
             } else {
@@ -777,6 +785,15 @@ impl Agent {
                     && self.ready_for(record.pid, &record.sha256)
             })
         {
+            if artifact == "magik"
+                && let Err(error) = self.finish_app_install(published_hash.as_deref().unwrap_or(""))
+            {
+                return response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"app-cleanup-failed","verified_ready":true,"detail":error}),
+                );
+            }
             return response(
                 &request.id,
                 "started",

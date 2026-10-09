@@ -74,10 +74,27 @@ block; ending the session replaces them on normal restoration. Mini remains an
 independent bounded workload. Failed starts report the Main state without rebooting
 or silently retrying the deployment.
 
-Installation inspection requires `application-install-inspect-v1`. Crash report
-reading and deletion require `crash-report-read-v1` and `crash-report-delete-v1`,
+Canonical delivery requires `canonical-magik-runtime-v2`. Its persisted
+`app-install.json` receipt records backup preparation, publication, restoration,
+readiness, base source revision and dirty/unknown provenance. A matching completed
+upload can be resumed without overwriting backups. Upload transport makes one
+attempt; later delivery reconciles an interrupted installation before publication.
+`application-install-recover` (`application-install-recover-v1`) also exposes that
+bounded recovery without requiring a failed start. Restoration first quiesces Main,
+preserves backup sources until all restores succeed, and resumes on error exits.
+A verified live app is retained if only cleanup fails. First installs do not need
+an existing canonical executable. Environment rollback restores only the managed
+block and retains current operator settings.
+
+Installation inspection requires `application-install-inspect-v2` and reports a
+null running process when there is no launcher. Crash report reading and deletion
+require `crash-report-read-v1` and `crash-report-delete-v2`,
 respectively; the host supplies missing service capabilities before dispatch.
-Deletion accepts named reports with the reviewed checksum, but rejects
-`latest.json`: crash writers replace that alias independently of agent mutations.
+Deletion is limited to Dev reports and rejects `latest.json`. A named report is
+atomically claimed before its bytes are hashed and parsed; only that claimed
+version is deleted. Concurrent replacements at the original path are preserved.
+Failed validation restores the claim without overwriting a replacement; if that
+is impossible, the readable claim is retained and its path is reported. An
+unreadable Main status does not block deletion; a known current crash is protected.
 Backup creation failures remove only files created by the failed attempt and
 resume Main, retaining any cleanup or resumption error in the response.

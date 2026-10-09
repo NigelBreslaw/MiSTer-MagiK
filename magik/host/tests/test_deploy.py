@@ -47,7 +47,9 @@ def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_
 
     def build(package):
         builds.append(package)
-        return BuildResult(artifact, False, 0)
+        return BuildResult(
+            artifact, False, 0, source_revision="a" * 40, source_dirty=False
+        )
 
     monkeypatch.setattr(cli, "ensure_arm_application", build)
     monkeypatch.setattr(cli, "ensure_artwork", lambda *args: False)
@@ -60,7 +62,9 @@ def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_
     )
     assert builds[0].parts[-2:] == ("apps", "mister")
     assert agent.artifact == "magik"
-    agent.upload.assert_called_once_with("magik", b"real app", source_revision="a" * 40)
+    agent.upload.assert_called_once_with(
+        "magik", b"real app", source_revision="a" * 40, source_dirty=False
+    )
     agent.start.assert_called_once_with(
         expected_sha256=sha256_hex(b"real app"), restart=False
     )

@@ -50,6 +50,35 @@ def test_authentication_error_is_not_retreated_as_bootstrap() -> None:
     thread.join()
 
 
+def test_upload_timeout_is_not_automatically_retried(monkeypatch):
+    attempts = []
+
+    def unavailable(*args, **kwargs):
+        attempts.append(1)
+        raise TimeoutError("upload outcome unknown")
+
+    monkeypatch.setattr("magik.client.socket.create_connection", unavailable)
+    with pytest.raises(TimeoutError, match="outcome unknown"):
+        NativeAgent("localhost", "token").upload(
+            "magik", b"app", source_revision="a" * 40, source_dirty=True
+        )
+    assert len(attempts) == 1
+
+
+def test_upload_carries_dirty_build_provenance(monkeypatch):
+    sent = []
+
+    def request(operation, fields, body, **kwargs):
+        sent.append(fields)
+        return Envelope("id", "uploaded", "", {}), b""
+
+    agent = NativeAgent("localhost", "token")
+    monkeypatch.setattr(agent, "_request", request)
+    agent.upload("magik", b"app", source_revision="b" * 40, source_dirty=True)
+    assert sent[0]["source_revision"] == "b" * 40
+    assert sent[0]["source_dirty"] is True
+
+
 def test_start_error_retains_launcher_recovery_outcome() -> None:
     port, thread = one_reply({"code": "start-failed", "recovery": None}, "error")
     with pytest.raises(AgentError, match="start-failed; launcher-recovery=passed"):

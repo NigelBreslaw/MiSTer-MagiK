@@ -546,15 +546,19 @@ impl crate::Agent {
                         let restored = crate::main_control::handoff("mister_magik_resume\n");
                         return Err(format!("{error}; Main restoration: {restored:?}"));
                     }
-                    self.stop_owned_process()?;
-                    let restored = restore_stage(&root);
-                    let resumed = if handoff_required {
-                        crate::main_control::handoff("mister_magik_resume\n")
-                    } else {
-                        Ok(())
-                    };
-                    restored?;
-                    resumed?;
+                    crate::main_control::resume_after(
+                        || {
+                            self.stop_owned_process()?;
+                            restore_stage(&root)
+                        },
+                        || {
+                            if handoff_required {
+                                crate::main_control::handoff("mister_magik_resume\n")
+                            } else {
+                                Ok(())
+                            }
+                        },
+                    )?;
                     Ok(json!({"restored":true,"requires_explicit_reboot":true}))
                 }
                 _ => Err("unknown publication control action".into()),

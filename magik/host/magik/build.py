@@ -22,6 +22,25 @@ class BuildResult:
     rebuilt: bool
     elapsed_ms: int
     prebuilt: bool = False
+    source_revision: str | None = None
+    source_dirty: bool | None = None
+
+
+def source_metadata(repository: Path) -> tuple[str | None, bool | None]:
+    try:
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+        ).strip()
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=repository,
+                text=True,
+            ).strip()
+        )
+        return revision, dirty
+    except (OSError, subprocess.CalledProcessError):
+        return None, None
 
 
 def build_repository(package: Path) -> Path:
@@ -103,6 +122,13 @@ def _ensure_arm_package(
     require_space(repository, 8 * 1024**3, "ARM build")
     name = prepare(repository, runner)
     environment = []
+    revision, dirty = (
+        source_metadata(repository) if app and app.name == "magik" else (None, None)
+    )
+    if revision is not None:
+        environment += ["--env", f"MISTER_MAGIK_SOURCE_REVISION={revision}"]
+    if dirty is not None:
+        environment += ["--env", f"MISTER_MAGIK_SOURCE_DIRTY={int(dirty)}"]
     if app and app.name == "mini-magik":
         environment += ["--env", f"MAGIK_MINI_BUILD_PROFILE={profile}"]
         if profile == "release-device":
@@ -185,7 +211,13 @@ def _ensure_arm_package(
         raise RuntimeError(
             f"MagiK ARM {package.name} build failed or omitted its binary artifact"
         )
-    return BuildResult(artifact, not fresh, int((time.monotonic() - started) * 1000))
+    return BuildResult(
+        artifact,
+        not fresh,
+        int((time.monotonic() - started) * 1000),
+        source_revision=revision,
+        source_dirty=dirty,
+    )
 
 
 def ensure_arm_application(
@@ -205,7 +237,17 @@ def ensure_arm_application(
         artifact = Path(prebuilt).expanduser().resolve()
         if not artifact.is_file():
             raise RuntimeError("MagiK prebuilt application artifact is unavailable")
-        return BuildResult(artifact, False, 0, prebuilt=True)
+        dirty = os.environ.get("MISTER_MAGIK2_PREBUILT_SOURCE_DIRTY")
+        if dirty not in {None, "0", "1"}:
+            raise ValueError("prebuilt source dirty must be 0 or 1")
+        return BuildResult(
+            artifact,
+            False,
+            0,
+            prebuilt=True,
+            source_revision=os.environ.get("MISTER_MAGIK2_PREBUILT_SOURCE_REVISION"),
+            source_dirty=None if dirty is None else dirty == "1",
+        )
     return ensure_arm_package(probe_root, runner=runner, prepare=prepare)
 
 

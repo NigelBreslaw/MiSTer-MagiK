@@ -12,7 +12,7 @@ import webbrowser
 from pathlib import Path
 
 from .artwork import ensure as ensure_artwork
-from .apps import APPLICATIONS, application, repository
+from .apps import APPLICATIONS, CANONICAL_MAGIK_APP, application, repository
 from .bootstrap import BootstrapError, SshBootstrap
 from .build import ensure_arm_agent, ensure_arm_application, ensure_arm_package
 from .client import AgentError, NativeAgent
@@ -251,7 +251,7 @@ def main() -> int:
             f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(remembered MiSTer)')}"
         )
         print(
-            "Executable: /media/fat/mister-magik-dev/mister-magik-fb"
+            f"Executable: {CANONICAL_MAGIK_APP}"
             if arguments.app == "magik"
             else f"Executable: /media/fat/mister-magik2/{arguments.app}"
         )
@@ -613,12 +613,20 @@ def ensure_application(
         append_event(run, {"phase": "upload", "bytes": len(payload)})
         if app.name == "magik":
             revision = (
-                os.environ.get("MISTER_MAGIK2_PREBUILT_SOURCE_REVISION")
+                built.source_revision
+                or os.environ.get("MISTER_MAGIK2_PREBUILT_SOURCE_REVISION")
                 or subprocess.check_output(
                     ["git", "rev-parse", "HEAD"], cwd=repository(), text=True
                 ).strip()
             )
-            agent.upload(app.name, payload, source_revision=revision)
+            dirty = built.source_dirty
+            if dirty is None and not built.prebuilt:
+                from .build import source_metadata
+
+                _, dirty = source_metadata(repository())
+            agent.upload(
+                app.name, payload, source_revision=revision, source_dirty=dirty
+            )
         else:
             agent.upload(app.name, payload)
         upload_elapsed_ms = max(1, int((time.monotonic() - upload_started) * 1_000))

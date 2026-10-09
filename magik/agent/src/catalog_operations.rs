@@ -444,10 +444,7 @@ mod tests {
                 .clone(),
         };
         let (path, args) = arguments(&request).unwrap();
-        assert_eq!(
-            path,
-            PathBuf::from("/media/fat/mister-magik-dev/mister-magik-fb")
-        );
+        assert_eq!(path, PathBuf::from(crate::app_install::APP));
         assert_eq!(args, vec!["catalog-inspect"]);
         for fields in [
             json!({"layout":"../","action":"inspect"}),
