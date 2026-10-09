@@ -530,6 +530,37 @@ struct ConfirmedPresent<'a> {
     wait_start: Instant,
 }
 
+/// The frame-local values the tooling presentation metrics read for one confirmed present.
+#[cfg(feature = "tooling")]
+struct ToolingPresentation<'a> {
+    card_direct_frame_rendered: bool,
+    card_direct_measurement: &'a mut Option<(u64, u64, u64, u64)>,
+    card_presentation_measurement_enabled: bool,
+    card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
+    custom_draw_done: Instant,
+    custom_draw_start: Instant,
+    frame_start_phase_us: u64,
+    frame_t1: Instant,
+    frame_t2: Instant,
+    frame_t3: Instant,
+    frame_t4: Instant,
+    home_horizontal_input_held: bool,
+    navigation_endpoint_rendered: bool,
+    navigation_transition_composition_active: bool,
+    navigation_transition_renderer: &'static str,
+    navigation_transition_route: &'static str,
+    post_timing: &'a Option<(Instant, Instant)>,
+    pre_render_wait_us: u128,
+    presented_frame: &'a LauncherPresentedFrame,
+    tooling_animation_active: bool,
+    tooling_frame_begin: Instant,
+    tooling_frame_evidence:
+        &'a mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    tooling_tick_us: u64,
+    wait_done: Instant,
+    wait_start: Instant,
+}
+
 impl<'a> FrameLoop<'a> {
     pub(super) fn new(env: Env<'a>) -> Self {
         let Env {
@@ -7068,38 +7099,27 @@ impl<'a> FrameLoop<'a> {
         }
         if *accepted_and_active_confirmed {
             #[cfg(feature = "tooling")]
-            record_tooling_presentation(ToolingPresentation {
-                app: &self.env.app,
+            self.record_tooling_presentation(ToolingPresentation {
                 card_direct_frame_rendered,
                 card_direct_measurement,
                 card_presentation_measurement_enabled,
                 card_work_timing,
                 custom_draw_done,
                 custom_draw_start,
-                director: &mut self.out.director,
-                f: &mut *self.env.f,
                 frame_start_phase_us,
                 frame_t1,
                 frame_t2,
                 frame_t3,
                 frame_t4,
                 home_horizontal_input_held,
-                launcher_card_home: &self.fx.launcher_card_home,
-                nav: &self.ui.nav,
                 navigation_endpoint_rendered,
                 navigation_transition_composition_active,
                 navigation_transition_renderer,
                 navigation_transition_route,
-                pacer: &self.out.pacer,
                 post_timing: &post_timing,
                 pre_render_wait_us,
                 presented_frame,
-                run_start: self.out.run_start,
-                screensaver: &self.fx.screensaver,
-                tooling: &mut self.diag.tooling,
                 tooling_animation_active,
-                tooling_attempt_id: self.diag.tooling_attempt_id,
-                tooling_drop_baseline: &mut self.diag.tooling_drop_baseline,
                 tooling_frame_begin,
                 tooling_frame_evidence,
                 tooling_tick_us,
@@ -7196,6 +7216,268 @@ impl<'a> FrameLoop<'a> {
                         cadence_error,
                     ),
                 );
+            }
+        }
+    }
+
+    /// Records the confirmed present into the tooling session's counters, drop accounting and
+    /// frame evidence.
+    #[cfg(feature = "tooling")]
+    fn record_tooling_presentation(&mut self, ctx: ToolingPresentation<'_>) {
+        let ToolingPresentation {
+            card_direct_frame_rendered,
+            card_direct_measurement,
+            card_presentation_measurement_enabled,
+            card_work_timing,
+            custom_draw_done,
+            custom_draw_start,
+            frame_start_phase_us,
+            frame_t1,
+            frame_t2,
+            frame_t3,
+            frame_t4,
+            home_horizontal_input_held,
+            navigation_endpoint_rendered,
+            navigation_transition_composition_active,
+            navigation_transition_renderer,
+            navigation_transition_route,
+            post_timing,
+            pre_render_wait_us,
+            presented_frame,
+            tooling_animation_active,
+            tooling_frame_begin,
+            tooling_frame_evidence,
+            tooling_tick_us,
+            wait_done,
+            wait_start,
+        } = ctx;
+        if let Some(session) = self.diag.tooling.as_mut() {
+            let metrics = &mut session.metrics;
+            metrics.counters.presentations += 1;
+            if self.fx.screensaver.active {
+                metrics.counters.screensaver_presentations += 1;
+            }
+            metrics.counters.posts += 1;
+            metrics.counters.flips += 1;
+            let render_us = frame_t2.saturating_duration_since(frame_t1).as_micros() as u64;
+            metrics.last_render_us = render_us;
+            metrics.counters.render_us += render_us;
+            if metrics.window_start.is_some() && metrics.window.is_none() {
+                metrics.frame_timings_us.push([
+                    render_us,
+                    presented_frame.main_present_hidden_copy_us as u64,
+                    Instant::now()
+                        .saturating_duration_since(frame_t1)
+                        .as_micros() as u64,
+                ]);
+            }
+            metrics.counters.render_to_present_us += Instant::now()
+                .saturating_duration_since(frame_t1)
+                .as_micros() as u64;
+            if let Some((copy_us, source_timestamp_us, source_generation, age_us)) =
+                card_direct_measurement.take()
+            {
+                metrics.counters.card_hidden_copy_us =
+                    metrics.counters.card_hidden_copy_us.saturating_add(copy_us);
+                metrics.counters.card_source_age_us =
+                    metrics.counters.card_source_age_us.saturating_add(age_us);
+                metrics.last_card_source_timestamp_us = source_timestamp_us;
+                let requested_generation = self
+                    .fx
+                    .launcher_card_home
+                    .as_ref()
+                    .expect("a direct card presentation retains its card session")
+                    .current_request()
+                    .generation;
+                if !metrics.note_card_delivery(requested_generation, source_generation) {
+                    if let Some(frame) = tooling_frame_evidence.as_mut() {
+                        frame.missing_fresh_pose += 1;
+                    }
+                    metrics.record_dropped_frame(
+                        mister_magik_tooling_support::measurement::DroppedFrameRecord {
+                            reason: "delivered artwork does not match the requested pose",
+                            workload:
+                                mister_magik_tooling_support::measurement::FrameWorkload::Card,
+                            dropped_frames: 1,
+                            source_generation,
+                            source_age_us: age_us,
+                            ..Default::default()
+                        },
+                    );
+                }
+            } else if card_presentation_measurement_enabled {
+                metrics.counters.card_synchronous_presentations += 1;
+            }
+            if self.ui.nav.home_horizontal_repeat_active() {
+                metrics.counters.card_continuous_presentations += 1;
+            }
+            let evidence_read_before = tooling_frame_evidence.as_ref().map(|_| Instant::now());
+            match self.env.f.read_magik_presentation_telemetry() {
+                Ok(telemetry) => {
+                    let observed_at = Instant::now();
+                    let animation_active = tooling_animation_active;
+                    if let Some(previous_observation) = &mut self.diag.tooling_drop_baseline {
+                        let previous = previous_observation.telemetry;
+                        let at = previous_observation.at;
+                        let was_animating = previous_observation.motion;
+                        match mister_magik_latch_contract::validate_presentation_telemetry_window(
+                            previous,
+                            telemetry,
+                            observed_at.saturating_duration_since(at).as_micros().max(1) as u64,
+                            8_333,
+                        ) {
+                            Ok(delta) => {
+                                metrics.counters.owned_vblanks +=
+                                    u64::from(delta.owned_vblank_delta);
+                                metrics.counters.presented_vblanks +=
+                                    u64::from(delta.presented_vblank_delta);
+                                let repeated = u64::from(delta.repeated_vblank_delta);
+                                let dropped = if !was_animating && animation_active {
+                                    // A first frame's baseline restarts at its render, so
+                                    // this spans that frame's work up to its post.
+                                    let work_us = post_timing
+                                        .map_or(frame_t4, |(posted, _)| posted)
+                                        .saturating_duration_since(at)
+                                        .as_micros()
+                                        as u64;
+                                    let dropped =
+                                        mister_magik_tooling_support::measurement::first_frame_drops(
+                                            repeated,
+                                            work_us,
+                                            self.out.pacer.period_us(),
+                                        );
+                                    metrics.counters.motion_starts += 1;
+                                    metrics.counters.first_frame_wait_refreshes +=
+                                        repeated - dropped;
+                                    dropped
+                                } else if animation_active || was_animating {
+                                    repeated
+                                } else {
+                                    0
+                                };
+                                metrics.counters.drops += dropped;
+                                if dropped != 0 || tooling_frame_evidence.is_some() {
+                                    let record = mister_magik_tooling_support::measurement::DroppedFrameRecord {
+                                        reason: "owned refresh repeated during motion; see observation interval and phase timeline",
+                                        workload: if self.fx.screensaver.active {
+                                            mister_magik_tooling_support::measurement::FrameWorkload::Screensaver
+                                        } else if navigation_transition_composition_active {
+                                            mister_magik_tooling_support::measurement::FrameWorkload::SystemTransition
+                                        } else if card_work_timing.is_some() {
+                                            mister_magik_tooling_support::measurement::FrameWorkload::Card
+                                        } else {
+                                            mister_magik_tooling_support::measurement::FrameWorkload::Slint
+                                        },
+                                        transition_route: navigation_transition_route,
+                                        transition_renderer: navigation_transition_renderer,
+                                        timeline: Some(mister_magik_tooling_support::measurement::FramePhaseTimeline {
+                                            previous_observation_us: duration_us(self.out.run_start, at),
+                                            frame_begin_us: duration_us(self.out.run_start, tooling_frame_begin),
+                                            render_start_us: duration_us(self.out.run_start, frame_t1),
+                                            render_end_us: duration_us(self.out.run_start, frame_t2),
+                                            custom_draw_start_us: duration_us(self.out.run_start, custom_draw_start),
+                                            custom_draw_end_us: duration_us(self.out.run_start, custom_draw_done),
+                                            present_start_us: duration_us(self.out.run_start, frame_t3),
+                                            post_returned_us: duration_us(self.out.run_start, frame_t4),
+                                            post_request_start_us: post_timing.map(|(at,_)|duration_us(self.out.run_start,at)),
+                                            post_verified_us: post_timing.map(|(_,at)|duration_us(self.out.run_start,at)),
+                                            confirmation_wait_start_us: duration_us(self.out.run_start, wait_start),
+                                            active_observed_us: duration_us(self.out.run_start, wait_done),
+                                            telemetry_observed_us: duration_us(self.out.run_start, observed_at),
+                                            refresh_period_us: self.out.pacer.period_us(),
+                                            frame_start_phase_us,
+                                            present_start_phase_us: u128_to_u64(presented_frame.present_phase_us),
+                                            tooling_tick_us,
+                                            pre_render_wait_us: u128_to_u64(pre_render_wait_us),
+                                            hidden_copy_us: u128_to_u64(presented_frame.main_present_hidden_copy_us),
+                                            hidden_publish_us: u128_to_u64(presented_frame.main_present_hidden_publish_us),
+                                            latch_request_us: u128_to_u64(presented_frame.main_present_request_us),
+                                            post_status_us: presented_frame.main_present_wait_us,
+                                            completion_poll_us: presented_frame.main_present_completion_poll_wall_us,
+                                            previous_active_sequence: previous.active_sequence,
+                                            posted_sequence: presented_frame.main_present_sequence,
+                                            post_active_sequence: presented_frame.main_present_post_active_sequence,
+                                            post_pending_sequence: presented_frame.main_present_post_pending_sequence,
+                                            post_pending: presented_frame.main_present_post_pending,
+                                            previous_owned_refresh: previous.owned_vblank_count,
+                                            owned_refresh_delta: delta.owned_vblank_delta,
+                                            repeated_refresh_delta: delta.repeated_vblank_delta,
+                                        }),
+                                        work:card_work_timing,
+                                        dropped_frames: dropped,
+                                        owned_refresh_observed: Some(telemetry.owned_vblank_count),
+                                        active_sequence: Some(telemetry.active_sequence), ui_render_us: render_us,
+                                        ..Default::default()
+                                    };
+                                    if dropped != 0 {
+                                        metrics.record_dropped_frame(record);
+                                    }
+                                    if let Some(frame) = tooling_frame_evidence.as_mut() {
+                                        frame.record = record;
+                                        frame.telemetry_valid = true;
+                                        frame.telemetry_before_us = duration_us(
+                                            self.out.run_start,
+                                            evidence_read_before.unwrap(),
+                                        );
+                                        frame.previous_read_bracket_us =
+                                            previous_observation.read_bracket_us;
+                                        frame.previous_observation_attempt_id =
+                                            Some(previous_observation.attempt_id);
+                                        frame.refresh_counter = Some(telemetry.owned_vblank_count);
+                                        frame.ownership_loss_count =
+                                            Some(telemetry.ownership_loss_count);
+                                        frame.raw_presented_count =
+                                            Some(telemetry.presented_vblank_count);
+                                        frame.raw_repeat_count =
+                                            Some(telemetry.repeated_vblank_count);
+                                        frame.telemetry_flags = Some(telemetry.flags);
+                                    }
+                                }
+                            }
+                            Err(error) => metrics.error = Some(error.to_string()),
+                        }
+                    }
+                    let card_motion_active = self.ui.nav.screen == Screen::Home
+                        && self
+                            .fx
+                            .launcher_card_home
+                            .as_ref()
+                            .is_some_and(|card| card.is_animating());
+                    let other_motion_active = card_motion_active
+                        || self.ui.nav.home_scroll_active()
+                        || self.ui.nav.screen == Screen::Home
+                            && self.ui.nav.home_horizontal_repeat_active()
+                        || home_horizontal_input_held
+                        || self.fx.screensaver.active
+                        || self.out.director.navigation.is_active()
+                        || self.out.director.orientation.is_active()
+                        || self.ui.nav.screen == Screen::Arcade
+                            && self.ui.nav.arcade.is_scroll_active()
+                        || self.env.app.window().has_active_animations();
+                    let endpoint_rendered = navigation_endpoint_rendered
+                        || card_direct_frame_rendered && !card_motion_active;
+                    let motion_continues =
+                        animation_active && (!endpoint_rendered || other_motion_active);
+                    if animation_active && !motion_continues {
+                        metrics.counters.motion_endpoint_resets += 1;
+                    }
+                    if let Some(frame) = tooling_frame_evidence.as_mut() {
+                        frame.motion_continues_after_present = Some(motion_continues);
+                    }
+                    self.diag.tooling_drop_baseline = Some(
+                        super::launcher_frame_accounting::ToolingPresentationObservation::new(
+                            telemetry,
+                            observed_at,
+                            motion_continues,
+                            self.diag.tooling_attempt_id,
+                            evidence_read_before,
+                            self.out.run_start,
+                        ),
+                    );
+                    metrics.last_physical_drop_count =
+                        Some(presented_frame.main_present_drop_count);
+                }
+                Err(error) => metrics.error = Some(format!("presentation telemetry: {error}")),
             }
         }
     }
