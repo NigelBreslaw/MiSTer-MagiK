@@ -1,13 +1,11 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::launcher_compositor::{
-    LauncherPresentBackend, LauncherPresentResult, LauncherPresentStatus,
-};
+use super::launcher_compositor::{LauncherPresentBackend, LauncherPresentStatus};
 use super::launcher_loop::{LaunchReturnSession, LauncherStatusTextSnapshot};
 #[cfg(feature = "tooling")]
 use super::launcher_pacing::FrameProductionClass;
-use super::launcher_pacing::{FrameProductionTrace, LauncherPacingTrace};
+use super::launcher_pacing::FrameProductionTrace;
 use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
 use crate::launcher_presentation::SelectionFeedbackStamp;
@@ -169,158 +167,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) cpu_t4: FrameAnalyticsCpuStamp,
 }
 
-pub(super) struct LauncherFrameSnapshotBuilder {
-    pub(super) identity: LauncherFrameIdentity,
-    pub(super) timing: LauncherFrameTiming,
-    pub(super) render: LauncherFrameRenderData,
-    pub(super) pacing: LauncherPacingTrace,
-    pub(super) presentation: LauncherPresentResult,
-    pub(super) status: LauncherFrameStatusData,
-    pub(super) cpu: LauncherFrameCpuTrace,
-}
-
-pub(super) struct LauncherFrameIdentity {
-    pub(super) frames: u64,
-    pub(super) selection_feedback: SelectionFeedbackStamp,
-    pub(super) selected: usize,
-    pub(super) visual_index: f32,
-}
-
-pub(super) struct LauncherFrameTiming {
-    pub(super) startup_start: Instant,
-    pub(super) startup_monotonic_us: u64,
-    pub(super) run_start: Instant,
-    pub(super) loop_start: Instant,
-    pub(super) frame_t1: Instant,
-    pub(super) frame_t2: Instant,
-    pub(super) frame_t3: Instant,
-    pub(super) frame_t4: Instant,
-    pub(super) post_present_wait_us: u128,
-    pub(super) custom_draw_start: Instant,
-    pub(super) custom_draw_done: Instant,
-    pub(super) prepare_us: u128,
-}
-
-pub(super) struct LauncherFrameRenderData {
-    pub(super) custom_draw_trace: LauncherCustomDrawTrace,
-    pub(super) prepare_trace: LauncherPrepareTrace,
-    pub(super) dirty_rect: Option<DirtyRect>,
-    pub(super) preview_cache_state: &'static str,
-    pub(super) preview_transition: PreviewTransitionTrace,
-    pub(super) composition_status: UiCompositionStatus,
-    pub(super) screensaver_active: bool,
-    pub(super) screensaver_active_cards: usize,
-    pub(super) frame_production_trace: FrameProductionTrace,
-    pub(super) screensaver_render_trace: ScreensaverRenderTrace,
-}
-
-pub(super) struct LauncherFrameStatusData {
-    pub(super) status_write_due: bool,
-    pub(super) status_string_copy_bytes: usize,
-    pub(super) clock_update_due: bool,
-    pub(super) clock_update_us: u128,
-}
-
-pub(super) struct LauncherFrameCpuTrace {
-    pub(super) loop_start: FrameAnalyticsCpuStamp,
-    pub(super) t0: FrameAnalyticsCpuStamp,
-    pub(super) t1: FrameAnalyticsCpuStamp,
-    pub(super) t2: FrameAnalyticsCpuStamp,
-    pub(super) custom_draw_start: FrameAnalyticsCpuStamp,
-    pub(super) custom_draw_done: FrameAnalyticsCpuStamp,
-    pub(super) t3: FrameAnalyticsCpuStamp,
-    pub(super) t4: FrameAnalyticsCpuStamp,
-}
-
 pub(super) struct LauncherFrameFinishTraceTiming {
     pub(super) runtime_status_write_us: u128,
-}
-
-impl LauncherFrameSnapshotBuilder {
-    pub(super) fn build(self) -> LauncherPresentedFrame {
-        LauncherPresentedFrame {
-            frames: self.identity.frames,
-            selection_feedback: self.identity.selection_feedback,
-            selected: self.identity.selected,
-            visual_index: self.identity.visual_index,
-            startup_start: self.timing.startup_start,
-            startup_monotonic_us: self.timing.startup_monotonic_us,
-            run_start: self.timing.run_start,
-            loop_start: self.timing.loop_start,
-            frame_t1: self.timing.frame_t1,
-            frame_t2: self.timing.frame_t2,
-            frame_t3: self.timing.frame_t3,
-            frame_t4: self.timing.frame_t4,
-            post_present_wait_us: self.timing.post_present_wait_us,
-            custom_draw_start: self.timing.custom_draw_start,
-            custom_draw_done: self.timing.custom_draw_done,
-            custom_draw_trace: self.render.custom_draw_trace,
-            prepare_trace: self.render.prepare_trace,
-            prepare_us: self.timing.prepare_us,
-            dirty_rect: self.render.dirty_rect,
-            copied_rows: self.presentation.copied_rows,
-            direct_preview_rows: self.presentation.direct_preview_rows,
-            present_bytes: self.presentation.present_bytes,
-            wasted_present_bytes: self.presentation.wasted_present_bytes,
-            fb_present_us_override: self.presentation.fb_present_us_override,
-            vsync_us_override: self.presentation.vsync_us_override,
-            cached_present_us: self.presentation.cached_present_us,
-            hidden_compose_us: self.presentation.hidden_compose_us,
-            direct_preview_present_us: self.presentation.direct_preview_present_us,
-            arcade_list_present_us: self.presentation.arcade_list_present_us,
-            main_present_backend: self.presentation.main_present_backend,
-            main_present_status: self.presentation.main_present_status,
-            main_present_buffer: self.presentation.main_present_buffer,
-            main_present_hidden_copy_us: self.presentation.main_present_hidden_copy_us,
-            main_present_hidden_publish_us: self.presentation.main_present_hidden_publish_us,
-            main_present_hidden_copied_bytes: self.presentation.main_present_hidden_copied_bytes,
-            main_present_copy_path: self.presentation.main_present_copy_path,
-            main_present_request_us: self.presentation.main_present_request_us,
-            main_present_hidden_full_copy: self.presentation.main_present_hidden_full_copy,
-            main_present_wait_us: self.presentation.main_present_wait_us,
-            main_present_sequence: self.presentation.main_present_sequence,
-            main_present_post_active_sequence: self.presentation.main_present_post_active_sequence,
-            main_present_post_pending_sequence: self
-                .presentation
-                .main_present_post_pending_sequence,
-            main_present_post_pending: self.presentation.main_present_post_pending,
-            main_present_active_sequence: self.presentation.main_present_sequence,
-            main_present_pending: false,
-            main_present_completion_poll_count: 0,
-            main_present_completion_poll_wall_us: 0,
-            main_present_completion_poll_cpu_us: 0,
-            main_present_flip_count: self.presentation.main_present_flip_count,
-            main_present_drop_count: self.presentation.main_present_drop_count,
-            main_present_receipt_crc: self.presentation.main_present_receipt_crc,
-            vsync_source: self.pacing.vsync_source,
-            vsync_period_us: self.pacing.vsync_period_us,
-            vsync_miss_streak: self.pacing.vsync_miss_streak,
-            vsync_stale_hits: self.pacing.vsync_stale_hits,
-            vsync_wait_start_age_us: self.pacing.vsync_wait_start_age_us,
-            vsync_accepted_hit_age_us: self.pacing.vsync_accepted_hit_age_us,
-            frame_start_phase_us: self.pacing.frame_start_phase_us,
-            present_phase_us: self.pacing.present_phase_us,
-            preview_cache_state: self.render.preview_cache_state,
-            preview_transition: self.render.preview_transition,
-            composition_status: self.render.composition_status,
-            screensaver_active: self.render.screensaver_active,
-            screensaver_active_cards: self.render.screensaver_active_cards,
-            frame_production_trace: self.render.frame_production_trace,
-            screensaver_render_trace: self.render.screensaver_render_trace,
-            status_write_due: self.status.status_write_due,
-            status_string_copy_bytes: self.status.status_string_copy_bytes,
-            clock_update_due: self.status.clock_update_due,
-            clock_update_us: self.status.clock_update_us,
-            cpu_loop_start: self.cpu.loop_start,
-            cpu_t0: self.cpu.t0,
-            cpu_t1: self.cpu.t1,
-            cpu_t2: self.cpu.t2,
-            cpu_custom_draw_start: self.cpu.custom_draw_start,
-            cpu_custom_draw_done: self.cpu.custom_draw_done,
-            cpu_t3: self.cpu.t3,
-            cpu_t4: self.cpu.t4,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2481,127 +2329,6 @@ mod tests {
         }
     }
 
-    fn builder_from_frame(frame: &LauncherPresentedFrame) -> LauncherFrameSnapshotBuilder {
-        LauncherFrameSnapshotBuilder {
-            identity: LauncherFrameIdentity {
-                frames: frame.frames,
-                selection_feedback: frame.selection_feedback.clone(),
-                selected: frame.selected,
-                visual_index: frame.visual_index,
-            },
-            timing: LauncherFrameTiming {
-                startup_start: frame.startup_start,
-                startup_monotonic_us: frame.startup_monotonic_us,
-                run_start: frame.run_start,
-                loop_start: frame.loop_start,
-                frame_t1: frame.frame_t1,
-                frame_t2: frame.frame_t2,
-                frame_t3: frame.frame_t3,
-                frame_t4: frame.frame_t4,
-                post_present_wait_us: frame.post_present_wait_us,
-                custom_draw_start: frame.custom_draw_start,
-                custom_draw_done: frame.custom_draw_done,
-                prepare_us: frame.prepare_us,
-            },
-            render: LauncherFrameRenderData {
-                custom_draw_trace: frame.custom_draw_trace,
-                prepare_trace: frame.prepare_trace,
-                dirty_rect: frame.dirty_rect,
-                preview_cache_state: frame.preview_cache_state,
-                preview_transition: frame.preview_transition,
-                composition_status: frame.composition_status.clone(),
-                screensaver_active: frame.screensaver_active,
-                screensaver_active_cards: frame.screensaver_active_cards,
-                frame_production_trace: frame.frame_production_trace,
-                screensaver_render_trace: frame.screensaver_render_trace,
-            },
-            pacing: LauncherPacingTrace {
-                vsync_source: frame.vsync_source,
-                vsync_period_us: frame.vsync_period_us,
-                vsync_miss_streak: frame.vsync_miss_streak,
-                vsync_stale_hits: frame.vsync_stale_hits,
-                vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
-                vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
-                frame_start_phase_us: frame.frame_start_phase_us,
-                present_phase_us: frame.present_phase_us,
-            },
-            presentation: LauncherPresentResult {
-                readiness_source_evidence: None,
-                copied_rows: frame.copied_rows,
-                direct_preview_rows: frame.direct_preview_rows,
-                present_bytes: frame.present_bytes,
-                wasted_present_bytes: frame.wasted_present_bytes,
-                fb_present_us_override: frame.fb_present_us_override,
-                vsync_us_override: frame.vsync_us_override,
-                cached_present_us: frame.cached_present_us,
-                hidden_compose_us: frame.hidden_compose_us,
-                direct_preview_present_us: frame.direct_preview_present_us,
-                arcade_list_present_us: frame.arcade_list_present_us,
-                main_present_backend: frame.main_present_backend,
-                main_present_status: frame.main_present_status,
-                main_present_buffer: frame.main_present_buffer,
-                main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
-                main_present_hidden_publish_us: frame.main_present_hidden_publish_us,
-                main_present_hidden_copied_bytes: frame.main_present_hidden_copied_bytes,
-                main_present_hidden_full_copy: frame.main_present_hidden_full_copy,
-                main_present_copy_path: frame.main_present_copy_path,
-                main_present_request_us: frame.main_present_request_us,
-                main_present_wait_us: frame.main_present_wait_us,
-                main_present_sequence: frame.main_present_sequence,
-                main_present_post_active_sequence: frame.main_present_post_active_sequence,
-                main_present_post_pending_sequence: frame.main_present_post_pending_sequence,
-                main_present_post_pending: frame.main_present_post_pending,
-                main_present_flip_count: frame.main_present_flip_count,
-                main_present_drop_count: frame.main_present_drop_count,
-                main_present_receipt_crc: frame.main_present_receipt_crc,
-            },
-            status: LauncherFrameStatusData {
-                status_write_due: frame.status_write_due,
-                status_string_copy_bytes: frame.status_string_copy_bytes,
-                clock_update_due: frame.clock_update_due,
-                clock_update_us: frame.clock_update_us,
-            },
-            cpu: LauncherFrameCpuTrace {
-                loop_start: frame.cpu_loop_start,
-                t0: frame.cpu_t0,
-                t1: frame.cpu_t1,
-                t2: frame.cpu_t2,
-                custom_draw_start: frame.cpu_custom_draw_start,
-                custom_draw_done: frame.cpu_custom_draw_done,
-                t3: frame.cpu_t3,
-                t4: frame.cpu_t4,
-            },
-        }
-    }
-
-    #[test]
-    fn frame_snapshot_builder_keeps_default_pacing_values_when_missing() {
-        let start = Instant::now();
-        let frame = presented_frame(43, start, 16_500);
-        let mut builder = builder_from_frame(&frame);
-        builder.pacing = LauncherPacingTrace {
-            vsync_source: None,
-            vsync_period_us: 20_000,
-            vsync_miss_streak: 0,
-            vsync_stale_hits: 0,
-            vsync_wait_start_age_us: 0,
-            vsync_accepted_hit_age_us: 0,
-            frame_start_phase_us: 1_234,
-            present_phase_us: 0,
-        };
-
-        let built = builder.build();
-
-        assert_eq!(built.vsync_source, None);
-        assert_eq!(built.vsync_period_us, 20_000);
-        assert_eq!(built.vsync_miss_streak, 0);
-        assert_eq!(built.vsync_stale_hits, 0);
-        assert_eq!(built.vsync_wait_start_age_us, 0);
-        assert_eq!(built.vsync_accepted_hit_age_us, 0);
-        assert_eq!(built.frame_start_phase_us, 1_234);
-        assert_eq!(built.present_phase_us, 0);
-    }
-
     #[test]
     fn navigation_transition_defers_status_without_consuming_the_deadline() {
         let start = Instant::now();
@@ -2756,28 +2483,5 @@ mod tests {
         assert_eq!(status.slow_frames[0].severity, "cadence-warning");
         assert_eq!(status.slow_frames[0].warning_us, FRAME_CADENCE_WARNING_US);
         assert_eq!(status.slow_frames[0].over_budget_us, 0);
-    }
-
-    #[test]
-    fn frame_snapshot_builder_populates_existing_fields() {
-        let start = Instant::now();
-        let mut expected = presented_frame(42, start, 21_000);
-        expected.main_present_receipt_crc = 0x5a3c;
-
-        let built = builder_from_frame(&expected).build();
-
-        assert_eq!(built.frames, expected.frames);
-        assert_eq!(built.selected, expected.selected);
-        assert_eq!(built.visual_index, expected.visual_index);
-        assert_eq!(built.frame_t4, expected.frame_t4);
-        assert_eq!(built.prepare_trace.catalog_message_count, 2);
-        assert_eq!(built.copied_rows, 12);
-        assert_eq!(built.present_bytes, 23_040);
-        assert_eq!(built.vsync_source, Some(VsyncPaceSource::Timeout));
-        assert_eq!(built.vsync_miss_streak, 3);
-        assert_eq!(built.frame_start_phase_us, 8_000);
-        assert_eq!(built.main_present_receipt_crc, 0x5a3c);
-        assert_eq!(built.preview_cache_state, "exact");
-        assert_eq!(built.status_string_copy_bytes, 128);
     }
 }

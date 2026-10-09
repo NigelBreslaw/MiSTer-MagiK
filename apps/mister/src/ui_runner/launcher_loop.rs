@@ -18,8 +18,6 @@ use super::launcher_confirmation::{
 };
 use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, FrameAnalyticsMode, LauncherCustomDrawTrace, LauncherFrameAccounting,
-    LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
-    LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
 use super::launcher_pacing::{
     FB0_LATE_FRAME_START_HEADROOM_US, FrameProductionClass, FrameProductionTrace,
