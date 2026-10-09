@@ -329,6 +329,7 @@ pub(super) struct ProjectFrame {
     pub(super) custom_home_scene_ready: bool,
     pub(super) custom_home_needs_render: bool,
     pub(super) home_pan_present_active: bool,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub(super) home_horizontal_input_held: bool,
     pub(super) stream_motion_before_render: bool,
     pub(super) wake_reasons: LauncherWakeReasons,
@@ -5772,7 +5773,6 @@ impl<'a> FrameLoop<'a> {
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let mut portrait_arcade_list_pixels = 0_u64;
         let mut portrait_arcade_list_bytes = 0_u64;
-        let preview_blit_start = Instant::now();
         let gui_preview_pmu = self
             .diag
             .gui_profiling
@@ -5844,7 +5844,6 @@ impl<'a> FrameLoop<'a> {
             self.env.window.request_redraw();
         }
         drop(gui_preview_pmu);
-        let preview_blit_us = preview_blit_start.elapsed().as_micros();
         let portrait_preview_rotation_pixels = if self.out.layout.is_portrait() {
             raw_preview
                 .map(|present| match present {
@@ -6428,7 +6427,6 @@ impl<'a> FrameLoop<'a> {
             arcade_list_update_us,
             portrait_arcade_list_pixels,
             portrait_arcade_list_bytes,
-            preview_blit_us,
             portrait_preview_rotation_pixels,
             portrait_preview_blend_pixels,
             portrait_preview_worker_queue_replacements: preview_compositor_telemetry
@@ -7387,14 +7385,6 @@ impl<'a> FrameLoop<'a> {
                 selection_feedback: self.ui.bridge_models.selection_feedback_stamp(),
                 selected: self.ui.nav.arcade.selected,
                 visual_index: self.ui.nav.arcade.visual_index,
-                #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-                home_trace: LauncherHomeFrameTrace::from_nav(&self.ui.nav),
-                search_index_state: match self.ui.nav.arcade_search.status {
-                    launcher::ArcadeSearchStatus::Idle => "idle",
-                    launcher::ArcadeSearchStatus::Searching => "searching",
-                    launcher::ArcadeSearchStatus::Ready => "ready",
-                    launcher::ArcadeSearchStatus::Failed => "failed",
-                },
             },
             timing: LauncherFrameTiming {
                 startup_start: self.out.start,
@@ -7411,8 +7401,6 @@ impl<'a> FrameLoop<'a> {
                 custom_draw_start: render.custom_draw_start,
                 custom_draw_done: render.custom_draw_done,
                 prepare_us: render.prepare_us,
-                home_pan_present_active: project.home_pan_present_active,
-                home_horizontal_input_held: project.home_horizontal_input_held,
                 redraw_pending: render.redraw_pending_for_trace,
                 wake_reasons_bits: render.wake_reasons_bits,
             },

@@ -5747,24 +5747,8 @@ fn preview_terminal_for_route(
         && matches!(presentation_label, "visible" | "detached")
 }
 
-#[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
 fn preview_scroll_exit_after_trace_deadline(_run_start: Instant) -> Option<Instant> {
     None
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn preview_scroll_exit_after_trace_deadline(run_start: Instant) -> Option<Instant> {
-    if !matches!(
-        std::env::var("MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE").as_deref(),
-        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-    ) {
-        return None;
-    }
-    let secs = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_SECS")
-        .ok()?
-        .parse::<u64>()
-        .ok()?;
-    (secs > 0).then(|| run_start + Duration::from_secs(secs))
 }
 
 fn catalog_build_media_gate(

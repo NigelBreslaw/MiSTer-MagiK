@@ -1458,13 +1458,6 @@ pub use stub::{
     start_system_entry,
 };
 
-#[cfg(feature = "diagnostics")]
-pub fn start_from_env() -> Option<CpuProfiler> {
-    let values: std::collections::BTreeMap<String, String> = std::env::vars().collect();
-    let config = CpuProfileConfig::capture_with(|name| values.get(name).map(String::as_str));
-    start(&config)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

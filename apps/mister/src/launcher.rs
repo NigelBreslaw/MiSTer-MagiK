@@ -2102,11 +2102,6 @@ impl LauncherNav {
             .unwrap_or("")
     }
 
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    pub fn home_scroll_max(&self) -> i32 {
-        home_max_scroll(self.home_navigation_count())
-    }
-
     pub fn catalog_build_started(&mut self) {
         self.catalog_update_states.clear();
         self.catalog_build_active = true;

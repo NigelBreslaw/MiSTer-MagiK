@@ -12,10 +12,6 @@ use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
 use crate::launcher_presentation::SelectionFeedbackStamp;
 use mister_magik_fb::latch_readiness::LatchFailure;
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-use std::fmt::Write as _;
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-use std::io::{BufWriter, Write as _};
 
 const FRAME_BUDGET_US: u64 = 16_667;
 const FRAME_CADENCE_WARNING_US: u64 = 16_000;
@@ -25,8 +21,6 @@ const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analy
 const FRAME_ANALYTICS_LEASE_MAX_AGE: Duration = Duration::from_secs(3);
 const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
 const FRAME_SLOW_SAMPLE_CAP: usize = 32;
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
 
 pub(super) struct LauncherFrameAccounting {
     output_route: &'static str,
@@ -46,17 +40,7 @@ pub(super) struct LauncherFrameAccounting {
     direct_preview_present_us: u128,
     arcade_list_present_us: u128,
     rows: u128,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    preview_scroll_trace: Option<PreviewScrollTrace>,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    preview_scroll_trace_duration: Option<Duration>,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    last_preview_trace_loop_start: Option<Instant>,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    last_preview_trace_frame_t4: Option<Instant>,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    last_preview_trace_finish_done: Option<Instant>,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
+    #[cfg(feature = "profile")]
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
     runtime_status_publisher: runtime_status::RuntimeStatusPublisher,
     last_status_write: Instant,
@@ -106,13 +90,6 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) selection_feedback: SelectionFeedbackStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    pub(super) home_trace: LauncherHomeFrameTrace,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) search_index_state: &'static str,
     pub(super) startup_start: Instant,
     pub(super) startup_monotonic_us: u64,
     pub(super) run_start: Instant,
@@ -177,23 +154,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) vsync_accepted_hit_age_us: u64,
     pub(super) frame_start_phase_us: u64,
     pub(super) present_phase_us: u128,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) home_pan_present_active: bool,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) home_horizontal_input_held: bool,
     pub(super) redraw_pending: bool,
     pub(super) wake_reasons_bits: u64,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) arcade_update_label: ArcadeUpdateTrace,
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
     pub(super) composition_status: UiCompositionStatus,
@@ -230,49 +192,6 @@ pub(super) struct LauncherFrameIdentity {
     pub(super) selection_feedback: SelectionFeedbackStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    pub(super) home_trace: LauncherHomeFrameTrace,
-    pub(super) search_index_state: &'static str,
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct LauncherHomeFrameTrace {
-    pub(super) screen: &'static str,
-    pub(super) menu_token: u64,
-    pub(super) selected_token: u64,
-    pub(super) selected_index: usize,
-    pub(super) scroll_x: i32,
-    pub(super) scroll_max: i32,
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-impl LauncherHomeFrameTrace {
-    pub(super) fn from_nav(nav: &LauncherNav) -> Self {
-        Self {
-            screen: screen_label(nav.screen),
-            menu_token: stable_trace_token(nav.current_menu_id()),
-            selected_token: stable_trace_token(nav.current_menu_selected_item_id()),
-            selected_index: nav.selected,
-            scroll_x: nav.scroll_x,
-            scroll_max: nav.home_scroll_max(),
-        }
-    }
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn stable_trace_token(value: &str) -> u64 {
-    // FNV-1a gives trace consumers a stable identity without cloning taxonomy
-    // strings into every buffered frame row.
-    if value.is_empty() {
-        return 0;
-    }
-    value
-        .as_bytes()
-        .iter()
-        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
-        })
 }
 
 pub(super) struct LauncherFrameTiming {
@@ -290,8 +209,6 @@ pub(super) struct LauncherFrameTiming {
     pub(super) custom_draw_start: Instant,
     pub(super) custom_draw_done: Instant,
     pub(super) prepare_us: u128,
-    pub(super) home_pan_present_active: bool,
-    pub(super) home_horizontal_input_held: bool,
     pub(super) redraw_pending: bool,
     pub(super) wake_reasons_bits: u64,
 }
@@ -329,11 +246,6 @@ pub(super) struct LauncherFrameCpuTrace {
 
 pub(super) struct LauncherFrameFinishTraceTiming {
     pub(super) runtime_status_write_us: u128,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    runtime_status_write_deferred: bool,
     pub(super) frame_finish_us: u128,
 }
 
@@ -344,9 +256,6 @@ impl LauncherFrameSnapshotBuilder {
             selection_feedback: self.identity.selection_feedback,
             selected: self.identity.selected,
             visual_index: self.identity.visual_index,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            home_trace: self.identity.home_trace,
-            search_index_state: self.identity.search_index_state,
             startup_start: self.timing.startup_start,
             startup_monotonic_us: self.timing.startup_monotonic_us,
             run_start: self.timing.run_start,
@@ -412,11 +321,8 @@ impl LauncherFrameSnapshotBuilder {
             vsync_accepted_hit_age_us: self.pacing.vsync_accepted_hit_age_us,
             frame_start_phase_us: self.pacing.frame_start_phase_us,
             present_phase_us: self.pacing.present_phase_us,
-            home_pan_present_active: self.timing.home_pan_present_active,
-            home_horizontal_input_held: self.timing.home_horizontal_input_held,
             redraw_pending: self.timing.redraw_pending,
             wake_reasons_bits: self.timing.wake_reasons_bits,
-            arcade_update_label: self.presentation.arcade_update_label,
             preview_cache_state: self.render.preview_cache_state,
             preview_transition: self.render.preview_transition,
             composition_status: self.render.composition_status,
@@ -545,431 +451,7 @@ pub(super) struct LauncherPrepareTrace {
     pub(super) status_string_copy_us: u128,
 }
 
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-struct PreviewScrollTrace {
-    writer: BufWriter<std::fs::File>,
-    rows: Vec<PreviewScrollTraceRow>,
-    row_text: String,
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-struct PreviewScrollTraceRow {
-    frame: u64,
-    elapsed_us: u128,
-    loop_delta_us: u128,
-    selected: usize,
-    visual_index: f32,
-    home_screen: &'static str,
-    home_menu_token: u64,
-    home_selected_token: u64,
-    home_selected_index: usize,
-    home_scroll_x: i32,
-    home_scroll_max: i32,
-    cache_state: &'static str,
-    transition_effect: &'static str,
-    transition_progress: f32,
-    arcade_update: ArcadeUpdateTrace,
-    copied_rows: u32,
-    direct_preview_rows: u32,
-    present_bytes: usize,
-    wasted_present_bytes: usize,
-    prepare_us: u128,
-    catalog_worker_us: u128,
-    catalog_message_count: u32,
-    catalog_backlog: u32,
-    catalog_ready_deferred: u8,
-    catalog_ready_deferred_age_us: u128,
-    media_worker_us: u128,
-    media_gate_us: u128,
-    preview_schedule_us: u128,
-    preview_apply_us: u128,
-    slint_render_us: u128,
-    custom_draw_us: u128,
-    arcade_list_update_us: u128,
-    preview_blit_us: u128,
-    crt_backdrop_prepare_us: u64,
-    crt_backdrop_prepare_pixels: u32,
-    crt_backdrop_blend_us: u64,
-    crt_backdrop_blend_pixels: u32,
-    preview_fade_wall_us: u64,
-    preview_fade_cpu_us: u64,
-    preview_fade_pixels: u32,
-    preview_fade_rows: u32,
-    preview_fade_path: &'static str,
-    preview_fade_alpha_bucket: u8,
-    effect_label_us: u128,
-    pre_render_wait_us: u128,
-    post_present_wait_us: u128,
-    post_frame_tail_us: u128,
-    frame_finish_us: u128,
-    post_finish_tail_us: u128,
-    vsync_us: u128,
-    fb_present_us: u128,
-    cached_present_us: u128,
-    hidden_compose_us: u128,
-    hidden_preview_compose_us: u128,
-    hidden_arcade_compose_us: u128,
-    direct_preview_present_us: u128,
-    arcade_list_present_us: u128,
-    main_present_backend: &'static str,
-    main_present_status: &'static str,
-    main_present_buffer: u8,
-    main_present_hidden_copy_us: u128,
-    main_present_hidden_invalid_bytes: usize,
-    main_present_hidden_rect_count: u32,
-    main_present_hidden_catchup_bytes: usize,
-    main_present_hidden_full_copy: bool,
-    main_present_request_us: u128,
-    main_present_set_vga_fb_us: u128,
-    main_present_wait_us: u64,
-    main_present_sequence: u16,
-    main_present_flip_count: u16,
-    main_present_drop_count: u16,
-    vsync_source: &'static str,
-    vsync_period_us: u64,
-    vsync_miss_streak: u32,
-    vsync_stale_hits: u32,
-    vsync_wait_start_age_us: u64,
-    vsync_accepted_hit_age_us: u64,
-    frame_start_phase_us: u64,
-    present_phase_us: u128,
-    home_pan_present_active: u8,
-    home_horizontal_input_held: u8,
-    redraw_pending: u8,
-    wake_reasons_bits: u64,
-    dirty_y0: usize,
-    dirty_y1: usize,
-    status_write_due: u8,
-    runtime_status_write_deferred: u8,
-    frame_tail_slack_us: u128,
-    status_string_copy_us: u128,
-    status_string_copy_bytes: usize,
-    runtime_status_write_us: u128,
-    status_write_duration_us: u128,
-    wall_us: u128,
-    search_index_state: &'static str,
-    startup_elapsed_us: u128,
-    monotonic_us: u128,
-    screensaver_active: u8,
-    screensaver_active_cards: usize,
-    screensaver_archive_poll_us: u128,
-    screensaver_card_adopt_us: u128,
-    screensaver_cards_adopted: usize,
-    screensaver_parade_advance_us: u128,
-    screensaver_background_us: u128,
-    screensaver_draw_order_us: u128,
-    screensaver_tile_blit_us: u128,
-    screensaver_cards_drawn: usize,
-    screensaver_cards_culled: usize,
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-impl PreviewScrollTrace {
-    fn new(writer: BufWriter<std::fs::File>) -> Self {
-        Self {
-            writer,
-            rows: Vec::with_capacity(PREVIEW_SCROLL_TRACE_FLUSH_ROWS),
-            row_text: String::with_capacity(384),
-        }
-    }
-
-    fn push(&mut self, row: PreviewScrollTraceRow, allow_flush: bool) {
-        self.rows.push(row);
-        if allow_flush && self.rows.len() >= PREVIEW_SCROLL_TRACE_FLUSH_ROWS {
-            self.flush_rows();
-        }
-    }
-
-    fn flush_rows(&mut self) {
-        let rows = std::mem::take(&mut self.rows);
-        for row in rows {
-            self.row_text.clear();
-            row.write_tsv(&mut self.row_text);
-            let _ = self.writer.write_all(self.row_text.as_bytes());
-        }
-        let _ = self.writer.flush();
-    }
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-impl PreviewScrollTraceRow {
-    fn write_tsv(&self, out: &mut String) {
-        let _ = writeln!(
-            out,
-            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            self.frame,
-            self.elapsed_us,
-            self.loop_delta_us,
-            self.selected,
-            self.visual_index,
-            self.home_screen,
-            self.home_menu_token,
-            self.home_selected_token,
-            self.home_selected_index,
-            self.home_scroll_x,
-            self.home_scroll_max,
-            self.cache_state,
-            self.transition_effect,
-            self.transition_progress,
-            self.arcade_update,
-            self.copied_rows,
-            self.direct_preview_rows,
-            self.present_bytes,
-            self.wasted_present_bytes,
-            self.prepare_us,
-            self.catalog_worker_us,
-            self.catalog_message_count,
-            self.catalog_backlog,
-            self.catalog_ready_deferred,
-            self.catalog_ready_deferred_age_us,
-            self.media_worker_us,
-            self.media_gate_us,
-            self.preview_schedule_us,
-            self.preview_apply_us,
-            self.slint_render_us,
-            self.custom_draw_us,
-            self.arcade_list_update_us,
-            self.preview_blit_us,
-            self.preview_fade_wall_us,
-            self.preview_fade_cpu_us,
-            self.preview_fade_pixels,
-            self.preview_fade_rows,
-            self.preview_fade_path,
-            self.preview_fade_alpha_bucket,
-            self.effect_label_us,
-            self.pre_render_wait_us,
-            self.post_present_wait_us,
-            self.post_frame_tail_us,
-            self.vsync_us,
-            self.fb_present_us,
-            self.cached_present_us,
-            self.hidden_compose_us,
-            self.hidden_preview_compose_us,
-            self.hidden_arcade_compose_us,
-            self.direct_preview_present_us,
-            self.arcade_list_present_us,
-            self.main_present_backend,
-            self.main_present_status,
-            self.main_present_buffer,
-            self.main_present_hidden_copy_us,
-            self.main_present_hidden_invalid_bytes,
-            self.main_present_hidden_rect_count,
-            self.main_present_hidden_catchup_bytes,
-            u8::from(self.main_present_hidden_full_copy),
-            self.main_present_request_us,
-            self.main_present_set_vga_fb_us,
-            self.main_present_wait_us,
-            self.main_present_sequence,
-            self.main_present_flip_count,
-            self.main_present_drop_count,
-            self.vsync_source,
-            self.vsync_period_us,
-            self.vsync_miss_streak,
-            self.vsync_stale_hits,
-            self.vsync_wait_start_age_us,
-            self.vsync_accepted_hit_age_us,
-            self.frame_start_phase_us,
-            self.present_phase_us,
-            self.home_pan_present_active,
-            self.home_horizontal_input_held,
-            self.redraw_pending,
-            self.wake_reasons_bits,
-            self.dirty_y0,
-            self.dirty_y1,
-            self.status_write_due,
-            self.runtime_status_write_deferred,
-            self.frame_tail_slack_us,
-            self.status_string_copy_us,
-            self.status_string_copy_bytes,
-            self.runtime_status_write_us,
-            self.status_write_duration_us,
-            self.wall_us
-        );
-        out.pop();
-        let _ = writeln!(
-            out,
-            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            self.frame_finish_us,
-            self.post_finish_tail_us,
-            self.screensaver_active,
-            self.screensaver_active_cards,
-            self.screensaver_archive_poll_us,
-            self.screensaver_card_adopt_us,
-            self.screensaver_cards_adopted,
-            self.screensaver_parade_advance_us,
-            self.screensaver_background_us,
-            self.screensaver_draw_order_us,
-            self.screensaver_tile_blit_us,
-            self.screensaver_cards_drawn,
-            self.screensaver_cards_culled,
-            self.search_index_state,
-            self.startup_elapsed_us,
-            self.monotonic_us,
-            self.crt_backdrop_prepare_us,
-            self.crt_backdrop_prepare_pixels,
-            self.crt_backdrop_blend_us,
-            self.crt_backdrop_blend_pixels
-        );
-    }
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn preview_scroll_trace_row_from_frame(
-    frame: &LauncherPresentedFrame,
-    loop_delta_us: u128,
-    post_frame_tail_us: u128,
-    runtime_status_write_us: u128,
-    runtime_status_write_deferred: bool,
-    frame_finish_us: u128,
-    post_finish_tail_us: u128,
-) -> PreviewScrollTraceRow {
-    let wall_us = (frame.frame_t4 - frame.loop_start).as_micros();
-    let frame_tail_slack_us = u128::from(frame.vsync_period_us).saturating_sub(wall_us);
-    PreviewScrollTraceRow {
-        frame: frame.frames,
-        elapsed_us: frame.loop_start.duration_since(frame.run_start).as_micros(),
-        loop_delta_us,
-        selected: frame.selected,
-        visual_index: frame.visual_index,
-        home_screen: frame.home_trace.screen,
-        home_menu_token: frame.home_trace.menu_token,
-        home_selected_token: frame.home_trace.selected_token,
-        home_selected_index: frame.home_trace.selected_index,
-        home_scroll_x: frame.home_trace.scroll_x,
-        home_scroll_max: frame.home_trace.scroll_max,
-        cache_state: frame.preview_cache_state,
-        transition_effect: frame.preview_transition.effect.label(),
-        transition_progress: frame.preview_transition.progress,
-        arcade_update: frame.arcade_update_label,
-        copied_rows: frame.copied_rows,
-        direct_preview_rows: frame.direct_preview_rows,
-        present_bytes: frame.present_bytes,
-        wasted_present_bytes: frame.wasted_present_bytes,
-        prepare_us: frame.prepare_us,
-        catalog_worker_us: frame.prepare_trace.catalog_worker_us,
-        catalog_message_count: frame.prepare_trace.catalog_message_count,
-        catalog_backlog: frame.prepare_trace.catalog_backlog,
-        catalog_ready_deferred: u8::from(frame.prepare_trace.catalog_ready_deferred),
-        catalog_ready_deferred_age_us: frame.prepare_trace.catalog_ready_deferred_age_us,
-        media_worker_us: frame.prepare_trace.media_worker_us,
-        media_gate_us: frame.prepare_trace.media_gate_us,
-        preview_schedule_us: frame.prepare_trace.preview_schedule_us,
-        preview_apply_us: frame.prepare_trace.preview_apply_us,
-        slint_render_us: (frame.frame_t2 - frame.frame_t1).as_micros(),
-        custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
-        arcade_list_update_us: frame.custom_draw_trace.arcade_list_update_us,
-        preview_blit_us: frame.custom_draw_trace.preview_blit_us,
-        crt_backdrop_prepare_us: frame.custom_draw_trace.crt_backdrop_prepare_us,
-        crt_backdrop_prepare_pixels: frame.custom_draw_trace.crt_backdrop_prepare_pixels,
-        crt_backdrop_blend_us: frame.custom_draw_trace.crt_backdrop_blend_us,
-        crt_backdrop_blend_pixels: frame.custom_draw_trace.crt_backdrop_blend_pixels,
-        preview_fade_wall_us: frame.preview_transition.fade.wall_us,
-        preview_fade_cpu_us: frame.preview_transition.fade.cpu_us,
-        preview_fade_pixels: frame.preview_transition.fade.pixels,
-        preview_fade_rows: frame.preview_transition.fade.rows,
-        preview_fade_path: frame.preview_transition.fade.label(),
-        preview_fade_alpha_bucket: frame.preview_transition.fade.alpha_bucket,
-        effect_label_us: frame.custom_draw_trace.effect_label_us,
-        pre_render_wait_us: frame.pre_render_wait_us,
-        post_present_wait_us: frame.post_present_wait_us,
-        post_frame_tail_us,
-        frame_finish_us,
-        post_finish_tail_us,
-        vsync_us: frame
-            .vsync_us_override
-            .unwrap_or_else(|| (frame.frame_t3 - frame.custom_draw_done).as_micros()),
-        fb_present_us: frame
-            .fb_present_us_override
-            .unwrap_or_else(|| (frame.frame_t4 - frame.frame_t3).as_micros()),
-        cached_present_us: frame.cached_present_us,
-        hidden_compose_us: frame.hidden_compose_us,
-        hidden_preview_compose_us: frame.hidden_preview_compose_us,
-        hidden_arcade_compose_us: frame.hidden_arcade_compose_us,
-        direct_preview_present_us: frame.direct_preview_present_us,
-        arcade_list_present_us: frame.arcade_list_present_us,
-        main_present_backend: frame.main_present_backend.trace_label(),
-        main_present_status: frame.main_present_status.trace_label(),
-        main_present_buffer: frame.main_present_buffer,
-        main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
-        main_present_hidden_invalid_bytes: frame.main_present_hidden_invalid_bytes,
-        main_present_hidden_rect_count: frame.main_present_hidden_rect_count,
-        main_present_hidden_catchup_bytes: frame.main_present_hidden_catchup_bytes,
-        main_present_hidden_full_copy: frame.main_present_hidden_full_copy,
-        main_present_request_us: frame.main_present_request_us,
-        main_present_set_vga_fb_us: frame.main_present_set_vga_fb_us,
-        main_present_wait_us: frame.main_present_wait_us,
-        main_present_sequence: frame.main_present_sequence,
-        main_present_flip_count: frame.main_present_flip_count,
-        main_present_drop_count: frame.main_present_drop_count,
-        vsync_source: frame
-            .vsync_source
-            .map(VsyncPaceSource::label)
-            .unwrap_or("none"),
-        vsync_period_us: frame.vsync_period_us,
-        vsync_miss_streak: frame.vsync_miss_streak,
-        vsync_stale_hits: frame.vsync_stale_hits,
-        vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
-        vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
-        frame_start_phase_us: frame.frame_start_phase_us,
-        present_phase_us: frame.present_phase_us,
-        home_pan_present_active: u8::from(frame.home_pan_present_active),
-        home_horizontal_input_held: u8::from(frame.home_horizontal_input_held),
-        redraw_pending: u8::from(frame.redraw_pending),
-        wake_reasons_bits: frame.wake_reasons_bits,
-        dirty_y0: frame.dirty_rect.map(|rect| rect.y0).unwrap_or(0),
-        dirty_y1: frame.dirty_rect.map(|rect| rect.y1).unwrap_or(0),
-        status_write_due: u8::from(frame.status_write_due),
-        runtime_status_write_deferred: u8::from(runtime_status_write_deferred),
-        frame_tail_slack_us,
-        status_string_copy_us: frame.prepare_trace.status_string_copy_us,
-        status_string_copy_bytes: frame.status_string_copy_bytes,
-        runtime_status_write_us,
-        status_write_duration_us: runtime_status_write_us,
-        wall_us,
-        search_index_state: frame.search_index_state,
-        startup_elapsed_us: frame
-            .loop_start
-            .duration_since(frame.startup_start)
-            .as_micros(),
-        monotonic_us: u128::from(frame.startup_monotonic_us).saturating_add(
-            frame
-                .loop_start
-                .duration_since(frame.startup_start)
-                .as_micros(),
-        ),
-        screensaver_active: u8::from(frame.screensaver_active),
-        screensaver_active_cards: frame.screensaver_active_cards,
-        screensaver_archive_poll_us: frame.screensaver_render_trace.archive_poll_us,
-        screensaver_card_adopt_us: frame.screensaver_render_trace.card_adopt_us,
-        screensaver_cards_adopted: frame.screensaver_render_trace.cards_adopted,
-        screensaver_parade_advance_us: frame.screensaver_render_trace.parade_advance_us,
-        screensaver_background_us: frame.screensaver_render_trace.background_us,
-        screensaver_draw_order_us: frame.screensaver_render_trace.draw_order_us,
-        screensaver_tile_blit_us: frame.screensaver_render_trace.tile_blit_us,
-        screensaver_cards_drawn: frame.screensaver_render_trace.cards_drawn,
-        screensaver_cards_culled: frame.screensaver_render_trace.cards_culled,
-    }
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-impl Drop for PreviewScrollTrace {
-    fn drop(&mut self) {
-        self.flush_rows();
-    }
-}
-
 impl LauncherFrameAccounting {
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    pub(super) fn finish_preview_scroll_trace(&mut self) {
-        if let Some(trace) = self.preview_scroll_trace.as_mut() {
-            trace.flush_rows();
-        }
-        if let Ok(path) = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_COMPLETE") {
-            let _ = std::fs::File::create(path);
-        }
-    }
-
-    #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
     pub(super) fn finish_preview_scroll_trace(&mut self) {}
 }
 
@@ -986,11 +468,6 @@ pub(super) struct LauncherCustomDrawTrace {
         crate::arcade_list_renderer::PersistentArcadeCompositionTrace,
     pub(super) portrait_arcade_list_pixels: u64,
     pub(super) portrait_arcade_list_bytes: u64,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) preview_blit_us: u128,
     pub(super) portrait_preview_rotation_pixels: u64,
     pub(super) portrait_preview_blend_pixels: u64,
     pub(super) portrait_preview_worker_queue_replacements: u64,
@@ -1130,34 +607,6 @@ struct FrameBudgetSample {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum ArcadeUpdateTrace {
-    None,
-    Full,
-    Scroll { delta_y: isize },
-}
-
-impl ArcadeUpdateTrace {
-    pub(super) fn from_update(update: Option<&ArcadeListUpdate>) -> Self {
-        match update {
-            Some(ArcadeListUpdate::Full(_)) => Self::Full,
-            Some(ArcadeListUpdate::Scroll { delta_y, .. }) => Self::Scroll { delta_y: *delta_y },
-            None => Self::None,
-        }
-    }
-}
-
-impl std::fmt::Display for ArcadeUpdateTrace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::None => f.write_str("none"),
-            Self::Full => f.write_str("full"),
-            Self::Scroll { delta_y } => write!(f, "scroll:{delta_y}"),
-        }
-    }
-}
-
-/// What the status snapshot and the automation observer read when a frame finishes.
-#[derive(Clone, Copy)]
 pub(super) struct FrameStatusView<'a> {
     pub(super) nav: &'a LauncherNav,
     pub(super) pad: &'a PadPool,
@@ -1224,8 +673,7 @@ impl LauncherFrameAccounting {
             crt_font_experiment,
             framebuffer_width,
             framebuffer_height,
-            fps_log_enabled: cfg!(any(feature = "bench-tools", feature = "diagnostics"))
-                || profile_fps_log_enabled,
+            fps_log_enabled: profile_fps_log_enabled,
             fps_window_start: run_start,
             fps_frames: 0,
             prepare_us: 0,
@@ -1238,17 +686,7 @@ impl LauncherFrameAccounting {
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
             rows: 0,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            preview_scroll_trace: open_preview_scroll_trace(),
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            preview_scroll_trace_duration: preview_scroll_trace_duration_from_env(),
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            last_preview_trace_loop_start: None,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            last_preview_trace_frame_t4: None,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            last_preview_trace_finish_done: None,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
+            #[cfg(feature = "profile")]
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
             runtime_status_publisher: runtime_status::RuntimeStatusPublisher::new(),
             last_status_write: Instant::now() - Duration::from_secs(2),
@@ -1334,14 +772,7 @@ impl LauncherFrameAccounting {
     }
 
     pub(super) fn preview_scroll_trace_enabled(&self) -> bool {
-        #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-        {
-            false
-        }
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        {
-            self.preview_scroll_trace.is_some()
-        }
+        false
     }
 
     pub(super) fn status_write_due(&self) -> bool {
@@ -1364,10 +795,6 @@ impl LauncherFrameAccounting {
         start: Instant,
         disp: &mut MappedRgb565Framebuffer,
         status: FrameStatusView<'_>,
-        #[cfg_attr(
-            not(any(feature = "bench-tools", feature = "diagnostics")),
-            allow(unused_variables)
-        )]
         defer_preview_trace_flush: bool,
     ) {
         let timing = self.finish_frame_before_trace(&frame, status);
@@ -1413,7 +840,6 @@ impl LauncherFrameAccounting {
         let frame_finish_us = frame_finish_start.elapsed().as_micros();
         LauncherFrameFinishTraceTiming {
             runtime_status_write_us,
-            runtime_status_write_deferred,
             frame_finish_us,
         }
     }
@@ -1441,7 +867,7 @@ impl LauncherFrameAccounting {
         self.record_stable_samples(frame.frames, disp);
         self.last_rendered_frame_at = frame.frame_t4;
         self.idle_loops_since_status = 0;
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
+        #[cfg(feature = "profile")]
         self.record_boot_frame_profile(frame, disp);
         self.record_first_frame(frame, start, catalog_ready);
     }
@@ -1452,18 +878,6 @@ impl LauncherFrameAccounting {
         timing: LauncherFrameFinishTraceTiming,
         defer_preview_trace_flush: bool,
     ) {
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        {
-            self.write_preview_trace(
-                frame,
-                timing.runtime_status_write_us,
-                timing.runtime_status_write_deferred,
-                timing.frame_finish_us,
-                defer_preview_trace_flush,
-            );
-            self.last_preview_trace_finish_done = Some(Instant::now());
-        }
-        #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
         {
             let _ = (frame, timing, defer_preview_trace_flush);
         }
@@ -1522,78 +936,6 @@ impl LauncherFrameAccounting {
             composition_status,
             Some((self.idle_loops_since_status, last_frame_ms_ago)),
         );
-    }
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    fn write_preview_trace(
-        &mut self,
-        frame: &LauncherPresentedFrame,
-        runtime_status_write_us: u128,
-        runtime_status_write_deferred: bool,
-        frame_finish_us: u128,
-        defer_flush: bool,
-    ) {
-        if self
-            .preview_scroll_trace_duration
-            .is_some_and(|limit| frame.loop_start.duration_since(frame.run_start) > limit)
-        {
-            self.close_preview_scroll_trace();
-            return;
-        }
-
-        if self.preview_scroll_trace.is_none() {
-            return;
-        }
-
-        let loop_delta_us = self
-            .last_preview_trace_loop_start
-            .map(|previous| {
-                frame
-                    .loop_start
-                    .saturating_duration_since(previous)
-                    .as_micros()
-            })
-            .unwrap_or(0);
-        let post_frame_tail_us = self
-            .last_preview_trace_frame_t4
-            .map(|previous| {
-                frame
-                    .loop_start
-                    .saturating_duration_since(previous)
-                    .as_micros()
-            })
-            .unwrap_or(0);
-        let post_finish_tail_us = self
-            .last_preview_trace_finish_done
-            .map(|previous| {
-                frame
-                    .loop_start
-                    .saturating_duration_since(previous)
-                    .as_micros()
-            })
-            .unwrap_or(0);
-        self.last_preview_trace_loop_start = Some(frame.loop_start);
-        self.last_preview_trace_frame_t4 = Some(frame.frame_t4);
-
-        let row = preview_scroll_trace_row_from_frame(
-            frame,
-            loop_delta_us,
-            post_frame_tail_us,
-            runtime_status_write_us,
-            runtime_status_write_deferred,
-            frame_finish_us,
-            post_finish_tail_us,
-        );
-        if let Some(trace) = self.preview_scroll_trace.as_mut() {
-            trace.push(row, !defer_flush);
-        }
-    }
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    fn close_preview_scroll_trace(&mut self) {
-        if let Some(mut trace) = self.preview_scroll_trace.take() {
-            trace.flush_rows();
-        }
     }
 
     fn record_first_copy(
@@ -2213,7 +1555,7 @@ impl LauncherFrameAccounting {
         }
     }
 
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
+    #[cfg(feature = "profile")]
     fn record_boot_frame_profile(
         &mut self,
         frame: &LauncherPresentedFrame,
@@ -2811,34 +2153,6 @@ fn usize_to_u32_saturating(value: usize) -> u32 {
     value.min(u32::MAX as usize) as u32
 }
 
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn preview_scroll_trace_duration_from_env() -> Option<Duration> {
-    let secs = std::env::var("MISTER_PREVIEW_SCROLL_TRACE_SECS")
-        .ok()?
-        .parse::<u64>()
-        .ok()?;
-    (secs > 0).then(|| Duration::from_secs(secs))
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
-    std::env::var("MISTER_PREVIEW_SCROLL_TRACE")
-        .ok()
-        .and_then(|path| {
-            let file = std::fs::File::create(&path)
-                .map_err(|e| crate::ui_errln!("preview scroll trace: create {path} failed: {e}"))
-                .ok()?;
-            let mut file = BufWriter::with_capacity(64 * 1024, file);
-            file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_cards_adopted\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\tcrt_backdrop_prepare_us\tcrt_backdrop_prepare_pixels\tcrt_backdrop_blend_us\tcrt_backdrop_blend_pixels\n",
-            )
-            .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
-            .ok()?;
-            crate::ui_logln!("preview_scroll_trace={path}");
-            Some(PreviewScrollTrace::new(file))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3112,9 +2426,6 @@ mod tests {
             selection_feedback: SelectionFeedbackStamp::default(),
             selected: 0,
             visual_index: 0.0,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-            home_trace: LauncherHomeFrameTrace::default(),
-            search_index_state: "building",
             startup_start: loop_start,
             startup_monotonic_us: 1_000_000,
             run_start: loop_start,
@@ -3212,11 +2523,8 @@ mod tests {
             vsync_accepted_hit_age_us: 500,
             frame_start_phase_us: 8_000,
             present_phase_us: 0,
-            home_pan_present_active: true,
-            home_horizontal_input_held: true,
             redraw_pending: true,
             wake_reasons_bits: 0x40,
-            arcade_update_label: ArcadeUpdateTrace::None,
             preview_cache_state: "exact",
             preview_transition: PreviewTransitionTrace::default(),
             composition_status: UiCompositionStatus::default(),
@@ -3246,9 +2554,6 @@ mod tests {
                 selection_feedback: frame.selection_feedback.clone(),
                 selected: frame.selected,
                 visual_index: frame.visual_index,
-                #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-                home_trace: frame.home_trace,
-                search_index_state: frame.search_index_state,
             },
             timing: LauncherFrameTiming {
                 startup_start: frame.startup_start,
@@ -3265,8 +2570,6 @@ mod tests {
                 custom_draw_start: frame.custom_draw_start,
                 custom_draw_done: frame.custom_draw_done,
                 prepare_us: frame.prepare_us,
-                home_pan_present_active: frame.home_pan_present_active,
-                home_horizontal_input_held: frame.home_horizontal_input_held,
                 redraw_pending: frame.redraw_pending,
                 wake_reasons_bits: frame.wake_reasons_bits,
             },
@@ -3329,7 +2632,6 @@ mod tests {
                 main_present_flip_count: frame.main_present_flip_count,
                 main_present_drop_count: frame.main_present_drop_count,
                 main_present_receipt_crc: frame.main_present_receipt_crc,
-                arcade_update_label: frame.arcade_update_label,
             },
             status: LauncherFrameStatusData {
                 status_write_due: frame.status_write_due,
@@ -3423,139 +2725,6 @@ mod tests {
         assert_eq!(built.vsync_accepted_hit_age_us, 0);
         assert_eq!(built.frame_start_phase_us, 1_234);
         assert_eq!(built.present_phase_us, 0);
-    }
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    #[test]
-    fn frame_snapshot_builder_preserves_preview_trace_row_output() {
-        let start = Instant::now();
-        let expected = presented_frame(44, start, 22_000);
-        let built = builder_from_frame(&expected).build();
-        let loop_delta_us = 16_667;
-        let runtime_status_write_us = 321;
-        let mut expected_row = String::new();
-        let mut built_row = String::new();
-
-        preview_scroll_trace_row_from_frame(
-            &expected,
-            loop_delta_us,
-            3_210,
-            runtime_status_write_us,
-            false,
-            654,
-            987,
-        )
-        .write_tsv(&mut expected_row);
-        preview_scroll_trace_row_from_frame(
-            &built,
-            loop_delta_us,
-            3_210,
-            runtime_status_write_us,
-            false,
-            654,
-            987,
-        )
-        .write_tsv(&mut built_row);
-
-        assert_eq!(built_row, expected_row);
-    }
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    #[test]
-    fn preview_trace_keeps_launcher_start_clock_when_benchmark_clock_is_rebased() {
-        let startup_start = Instant::now();
-        let loop_start = startup_start + Duration::from_millis(250);
-        let mut frame = presented_frame(45, loop_start, 16_000);
-        frame.startup_start = startup_start;
-        frame.startup_monotonic_us = 1_000_000;
-        frame.run_start = loop_start;
-
-        let row = preview_scroll_trace_row_from_frame(&frame, 16_667, 0, 0, false, 0, 0);
-
-        assert_eq!(row.elapsed_us, 0);
-        assert_eq!(row.startup_elapsed_us, 250_000);
-        assert_eq!(row.monotonic_us, 1_250_000);
-    }
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    #[test]
-    fn preview_trace_uses_present_timing_overrides_when_present_happens_before_vsync() {
-        let start = Instant::now();
-        let frame = presented_frame(45, start, 22_000);
-        let mut builder = builder_from_frame(&frame);
-        builder.presentation.fb_present_us_override = Some(1_700);
-        builder.presentation.vsync_us_override = Some(8_200);
-        builder.presentation.hidden_compose_us = 730;
-        builder.presentation.hidden_preview_compose_us = 230;
-        builder.presentation.hidden_arcade_compose_us = 500;
-        builder.presentation.direct_preview_present_us = 230;
-        builder.presentation.arcade_list_present_us = 500;
-        let built = builder.build();
-
-        let row = preview_scroll_trace_row_from_frame(&built, 16_667, 3_210, 0, false, 654, 987);
-
-        assert_eq!(row.fb_present_us, 1_700);
-        assert_eq!(row.vsync_us, 8_200);
-        assert_eq!(row.hidden_compose_us, 730);
-        assert_eq!(row.hidden_preview_compose_us, 230);
-        assert_eq!(row.hidden_arcade_compose_us, 500);
-        assert_eq!(row.direct_preview_present_us, 230);
-        assert_eq!(row.arcade_list_present_us, 500);
-        assert_eq!(row.pre_render_wait_us, 400);
-        assert_eq!(row.post_present_wait_us, 800);
-        assert_eq!(row.post_frame_tail_us, 3_210);
-        assert_eq!(row.runtime_status_write_deferred, 0);
-        assert_eq!(row.frame_tail_slack_us, 0);
-        assert_eq!(row.status_write_duration_us, 0);
-        assert_eq!(row.frame_finish_us, 654);
-        assert_eq!(row.post_finish_tail_us, 987);
-        assert_eq!(row.home_pan_present_active, 1);
-        assert_eq!(row.home_horizontal_input_held, 1);
-        assert_eq!(row.redraw_pending, 1);
-        assert_eq!(row.wake_reasons_bits, 0x40);
-    }
-
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    #[test]
-    fn preview_trace_serializes_typed_presentation_labels_at_the_accounting_edge() {
-        let start = Instant::now();
-        let cases = [
-            (
-                LauncherPresentBackend::None,
-                LauncherPresentStatus::None,
-                "none",
-                "none",
-            ),
-            (
-                LauncherPresentBackend::Fb0Dirty,
-                LauncherPresentStatus::None,
-                "fb0-dirty",
-                "none",
-            ),
-            (
-                LauncherPresentBackend::FpgaVblankLatchHidden,
-                LauncherPresentStatus::Ok,
-                "fpga-vblank-latch-hidden",
-                "ok",
-            ),
-            (
-                LauncherPresentBackend::FpgaVblankLatchHidden,
-                LauncherPresentStatus::Unsupported,
-                "fpga-vblank-latch-hidden",
-                "unsupported",
-            ),
-        ];
-
-        for (backend, status, expected_backend, expected_status) in cases {
-            let mut frame = presented_frame(45, start, 22_000);
-            frame.main_present_backend = backend;
-            frame.main_present_status = status;
-
-            let row = preview_scroll_trace_row_from_frame(&frame, 16_667, 0, 0, false, 0, 0);
-
-            assert_eq!(row.main_present_backend, expected_backend);
-            assert_eq!(row.main_present_status, expected_status);
-        }
     }
 
     #[test]

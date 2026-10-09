@@ -900,7 +900,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let mut arcade_copy_trace =
             crate::arcade_list_renderer::PersistentArcadeCopyTrace::default();
         let mut preview_redraw_rect = None;
-        let mut arcade_redraw_update = None;
         let layer_target = self.targets.layer_target;
         let hardware = &mut *self.targets.hardware;
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
@@ -944,7 +943,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 PresentCopyStats::default(),
                 crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(),
                 None,
-                None,
             );
             return Ok(LauncherPresentCycle {
                 #[cfg(feature = "tooling")]
@@ -970,7 +968,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             self.profile_latch_phases,
             |hidden, plan, preview_publication, arcade_publication, arcade_mirror| {
                 preview_redraw_rect = plan.preview_redraw;
-                arcade_redraw_update = plan.arcade_redraw;
                 if let Some(rect) = plan.preview_redraw {
                     let preview_pmu = self
                         .profile_latch_phases
@@ -1106,7 +1103,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             arcade_stats,
             arcade_copy_trace,
             preview_redraw_rect,
-            arcade_redraw_update,
         );
         let frame_t4 = Instant::now();
         let cpu_t4 = FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode);
@@ -1208,7 +1204,6 @@ fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
         main_present_flip_count: 0,
         main_present_drop_count: 0,
         main_present_receipt_crc: 0,
-        arcade_update_label: stats.arcade_update_label,
     }
 }
 
@@ -1232,7 +1227,6 @@ fn latch_present_result(
     arcade_stats: PresentCopyStats,
     arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace,
     preview_redraw_rect: Option<DirtyRect>,
-    arcade_redraw_update: Option<ArcadeListUpdate>,
 ) -> LauncherPresentResult {
     let present_us = stats.copy_us
         + stats.publish_us
@@ -1288,7 +1282,6 @@ fn latch_present_result(
         main_present_flip_count: stats.flip_count,
         main_present_drop_count: stats.drop_count,
         main_present_receipt_crc: stats.receipt_crc,
-        arcade_update_label: ArcadeUpdateTrace::from_update(arcade_redraw_update.as_ref()),
     }
 }
 
@@ -1329,7 +1322,6 @@ fn empty_present_result() -> LauncherPresentResult {
         main_present_flip_count: 0,
         main_present_drop_count: 0,
         main_present_receipt_crc: 0,
-        arcade_update_label: ArcadeUpdateTrace::None,
     }
 }
 

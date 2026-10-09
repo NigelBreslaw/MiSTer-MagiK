@@ -51,8 +51,6 @@ ui = [
     "dep:mister-magik-framebuffer-stream",
     "dep:slint",
 ]
-diagnostics = []
-bench-tools = []
 bench-scenes = []
 
 [build-dependencies]

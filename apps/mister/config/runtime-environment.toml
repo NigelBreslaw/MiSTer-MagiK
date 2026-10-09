@@ -470,76 +470,6 @@ aliases = []
 documentation = { summary = "Controls fb diagnostic rect behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_FB_MAP_BANDWIDTH_FRAMES"
-owner = "apps/mister/src/app_entry.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls fb map bandwidth frames behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_FB_MAP_BANDWIDTH_H"
-owner = "apps/mister/src/app_entry.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls fb map bandwidth h behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_FB_MAP_BANDWIDTH_W"
-owner = "apps/mister/src/app_entry.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls fb map bandwidth w behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_FB_MAP_REPORT_H"
-owner = "apps/mister/src/app_entry.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls fb map report h behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_FB_MAP_REPORT_W"
-owner = "apps/mister/src/app_entry.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls fb map report w behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_FB_PRESENT_DELAY_US"
 owner = "apps/mister/src/visual_platform.rs"
 classification = "production"
@@ -580,34 +510,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls fb route reassert frames behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_FPGA_LATCH_PATTERN_FRAMES"
-owner = "apps/mister/src/app_entry.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls fpga latch pattern frames behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_FPGA_LATCH_PATTERN_PERIOD_US"
-owner = "apps/mister/src/app_entry.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls fpga latch pattern period us behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FRAMEBUFFER_STREAM_SCALE"
@@ -2190,20 +2092,6 @@ aliases = []
 documentation = { summary = "Controls preview run label behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "diagnostic"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls preview scroll exit after trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM"
 owner = "crates/catalog/src/preview_worker.rs"
 classification = "production"
@@ -2216,48 +2104,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Skips preview archive warming during scroll benchmarks", accepted_values = ["1", "on", "true", "yes"], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PREVIEW_SCROLL_TRACE"
-owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls preview scroll trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PREVIEW_SCROLL_TRACE_COMPLETE"
-owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls preview scroll trace complete behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PREVIEW_SCROLL_TRACE_SECS"
-owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
-classification = "diagnostic"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls preview scroll trace secs behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_TRACE"
@@ -2538,20 +2384,6 @@ conflicts = []
 sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls snes preview archive behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_STREAM_SCALAR_BENCH_SAMPLES"
-owner = "mister/platform/runtime/src/framebuffer/downsample.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls stream scalar bench samples behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SYSTEM_ENTRY_PROFILE_OUT"

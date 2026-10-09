@@ -126,9 +126,6 @@ pub mod macos_preview_content;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod media_bench_download;
-#[cfg(all(feature = "ui", feature = "bench-tools"))]
-#[doc(hidden)]
-pub mod media_bench_save;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[doc(hidden)]
 pub mod media_http;
@@ -150,9 +147,6 @@ pub mod pmu_probe;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod pmu_profile;
-#[cfg(all(feature = "ui", any(feature = "bench-tools", feature = "diagnostics")))]
-#[doc(hidden)]
-pub mod preview_pack_bench;
 #[cfg(feature = "ui")]
 #[cfg_attr(
     any(

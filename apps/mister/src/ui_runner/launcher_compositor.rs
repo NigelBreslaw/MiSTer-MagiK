@@ -1043,7 +1043,6 @@ pub(super) struct LauncherPresentResult {
     pub(super) main_present_flip_count: u16,
     pub(super) main_present_drop_count: u16,
     pub(super) main_present_receipt_crc: u16,
-    pub(super) arcade_update_label: ArcadeUpdateTrace,
 }
 
 #[cfg(test)]
