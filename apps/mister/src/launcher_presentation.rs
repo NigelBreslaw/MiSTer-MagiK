@@ -30,7 +30,7 @@ use mister_magik_ui::launcher::{
     MenuItemPresentation, MenuItemStatus, MisterUi, NavigationView, OverlayView, SettingsView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -328,52 +328,6 @@ macro_rules! set_view_string_if_changed {
             $view.$setter(SharedString::from(source));
         }
     }};
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BridgeChurnCounters {
-    pub(crate) model_replacements: u64,
-    pub(crate) row_mutations: u64,
-    pub(crate) row_allocations: u64,
-    pub(crate) shared_string_constructions: u64,
-    pub(crate) model_allocation_us: u64,
-}
-
-impl BridgeChurnCounters {
-    #[cfg(feature = "ui")]
-    pub(crate) fn saturating_sub(self, earlier: Self) -> Self {
-        Self {
-            model_replacements: self
-                .model_replacements
-                .saturating_sub(earlier.model_replacements),
-            row_mutations: self.row_mutations.saturating_sub(earlier.row_mutations),
-            row_allocations: self.row_allocations.saturating_sub(earlier.row_allocations),
-            shared_string_constructions: self
-                .shared_string_constructions
-                .saturating_sub(earlier.shared_string_constructions),
-            model_allocation_us: self
-                .model_allocation_us
-                .saturating_sub(earlier.model_allocation_us),
-        }
-    }
-}
-
-thread_local! {
-    static BRIDGE_CHURN_ENABLED: Cell<bool> = const { Cell::new(false) };
-    static BRIDGE_CHURN_COUNTERS: RefCell<BridgeChurnCounters> = const {
-        RefCell::new(BridgeChurnCounters {
-            model_replacements: 0,
-            row_mutations: 0,
-            row_allocations: 0,
-            shared_string_constructions: 0,
-            model_allocation_us: 0,
-        })
-    };
-}
-
-#[cfg(feature = "ui")]
-pub(crate) fn bridge_churn_snapshot() -> BridgeChurnCounters {
-    BRIDGE_CHURN_COUNTERS.with(|counters| *counters.borrow())
 }
 
 struct HubText {
@@ -735,18 +689,6 @@ pub struct PresenterTiming {
     pub hub_counts_us: [u64; 2],
 }
 
-struct BridgeChurnMeasurement(bool);
-impl BridgeChurnMeasurement {
-    fn begin() -> Self {
-        Self(BRIDGE_CHURN_ENABLED.with(|enabled| enabled.replace(true)))
-    }
-}
-impl Drop for BridgeChurnMeasurement {
-    fn drop(&mut self) {
-        BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(self.0));
-    }
-}
-
 fn presenter_stage(start: &mut Option<Instant>) -> u64 {
     start.map_or(0, |previous| {
         let now = Instant::now();
@@ -799,7 +741,6 @@ impl LauncherViewPresenters {
         active_display_fallback: Option<(u16, u16)>,
         measure: bool,
     ) -> Option<PresenterTiming> {
-        let _churn = measure.then(BridgeChurnMeasurement::begin);
         let mut timing = PresenterTiming::default();
         let mut stage = measure.then(Instant::now);
         let navigation = app.global::<NavigationView>();

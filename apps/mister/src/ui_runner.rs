@@ -97,7 +97,6 @@ pub(crate) use catalog_worker::run_catalog_worker_child;
 #[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
 mod crt_backdrop_controller;
-mod crt_trial_loop;
 mod launch_handoff_session;
 mod launcher_bridge;
 mod launcher_bridge_sync;
@@ -217,7 +216,6 @@ mod video_loop;
 use catalog_worker::*;
 #[cfg(not(mister_ui_scope_launcher))]
 use controller_loop::*;
-use crt_trial_loop::*;
 use launch_handoff_session::*;
 use launcher_bridge::*;
 use launcher_bridge_sync::*;
@@ -274,8 +272,6 @@ pub const UI_SCENES: &[&str] = &[
     "launcher",
     #[cfg(not(mister_ui_scope_launcher))]
     "controller_test",
-    "crt_probe", // Bounded attended slot diagnostics; never a production launcher mode.
-    "crt_trial",
     #[cfg(not(mister_ui_scope_launcher))]
     "tear_pattern",
     #[cfg(all(
@@ -402,16 +398,6 @@ pub fn run_ui(
             crate::ui_errln!("warning: failed to set FPGA audio volume: {e}");
             boot_analytics::event("set_audio_volume_failed", format!("error={e}"));
         }
-    }
-
-    if scene == "crt_probe" {
-        run_crt_probe_loop(secs, &ui, f, &mut display_session);
-        return;
-    }
-
-    if scene == "crt_trial" {
-        run_crt_trial_loop(secs, &ui, f, &mut display_session);
-        return;
     }
 
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);

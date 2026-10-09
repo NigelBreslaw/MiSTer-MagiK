@@ -385,34 +385,6 @@ aliases = []
 documentation = { summary = "Selects the volatile CRT240 composition policy", accepted_values = ["native", "legacy-480"], value_policy = "document" }
 
 [[control]]
-name = "MISTER_CRT_PROBE_PATTERN"
-owner = "apps/mister/src/ui_runner/crt_trial_loop.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls crt probe pattern behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CRT_TRIAL_CONTENT_BOUNDS"
-owner = "apps/mister/src/ui_runner/crt_trial_loop.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls crt trial content bounds behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_DIRTY_RECT_BROAD_PCT"
 owner = "mister/platform/runtime/src/framebuffer/target.rs"
 classification = "production"
@@ -595,63 +567,6 @@ aliases = []
 documentation = { summary = "Controls glyph alpha threshold behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_GUI_FRAME_PROFILE"
-owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
-classification = "diagnostic"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "enum"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls gui frame profile behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_GUI_FRAME_PROFILE_COMPLETE"
-owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls gui frame profile complete behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_GUI_FRAME_PROFILE_PMU"
-owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls gui frame profile pmu behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_GUI_FRAME_PROFILE_ROUTE"
-owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
-classification = "diagnostic"
-value_shape = "enum token"
-default_behavior = "uses arcade-velocity when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "enum"
-typed_default = "arcade-velocity"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Selects the fixed GUI frame profiling route", accepted_values = ["arcade-velocity", "settled-composition", "bridge-churn"], value_policy = "document" }
-
-[[control]]
 name = "MISTER_INPUT_INTEGRITY_STALL_MS"
 owner = "apps/mister/src/process_config.rs"
 classification = "test"
@@ -678,20 +593,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls input integrity trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_INPUT_LATENCY_LAB_ARM"
-owner = "apps/mister/src/process_config.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "benchmark only"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls input latency lab arm behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_INPUT_LATENCY_LAB_READER_POLICY"
@@ -1462,20 +1363,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls particle command order behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PARTICLE_PMU"
-owner = "apps/mister/src/particle_renderer.rs"
-classification = "diagnostic"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "developer diagnostic"
-parser = "enum"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls particle pmu behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PARTICLE_PROJECTION"

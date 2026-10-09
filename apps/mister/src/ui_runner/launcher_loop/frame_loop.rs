@@ -285,7 +285,6 @@ pub(super) struct PreInputFrame {
     pub(super) arcade_filter_visual_index_at_loop_start: f32,
     pub(super) prepare_trace_enabled: bool,
     pub(super) prepare_trace: LauncherPrepareTrace,
-    pub(super) bridge_churn_frame_start: crate::launcher_presentation::BridgeChurnCounters,
     pub(super) effective_view: EffectiveLauncherView,
     pub(super) launching: bool,
     pub(super) setup_active: bool,
@@ -1008,7 +1007,6 @@ impl<'a> FrameLoop<'a> {
             slint_timer_dispatch_us,
             ..LauncherPrepareTrace::default()
         };
-        let bridge_churn_frame_start = crate::launcher_presentation::bridge_churn_snapshot();
         if background_work_allowed
             && self.lib.catalog_ready
             && self.lib.user_state_session.available()
@@ -1737,7 +1735,6 @@ impl<'a> FrameLoop<'a> {
             arcade_filter_visual_index_at_loop_start,
             prepare_trace_enabled,
             prepare_trace,
-            bridge_churn_frame_start,
             effective_view,
             launching,
             setup_active,
@@ -3131,14 +3128,6 @@ impl<'a> FrameLoop<'a> {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
         pre_input.prepare_trace.bridge_model_projection_us = bridge_model_projection_us;
-        let bridge_churn_delta = crate::launcher_presentation::bridge_churn_snapshot()
-            .saturating_sub(pre_input.bridge_churn_frame_start);
-        pre_input.prepare_trace.bridge_model_replacements = bridge_churn_delta.model_replacements;
-        pre_input.prepare_trace.bridge_row_mutations = bridge_churn_delta.row_mutations;
-        pre_input.prepare_trace.bridge_row_allocations = bridge_churn_delta.row_allocations;
-        pre_input.prepare_trace.bridge_shared_string_constructions =
-            bridge_churn_delta.shared_string_constructions;
-        pre_input.prepare_trace.bridge_model_allocation_us = bridge_churn_delta.model_allocation_us;
         #[cfg(feature = "tooling")]
         if let Some(frame) = begin.tooling_frame_evidence.as_mut() {
             frame.bridge_us = u128_to_u64(pre_input.prepare_trace.bridge_sync_us);
@@ -3149,8 +3138,6 @@ impl<'a> FrameLoop<'a> {
             frame.bridge_presenter_us = bridge_presenter.map(|timing| timing.stages_us);
             frame.bridge_hub_counts_us = bridge_presenter.map(|timing| timing.hub_counts_us);
             frame.bridge_counters_enabled = bridge_presenter.is_some();
-            frame.bridge_allocation_us = pre_input.prepare_trace.bridge_model_allocation_us;
-            frame.bridge_models_replaced = pre_input.prepare_trace.bridge_model_replacements;
         }
 
         let media_gate_trace_start = pre_input.prepare_trace_enabled.then(Instant::now);

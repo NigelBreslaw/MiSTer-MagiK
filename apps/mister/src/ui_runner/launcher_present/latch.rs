@@ -310,10 +310,6 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) post_active_sequence: u16,
     pub(in crate::ui_runner) post_pending_sequence: u16,
     pub(in crate::ui_runner) post_pending: bool,
-    /// Includes the initial observation; values above one recovered a transient gap.
-    pub(in crate::ui_runner) post_status_reads: u8,
-    /// Physical GET attempts, including the one permitted transport retry per logical read.
-    pub(in crate::ui_runner) post_status_wire_attempts: u8,
     pub(in crate::ui_runner) flip_count: u16,
     pub(in crate::ui_runner) drop_count: u16,
     pub(in crate::ui_runner) receipt_crc: u16,
@@ -727,8 +723,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             post_active_sequence: after_status.active_sequence,
             post_pending_sequence: after_status.pending_sequence,
             post_pending: after_status.pending(),
-            post_status_reads: receipt.status_reads,
-            post_status_wire_attempts: receipt.status_wire_attempts,
             flip_count: after_status.flip_count,
             drop_count: after_status.drop_count,
             receipt_crc: receipt.receipt_crc,
@@ -1020,8 +1014,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             post_active_sequence: after_status.active_sequence,
             post_pending_sequence: after_status.pending_sequence,
             post_pending: after_status.pending(),
-            post_status_reads: receipt.status_reads,
-            post_status_wire_attempts: receipt.status_wire_attempts,
             flip_count,
             drop_count,
             receipt_crc: receipt.receipt_crc,
@@ -1055,10 +1047,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             self.buffers
                 .frame_view(buffer_index, self.width, self.height),
         )
-    }
-
-    pub(in crate::ui_runner) fn buffer_base_addr(&self, buffer_index: u8) -> u32 {
-        self.base_addr(buffer_index)
     }
 
     pub(in crate::ui_runner) fn publish_requested_full_snapshot(&self) -> bool {
