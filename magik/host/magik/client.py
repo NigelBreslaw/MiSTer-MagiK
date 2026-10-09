@@ -54,7 +54,7 @@ class NativeAgent:
         fields = {"artifact": artifact, "sha256": sha256_hex(payload)}
         if source_revision is not None:
             fields["source_revision"] = source_revision
-        response, _ = self._request("upload", fields, payload)
+        response, _ = self._request("upload", fields, payload, timeout=120)
         if response.operation == "error":
             raise AgentError.from_fields(response.fields)
         return response.fields

@@ -75,9 +75,9 @@ fn crash_report_path(path: &str, roots: &[&Path]) -> Result<PathBuf, String> {
         || path
             .components()
             .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
-        || !path
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with("report-"))
+        || !path.file_name().is_some_and(|name| {
+            name == "latest.json" || name.to_string_lossy().starts_with("report-")
+        })
         || path.extension().is_none_or(|extension| extension != "json")
         || !fs::symlink_metadata(&path)
             .map_err(|e| e.to_string())?
