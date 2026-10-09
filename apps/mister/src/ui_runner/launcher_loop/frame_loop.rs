@@ -229,6 +229,37 @@ macro_rules! catalog_domain {
     };
 }
 
+/// The frame's status view, built from loop state and the phase results. A macro, not a method,
+/// so the borrows stay on the individual fields and the accounting can still be borrowed mutably.
+macro_rules! frame_status_view {
+    ($frame:ident, $pre_input:expr, $project:expr) => {
+        FrameStatusView {
+            nav: &$frame.ui.nav,
+            pad: &$frame.env.pad,
+            catalog: &$frame.lib.catalog,
+            catalog_ready: $frame.lib.catalog_ready,
+            catalog_refresh_done: $frame.lib.catalog_session.refresh_done(),
+            launching: $pre_input.launching,
+            loading_title: $frame
+                .lib
+                .scheduler
+                .visible_loading_title(&$frame.lib.loading_title),
+            catalog_scan_visible: $project.catalog_scan_visible,
+            catalog_scan_percent: $project.catalog_scan_percent,
+            catalog_background_scan_visible: $project.catalog_background_scan_visible,
+            confirm_visible: $project.confirm_visible,
+            confirm_selected: $project.confirm_selected,
+            status_text: $project.status_text.as_ref(),
+            route_reassert_count: $frame.env.display_session.reassert_count(),
+            last_route_reassert_frame: $frame.env.display_session.last_reassert_frame(),
+            last_route_reassert_ok: $frame.env.display_session.last_reassert_ok(),
+            last_route_reassert_error: $frame.env.display_session.last_reassert_error(),
+            startup_status: $frame.lib.lifecycle.startup_status(),
+            return_session: &$frame.lib.launch_return_session,
+        }
+    };
+}
+
 /// What `begin` hands to the later phases.
 pub(super) struct BeginFrame {
     #[cfg(feature = "tooling")]
@@ -399,6 +430,104 @@ pub(super) struct Domains {
     pub(super) out: Output,
     pub(super) fx: Effects,
     pub(super) diag: Diagnostics,
+}
+
+/// What the latch post accounting, the vblank wait and the completion check read and update.
+struct LatchWait<'a> {
+    card_direct_frame_rendered: bool,
+    #[cfg(feature = "tooling")]
+    card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
+    composition_decision: &'a UiCompositionDecision,
+    confirmed_presentation: &'a mut PresentationOutcome,
+    #[cfg(feature = "tooling")]
+    custom_draw_done: Instant,
+    #[cfg(feature = "tooling")]
+    custom_draw_start: Instant,
+    frame_analytics_mode: FrameAnalyticsMode,
+    #[cfg(feature = "tooling")]
+    frame_t1: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t2: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t3: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t4: Instant,
+    presented_frame: &'a mut LauncherPresentedFrame,
+    preview_presentation_commit: &'a Option<crate::preview_state::PreviewPresentationCommit>,
+    selection_feedback_stamp: &'a crate::launcher_presentation::SelectionFeedbackStamp,
+    startup_intro_frame_posted: bool,
+    #[cfg(feature = "tooling")]
+    tooling_frame_evidence:
+        &'a mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    visible_frame_presented: bool,
+}
+
+/// What confirming a latched present reads and updates: the confirmation flags, the benchmark and
+/// startup captures, the response trace, the profiling hooks and the startup intro cadence.
+struct ConfirmedPresent<'a> {
+    accepted_and_active_confirmed: &'a mut bool,
+    animation_now: Instant,
+    #[cfg(feature = "tooling")]
+    card_direct_frame_rendered: bool,
+    #[cfg(feature = "tooling")]
+    card_direct_measurement: &'a mut Option<(u64, u64, u64, u64)>,
+    #[cfg(feature = "tooling")]
+    card_presentation_measurement_enabled: bool,
+    #[cfg(feature = "tooling")]
+    card_work_timing: Option<mister_magik_tooling_support::measurement::FrameWorkTiming>,
+    confirmed_present_sequence: &'a mut u16,
+    #[cfg(feature = "tooling")]
+    custom_draw_done: Instant,
+    #[cfg(feature = "tooling")]
+    custom_draw_start: Instant,
+    #[cfg(feature = "tooling")]
+    frame_start_phase_us: u64,
+    #[cfg(feature = "tooling")]
+    frame_t1: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t2: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t3: Instant,
+    #[cfg(feature = "tooling")]
+    frame_t4: Instant,
+    full_screen_transition_live_endpoint_rendered: bool,
+    full_screen_transition_release_raster_rendered: bool,
+    #[cfg(feature = "tooling")]
+    home_horizontal_input_held: bool,
+    native_device_base: bool,
+    #[cfg(feature = "tooling")]
+    navigation_endpoint_rendered: bool,
+    #[cfg(feature = "tooling")]
+    navigation_transition_composition_active: bool,
+    #[cfg(feature = "tooling")]
+    navigation_transition_renderer: &'static str,
+    #[cfg(feature = "tooling")]
+    navigation_transition_route: &'static str,
+    orientation_capture_source_carrier_rendered: bool,
+    pace: &'a mister_magik_fb::framebuffer::vsync::VsyncPace,
+    #[cfg(feature = "tooling")]
+    post_timing: Option<(Instant, Instant)>,
+    #[cfg(feature = "tooling")]
+    pre_render_wait_us: u128,
+    presented_copied_rows: u32,
+    presented_frame: &'a LauncherPresentedFrame,
+    readiness_post: Option<crate::ui_runner::launcher_readiness::ConfirmedLatchPost>,
+    readiness_source_evidence:
+        Option<crate::ui_runner::launcher_readiness::PostedSourceFrameEvidence>,
+    selection_feedback_confirmed_at: &'a mut Option<Instant>,
+    startup_intro_frame_posted: bool,
+    #[cfg(feature = "tooling")]
+    tooling_animation_active: bool,
+    #[cfg(feature = "tooling")]
+    tooling_frame_begin: Instant,
+    #[cfg(feature = "tooling")]
+    tooling_frame_evidence:
+        &'a mut Option<mister_magik_tooling_support::frame_evidence::FrameEvidence>,
+    #[cfg(feature = "tooling")]
+    tooling_tick_us: u64,
+    wait_done: Instant,
+    #[cfg(feature = "tooling")]
+    wait_start: Instant,
 }
 
 impl<'a> FrameLoop<'a> {
@@ -6334,30 +6463,6 @@ impl<'a> FrameLoop<'a> {
         let mut selection_feedback_confirmed_at = (!latch_trace_flush_deferred
             && visible_frame_presented)
             .then_some(pre_input.animation_now);
-        let status = FrameStatusView {
-            nav: &self.ui.nav,
-            pad: &self.env.pad,
-            catalog: &self.lib.catalog,
-            catalog_ready: self.lib.catalog_ready,
-            catalog_refresh_done: self.lib.catalog_session.refresh_done(),
-            launching: pre_input.launching,
-            loading_title: self
-                .lib
-                .scheduler
-                .visible_loading_title(&self.lib.loading_title),
-            catalog_scan_visible: project.catalog_scan_visible,
-            catalog_scan_percent: project.catalog_scan_percent,
-            catalog_background_scan_visible: project.catalog_background_scan_visible,
-            confirm_visible: project.confirm_visible,
-            confirm_selected: project.confirm_selected,
-            status_text: project.status_text.as_ref(),
-            route_reassert_count: self.env.display_session.reassert_count(),
-            last_route_reassert_frame: self.env.display_session.last_reassert_frame(),
-            last_route_reassert_ok: self.env.display_session.last_reassert_ok(),
-            last_route_reassert_error: self.env.display_session.last_reassert_error(),
-            startup_status: self.lib.lifecycle.startup_status(),
-            return_session: &self.lib.launch_return_session,
-        };
         if latch_trace_flush_deferred {
             let ControlFlow::Continue(LatchWaitOutcome {
                 finish_timing,
@@ -6367,61 +6472,43 @@ impl<'a> FrameLoop<'a> {
                 wait_done,
                 readiness_post,
                 ..
-            }) = post_accounting_and_latch_wait(LatchWait {
-                status,
-                card_direct_frame_rendered: render.card_direct_frame_rendered,
-                #[cfg(feature = "tooling")]
-                card_work_timing: render.card_work_timing,
-                composition_decision: &project.composition_decision,
-                confirmed_presentation: &mut confirmed_presentation,
-                #[cfg(feature = "tooling")]
-                custom_draw_done: render.custom_draw_done,
-                #[cfg(feature = "tooling")]
-                custom_draw_start: render.custom_draw_start,
-                director: &mut self.out.director,
-                f: &mut *self.env.f,
-                frame_accounting: &mut self.diag.frame_accounting,
-                frame_analytics_mode: pre_input.frame_analytics_mode,
-                frame_clock: self.out.frame_clock,
-                #[cfg(feature = "tooling")]
-                frame_t1: render.frame_t1,
-                #[cfg(feature = "tooling")]
-                frame_t2: render.frame_t2,
-                #[cfg(feature = "tooling")]
-                frame_t3,
-                #[cfg(feature = "tooling")]
-                frame_t4,
-                input_observation: self.inp.input_observation,
-                launcher_card_home: &mut self.fx.launcher_card_home,
-                launcher_presenter: &mut self.out.launcher_presenter,
-                nav: &self.ui.nav,
-                pacer: &mut self.out.pacer,
-                pad: &self.env.pad,
-                presented_frame: &mut presented_frame,
-                preview_presentation_commit: &render.preview_presentation_commit,
-                #[cfg(feature = "tooling")]
-                run_start: self.out.run_start,
-                screensaver: &self.fx.screensaver,
-                selection_feedback_stamp: &selection_feedback_stamp,
-                startup_intro_frame_posted,
-                #[cfg(feature = "tooling")]
-                tooling: &mut self.diag.tooling,
-                #[cfg(feature = "tooling")]
-                tooling_frame_evidence: &mut begin.tooling_frame_evidence,
-                #[cfg(feature = "tooling")]
-                tooling_reject_baseline: &mut self.diag.tooling_reject_baseline,
-                visible_frame_presented,
-                window: self.env.window,
-            })
+            }) = self.post_accounting_and_latch_wait(
+                LatchWait {
+                    card_direct_frame_rendered: render.card_direct_frame_rendered,
+                    #[cfg(feature = "tooling")]
+                    card_work_timing: render.card_work_timing,
+                    composition_decision: &project.composition_decision,
+                    confirmed_presentation: &mut confirmed_presentation,
+                    #[cfg(feature = "tooling")]
+                    custom_draw_done: render.custom_draw_done,
+                    #[cfg(feature = "tooling")]
+                    custom_draw_start: render.custom_draw_start,
+                    frame_analytics_mode: pre_input.frame_analytics_mode,
+                    #[cfg(feature = "tooling")]
+                    frame_t1: render.frame_t1,
+                    #[cfg(feature = "tooling")]
+                    frame_t2: render.frame_t2,
+                    #[cfg(feature = "tooling")]
+                    frame_t3,
+                    #[cfg(feature = "tooling")]
+                    frame_t4,
+                    presented_frame: &mut presented_frame,
+                    preview_presentation_commit: &render.preview_presentation_commit,
+                    selection_feedback_stamp: &selection_feedback_stamp,
+                    startup_intro_frame_posted,
+                    #[cfg(feature = "tooling")]
+                    tooling_frame_evidence: &mut begin.tooling_frame_evidence,
+                    visible_frame_presented,
+                },
+                &pre_input,
+                &project,
+            )
             else {
                 return Err(EndFrame);
             };
-            account_confirmed_present(ConfirmedPresent {
+            self.account_confirmed_present(ConfirmedPresent {
                 accepted_and_active_confirmed: &mut accepted_and_active_confirmed,
-                system_entry: &mut self.lib.system_entry,
                 animation_now: pre_input.animation_now,
-                #[cfg(feature = "tooling")]
-                app: &self.env.app,
                 #[cfg(feature = "tooling")]
                 card_direct_frame_rendered: render.card_direct_frame_rendered,
                 #[cfg(feature = "tooling")]
@@ -6437,10 +6524,6 @@ impl<'a> FrameLoop<'a> {
                 custom_draw_done: render.custom_draw_done,
                 #[cfg(feature = "tooling")]
                 custom_draw_start: render.custom_draw_start,
-                director: &mut self.out.director,
-                f: &mut *self.env.f,
-                frame_accounting: &mut self.diag.frame_accounting,
-                frame_clock: self.out.frame_clock,
                 #[cfg(feature = "tooling")]
                 frame_start_phase_us: render.frame_start_phase_us,
                 #[cfg(feature = "tooling")]
@@ -6457,13 +6540,7 @@ impl<'a> FrameLoop<'a> {
                     .full_screen_transition_release_raster_rendered,
                 #[cfg(feature = "tooling")]
                 home_horizontal_input_held: project.home_horizontal_input_held,
-                #[cfg(feature = "tooling")]
-                launcher_card_home: &self.fx.launcher_card_home,
-                launcher_presenter: &mut self.out.launcher_presenter,
-                launcher_readiness: &mut self.out.launcher_readiness,
-                layer_target: &mut layer_target,
-                lifecycle: &self.lib.lifecycle,
-                nav: &self.ui.nav,
+                native_device_base: project.native_device_base,
                 #[cfg(feature = "tooling")]
                 navigation_endpoint_rendered: render.navigation_endpoint_rendered,
                 #[cfg(feature = "tooling")]
@@ -6477,8 +6554,6 @@ impl<'a> FrameLoop<'a> {
                     .orientation_capture_source_carrier_rendered,
                 pace: &pace,
                 #[cfg(feature = "tooling")]
-                pacer: &self.out.pacer,
-                #[cfg(feature = "tooling")]
                 post_timing,
                 #[cfg(feature = "tooling")]
                 pre_render_wait_us: render.pre_render_wait_us,
@@ -6486,22 +6561,10 @@ impl<'a> FrameLoop<'a> {
                 presented_frame: &presented_frame,
                 readiness_post,
                 readiness_source_evidence,
-                #[cfg(feature = "tooling")]
-                run_start: self.out.run_start,
-                #[cfg(feature = "tooling")]
-                screensaver: &self.fx.screensaver,
                 selection_feedback_confirmed_at: &mut selection_feedback_confirmed_at,
-                start: self.out.start,
-                startup_intro: &mut self.fx.startup_intro,
                 startup_intro_frame_posted,
                 #[cfg(feature = "tooling")]
-                tooling: &mut self.diag.tooling,
-                #[cfg(feature = "tooling")]
                 tooling_animation_active: render.tooling_animation_active,
-                #[cfg(feature = "tooling")]
-                tooling_attempt_id: self.diag.tooling_attempt_id,
-                #[cfg(feature = "tooling")]
-                tooling_drop_baseline: &mut self.diag.tooling_drop_baseline,
                 #[cfg(feature = "tooling")]
                 tooling_frame_begin: begin.tooling_frame_begin,
                 #[cfg(feature = "tooling")]
@@ -6511,7 +6574,6 @@ impl<'a> FrameLoop<'a> {
                 wait_done,
                 #[cfg(feature = "tooling")]
                 wait_start,
-                window: self.env.window,
             });
             self.diag.frame_accounting.record_finished_frame(
                 &presented_frame,
@@ -6530,7 +6592,7 @@ impl<'a> FrameLoop<'a> {
                 presented_frame,
                 self.out.start,
                 self.env.disp,
-                status,
+                frame_status_view!(self, pre_input, project),
                 latch_trace_flush_deferred,
             );
         }
@@ -6673,6 +6735,469 @@ impl<'a> FrameLoop<'a> {
         self.out.frames += 1;
         self.out.frame_clock.advance();
         record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
+    }
+
+    /// Accounts the posted frame, waits out the refresh for the latch completion and records the
+    /// confirmation; `Break` means input arrived during the wait and the frame is superseded.
+    fn post_accounting_and_latch_wait(
+        &mut self,
+        ctx: LatchWait<'_>,
+        pre_input: &PreInputFrame,
+        project: &ProjectFrame,
+    ) -> ControlFlow<(), LatchWaitOutcome> {
+        let LatchWait {
+            card_direct_frame_rendered,
+            #[cfg(feature = "tooling")]
+            card_work_timing,
+            composition_decision,
+            confirmed_presentation,
+            #[cfg(feature = "tooling")]
+            custom_draw_done,
+            #[cfg(feature = "tooling")]
+            custom_draw_start,
+            frame_analytics_mode,
+            #[cfg(feature = "tooling")]
+            frame_t1,
+            #[cfg(feature = "tooling")]
+            frame_t2,
+            #[cfg(feature = "tooling")]
+            frame_t3,
+            #[cfg(feature = "tooling")]
+            frame_t4,
+            presented_frame,
+            preview_presentation_commit,
+            selection_feedback_stamp,
+            startup_intro_frame_posted,
+            #[cfg(feature = "tooling")]
+            tooling_frame_evidence,
+            visible_frame_presented,
+        } = ctx;
+        let finish_timing = self.diag.frame_accounting.finish_frame_before_trace(
+            presented_frame,
+            frame_status_view!(self, pre_input, project),
+        );
+        record_launcher_frame_phase!(LauncherFramePhase::PostSubmitAccounted);
+        // Latch mode posts the hidden buffer first, then spends the slack before
+        // vblank on normal per-frame accounting. The final wait is only the
+        // pacing boundary for the next frame.
+        if card_direct_frame_rendered
+            && visible_frame_presented
+            && let Some(session) = self.fx.launcher_card_home.as_mut()
+        {
+            let mut next_clock = self.out.frame_clock;
+            next_clock.advance();
+            if session.is_level_trick_active() {
+                session.prepare_helper_ahead(next_clock.elapsed_us() / 1_000);
+            } else {
+                let (selected, visual_index) =
+                    self.ui.nav.home_card_visual_prediction(next_clock.now());
+                session.prepare_browse_helper_ahead(
+                    next_clock.elapsed_us() / 1_000,
+                    selected,
+                    visual_index,
+                    self.ui.nav.home_card_browse_prediction(next_clock.now()),
+                );
+            }
+        }
+        let wait_start = Instant::now();
+        let interruptible_home_wait = can_preempt_home_latch_wait(
+            self.ui.nav.screen,
+            !selection_feedback_stamp.entries.is_empty(),
+            self.out.director.navigation.is_active()
+                || self.out.director.orientation.is_active()
+                || !self.out.director.chart.is_live(),
+            self.fx.screensaver.active,
+            composition_decision.state != UiCompositionState::FullSlint
+                || composition_decision.retirement_generation.is_some(),
+            preview_presentation_commit.is_some(),
+            startup_intro_frame_posted,
+        );
+        let pace = match self.out.pacer.wait_interruptible(|| {
+            interruptible_home_wait
+                && matches!(
+                    self.env
+                        .pad
+                        .wait_for_input(self.inp.input_observation, Duration::ZERO),
+                    crate::input_hub::InputWaitOutcome::Changed
+                )
+        }) {
+            VsyncWaitOutcome::Pace(pace) => pace,
+            VsyncWaitOutcome::Interrupted => {
+                record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
+                self.env.window.request_redraw();
+                record_launcher_frame_phase!(LauncherFramePhase::Yielded);
+                #[cfg(feature = "tooling")]
+                if let Some(mut frame) = tooling_frame_evidence.take()
+                    && let Some(session) = self.diag.tooling.as_mut()
+                    && session.frame_evidence_active()
+                {
+                    let started = Instant::now();
+                    frame.outcome = "superseded-before-confirmation";
+                    frame.slot = presented_frame.main_present_buffer;
+                    frame.copied_bytes = presented_frame.main_present_hidden_copied_bytes as u64;
+                    frame.finish_us = duration_us(self.out.run_start, started);
+                    frame.record.reason = "post replaced before vsync; not a counted drop";
+                    frame.record.work = card_work_timing;
+                    frame.record.timeline = Some(
+                        mister_magik_tooling_support::measurement::FramePhaseTimeline {
+                            frame_begin_us: frame.begin_us,
+                            render_start_us: duration_us(self.out.run_start, frame_t1),
+                            render_end_us: duration_us(self.out.run_start, frame_t2),
+                            custom_draw_start_us: duration_us(
+                                self.out.run_start,
+                                custom_draw_start,
+                            ),
+                            custom_draw_end_us: duration_us(self.out.run_start, custom_draw_done),
+                            present_start_us: duration_us(self.out.run_start, frame_t3),
+                            post_returned_us: duration_us(self.out.run_start, frame_t4),
+                            confirmation_wait_start_us: duration_us(self.out.run_start, wait_start),
+                            posted_sequence: presented_frame.main_present_sequence,
+                            post_pending_sequence: presented_frame
+                                .main_present_post_pending_sequence,
+                            post_pending: presented_frame.main_present_post_pending,
+                            ..Default::default()
+                        },
+                    );
+                    session.record_frame_evidence(frame, started);
+                }
+                // No vsync has passed, so the next frame reuses this frame's
+                // time and replaces the posted one in the same refresh slot.
+                return ControlFlow::Break(());
+            }
+        };
+        let completion_timeout =
+            Duration::from_micros(self.out.pacer.period_us().saturating_mul(3) / 2);
+        let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
+        let completion = wait_for_latch_completion(
+            &mut *self.env.f,
+            presented_frame.main_present_sequence,
+            completion_remaining,
+        );
+        let wait_done = Instant::now();
+        #[cfg(feature = "tooling")]
+        super::launcher_frame_accounting::capture_evidence_cpu(
+            tooling_frame_evidence,
+            5,
+            self.out.run_start,
+        );
+        let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
+        let wait_trace = LauncherPacingTrace::from_pace_with_present_phase(
+            Some(&pace),
+            presented_frame.frame_start_phase_us,
+            self.out.pacer.period_us(),
+            presented_frame.present_phase_us,
+        );
+        presented_frame.frame_t4 = wait_done;
+        presented_frame.post_present_wait_us = post_wait_us;
+        presented_frame.vsync_us_override = Some(post_wait_us);
+        presented_frame.cpu_t4 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
+        presented_frame.vsync_source = wait_trace.vsync_source;
+        presented_frame.vsync_period_us = wait_trace.vsync_period_us;
+        presented_frame.vsync_miss_streak = wait_trace.vsync_miss_streak;
+        presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
+        presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
+        presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
+        #[cfg(feature = "tooling")]
+        if let Some(frame) = tooling_frame_evidence.as_mut() {
+            frame.slot = presented_frame.main_present_buffer;
+            frame.copied_bytes = presented_frame.main_present_hidden_copied_bytes as u64;
+            frame.full_seed = presented_frame.main_present_hidden_full_copy;
+        }
+        let mut readiness_post = None;
+        match completion {
+            Ok(completion) => {
+                let status = completion.status;
+                #[cfg(feature = "tooling")]
+                if let Some(session) = self.diag.tooling.as_mut() {
+                    if let Some(previous) = self.diag.tooling_reject_baseline {
+                        session.metrics.counters.rejections +=
+                            u64::from(status.reject_count.wrapping_sub(previous));
+                    }
+                    self.diag.tooling_reject_baseline = Some(status.reject_count);
+                }
+                readiness_post = Some(super::launcher_readiness::ConfirmedLatchPost {
+                    sequence: status.active_sequence,
+                    route_epoch: status.active_route_epoch,
+                    slot: presented_frame.main_present_buffer,
+                    receipt_crc: presented_frame.main_present_receipt_crc,
+                    active_base: status.active_base,
+                    width: status.active_width,
+                    height: status.active_height,
+                    stride: status.active_stride,
+                });
+                presented_frame.main_present_active_sequence = status.active_sequence;
+                presented_frame.main_present_pending = status.pending();
+                presented_frame.main_present_flip_count = status.flip_count;
+                presented_frame.main_present_drop_count = status.drop_count;
+                presented_frame.main_present_completion_poll_count = completion.poll_count;
+                presented_frame.main_present_completion_poll_wall_us = completion.wall_us;
+                presented_frame.main_present_completion_poll_cpu_us = completion.cpu_us;
+                *confirmed_presentation = PresentationOutcome::Confirmed {
+                    sequence: status.active_sequence,
+                    slot: presented_frame.main_present_buffer,
+                    route_epoch: status.active_route_epoch,
+                };
+            }
+            Err(failure) => {
+                self.out.director.presentation_failed(composition_decision);
+                self.out.launcher_presenter.fail_latch_completion(failure);
+                if let Some(failure) = self.out.launcher_presenter.latch_failure() {
+                    self.diag.frame_accounting.record_latch_failure(failure);
+                }
+                presented_frame.main_present_active_sequence = 0;
+                presented_frame.main_present_pending = true;
+            }
+        }
+        ControlFlow::Continue(LatchWaitOutcome {
+            finish_timing,
+            #[cfg(feature = "tooling")]
+            wait_start,
+            pace,
+            wait_done,
+            readiness_post,
+        })
+    }
+
+    /// Decides whether the present is confirmed and, when it is, runs everything that depends on the
+    /// confirmation.
+    fn account_confirmed_present(&mut self, ctx: ConfirmedPresent<'_>) {
+        let ConfirmedPresent {
+            accepted_and_active_confirmed,
+            animation_now,
+            #[cfg(feature = "tooling")]
+            card_direct_frame_rendered,
+            #[cfg(feature = "tooling")]
+            card_direct_measurement,
+            #[cfg(feature = "tooling")]
+            card_presentation_measurement_enabled,
+            #[cfg(feature = "tooling")]
+            card_work_timing,
+            confirmed_present_sequence,
+            #[cfg(feature = "tooling")]
+            custom_draw_done,
+            #[cfg(feature = "tooling")]
+            custom_draw_start,
+            #[cfg(feature = "tooling")]
+            frame_start_phase_us,
+            #[cfg(feature = "tooling")]
+            frame_t1,
+            #[cfg(feature = "tooling")]
+            frame_t2,
+            #[cfg(feature = "tooling")]
+            frame_t3,
+            #[cfg(feature = "tooling")]
+            frame_t4,
+            full_screen_transition_live_endpoint_rendered,
+            full_screen_transition_release_raster_rendered,
+            #[cfg(feature = "tooling")]
+            home_horizontal_input_held,
+            native_device_base,
+            #[cfg(feature = "tooling")]
+            navigation_endpoint_rendered,
+            #[cfg(feature = "tooling")]
+            navigation_transition_composition_active,
+            #[cfg(feature = "tooling")]
+            navigation_transition_renderer,
+            #[cfg(feature = "tooling")]
+            navigation_transition_route,
+            orientation_capture_source_carrier_rendered,
+            pace,
+            #[cfg(feature = "tooling")]
+            post_timing,
+            #[cfg(feature = "tooling")]
+            pre_render_wait_us,
+            presented_copied_rows,
+            presented_frame,
+            readiness_post,
+            readiness_source_evidence,
+            selection_feedback_confirmed_at,
+            startup_intro_frame_posted,
+            #[cfg(feature = "tooling")]
+            tooling_animation_active,
+            #[cfg(feature = "tooling")]
+            tooling_frame_begin,
+            #[cfg(feature = "tooling")]
+            tooling_frame_evidence,
+            #[cfg(feature = "tooling")]
+            tooling_tick_us,
+            wait_done,
+            #[cfg(feature = "tooling")]
+            wait_start,
+        } = ctx;
+        *accepted_and_active_confirmed = presented_frame.main_present_sequence != 0
+            && presented_frame.main_present_active_sequence
+                == presented_frame.main_present_sequence
+            && !presented_frame.main_present_pending
+            && self.out.launcher_presenter.latch_failure().is_none();
+        if *accepted_and_active_confirmed {
+            record_launcher_frame_phase!(LauncherFramePhase::ActiveConfirmed);
+            *confirmed_present_sequence = presented_frame.main_present_sequence;
+            // Feedback dwell is counted in frames: the frame that carried
+            // the highlight is the one that confirmed it.
+            *selection_feedback_confirmed_at = Some(animation_now);
+            if orientation_capture_source_carrier_rendered {
+                self.out
+                    .director
+                    .orientation
+                    .restart_animation(animation_now + self.out.frame_clock.period());
+                self.env.window.request_redraw();
+            }
+            self.lib
+                .system_entry
+                .note_ready_frame(self.ui.nav.screen, presented_copied_rows, true);
+        }
+        if *accepted_and_active_confirmed
+            && (full_screen_transition_release_raster_rendered
+                || full_screen_transition_live_endpoint_rendered)
+            && let Some(generation) = self.out.director.chart.generation()
+        {
+            match self.out.director.chart.live_frame_presented(generation) {
+                Ok(retained_redraw) => {
+                    // Reverse card/cog endpoints already contain the current
+                    // Home raster. Transition-owned redraw requests made while
+                    // the snapshot was locked must not replace them with a
+                    // redundant full-screen release frame.
+                    if retained_redraw && !full_screen_transition_live_endpoint_rendered {
+                        self.env.window.request_redraw();
+                    }
+                }
+                Err(error) => {
+                    crate::ui_errln!("full-screen live-frame confirmation rejected: {error:?}")
+                }
+            }
+        }
+        if *accepted_and_active_confirmed {
+            #[cfg(feature = "tooling")]
+            record_tooling_presentation(ToolingPresentation {
+                app: &self.env.app,
+                card_direct_frame_rendered,
+                card_direct_measurement,
+                card_presentation_measurement_enabled,
+                card_work_timing,
+                custom_draw_done,
+                custom_draw_start,
+                director: &mut self.out.director,
+                f: &mut *self.env.f,
+                frame_start_phase_us,
+                frame_t1,
+                frame_t2,
+                frame_t3,
+                frame_t4,
+                home_horizontal_input_held,
+                launcher_card_home: &self.fx.launcher_card_home,
+                nav: &self.ui.nav,
+                navigation_endpoint_rendered,
+                navigation_transition_composition_active,
+                navigation_transition_renderer,
+                navigation_transition_route,
+                pacer: &self.out.pacer,
+                post_timing: &post_timing,
+                pre_render_wait_us,
+                presented_frame,
+                run_start: self.out.run_start,
+                screensaver: &self.fx.screensaver,
+                tooling: &mut self.diag.tooling,
+                tooling_animation_active,
+                tooling_attempt_id: self.diag.tooling_attempt_id,
+                tooling_drop_baseline: &mut self.diag.tooling_drop_baseline,
+                tooling_frame_begin,
+                tooling_frame_evidence,
+                tooling_tick_us,
+                wait_done,
+                wait_start,
+            });
+            if let Some(post) = readiness_post {
+                if self
+                    .out
+                    .launcher_readiness
+                    .source_evidence_request()
+                    .is_some()
+                    && self.lib.lifecycle.startup_can_present_frame()
+                    && let Some(source) = readiness_source_evidence
+                {
+                    self.out
+                        .launcher_readiness
+                        .observe_posted(post, source, true);
+                    record_launcher_frame_phase!(LauncherFramePhase::ReadinessSourceAcknowledged);
+                }
+                if self.out.launcher_readiness.needs_full_present() {
+                    self.env.window.request_redraw();
+                }
+            }
+        }
+        if *accepted_and_active_confirmed
+            && startup_intro_frame_posted
+            && let Some(intro) = self.fx.startup_intro.as_mut()
+        {
+            let confirmed_at = pace.hit_at.unwrap_or(wait_done);
+            if intro.presentation_start_capture_needed() {
+                let telemetry = self.env.f.read_magik_presentation_telemetry();
+                intro.capture_presentation_start(confirmed_at, telemetry);
+            }
+            let software_cadence = intro.note_confirmed_present(
+                confirmed_at,
+                pace.period_us,
+                pace.source == VsyncPaceSource::Vsync,
+            );
+            if let Some(software_cadence) = software_cadence {
+                let authoritative_cadence = intro.authoritative_cadence_status(
+                    confirmed_at,
+                    self.env.f.read_magik_presentation_telemetry(),
+                    software_cadence,
+                );
+                let dropped_frames = authoritative_cadence
+                    .dropped_frames
+                    .map_or_else(|| "unavailable".to_string(), |count| count.to_string());
+                let cadence_qualified = authoritative_cadence.qualified;
+                let cadence_error = authoritative_cadence.error.as_deref().unwrap_or("none");
+                self.diag
+                    .frame_accounting
+                    .record_startup_intro_cadence(authoritative_cadence.clone());
+                let mut layer_target = LayerTarget::new_oriented_with_epoch(
+                    &mut *self.env.target,
+                    self.out.layout,
+                    self.out.layout_epoch,
+                );
+                if native_device_base {
+                    layer_target.attach_device_background(
+                        &mut self.out.native_device_background,
+                        self.ui.nav.device_kind(),
+                        self.env.window,
+                    );
+                }
+                let restored = intro.restore_handoff_snapshot(&mut layer_target);
+                if !restored {
+                    crate::ui_errln!("startup intro handoff cache geometry mismatch");
+                }
+                self.out
+                    .launcher_presenter
+                    .invalidate_external_hidden_mode();
+                self.fx.startup_intro = None;
+                self.env.window.request_redraw();
+                print_startup_event(
+                    self.out.start,
+                    "startup_intro_completed",
+                    format!(
+                        concat!(
+                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} ",
+                            "expected_refresh_intervals={} ",
+                            "dropped_frames={} ",
+                            "software_estimated_dropped_frames={} pacing_failures={} ",
+                            "max_confirmation_gap_us={} cadence_qualified={} cadence_error={}"
+                        ),
+                        software_cadence.confirmed_frames,
+                        software_cadence.cabinet_wait_frames,
+                        software_cadence.expected_refresh_intervals,
+                        dropped_frames,
+                        software_cadence.software_estimated_dropped_frames,
+                        software_cadence.pacing_failures,
+                        software_cadence.max_confirmation_gap_us,
+                        cadence_qualified,
+                        cadence_error,
+                    ),
+                );
+            }
+        }
     }
 }
 
