@@ -8,16 +8,6 @@ pub(super) fn frame_target_geometry(ui: &UiDisplay) -> FramebufferTargetGeometry
     FramebufferTargetGeometry::new(ui.render_w(), ui.render_h())
 }
 
-pub(super) fn launcher_dirty_opt_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_LAUNCHER_DIRTY_OPT").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
-        )
-    })
-}
-
 pub(super) fn preview_run_label() -> String {
     std::env::var("MISTER_PREVIEW_RUN_LABEL").unwrap_or_default()
 }
@@ -275,7 +265,6 @@ pub(super) fn blit_raw_preview_if_needed(
     };
     let direct_present = allow_direct;
     let raw_rect = if trace.active {
-        let blend_pmu = mister_magik_perf_events::sampled_span("gui.custom.preview-blend");
         let (raw_rect, fade) = if direct_present {
             target.blit_raw_preview_transition_direct(
                 ui,
@@ -286,7 +275,6 @@ pub(super) fn blit_raw_preview_if_needed(
         } else {
             target.blit_raw_preview_transition(ui, &transition_frame, trace.effect, trace.progress)
         };
-        drop(blend_pmu);
         trace.fade = fade;
         raw_rect
     } else {
@@ -439,16 +427,6 @@ pub(super) fn arcade_list_needs_forced_redraw(
 ) -> bool {
     full_frame_present
         || slint_dirty.is_some_and(|rect| rect.intersection(renderer.dirty_rect()).is_some())
-}
-
-#[cfg(not(mister_ui_scope_launcher))]
-pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
-    FrameRect {
-        x0: rect.x0 as u32,
-        y0: rect.y0 as u32,
-        x1: rect.x1 as u32,
-        y1: rect.y1 as u32,
-    }
 }
 
 pub(super) fn configure_window_layout(

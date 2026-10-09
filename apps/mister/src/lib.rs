@@ -57,17 +57,6 @@ pub mod catalog_failure_report;
 pub mod catalog_progress_report;
 pub mod command_args;
 pub mod controller_db;
-#[cfg(feature = "ui")]
-#[cfg_attr(
-    any(
-        test,
-        mister_ui_scope_launcher,
-        not(all(target_os = "linux", target_arch = "arm"))
-    ),
-    allow(dead_code)
-)]
-#[doc(hidden)]
-pub mod cpu_profile;
 pub mod crash_report;
 pub mod crt_arcade_overlay;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -87,9 +76,6 @@ pub use mister_magik_mister_runtime::fpga;
 pub use mister_magik_mister_runtime::framebuffer;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
-pub mod frame_profile;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
 pub mod input;
 #[cfg(feature = "ui")]
 #[cfg_attr(
@@ -101,9 +87,6 @@ pub mod input;
 )]
 #[doc(hidden)]
 pub mod input_hub;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod input_integrity_driver;
 pub use mister_magik_mister_runtime::latch_readiness;
 pub mod latch_failure_report;
 pub mod launch_preparation;
@@ -126,9 +109,6 @@ pub mod macos_preview_content;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod media_bench_download;
-#[cfg(all(feature = "ui", feature = "bench-tools"))]
-#[doc(hidden)]
-pub mod media_bench_save;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[doc(hidden)]
 pub mod media_http;
@@ -144,15 +124,6 @@ pub mod mr_audio;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_renderer;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod pmu_probe;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod pmu_profile;
-#[cfg(all(feature = "ui", any(feature = "bench-tools", feature = "diagnostics")))]
-#[doc(hidden)]
-pub mod preview_pack_bench;
 #[cfg(feature = "ui")]
 #[cfg_attr(
     any(
@@ -178,9 +149,6 @@ pub mod screenshot_transitions;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod search_bench;
-#[cfg(feature = "ui")]
-#[doc(hidden)]
-pub mod ui_test_support;
 pub use mister_magik_mister_runtime::runtime_status;
 pub use mister_magik_mister_runtime::settings;
 pub mod device_art;

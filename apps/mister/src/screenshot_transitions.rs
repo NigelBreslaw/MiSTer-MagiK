@@ -111,17 +111,14 @@ impl PreviewFadePath {
 
 pub struct PreviewTransitionDemo {
     effects: Vec<PreviewTransitionEffect>,
-    picker_index: Option<usize>,
     pub segment: Duration,
     pub duration: Duration,
     timeline: PreviewTransitionController<PreviewTransitionEffect>,
-    label_overlay: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreviewTransitionConfig {
     spec: String,
-    picker_enabled: bool,
     segment_secs: u64,
     duration_ms: u64,
 }
@@ -132,9 +129,6 @@ impl PreviewTransitionConfig {
             spec: get("MISTER_PREVIEW_TRANSITION")
                 .unwrap_or_default()
                 .to_owned(),
-            picker_enabled: transition_picker_enabled_from_value(get(
-                "MISTER_PREVIEW_TRANSITION_PICKER",
-            )),
             segment_secs: get("MISTER_PREVIEW_TRANSITION_SEGMENT_SECS")
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(5)
@@ -156,11 +150,9 @@ impl PreviewTransitionDemo {
     pub fn disabled() -> Self {
         Self {
             effects: vec![PreviewTransitionEffect::Fade],
-            picker_index: None,
             segment: Duration::from_secs(1),
             duration: Duration::from_millis(DEFAULT_PREVIEW_TRANSITION_MS),
             timeline: PreviewTransitionController::default(),
-            label_overlay: false,
         }
     }
 
@@ -172,12 +164,7 @@ impl PreviewTransitionDemo {
         let spec = config.spec;
         let mut effects = Vec::new();
         let trimmed = spec.trim();
-        let picker_enabled = config.picker_enabled;
-        let label_overlay = picker_enabled || !trimmed.is_empty();
-        let use_all = picker_enabled && trimmed.is_empty();
-        if use_all {
-            effects.extend(PreviewTransitionEffect::all());
-        } else if !trimmed.is_empty() {
+        if !trimmed.is_empty() {
             for part in trimmed
                 .split(',')
                 .map(str::trim)
@@ -195,19 +182,11 @@ impl PreviewTransitionDemo {
         if effects.is_empty() {
             effects.push(PreviewTransitionEffect::Fade);
         }
-        let picker_index = picker_enabled.then_some(
-            effects
-                .iter()
-                .position(|effect| *effect == PreviewTransitionEffect::Fade)
-                .unwrap_or(0),
-        );
         Self {
             effects,
-            picker_index,
             segment: Duration::from_secs(config.segment_secs),
             duration: Duration::from_millis(config.duration_ms),
             timeline: PreviewTransitionController::default(),
-            label_overlay,
         }
     }
 
@@ -223,41 +202,13 @@ impl PreviewTransitionDemo {
         if self.effects.is_empty() {
             return PreviewTransitionEffect::Fade;
         }
-        if let Some(idx) = self.picker_index {
-            return self.effects[idx.min(self.effects.len() - 1)];
-        }
         let segment_us = self.segment.as_micros().max(1);
         let idx = ((elapsed.as_micros() / segment_us) as usize) % self.effects.len();
         self.effects[idx]
     }
 
-    pub fn picker_enabled(&self) -> bool {
-        self.picker_index.is_some()
-    }
-
     pub fn current_label(&self, elapsed: Duration) -> &'static str {
         self.current_effect(elapsed).label()
-    }
-
-    pub fn cycle_picker(&mut self, delta: isize) -> bool {
-        let Some(idx) = self.picker_index else {
-            return false;
-        };
-        if self.effects.is_empty() {
-            return false;
-        }
-        let len = self.effects.len() as isize;
-        let next = (idx as isize + delta).rem_euclid(len) as usize;
-        if next == idx {
-            return false;
-        }
-        self.picker_index = Some(next);
-        self.timeline.reset();
-        true
-    }
-
-    pub fn label_overlay_enabled(&self) -> bool {
-        self.label_overlay
     }
 
     pub fn update(
@@ -289,34 +240,21 @@ impl PreviewTransitionDemo {
     }
 }
 
-fn transition_picker_enabled_from_value(value: Option<&str>) -> bool {
-    value
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::preview_state::{PreviewRawFrame, PreviewRawPixels};
 
     #[test]
-    fn transition_config_clamps_timing_and_preserves_picker_input() {
+    fn transition_config_clamps_timing() {
         let values = std::collections::HashMap::from([
             ("MISTER_PREVIEW_TRANSITION", "fade,slide-left"),
-            ("MISTER_PREVIEW_TRANSITION_PICKER", "yes"),
             ("MISTER_PREVIEW_TRANSITION_SEGMENT_SECS", "0"),
             ("MISTER_PREVIEW_TRANSITION_MS", "9999"),
         ]);
         let config = PreviewTransitionConfig::capture_with(|name| values.get(name).copied());
         let demo = PreviewTransitionDemo::from_config(config);
 
-        assert!(demo.picker_enabled());
         assert_eq!(demo.segment, Duration::from_secs(1));
         assert_eq!(demo.duration, Duration::from_millis(2_000));
     }
@@ -324,11 +262,9 @@ mod tests {
     fn transition_demo(duration: Duration) -> PreviewTransitionDemo {
         PreviewTransitionDemo {
             effects: vec![PreviewTransitionEffect::Fade],
-            picker_index: None,
             segment: Duration::from_secs(5),
             duration,
             timeline: PreviewTransitionController::default(),
-            label_overlay: false,
         }
     }
 
@@ -422,14 +358,6 @@ mod tests {
             &[PreviewTransitionEffect::Fade]
         );
         assert_eq!(DEFAULT_PREVIEW_TRANSITION_MS, 130);
-    }
-
-    #[test]
-    fn disabled_transition_has_no_picker_or_label_overlay() {
-        let transition = PreviewTransitionDemo::disabled();
-
-        assert!(!transition.picker_enabled());
-        assert!(!transition.label_overlay_enabled());
     }
 
     #[test]

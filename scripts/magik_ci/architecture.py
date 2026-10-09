@@ -25,7 +25,7 @@ class Hotspot:
 HOTSPOTS = (
     Hotspot(
         "launcher-runtime",
-        "apps/mister/src/ui_runner/launcher_loop.rs",
+        "apps/mister/src/ui_runner/launcher_loop/frame_loop.rs",
         "P1 Decompose launcher state and frame phases",
         ("apps/mister/src/ui_runner/",),
     ),

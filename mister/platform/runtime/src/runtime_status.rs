@@ -52,10 +52,6 @@ launcher_status_types! {
         idle: bool,
         idle_loops: u64,
         status_sequence: u64,
-        state_revision: u64,
-        presented_state_revision: u64,
-        action_sequence: u64,
-        presented_action_sequence: u64,
         fps_estimate: f64,
         framebuffer_width: usize,
         framebuffer_height: usize,
@@ -150,7 +146,6 @@ launcher_status_types! {
         latch_failure_reason,
         latch_failure_detail,
         catalog_refresh_policy,
-        screensaver_profile_state,
         catalog_scan_message,
         catalog_scan_title,
         catalog_scan_detail,
@@ -170,9 +165,6 @@ launcher_status_types! {
         direct_layer_retirement_receipt,
         last_composition_invariant_kind,
         last_composition_invariant_detail,
-        bench_scenario,
-        start_screen,
-        lock_screen,
         last_route_reassert_error,
         launch_state,
         loading_title,
@@ -304,7 +296,6 @@ pub struct FrameBudgetRecentFrame {
     pub navigation_transition_direction: &'static str,
     pub navigation_transition_renderer: &'static str,
     pub navigation_transition_orientation: &'static str,
-    pub settings_navigation_benchmark_leg: u8,
     pub navigation_transition_us: u64,
     pub navigation_transition_base_copy_us: u64,
     pub navigation_transition_settings_blit_us: u64,
@@ -316,7 +307,6 @@ pub struct FrameBudgetRecentFrame {
     pub navigation_status_quiesce_wait_us: u64,
     pub navigation_status_quiesce_timeout: bool,
     pub orientation_transition_active: bool,
-    pub orientation_transition_leg: u8,
     pub orientation_transition_effect: &'static str,
     pub orientation_transition_from: &'static str,
     pub orientation_transition_to: &'static str,
@@ -819,13 +809,6 @@ fn write_launcher_status_json(
     field!("idle", status.idle);
     field!("idle_loops", status.idle_loops);
     field!("status_sequence", status.status_sequence);
-    field!("state_revision", status.state_revision);
-    field!("presented_state_revision", status.presented_state_revision);
-    field!("action_sequence", status.action_sequence);
-    field!(
-        "presented_action_sequence",
-        status.presented_action_sequence
-    );
     field!("menu_id", status.menu_id);
     field!("selected_item_id", status.selected_item_id);
     field!("active_collection_id", status.active_collection_id);
@@ -864,10 +847,6 @@ fn write_launcher_status_json(
     field!("catalog_refresh_done", status.catalog_refresh_done);
     field!("catalog_refresh_policy", status.catalog_refresh_policy);
     field!("catalog_worker_enabled", status.catalog_worker_enabled);
-    field!(
-        "screensaver_profile_state",
-        status.screensaver_profile_state
-    );
     field!("catalog_scan_visible", status.catalog_scan_visible);
     field!("catalog_scan_message", status.catalog_scan_message);
     field!("catalog_scan_title", status.catalog_scan_title);
@@ -1027,9 +1006,6 @@ fn write_launcher_status_json_tail(
         "last_composition_invariant_detail",
         status.last_composition_invariant_detail
     );
-    field!("bench_scenario", status.bench_scenario);
-    field!("start_screen", status.start_screen);
-    field!("lock_screen", status.lock_screen);
     field!("route_reassert_count", status.route_reassert_count);
     field!(
         "last_route_reassert_frame",
@@ -1156,13 +1132,6 @@ fn launcher_status_value(
     insert!("idle", status.idle);
     insert!("idle_loops", status.idle_loops);
     insert!("status_sequence", status.status_sequence);
-    insert!("state_revision", status.state_revision);
-    insert!("presented_state_revision", status.presented_state_revision);
-    insert!("action_sequence", status.action_sequence);
-    insert!(
-        "presented_action_sequence",
-        status.presented_action_sequence
-    );
     insert!("fps_estimate", (status.fps_estimate * 10.0).round() / 10.0);
     insert!("rolling_fps", (status.rolling_fps * 10.0).round() / 10.0);
     insert!("rolling_prepare_us", status.rolling_prepare_us);
@@ -1193,10 +1162,6 @@ fn launcher_status_value(
     insert!("catalog_refresh_done", status.catalog_refresh_done);
     insert!("catalog_refresh_policy", status.catalog_refresh_policy);
     insert!("catalog_worker_enabled", status.catalog_worker_enabled);
-    insert!(
-        "screensaver_profile_state",
-        status.screensaver_profile_state
-    );
     insert!("catalog_scan_visible", status.catalog_scan_visible);
     insert!("catalog_scan_message", status.catalog_scan_message);
     insert!("catalog_scan_title", status.catalog_scan_title);
@@ -1338,9 +1303,6 @@ fn launcher_status_value(
         "last_composition_invariant_detail",
         status.last_composition_invariant_detail
     );
-    insert!("bench_scenario", status.bench_scenario);
-    insert!("start_screen", status.start_screen);
-    insert!("lock_screen", status.lock_screen);
     insert!("route_reassert_count", status.route_reassert_count);
     insert!(
         "last_route_reassert_frame",
@@ -1451,10 +1413,6 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!(
         "orientation_transition_active",
         frame.orientation_transition_active
-    );
-    field!(
-        "orientation_transition_leg",
-        frame.orientation_transition_leg
     );
     field!(
         "orientation_transition_effect",
@@ -1881,10 +1839,6 @@ mod tests {
                 idle: true,
                 idle_loops: 12,
                 status_sequence: 9,
-                state_revision: 12,
-                presented_state_revision: 12,
-                action_sequence: 4,
-                presented_action_sequence: 4,
                 fps_estimate: 59.94,
                 framebuffer_width: 640,
                 framebuffer_height: 576,
@@ -1918,7 +1872,6 @@ mod tests {
                 catalog_refresh_policy: "off",
                 catalog_worker_enabled: false,
                 selected_game_has_preview: true,
-                screensaver_profile_state: "active",
                 catalog_scan_visible: false,
                 catalog_scan_message: "Scanning for games",
                 catalog_scan_title: "",
@@ -1960,9 +1913,6 @@ mod tests {
                 direct_layer_retirement_receipt_route_epoch: 0,
                 last_composition_invariant_kind: "",
                 last_composition_invariant_detail: "",
-                bench_scenario: "held-scroll",
-                start_screen: "arcade",
-                lock_screen: "arcade",
                 route_reassert_count: 2,
                 last_route_reassert_frame: 120,
                 last_route_reassert_ok: true,
@@ -2018,7 +1968,6 @@ mod tests {
                         screensaver_active: true,
                         screensaver_renderer: "parade",
                         orientation_transition_active: true,
-                        orientation_transition_leg: 2,
                         orientation_transition_from: "monitor-clockwise",
                         orientation_transition_to: "monitor-counterclockwise",
                         orientation_begin_us: 101,
@@ -2138,6 +2087,7 @@ mod tests {
                         present_phase_us: 321,
                     }],
                 },
+                phase_profile: PhaseProfileStatus::default(),
             },
             5678,
             101,
@@ -2200,10 +2150,6 @@ mod tests {
             value["frame_budget"]["recent_frames"][0]
                 .get("screensaver_render_ahead_sequence")
                 .is_none()
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["orientation_transition_leg"],
-            2
         );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["orientation_transition_total_us"],
@@ -2330,7 +2276,6 @@ mod tests {
         assert_eq!(value["direct_layer_retirement_receipt"], "");
         assert_eq!(value["last_composition_invariant_kind"], "");
         assert_eq!(value["last_composition_invariant_detail"], "");
-        assert_eq!(value["bench_scenario"], "held-scroll");
         assert_eq!(value["route_reassert_count"], 2);
         assert_eq!(value["last_route_reassert_ok"], true);
         assert_eq!(value["launch_state"], "idle");
@@ -2417,11 +2362,7 @@ mod tests {
         assert!(indices.len() > 10);
     }
 
-    fn publisher_status(
-        status_sequence: u64,
-        screen: &'static str,
-        screensaver_profile_state: &'static str,
-    ) -> LauncherStatus<'static> {
+    fn publisher_status(status_sequence: u64, screen: &'static str) -> LauncherStatus<'static> {
         LauncherStatus {
             build_package_version: "0.1.0",
             build_version: "0.2.2429",
@@ -2448,10 +2389,6 @@ mod tests {
             idle: false,
             idle_loops: 0,
             status_sequence,
-            state_revision: status_sequence,
-            presented_state_revision: status_sequence,
-            action_sequence: status_sequence,
-            presented_action_sequence: status_sequence,
             fps_estimate: 60.04,
             framebuffer_width: 640,
             framebuffer_height: 288,
@@ -2485,7 +2422,6 @@ mod tests {
             catalog_refresh_policy: "default",
             catalog_worker_enabled: true,
             selected_game_has_preview: false,
-            screensaver_profile_state,
             catalog_scan_visible: true,
             catalog_scan_message: "Updating Library",
             catalog_scan_title: "Indexing library",
@@ -2527,9 +2463,6 @@ mod tests {
             direct_layer_retirement_receipt_route_epoch: 0,
             last_composition_invariant_kind: "",
             last_composition_invariant_detail: "",
-            bench_scenario: "none",
-            start_screen: "home",
-            lock_screen: "none",
             route_reassert_count: 0,
             last_route_reassert_frame: 0,
             last_route_reassert_ok: false,
@@ -2564,11 +2497,10 @@ mod tests {
     fn streamed_launcher_status_is_value_equivalent_to_legacy_document() {
         let counters = RuntimeStatusPublisherCounters::default();
         let mut bytes = Vec::new();
-        let owned = OwnedLauncherStatus::from(publisher_status(1, "arcade", "disabled"));
+        let owned = OwnedLauncherStatus::from(publisher_status(1, "arcade"));
         write_launcher_status_json(&mut bytes, &owned, 123, 99, &counters).unwrap();
         let mut streamed: Value = serde_json::from_slice(&bytes).unwrap();
-        let mut expected =
-            launcher_status_value(publisher_status(1, "arcade", "disabled"), 123, 99);
+        let mut expected = launcher_status_value(publisher_status(1, "arcade"), 123, 99);
         let map = expected.as_object_mut().unwrap();
         map.insert("status_publish_mode".into(), json!("async"));
         map.insert("status_submitted_sequence".into(), json!(1));
@@ -2590,7 +2522,7 @@ mod tests {
     fn runtime_status_publisher_replaces_status_file_atomically() {
         let path = std::env::temp_dir().join(unique_name("runtime-status.json"));
         let publisher = RuntimeStatusPublisher::new_for_test(path.clone(), Duration::ZERO);
-        publisher.submit(publisher_status(1, "arcade", "disabled"));
+        publisher.submit(publisher_status(1, "arcade"));
         drop(publisher);
 
         let text = fs::read_to_string(&path).expect("status json should be written");
@@ -2633,9 +2565,9 @@ mod tests {
         let path = std::env::temp_dir().join(unique_name("runtime-status-coalesce.json"));
         let publisher =
             RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(50));
-        publisher.submit(publisher_status(1, "home", "active"));
-        publisher.submit(publisher_status(2, "settings", "active"));
-        publisher.submit(publisher_status(3, "arcade", "complete"));
+        publisher.submit(publisher_status(1, "home"));
+        publisher.submit(publisher_status(2, "settings"));
+        publisher.submit(publisher_status(3, "arcade"));
         let metrics = wait_for_publisher(&publisher, |metrics| metrics.written_sequence == 3);
         assert_eq!(metrics.submitted_sequence, 3);
         assert_eq!(metrics.written_sequence, 3);
@@ -2645,7 +2577,6 @@ mod tests {
         let _ = fs::remove_file(path);
         assert_eq!(value["status_sequence"], 3);
         assert_eq!(value["screen"], "arcade");
-        assert_eq!(value["screensaver_profile_state"], "complete");
     }
 
     #[test]
@@ -2653,7 +2584,7 @@ mod tests {
         let path = std::env::temp_dir().join(unique_name("runtime-status-failure"));
         fs::create_dir_all(&path).unwrap();
         let publisher = RuntimeStatusPublisher::new_for_test(path.clone(), Duration::ZERO);
-        publisher.submit(publisher_status(4, "home", "active"));
+        publisher.submit(publisher_status(4, "home"));
         let metrics = wait_for_publisher(&publisher, |metrics| metrics.worker_errors > 0);
         assert_eq!(metrics.written_sequence, 0);
         assert!(metrics.worker_errors > 0);
@@ -2666,13 +2597,12 @@ mod tests {
         let path = std::env::temp_dir().join(unique_name("runtime-status-final.json"));
         let publisher =
             RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(20));
-        publisher.submit(publisher_status(9, "settings", "complete"));
+        publisher.submit(publisher_status(9, "settings"));
         drop(publisher);
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let _ = fs::remove_file(path);
         assert_eq!(value["status_sequence"], 9);
         assert_eq!(value["status_written_sequence"], 9);
-        assert_eq!(value["screensaver_profile_state"], "complete");
     }
 
     #[test]
@@ -2681,7 +2611,7 @@ mod tests {
         let publisher =
             RuntimeStatusPublisher::new_for_test(path.clone(), Duration::from_millis(100));
         let started = Instant::now();
-        publisher.submit(publisher_status(1, "home", "active"));
+        publisher.submit(publisher_status(1, "home"));
         assert!(started.elapsed() < Duration::from_millis(50));
         drop(publisher);
         let _ = fs::remove_file(path);

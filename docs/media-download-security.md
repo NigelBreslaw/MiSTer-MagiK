@@ -9,7 +9,7 @@ runtime bounds and hashes object downloads using metadata fetched over HTTPS.
 
 Signed-manifest enforcement is compiled behind the
 `signed-media-manifests` Cargo feature. The feature is disabled by default and
-is not part of the canonical production feature set (`ui,profile`). Current
+is not part of the canonical production feature set (`ui`). Current
 releases therefore fetch and parse the bounded HTTPS manifest without
 requesting `manifest.json.sig`.
 

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use crate::cpu_profile::CatalogBuildProfiler;
 use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
@@ -2022,36 +2021,15 @@ fn run_fast_catalog_refresh_in_process(
         FastCatalogRefreshRequest, FastCatalogSystemOutcome, FastSourceCheckStatus,
     };
 
-    let mut catalog_profile = CatalogBuildProfiler::capture_process();
-    let profile_operation = match plan {
-        CatalogWorkerPlan::InitialBuild | CatalogWorkerPlan::FreshBuild => "fresh",
-        CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS => "rebuild-all",
-        _ => "refresh",
-    };
-    catalog_profile.arm(profile_operation);
     if matches!(
         plan,
         CatalogWorkerPlan::InitialBuild | CatalogWorkerPlan::FreshBuild
     ) {
-        run_fast_catalog_fresh_build(
-            root,
-            catalog_root,
-            tx,
-            catalog_profile,
-            mutation_lease,
-            bootstrap_run_id,
-        );
+        run_fast_catalog_fresh_build(root, catalog_root, tx, mutation_lease, bootstrap_run_id);
         return;
     }
     if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
-        run_fast_catalog_fresh_build(
-            root,
-            catalog_root,
-            tx,
-            catalog_profile,
-            mutation_lease,
-            bootstrap_run_id,
-        );
+        run_fast_catalog_fresh_build(root, catalog_root, tx, mutation_lease, bootstrap_run_id);
         return;
     }
     let request = if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
@@ -2079,13 +2057,11 @@ fn run_fast_catalog_refresh_in_process(
                         root,
                         catalog_root,
                         tx,
-                        catalog_profile,
                         mutation_lease,
                         bootstrap_run_id,
                     );
                 }
                 mister_magik_catalog::fast_catalog_refresh::FastRefreshPlanningError::Fatal(error) => {
-                    catalog_profile.fail("planning-failed");
                     let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                         error: format!("fast catalog refresh planning failed: {error}"),
                     });
@@ -2130,7 +2106,6 @@ fn run_fast_catalog_refresh_in_process(
             Ok(report) => report,
             Err(error) => {
                 report_catalog_filesystem_headroom(tx, "refresh-error");
-                catalog_profile.fail("refresh-failed");
                 let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                     error: format!("fast catalog refresh failed: {error}"),
                 });
@@ -2206,7 +2181,6 @@ fn run_fast_catalog_refresh_in_process(
             removed,
         });
         if let Err(error) = publish_registry_ready_at(tx, root, catalog_root) {
-            catalog_profile.fail("registry-reload-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("fast catalog registry reload failed: {error}"),
             });
@@ -2214,11 +2188,7 @@ fn run_fast_catalog_refresh_in_process(
         }
     }
     report_catalog_filesystem_headroom(tx, "complete");
-    if report.artifact_systems_written == 0 {
-        catalog_profile.unchanged();
-    } else {
-        catalog_profile.persisted();
-    }
+
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "catalog_100_percent_complete".to_string(),
         detail: format!(
@@ -2231,14 +2201,12 @@ fn run_fast_catalog_refresh_in_process(
         ),
     });
     let _ = tx.send(CatalogWorkerMessage::Done);
-    catalog_profile.wait_for_finalization();
 }
 
 fn run_fast_catalog_fresh_build(
     root: &str,
     catalog_root: &Path,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
-    mut catalog_profile: CatalogBuildProfiler,
     mutation_lease: &mister_magik_catalog::catalog_lease::CatalogMutationLease,
     bootstrap_run_id: Option<&str>,
 ) {
@@ -2353,7 +2321,6 @@ fn run_fast_catalog_fresh_build(
         Ok(report) => report,
         Err(error) => {
             report_catalog_filesystem_headroom(tx, "fresh-error");
-            catalog_profile.fail("fresh-build-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("catalog build failed: {error}"),
             });
@@ -2416,15 +2383,12 @@ fn run_fast_catalog_fresh_build(
         elapsed_us: report.elapsed_us,
     });
     if let Err(error) = publish_registry_ready_at(tx, root, catalog_root) {
-        catalog_profile.fail("registry-reload-failed");
         let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
             error: format!("catalog registry load failed: {error}"),
         });
         return;
     }
-    catalog_profile.persisted();
     let _ = tx.send(CatalogWorkerMessage::Done);
-    catalog_profile.wait_for_finalization();
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogReconcileScope {

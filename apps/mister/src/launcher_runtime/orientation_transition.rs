@@ -432,23 +432,10 @@ impl OrientationTransitionRuntime {
             })
             .min(self.duration);
         let fill_started = Instant::now();
-        let fill_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
-            self.effect,
-            self.from,
-            self.to,
-            OrientationPmuPhase::Fill,
-        ));
         let (frame, levels, revealing) =
             orientation_wave_state(self.effect, &self.source, &self.destination, elapsed);
-        drop(fill_pmu);
         let fill_us = elapsed_us(fill_started);
         let map_started = Instant::now();
-        let map_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
-            self.effect,
-            self.from,
-            self.to,
-            OrientationPmuPhase::Map,
-        ));
         let done = elapsed >= self.duration;
         let damage = if !self.previous_levels_valid || self.previous_revealing != revealing || done
         {
@@ -456,15 +443,8 @@ impl OrientationTransitionRuntime {
         } else {
             OrientationTransitionDamage::changed(&self.previous_levels, &levels)
         };
-        drop(map_pmu);
         let map_us = elapsed_us(map_started);
         let crossfade_started = Instant::now();
-        let crossfade_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
-            self.effect,
-            self.from,
-            self.to,
-            OrientationPmuPhase::Crossfade,
-        ));
         let previous =
             (self.previous_levels_valid && self.previous_revealing == revealing && !done)
                 .then_some(&self.previous_levels);
@@ -491,7 +471,6 @@ impl OrientationTransitionRuntime {
         self.previous_levels_valid = true;
         self.previous_revealing = revealing;
         let blended_pixels = damage.dirty_pixels(self.width, self.height);
-        drop(crossfade_pmu);
         let crossfade_us = elapsed_us(crossfade_started);
         if done {
             self.active = false;

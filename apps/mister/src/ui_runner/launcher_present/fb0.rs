@@ -18,7 +18,6 @@ pub(in crate::ui_runner) struct Fb0DirtyPresentStats {
     pub(in crate::ui_runner) cached_present_us: u128,
     pub(in crate::ui_runner) direct_preview_present_us: u128,
     pub(in crate::ui_runner) arcade_list_present_us: u128,
-    pub(in crate::ui_runner) arcade_update_label: ArcadeUpdateTrace,
 }
 
 pub(in crate::ui_runner) struct Fb0DirtyPresenter;
@@ -73,7 +72,6 @@ impl Fb0DirtyPresenter {
         let cached_damage = frame_plan.cached_damage();
         let direct_preview_rect = frame_plan.preview_dirty();
         let arcade_list_update = frame_plan.arcade_dirty();
-        let arcade_update_label = ArcadeUpdateTrace::from_update(arcade_list_update.as_ref());
         let arcade_overlay_rect = arcade_list_update.as_ref().map(arcade_update_dirty_rect);
         let cached_present_rects =
             Self::cached_present_plan(cached_damage, direct_preview_rect, arcade_overlay_rect);
@@ -119,7 +117,6 @@ impl Fb0DirtyPresenter {
             cached_present_us,
             direct_preview_present_us,
             arcade_list_present_us,
-            arcade_update_label,
         }
     }
 
@@ -298,7 +295,6 @@ mod tests {
             stats.present_bytes,
             expected_cached_bytes + present_bytes_for_rows(preview_rect.width(), 2) + 99
         );
-        assert_eq!(stats.arcade_update_label.to_string(), "full");
     }
 
     #[test]

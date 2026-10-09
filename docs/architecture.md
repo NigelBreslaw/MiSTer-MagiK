@@ -805,7 +805,8 @@ while `apps/mister/src/ui_runner/launcher_scheduler.rs` and the focused
 `*_session.rs` adapters start and poll catalog, media, launch, and background
 jobs. The device UI runner retains Slint rendering, row-copy decisions,
 framebuffer presentation, route reassertion, and frame accounting in
-`apps/mister/src/ui_runner/launcher_loop.rs`.
+`apps/mister/src/ui_runner/launcher_loop/frame_loop.rs`, as `FrameLoop`: its state grouped
+by domain, with the frame phases as methods.
 Lifecycle and scheduler internals should use explicit enum states for startup
 readiness, pending launch refs, and worker availability instead of parallel
 booleans or `Option` fields that can express impossible combinations.

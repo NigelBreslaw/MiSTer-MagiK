@@ -120,14 +120,10 @@ fn sync_media_progress_bridge(
                 .iter()
                 .zip(&rows)
                 .all(|(before, after)| before.system == after.system);
-        let allocation_started = Instant::now();
-        let mut allocated_rows = 0usize;
         if same_identity {
             for (index, row) in rows.iter().enumerate() {
                 if state.rows.get(index) != Some(row) {
                     model.set_row_data(index, media_progress_typed_row(row));
-                    allocated_rows = allocated_rows.saturating_add(1);
-                    crate::launcher_presentation::bridge_churn_record_row_mutations(1);
                 }
             }
         } else {
@@ -136,22 +132,12 @@ fn sync_media_progress_bridge(
                     .map(media_progress_typed_row)
                     .collect::<Vec<_>>(),
             );
-            allocated_rows = rows.len();
         }
-        if allocated_rows > 0 {
-            crate::launcher_presentation::bridge_churn_record_row_allocations(
-                allocated_rows as u64,
-            );
-            crate::launcher_presentation::bridge_churn_record_model_allocation_us(
-                allocation_started.elapsed().as_micros(),
-            );
-        }
+
         if publish_model {
-            crate::launcher_presentation::bridge_churn_record_model_replacements(1);
             media.set_rows(ModelRc::from(model.clone()));
         }
         if state.summary != summary {
-            crate::launcher_presentation::bridge_churn_record_shared_strings(1);
             media.set_summary(SharedString::from(summary.as_str()));
         }
         state.rows = rows;
@@ -171,25 +157,6 @@ pub(super) fn cached_catalog_validation_intent(
         catalog_scan_message(foreground_update),
         "Validating library",
         format!("Using cached {games} games while checking for changes"),
-        -1,
-    ))
-}
-
-pub(super) fn catalog_rebuild_started_intent(foreground_update: bool) -> LauncherWorkerUiIntent {
-    LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
-        foreground_update,
-        !foreground_update,
-        catalog_scan_message(foreground_update),
-        if foreground_update {
-            "Indexing library"
-        } else {
-            "Checking library"
-        },
-        if foreground_update {
-            "Rebuilding catalog with latest games..."
-        } else {
-            "Comparing library changes..."
-        },
         -1,
     ))
 }
@@ -459,20 +426,14 @@ impl MediaProgressDisplay {
 fn media_progress_model(
     rows: &[MediaProgressDisplayRow],
 ) -> ModelRc<slint_ui::launcher::MediaPackRow> {
-    let allocation_started = Instant::now();
     let rows = rows
         .iter()
         .map(media_progress_typed_row)
         .collect::<Vec<_>>();
-    crate::launcher_presentation::bridge_churn_record_row_allocations(rows.len() as u64);
-    crate::launcher_presentation::bridge_churn_record_model_allocation_us(
-        allocation_started.elapsed().as_micros(),
-    );
     ModelRc::new(VecModel::from(rows))
 }
 
 fn media_progress_typed_row(row: &MediaProgressDisplayRow) -> slint_ui::launcher::MediaPackRow {
-    crate::launcher_presentation::bridge_churn_record_shared_strings(6);
     slint_ui::launcher::MediaPackRow {
         system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
         image_size: row.image_size.clone().into(),

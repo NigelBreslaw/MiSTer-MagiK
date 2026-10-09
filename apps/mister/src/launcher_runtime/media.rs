@@ -232,12 +232,7 @@ fn run_screenshot_media_worker(
             let quiescent_since = benchmark_quiescent_since.get_or_insert_with(Instant::now);
             if quiescent_since.elapsed() >= MEDIA_REQUEST_QUIESCENCE {
                 let _ = tx.send(MediaWorkerMessage::Timing {
-                    name: if config.benchmark_auto_finish {
-                        "screenshot_media_benchmark_auto_finish"
-                    } else {
-                        "screenshot_media_request_complete"
-                    }
-                    .to_string(),
+                    name: "screenshot_media_request_complete".to_string(),
                     detail: format!(
                         "requested={} quiescent_ms={}",
                         queue.requested_count,
@@ -1842,7 +1837,6 @@ pub struct MediaWorkerConfig {
     asset_dir: PathBuf,
     catalog_root: PathBuf,
     max_concurrent_downloads: usize,
-    benchmark_auto_finish: bool,
 }
 
 impl MediaWorkerConfig {
@@ -1868,9 +1862,6 @@ impl MediaWorkerConfig {
             asset_dir: paths.media_asset_dir().to_path_buf(),
             catalog_root: paths.sharded_catalog_dir().to_path_buf(),
             max_concurrent_downloads: DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
-            benchmark_auto_finish: media_benchmark_auto_finish_from_value(get(
-                "MISTER_MEDIA_BENCH_CONTENTION",
-            )),
         })
     }
 
@@ -1891,19 +1882,8 @@ impl MediaWorkerConfig {
             asset_dir,
             catalog_root,
             max_concurrent_downloads: DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
-            benchmark_auto_finish: false,
         })
     }
-}
-
-#[cfg(feature = "bench-tools")]
-fn media_benchmark_auto_finish_from_value(value: Option<&str>) -> bool {
-    matches!(value, Some("1" | "true" | "yes" | "on"))
-}
-
-#[cfg(not(feature = "bench-tools"))]
-fn media_benchmark_auto_finish_from_value(_value: Option<&str>) -> bool {
-    false
 }
 
 #[derive(Default)]
@@ -2924,9 +2904,4 @@ mod tests {
         );
         let _ = fs::remove_dir_all(dir);
     }
-}
-#[cfg(not(feature = "bench-tools"))]
-#[test]
-fn production_build_cannot_enable_media_benchmark_auto_finish() {
-    assert!(!media_benchmark_auto_finish_from_value(Some("1")));
 }

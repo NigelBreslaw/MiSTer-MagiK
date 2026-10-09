@@ -506,7 +506,6 @@ pub(in crate::ui_runner) struct LauncherPresentFrame {
     pub(in crate::ui_runner) direct_hidden_mode: bool,
     pub(in crate::ui_runner) completed_hidden_frame: Option<CompletedHiddenFrame>,
     pub(in crate::ui_runner) readiness_source_request: Option<SourceEvidenceRequest>,
-    pub(in crate::ui_runner) profile_latch_phases: bool,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentTargets<'a, 'target> {
@@ -593,7 +592,6 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             direct_hidden_mode: frame.direct_hidden_mode,
             completed_hidden_frame: frame.completed_hidden_frame,
             readiness_source_request: frame.readiness_source_request,
-            profile_latch_phases: frame.profile_latch_phases,
         };
         if !frame.startup_can_present {
             return if self.display_frozen() {
@@ -823,7 +821,6 @@ struct LivePresentationAdapters<'a, 'target> {
     direct_hidden_mode: bool,
     completed_hidden_frame: Option<CompletedHiddenFrame>,
     readiness_source_request: Option<SourceEvidenceRequest>,
-    profile_latch_phases: bool,
 }
 
 impl LivePresentationAdapters<'_, '_> {
@@ -900,7 +897,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let mut arcade_copy_trace =
             crate::arcade_list_renderer::PersistentArcadeCopyTrace::default();
         let mut preview_redraw_rect = None;
-        let mut arcade_redraw_update = None;
         let layer_target = self.targets.layer_target;
         let hardware = &mut *self.targets.hardware;
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
@@ -920,12 +916,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 });
             };
             let source_evidence = completed.source_evidence.clone();
-            let stats = latch.present_completed_hidden_frame(
-                completed,
-                hardware,
-                self.display,
-                self.profile_latch_phases,
-            )?;
+            let stats = latch.present_completed_hidden_frame(completed, hardware, self.display)?;
             if let Some(scale) = mister_magik_fb::framebuffer::stream::configured_latch_scale(
                 self.stream_motion_active,
             ) && let Some(frame_view) = latch.committed_frame_view_if_mapped(stats.buffer_index)
@@ -942,8 +933,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 0,
                 0,
                 PresentCopyStats::default(),
-                crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(),
-                None,
                 None,
             );
             return Ok(LauncherPresentCycle {
@@ -967,17 +956,9 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             frame,
             hardware,
             self.display,
-            self.profile_latch_phases,
             |hidden, plan, preview_publication, arcade_publication, arcade_mirror| {
                 preview_redraw_rect = plan.preview_redraw;
-                arcade_redraw_update = plan.arcade_redraw;
                 if let Some(rect) = plan.preview_redraw {
-                    let preview_pmu = self
-                        .profile_latch_phases
-                        .then(|| {
-                            mister_magik_perf_events::sampled_span("gui.latch.preview-overlay-copy")
-                        })
-                        .flatten();
                     let started = Instant::now();
                     let (layout_generation, content_generation, backing_key) =
                         if let Some(publication) = preview_publication {
@@ -999,7 +980,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                             )
                         };
                     hidden_preview_compose_us = started.elapsed().as_micros();
-                    drop(preview_pmu);
                     require_complete_overlay_copy(
                         PhysicalOverlayRole::Preview,
                         plan.slot_index,
@@ -1011,12 +991,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                     )?;
                 }
                 if let Some(update) = plan.arcade_redraw {
-                    let arcade_pmu = self
-                        .profile_latch_phases
-                        .then(|| {
-                            mister_magik_perf_events::sampled_span("gui.latch.arcade-overlay-copy")
-                        })
-                        .flatten();
                     let started = Instant::now();
                     let arcade_rect = update.dirty_rect();
                     match arcade_overlay_copy_source(
@@ -1074,7 +1048,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         }
                     }
                     hidden_arcade_compose_us = started.elapsed().as_micros();
-                    drop(arcade_pmu);
                 }
                 Ok(())
             },
@@ -1104,9 +1077,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             hidden_arcade_compose_us,
             direct_preview_rows,
             arcade_stats,
-            arcade_copy_trace,
             preview_redraw_rect,
-            arcade_redraw_update,
         );
         let frame_t4 = Instant::now();
         let cpu_t4 = FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode);
@@ -1182,24 +1153,17 @@ fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
         vsync_us_override: None,
         cached_present_us: stats.cached_present_us,
         hidden_compose_us: 0,
-        hidden_preview_compose_us: 0,
-        hidden_arcade_compose_us: 0,
         direct_preview_present_us: stats.direct_preview_present_us,
         arcade_list_present_us: stats.arcade_list_present_us,
-        arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(),
         main_present_backend: LauncherPresentBackend::Fb0Dirty,
         main_present_status: LauncherPresentStatus::None,
         main_present_buffer: 0,
         main_present_hidden_copy_us: 0,
         main_present_hidden_publish_us: 0,
         main_present_hidden_copied_bytes: 0,
-        main_present_hidden_invalid_bytes: 0,
-        main_present_hidden_rect_count: 0,
-        main_present_hidden_catchup_bytes: 0,
-        main_present_hidden_full_copy: false,
         main_present_copy_path: "none",
         main_present_request_us: 0,
-        main_present_set_vga_fb_us: 0,
+        main_present_hidden_full_copy: false,
         main_present_wait_us: 0,
         main_present_sequence: 0,
         main_present_post_active_sequence: 0,
@@ -1208,7 +1172,6 @@ fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
         main_present_flip_count: 0,
         main_present_drop_count: 0,
         main_present_receipt_crc: 0,
-        arcade_update_label: stats.arcade_update_label,
     }
 }
 
@@ -1230,9 +1193,7 @@ fn latch_present_result(
     hidden_arcade_compose_us: u128,
     direct_preview_rows: u32,
     arcade_stats: PresentCopyStats,
-    arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace,
     preview_redraw_rect: Option<DirtyRect>,
-    arcade_redraw_update: Option<ArcadeListUpdate>,
 ) -> LauncherPresentResult {
     let present_us = stats.copy_us
         + stats.publish_us
@@ -1258,11 +1219,8 @@ fn latch_present_result(
         vsync_us_override: Some(0),
         cached_present_us: stats.copy_us,
         hidden_compose_us: hidden_preview_compose_us + hidden_arcade_compose_us,
-        hidden_preview_compose_us,
-        hidden_arcade_compose_us,
         direct_preview_present_us: hidden_preview_compose_us,
         arcade_list_present_us: hidden_arcade_compose_us,
-        arcade_copy_trace,
         main_present_backend: LauncherPresentBackend::FpgaVblankLatchHidden,
         main_present_status: if stats.set_supported && stats.status_supported {
             LauncherPresentStatus::Ok
@@ -1273,13 +1231,9 @@ fn latch_present_result(
         main_present_hidden_copy_us: stats.copy_us,
         main_present_hidden_publish_us: stats.publish_us,
         main_present_hidden_copied_bytes: stats.copied_bytes,
-        main_present_hidden_invalid_bytes: stats.invalid_bytes,
-        main_present_hidden_rect_count: stats.rect_count,
-        main_present_hidden_catchup_bytes: stats.catchup_bytes,
-        main_present_hidden_full_copy: stats.full_copy,
         main_present_copy_path: stats.copy_path.label(),
         main_present_request_us: stats.post_us + stats.set_vga_fb_us,
-        main_present_set_vga_fb_us: stats.set_vga_fb_us,
+        main_present_hidden_full_copy: stats.full_copy,
         main_present_wait_us: stats.status_us,
         main_present_sequence: stats.posted_sequence,
         main_present_post_active_sequence: stats.post_active_sequence,
@@ -1288,7 +1242,6 @@ fn latch_present_result(
         main_present_flip_count: stats.flip_count,
         main_present_drop_count: stats.drop_count,
         main_present_receipt_crc: stats.receipt_crc,
-        arcade_update_label: ArcadeUpdateTrace::from_update(arcade_redraw_update.as_ref()),
     }
 }
 
@@ -1303,24 +1256,17 @@ fn empty_present_result() -> LauncherPresentResult {
         vsync_us_override: None,
         cached_present_us: 0,
         hidden_compose_us: 0,
-        hidden_preview_compose_us: 0,
-        hidden_arcade_compose_us: 0,
         direct_preview_present_us: 0,
         arcade_list_present_us: 0,
-        arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(),
         main_present_backend: LauncherPresentBackend::None,
         main_present_status: LauncherPresentStatus::None,
         main_present_buffer: 0,
         main_present_hidden_copy_us: 0,
         main_present_hidden_publish_us: 0,
         main_present_hidden_copied_bytes: 0,
-        main_present_hidden_invalid_bytes: 0,
-        main_present_hidden_rect_count: 0,
-        main_present_hidden_catchup_bytes: 0,
-        main_present_hidden_full_copy: false,
         main_present_copy_path: "none",
         main_present_request_us: 0,
-        main_present_set_vga_fb_us: 0,
+        main_present_hidden_full_copy: false,
         main_present_wait_us: 0,
         main_present_sequence: 0,
         main_present_post_active_sequence: 0,
@@ -1329,7 +1275,6 @@ fn empty_present_result() -> LauncherPresentResult {
         main_present_flip_count: 0,
         main_present_drop_count: 0,
         main_present_receipt_crc: 0,
-        arcade_update_label: ArcadeUpdateTrace::None,
     }
 }
 

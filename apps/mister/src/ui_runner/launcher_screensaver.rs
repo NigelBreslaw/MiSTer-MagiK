@@ -41,25 +41,10 @@ pub struct ScreensaverRenderTrace {
     pub(super) renderer: &'static str,
     pub(super) archive_poll_us: u128,
     pub(super) card_adopt_us: u128,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) cards_adopted: usize,
     pub(super) parade_advance_us: u128,
     pub(super) background_us: u128,
     pub(super) draw_order_us: u128,
     pub(super) tile_blit_us: u128,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) cards_drawn: usize,
-    #[cfg_attr(
-        not(any(feature = "bench-tools", feature = "diagnostics")),
-        allow(dead_code)
-    )]
-    pub(super) cards_culled: usize,
     pub(super) raster_held_cards: usize,
     pub(super) raster_moved_cards: usize,
     pub(super) raster_hold_layer_mask: u8,
@@ -70,13 +55,10 @@ pub struct ScreensaverRenderTrace {
 pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverRenderTrace {
     ScreensaverRenderTrace {
         card_adopt_us: stats.card_adopt_us,
-        cards_adopted: stats.cards_adopted,
         parade_advance_us: stats.parade_advance_us,
         background_us: stats.background_us,
         draw_order_us: stats.draw_order_us,
         tile_blit_us: stats.tile_blit_us,
-        cards_drawn: stats.cards_drawn,
-        cards_culled: stats.cards_culled,
         raster_held_cards: stats.raster_held_cards,
         raster_moved_cards: stats.raster_moved_cards,
         raster_hold_layer_mask: stats.raster_hold_layer_mask,

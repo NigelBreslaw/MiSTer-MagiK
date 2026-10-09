@@ -2,58 +2,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use std::io::Write;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
-const PMU_CAPSULE_CONSTRUCTION: &str = "launch.return-capsule-construction";
-const PMU_LAUNCH_PREPARATION: &str = "launch.preparation";
-
-#[derive(Debug)]
-struct LaunchWorkerResult {
-    result: Result<bool, launcher::LaunchError>,
-    bench: Option<launcher::LaunchHandoffBenchResult>,
-}
+type LaunchWorkerResult = Result<bool, launcher::LaunchError>;
 
 #[derive(Debug)]
 struct PendingLaunch {
     title: String,
     rx: mpsc::Receiver<LaunchWorkerResult>,
-    action_start: Instant,
-    loading_presented: Instant,
-    bench_iteration: Option<usize>,
-    loading_frames: u64,
-    max_frame_gap_us: u64,
-    last_loop_start: Option<Instant>,
-}
-
-impl PendingLaunch {
-    fn record_loading_frame(&mut self, loop_start: Instant) {
-        self.loading_frames = self.loading_frames.saturating_add(1);
-        if let Some(previous) = self.last_loop_start {
-            let gap = loop_start.saturating_duration_since(previous).as_micros() as u64;
-            self.max_frame_gap_us = self.max_frame_gap_us.max(gap);
-        } else {
-            let gap = loop_start
-                .saturating_duration_since(self.loading_presented)
-                .as_micros() as u64;
-            self.max_frame_gap_us = self.max_frame_gap_us.max(gap);
-        }
-        self.last_loop_start = Some(loop_start);
-    }
 }
 
 #[derive(Debug)]
 struct StagedLaunch {
     title: String,
     launch_target: LaunchTarget,
-    action_start: Instant,
     return_state: Option<launcher::LaunchReturnState>,
     return_catalog: Option<return_catalog_capsule::PreparedReturnCatalogCapsule>,
-    bench_iteration: Option<usize>,
     user_game: Option<mister_magik_catalog::user_state::UserGameIdentity>,
 }
 
@@ -65,9 +32,7 @@ pub(super) enum LaunchHandoffRuntimeAction {
 
 #[derive(Debug)]
 pub(super) enum LaunchHandoffCompletion {
-    Success {
-        benchmark_terminal: bool,
-    },
+    Success,
     Failure {
         title: String,
         error: launcher::LaunchError,
@@ -75,132 +40,13 @@ pub(super) enum LaunchHandoffCompletion {
 }
 
 #[derive(Debug)]
-struct LaunchHandoffBenchConfig {
-    enabled: bool,
-    label: String,
-    trace_path: Option<String>,
-    delay: Duration,
-    iterations: usize,
-    launched: usize,
-    mode: launcher::LaunchHandoffBenchMode,
-}
-
-impl LaunchHandoffBenchConfig {
-    fn from_env(enabled: bool) -> Self {
-        let mode = match std::env::var("MISTER_LAUNCH_HANDOFF_MODE")
-            .unwrap_or_else(|_| "slow-fail".to_string())
-            .trim()
-        {
-            "success" => launcher::LaunchHandoffBenchMode::Success,
-            _ => launcher::LaunchHandoffBenchMode::SlowFail,
-        };
-        Self {
-            enabled,
-            label: std::env::var("MISTER_LAUNCH_HANDOFF_LABEL")
-                .unwrap_or_else(|_| "launch-handoff".to_string()),
-            trace_path: std::env::var("MISTER_LAUNCH_HANDOFF_TRACE")
-                .ok()
-                .filter(|path| !path.trim().is_empty()),
-            delay: std::env::var("MISTER_LAUNCH_HANDOFF_DELAY_MS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(Duration::from_millis)
-                .unwrap_or(DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY),
-            iterations: std::env::var("MISTER_LAUNCH_HANDOFF_ITERATIONS")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(1)
-                .max(1),
-            launched: 0,
-            mode,
-        }
-    }
-
-    fn should_request_launch(&self) -> bool {
-        self.enabled && self.launched < self.iterations
-    }
-
-    fn begin_launch(&mut self) -> Option<usize> {
-        if !self.enabled {
-            return None;
-        }
-        self.launched = self.launched.saturating_add(1);
-        Some(self.launched)
-    }
-
-    fn write_sample(
-        &self,
-        sample: LaunchHandoffBenchSample,
-        recovery_presented: Instant,
-        result: &'static str,
-        recovery: bool,
-    ) {
-        let Some(iteration) = sample.iteration else {
-            return;
-        };
-        let launch_action_to_loading_us = sample
-            .loading_presented
-            .saturating_duration_since(sample.action_start)
-            .as_micros() as u64;
-        let failure_recovery_us = recovery_presented
-            .saturating_duration_since(sample.result_received)
-            .as_micros() as u64;
-        let handoff_complete_us = sample
-            .result_received
-            .saturating_duration_since(sample.action_start)
-            .as_micros() as u64;
-        let first_ack_us = if result == "ok" {
-            sample.launch_prep_us
-        } else {
-            0
-        };
-        let line = format!(
-            "launch_handoff_sample\t{}\t{}\tlaunch_action_to_loading_us={}\tmax_frame_gap_us={}\tloading_frames_before_result={}\tfailure_recovery_us={}\tlaunch_prep_us={}\thandoff_wait_us={}\tresult={result}\thandoff_complete_us={handoff_complete_us}\tfirst_ack_us={first_ack_us}\trecovery={}",
-            self.label,
-            iteration,
-            launch_action_to_loading_us,
-            sample.max_frame_gap_us,
-            sample.loading_frames_before_result,
-            failure_recovery_us,
-            sample.launch_prep_us,
-            sample.handoff_wait_us,
-            u8::from(recovery),
-        );
-        crate::ui_logln!("{line}");
-        if let Some(path) = self.trace_path.as_deref()
-            && let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-        {
-            let _ = writeln!(file, "{line}");
-        }
-    }
-}
-
-#[derive(Debug)]
 struct LaunchWorkerRequest {
     launch_target: LaunchTarget,
-    bench_iteration: Option<usize>,
-    bench_delay: Duration,
-    bench_mode: launcher::LaunchHandoffBenchMode,
     user_game: Option<mister_magik_catalog::user_state::UserGameIdentity>,
 }
 
 type LaunchWorkerSpawner = fn(LaunchWorkerRequest) -> mpsc::Receiver<LaunchWorkerResult>;
 type ArcadeCoreProbe = fn() -> bool;
-
-#[derive(Debug)]
-struct LaunchHandoffBenchSample {
-    iteration: Option<usize>,
-    action_start: Instant,
-    loading_presented: Instant,
-    max_frame_gap_us: u64,
-    loading_frames_before_result: u64,
-    result_received: Instant,
-    launch_prep_us: u64,
-    handoff_wait_us: u64,
-}
 
 pub(super) struct LaunchHandoffSession {
     pending: Option<PendingLaunch>,
@@ -208,26 +54,20 @@ pub(super) struct LaunchHandoffSession {
     loading_title: String,
     launch_started: Instant,
     spawned_mister: bool,
-    bench: LaunchHandoffBenchConfig,
-    pending_bench_sample: Option<LaunchHandoffBenchSample>,
     spawn_worker: LaunchWorkerSpawner,
     arcade_core_running: ArcadeCoreProbe,
-    pmu_completion_path: Option<std::path::PathBuf>,
 }
 
 impl LaunchHandoffSession {
-    pub(super) fn from_env(bench_enabled: bool, pmu_completion_path: Option<&str>) -> Self {
+    pub(super) fn from_env() -> Self {
         Self {
             pending: None,
             staged: None,
             loading_title: String::new(),
             launch_started: Instant::now(),
             spawned_mister: false,
-            bench: LaunchHandoffBenchConfig::from_env(bench_enabled),
-            pending_bench_sample: None,
             spawn_worker: spawn_launch_worker,
             arcade_core_running: launcher::mister_running_arcade_core,
-            pmu_completion_path: pmu_completion_path.and_then(valid_launch_return_pmu_path),
         }
     }
 
@@ -264,27 +104,12 @@ impl LaunchHandoffSession {
         self.pending.is_some()
     }
 
-    pub(super) fn benchmark_enabled(&self) -> bool {
-        self.bench.enabled
-    }
-
-    pub(super) fn should_request_benchmark_launch(&self) -> bool {
-        self.bench.should_request_launch()
-    }
-
-    pub(super) fn record_loading_frame(&mut self, loop_start: Instant) {
-        if let Some(pending) = self.pending.as_mut() {
-            pending.record_loading_frame(loop_start);
-        }
-    }
-
     pub(super) fn begin_launch(
         &mut self,
         nav: &LauncherNav,
         catalog: &ArcadeCatalog,
         durable_catalog_fingerprint: Option<&str>,
         launch_ref: &str,
-        now: Instant,
     ) -> bool {
         if self.pending.is_some() || self.staged.is_some() {
             return false;
@@ -293,20 +118,11 @@ impl LaunchHandoffSession {
         let launch_target = catalog.launch_target_for_ref(launch_ref);
         let title = launcher::game_title(catalog, launch_ref);
         self.loading_title = format!("Loading {title}…");
-        let bench_iteration = self.bench.begin_launch();
-        let user_game = bench_iteration
-            .is_none()
-            .then(|| catalog.user_game_identity_for_ref(launch_ref))
-            .flatten();
-        let return_state = if bench_iteration.is_some() {
-            None
-        } else {
-            launcher::capture_launch_return_state(nav, catalog, launch_ref)
-        };
+        let user_game = catalog.user_game_identity_for_ref(launch_ref);
+        let return_state = launcher::capture_launch_return_state(nav, catalog, launch_ref);
         let return_catalog = return_state.as_ref().and_then(|state| {
             let durable_catalog_fingerprint = durable_catalog_fingerprint?;
             let collection_id = state.collection_id()?;
-            let _pmu = mister_magik_perf_events::sampled_span(PMU_CAPSULE_CONSTRUCTION);
             match return_catalog_capsule::prepare_return_catalog_capsule(
                 catalog,
                 collection_id,
@@ -323,16 +139,14 @@ impl LaunchHandoffSession {
         self.staged = Some(StagedLaunch {
             title,
             launch_target,
-            action_start: now,
             return_state,
             return_catalog,
-            bench_iteration,
             user_game,
         });
         true
     }
 
-    pub(super) fn complete_loading_frame(&mut self, loading_presented: Instant) {
+    pub(super) fn complete_loading_frame(&mut self) {
         let Some(staged) = self.staged.take() else {
             return;
         };
@@ -357,20 +171,11 @@ impl LaunchHandoffSession {
         }
         let rx = (self.spawn_worker)(LaunchWorkerRequest {
             launch_target: staged.launch_target,
-            bench_iteration: staged.bench_iteration,
-            bench_delay: self.bench.delay,
-            bench_mode: self.bench.mode,
             user_game: staged.user_game,
         });
         self.pending = Some(PendingLaunch {
             title: staged.title,
             rx,
-            action_start: staged.action_start,
-            loading_presented,
-            bench_iteration: staged.bench_iteration,
-            loading_frames: 1,
-            max_frame_gap_us: 0,
-            last_loop_start: None,
         });
     }
 
@@ -378,67 +183,26 @@ impl LaunchHandoffSession {
         &mut self,
         result_received: Instant,
     ) -> Option<LaunchHandoffCompletion> {
-        let worker_result = match self.pending.as_ref()?.rx.try_recv() {
+        let result = match self.pending.as_ref()?.rx.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return None,
-            Err(mpsc::TryRecvError::Disconnected) => LaunchWorkerResult {
-                result: Err(launcher::LaunchError::internal(
-                    "launch worker disconnected before reporting a result",
-                )),
-                bench: None,
-            },
+            Err(mpsc::TryRecvError::Disconnected) => Err(launcher::LaunchError::internal(
+                "launch worker disconnected before reporting a result",
+            )),
         };
         let pending = self.pending.take().expect("pending launch result");
-        finish_launch_return_handoff_pmu_async(self.pmu_completion_path.clone());
-        match worker_result.result {
+        self.launch_started = result_received;
+        match result {
             Ok(spawned) => {
-                self.launch_started = result_received;
                 self.spawned_mister = spawned;
-                let mut benchmark_terminal = false;
-                if let (Some(bench), Some(iteration)) =
-                    (worker_result.bench.as_ref(), pending.bench_iteration)
-                {
-                    let sample = LaunchHandoffBenchSample {
-                        iteration: Some(iteration),
-                        action_start: pending.action_start,
-                        loading_presented: pending.loading_presented,
-                        max_frame_gap_us: pending.max_frame_gap_us,
-                        loading_frames_before_result: pending.loading_frames.max(1),
-                        result_received,
-                        launch_prep_us: bench.prepare_us,
-                        handoff_wait_us: bench.handoff_us,
-                    };
-                    self.bench
-                        .write_sample(sample, result_received, "ok", false);
-                    self.loading_title.clear();
-                    launcher::reset_launch();
-                    benchmark_terminal = true;
-                }
-                Some(LaunchHandoffCompletion::Success { benchmark_terminal })
+                Some(LaunchHandoffCompletion::Success)
             }
             Err(error) => {
-                self.launch_started = result_received;
-                if worker_result.bench.is_none() {
-                    launcher::remove_launch_return_state();
-                    return_catalog_capsule::remove_return_catalog_capsule();
-                }
+                launcher::remove_launch_return_state();
+                return_catalog_capsule::remove_return_catalog_capsule();
                 self.spawned_mister |= error.spawned_mister();
                 self.loading_title.clear();
                 launcher::reset_launch();
-                if let (Some(bench), Some(iteration)) =
-                    (worker_result.bench.as_ref(), pending.bench_iteration)
-                {
-                    self.pending_bench_sample = Some(LaunchHandoffBenchSample {
-                        iteration: Some(iteration),
-                        action_start: pending.action_start,
-                        loading_presented: pending.loading_presented,
-                        max_frame_gap_us: pending.max_frame_gap_us,
-                        loading_frames_before_result: pending.loading_frames.max(1),
-                        result_received,
-                        launch_prep_us: bench.prepare_us,
-                        handoff_wait_us: bench.handoff_us,
-                    });
-                }
                 Some(LaunchHandoffCompletion::Failure {
                     title: pending.title,
                     error,
@@ -457,11 +221,7 @@ impl LaunchHandoffSession {
         }
     }
 
-    pub(super) fn finish_failure_recovery(&mut self, recovery_presented: Instant) {
-        if let Some(sample) = self.pending_bench_sample.take() {
-            self.bench
-                .write_sample(sample, recovery_presented, "error", true);
-        }
+    pub(super) fn finish_failure_recovery(&mut self) {
         self.loading_title.clear();
     }
 
@@ -481,8 +241,8 @@ impl LaunchHandoffSession {
     }
 
     #[cfg(test)]
-    fn with_worker_for_test(spawn_worker: LaunchWorkerSpawner, bench_enabled: bool) -> Self {
-        let mut session = Self::from_env(bench_enabled, None);
+    fn with_worker_for_test(spawn_worker: LaunchWorkerSpawner) -> Self {
+        let mut session = Self::from_env();
         session.spawn_worker = spawn_worker;
         session
     }
@@ -491,56 +251,11 @@ impl LaunchHandoffSession {
     fn with_worker_and_core_probe_for_test(
         spawn_worker: LaunchWorkerSpawner,
         arcade_core_running: ArcadeCoreProbe,
-        bench_enabled: bool,
     ) -> Self {
-        let mut session = Self::with_worker_for_test(spawn_worker, bench_enabled);
+        let mut session = Self::with_worker_for_test(spawn_worker);
         session.arcade_core_running = arcade_core_running;
         session
     }
-}
-
-fn valid_launch_return_pmu_path(path: &str) -> Option<std::path::PathBuf> {
-    let path = std::path::PathBuf::from(path);
-    (path.is_absolute()
-        && path.starts_with("/tmp/mister-magik")
-        && !path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir | std::path::Component::CurDir
-            )
-        }))
-    .then_some(path)
-}
-
-fn finish_launch_return_handoff_pmu_async(path: Option<std::path::PathBuf>) {
-    let Some(path) = path else {
-        return;
-    };
-    let ui_profile = mister_magik_perf_events::take_thread_profile();
-    let worker_profiles = mister_magik_perf_events::take_process_profiles();
-    std::thread::spawn(move || {
-        let passed = ui_profile.enabled
-            && ui_profile.failure.is_none()
-            && ui_profile.dropped_spans == 0
-            && !ui_profile.records.is_empty()
-            && worker_profiles.dropped_profiles == 0
-            && worker_profiles.profiles.iter().all(|submitted| {
-                submitted.profile.failure.is_none()
-                    && submitted.profile.dropped_spans == 0
-                    && !submitted.profile.records.is_empty()
-            })
-            && !worker_profiles.profiles.is_empty();
-        let payload = serde_json::json!({
-            "schema": "mister-magik-launch-return-handoff-pmu-v1",
-            "state": if passed { "complete" } else { "failed" },
-            "ui_profile": ui_profile,
-            "worker_profiles": worker_profiles,
-        });
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(path, format!("{payload}\n"));
-    });
 }
 
 fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWorkerResult> {
@@ -548,24 +263,8 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
     thread::Builder::new()
         .name("launch-handoff".to_string())
         .spawn(move || {
-            let prep_started = Instant::now();
-            let prep_pmu = mister_magik_perf_events::sampled_span(PMU_LAUNCH_PREPARATION);
             let prepared = crate::launch_preparation::prepare_launch_target(&request.launch_target);
-            drop(prep_pmu);
-            let prep_us = prep_started.elapsed().as_micros() as u64;
             let result = match prepared {
-                Ok(launch_target) if request.bench_iteration.is_some() => {
-                    let mut bench = launcher::execute_game_launch_handoff_bench(
-                        &launch_target,
-                        request.bench_delay,
-                        request.bench_mode,
-                    );
-                    bench.prepare_us = bench.prepare_us.saturating_add(prep_us);
-                    LaunchWorkerResult {
-                        result: bench.result.clone(),
-                        bench: Some(bench),
-                    }
-                }
                 Ok(launch_target) => {
                     let result = launcher::execute_game_launch(&launch_target);
                     if result.is_ok()
@@ -574,28 +273,13 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
                     {
                         crate::ui_errln!("user-state: failed to record successful launch: {error}");
                     }
-                    LaunchWorkerResult {
-                        result,
-                        bench: None,
-                    }
+                    result
                 }
-                Err(error) => {
-                    let result = Err(launcher::LaunchError::preparation(error));
-                    let bench =
-                        request
-                            .bench_iteration
-                            .map(|_| launcher::LaunchHandoffBenchResult {
-                                result: result.clone(),
-                                prepare_us: prep_us,
-                                handoff_us: 0,
-                            });
-                    LaunchWorkerResult { result, bench }
-                }
+                Err(error) => Err(launcher::LaunchError::preparation(error)),
             };
-            if result.result.is_err() {
+            if result.is_err() {
                 crate::launch_preparation::cleanup_archive_launch_staging();
             }
-            mister_magik_perf_events::submit_thread_profile("launch-handoff-worker");
             let _ = tx.send(result);
         })
         .expect("spawn launch-handoff");
@@ -644,24 +328,6 @@ mod tests {
     }
 
     #[test]
-    fn launch_profile_phase_ownership_keeps_ui_and_worker_work_separate() {
-        assert_eq!(
-            PMU_CAPSULE_CONSTRUCTION,
-            "launch.return-capsule-construction"
-        );
-        assert_eq!(PMU_LAUNCH_PREPARATION, "launch.preparation");
-        assert!(PMU_CAPSULE_CONSTRUCTION.starts_with("launch.return-capsule"));
-        assert!(!PMU_LAUNCH_PREPARATION.starts_with("launch.return-capsule"));
-    }
-
-    #[test]
-    fn launch_return_pmu_handoff_path_is_fixed_to_volatile_state() {
-        assert!(valid_launch_return_pmu_path("/tmp/mister-magik/handoff.json").is_some());
-        assert!(valid_launch_return_pmu_path("/tmp/handoff.json").is_none());
-        assert!(valid_launch_return_pmu_path("/tmp/mister-magik/../handoff.json").is_none());
-    }
-
-    #[test]
     fn successful_launch_history_is_durable_and_unique_mru() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -705,11 +371,7 @@ mod tests {
 
     fn success_worker(_request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWorkerResult> {
         let (tx, rx) = mpsc::channel();
-        tx.send(LaunchWorkerResult {
-            result: Ok(false),
-            bench: None,
-        })
-        .expect("send success result");
+        tx.send(Ok(false)).expect("send success result");
         rx
     }
 
@@ -722,47 +384,10 @@ mod tests {
         _request: LaunchWorkerRequest,
     ) -> mpsc::Receiver<LaunchWorkerResult> {
         let (tx, rx) = mpsc::channel();
-        tx.send(LaunchWorkerResult {
-            result: launcher::execute_game_launch(&LaunchTarget::Path(
-                "/tmp/mister-magik-test-missing-target.mra".into(),
-            )),
-            bench: None,
-        })
+        tx.send(launcher::execute_game_launch(&LaunchTarget::Path(
+            "/tmp/mister-magik-test-missing-target.mra".into(),
+        )))
         .expect("send failure result");
-        rx
-    }
-
-    fn benchmark_failure_worker(
-        request: LaunchWorkerRequest,
-    ) -> mpsc::Receiver<LaunchWorkerResult> {
-        let (tx, rx) = mpsc::channel();
-        let bench = launcher::execute_game_launch_handoff_bench(
-            &request.launch_target,
-            Duration::ZERO,
-            launcher::LaunchHandoffBenchMode::SlowFail,
-        );
-        tx.send(LaunchWorkerResult {
-            result: bench.result.clone(),
-            bench: Some(bench),
-        })
-        .expect("send benchmark failure result");
-        rx
-    }
-
-    fn benchmark_success_worker(
-        request: LaunchWorkerRequest,
-    ) -> mpsc::Receiver<LaunchWorkerResult> {
-        let (tx, rx) = mpsc::channel();
-        let bench = launcher::execute_game_launch_handoff_bench(
-            &request.launch_target,
-            Duration::ZERO,
-            launcher::LaunchHandoffBenchMode::Success,
-        );
-        tx.send(LaunchWorkerResult {
-            result: bench.result.clone(),
-            bench: Some(bench),
-        })
-        .expect("send benchmark success result");
         rx
     }
 
@@ -776,18 +401,12 @@ mod tests {
 
     #[test]
     fn begin_launch_sets_loading_before_worker_handoff() {
-        let mut session = LaunchHandoffSession::with_worker_for_test(pending_worker, false);
+        let mut session = LaunchHandoffSession::with_worker_for_test(pending_worker);
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
         let catalog = one_game_catalog();
 
-        assert!(session.begin_launch(
-            &nav,
-            &catalog,
-            None,
-            "/media/fat/_Arcade/1942.mra",
-            Instant::now(),
-        ));
+        assert!(session.begin_launch(&nav, &catalog, None, "/media/fat/_Arcade/1942.mra",));
 
         assert_eq!(session.loading_title(), "Loading 1942…");
         assert!(session.is_active());
@@ -798,18 +417,12 @@ mod tests {
     fn complete_loading_frame_starts_pending_handoff() {
         let _guard = lock_launch_handoff_tests();
         launcher::remove_launch_return_state();
-        let mut session = LaunchHandoffSession::with_worker_for_test(pending_worker, false);
+        let mut session = LaunchHandoffSession::with_worker_for_test(pending_worker);
         let nav = LauncherNav::new();
         let catalog = one_game_catalog();
 
-        assert!(session.begin_launch(
-            &nav,
-            &catalog,
-            None,
-            "/media/fat/_Arcade/1942.mra",
-            Instant::now(),
-        ));
-        session.complete_loading_frame(Instant::now());
+        assert!(session.begin_launch(&nav, &catalog, None, "/media/fat/_Arcade/1942.mra",));
+        session.complete_loading_frame();
 
         assert!(session.has_pending_launch());
         assert_eq!(session.loading_title(), "Loading 1942…");
@@ -820,18 +433,12 @@ mod tests {
     fn disconnected_launch_worker_finishes_as_an_internal_failure() {
         let _guard = lock_launch_handoff_tests();
         launcher::remove_launch_return_state();
-        let mut session = LaunchHandoffSession::with_worker_for_test(disconnected_worker, false);
+        let mut session = LaunchHandoffSession::with_worker_for_test(disconnected_worker);
         let nav = LauncherNav::new();
         let catalog = one_game_catalog();
 
-        assert!(session.begin_launch(
-            &nav,
-            &catalog,
-            None,
-            "/media/fat/_Arcade/1942.mra",
-            Instant::now(),
-        ));
-        session.complete_loading_frame(Instant::now());
+        assert!(session.begin_launch(&nav, &catalog, None, "/media/fat/_Arcade/1942.mra",));
+        session.complete_loading_frame();
 
         let completion = session
             .poll_completion(Instant::now())
@@ -853,25 +460,16 @@ mod tests {
         let mut session = LaunchHandoffSession::with_worker_and_core_probe_for_test(
             success_worker,
             arcade_core_idle,
-            false,
         );
         let nav = LauncherNav::new();
         let catalog = one_game_catalog();
 
-        assert!(session.begin_launch(
-            &nav,
-            &catalog,
-            None,
-            "/media/fat/_Arcade/1942.mra",
-            Instant::now(),
-        ));
-        session.complete_loading_frame(Instant::now());
+        assert!(session.begin_launch(&nav, &catalog, None, "/media/fat/_Arcade/1942.mra",));
+        session.complete_loading_frame();
 
         assert!(matches!(
             session.poll_completion(Instant::now()),
-            Some(LaunchHandoffCompletion::Success {
-                benchmark_terminal: false
-            })
+            Some(LaunchHandoffCompletion::Success)
         ));
         assert_eq!(session.loading_title(), "Loading 1942…");
         assert!(session.is_active());
@@ -884,7 +482,7 @@ mod tests {
         let _guard = lock_launch_handoff_tests();
         launcher::reset_launch();
         launcher::mark_launch_sent_for_test();
-        let mut session = LaunchHandoffSession::with_worker_for_test(pending_worker, false);
+        let mut session = LaunchHandoffSession::with_worker_for_test(pending_worker);
 
         assert_eq!(session.loading_title(), "");
         assert!(!session.has_pending_launch());
@@ -899,20 +497,13 @@ mod tests {
         let _guard = lock_launch_handoff_tests();
         launcher::reset_launch();
         launcher::remove_launch_return_state();
-        let mut session =
-            LaunchHandoffSession::with_worker_for_test(missing_target_failure_worker, false);
+        let mut session = LaunchHandoffSession::with_worker_for_test(missing_target_failure_worker);
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
         let catalog = one_game_catalog();
 
-        assert!(session.begin_launch(
-            &nav,
-            &catalog,
-            None,
-            "/media/fat/_Arcade/1942.mra",
-            Instant::now(),
-        ));
-        session.complete_loading_frame(Instant::now());
+        assert!(session.begin_launch(&nav, &catalog, None, "/media/fat/_Arcade/1942.mra",));
+        session.complete_loading_frame();
         assert!(
             Path::new(launcher::LAUNCH_RETURN_STATE_PATH).exists(),
             "return state is saved after loading frame"
@@ -930,121 +521,6 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_failure_writes_stable_trace_fields() {
-        let _guard = lock_launch_handoff_tests();
-        launcher::reset_launch();
-        launcher::remove_launch_return_state();
-        let trace_path = std::env::temp_dir().join(format!(
-            "mister-magik-launch-handoff-test-{}.tsv",
-            std::process::id()
-        ));
-        let target_path = std::env::temp_dir().join(format!(
-            "mister-magik-launch-handoff-test-{}.mra",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&trace_path);
-        std::fs::write(&target_path, "").expect("write launch target");
-        let mut session =
-            LaunchHandoffSession::with_worker_for_test(benchmark_failure_worker, true);
-        session.bench.label = "UNIT-HANDOFF".to_string();
-        session.bench.trace_path = Some(trace_path.display().to_string());
-        session.bench.delay = Duration::ZERO;
-        session.bench.iterations = 1;
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Arcade;
-        let catalog = one_game_catalog();
-        let start = Instant::now();
-
-        assert!(session.begin_launch(&nav, &catalog, None, target_path.to_str().unwrap(), start));
-        session.complete_loading_frame(start + Duration::from_millis(1));
-        assert!(matches!(
-            session.poll_completion(start + Duration::from_millis(2)),
-            Some(LaunchHandoffCompletion::Failure { .. })
-        ));
-        session.finish_failure_recovery(start + Duration::from_millis(3));
-
-        let trace = std::fs::read_to_string(&trace_path).expect("read trace");
-        let fields: Vec<&str> = trace.trim().split('\t').collect();
-        assert_eq!(fields[0], "launch_handoff_sample");
-        assert_eq!(fields[1], "UNIT-HANDOFF");
-        assert_eq!(fields[2], "1");
-        assert!(fields[3].starts_with("launch_action_to_loading_us="));
-        assert!(fields[4].starts_with("max_frame_gap_us="));
-        assert!(fields[5].starts_with("loading_frames_before_result="));
-        assert!(fields[6].starts_with("failure_recovery_us="));
-        assert!(fields[7].starts_with("launch_prep_us="));
-        assert!(fields[8].starts_with("handoff_wait_us="));
-        assert_eq!(fields[9], "result=error");
-        assert!(fields[10].starts_with("handoff_complete_us="));
-        assert_eq!(fields[11], "first_ack_us=0");
-        assert_eq!(fields[12], "recovery=1");
-        assert!(!Path::new(launcher::LAUNCH_RETURN_STATE_PATH).exists());
-
-        let _ = std::fs::remove_file(&trace_path);
-        let _ = std::fs::remove_file(&target_path);
-        launcher::remove_launch_return_state();
-    }
-
-    #[test]
-    fn benchmark_success_writes_terminal_trace_fields() {
-        let _guard = lock_launch_handoff_tests();
-        launcher::reset_launch();
-        launcher::remove_launch_return_state();
-        let trace_path = std::env::temp_dir().join(format!(
-            "mister-magik-launch-handoff-success-test-{}.tsv",
-            std::process::id()
-        ));
-        let target_path = std::env::temp_dir().join(format!(
-            "mister-magik-launch-handoff-success-test-{}.mra",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&trace_path);
-        std::fs::write(&target_path, "").expect("write launch target");
-        let mut session =
-            LaunchHandoffSession::with_worker_for_test(benchmark_success_worker, true);
-        session.bench.label = "UNIT-HANDOFF-SUCCESS".to_string();
-        session.bench.trace_path = Some(trace_path.display().to_string());
-        session.bench.delay = Duration::ZERO;
-        session.bench.iterations = 1;
-        session.bench.mode = launcher::LaunchHandoffBenchMode::Success;
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Arcade;
-        let catalog = one_game_catalog();
-        let start = Instant::now();
-
-        assert!(session.begin_launch(&nav, &catalog, None, target_path.to_str().unwrap(), start));
-        session.complete_loading_frame(start + Duration::from_millis(1));
-        assert!(matches!(
-            session.poll_completion(start + Duration::from_millis(2)),
-            Some(LaunchHandoffCompletion::Success {
-                benchmark_terminal: true
-            })
-        ));
-
-        let trace = std::fs::read_to_string(&trace_path).expect("read trace");
-        let fields: Vec<&str> = trace.trim().split('\t').collect();
-        assert_eq!(fields[0], "launch_handoff_sample");
-        assert_eq!(fields[1], "UNIT-HANDOFF-SUCCESS");
-        assert_eq!(fields[2], "1");
-        assert!(fields[3].starts_with("launch_action_to_loading_us="));
-        assert!(fields[4].starts_with("max_frame_gap_us="));
-        assert!(fields[5].starts_with("loading_frames_before_result="));
-        assert_eq!(fields[6], "failure_recovery_us=0");
-        assert!(fields[7].starts_with("launch_prep_us="));
-        assert!(fields[8].starts_with("handoff_wait_us="));
-        assert_eq!(fields[9], "result=ok");
-        assert!(fields[10].starts_with("handoff_complete_us="));
-        assert!(fields[11].starts_with("first_ack_us="));
-        assert_eq!(fields[12], "recovery=0");
-        assert_eq!(session.loading_title(), "");
-        assert!(!session.is_active());
-
-        let _ = std::fs::remove_file(&trace_path);
-        let _ = std::fs::remove_file(&target_path);
-        launcher::remove_launch_return_state();
-    }
-
-    #[test]
     fn runtime_action_waits_for_core_or_timeout_after_success() {
         let _guard = lock_launch_handoff_tests();
         launcher::reset_launch();
@@ -1052,25 +528,16 @@ mod tests {
         let mut idle_session = LaunchHandoffSession::with_worker_and_core_probe_for_test(
             success_worker,
             arcade_core_idle,
-            false,
         );
         let nav = LauncherNav::new();
         let catalog = one_game_catalog();
         let start = Instant::now();
 
-        assert!(idle_session.begin_launch(
-            &nav,
-            &catalog,
-            None,
-            "/media/fat/_Arcade/1942.mra",
-            start,
-        ));
-        idle_session.complete_loading_frame(start);
+        assert!(idle_session.begin_launch(&nav, &catalog, None, "/media/fat/_Arcade/1942.mra",));
+        idle_session.complete_loading_frame();
         assert!(matches!(
             idle_session.poll_completion(start),
-            Some(LaunchHandoffCompletion::Success {
-                benchmark_terminal: false
-            })
+            Some(LaunchHandoffCompletion::Success)
         ));
         assert_eq!(
             idle_session.runtime_action(start + Duration::from_millis(600)),
@@ -1084,21 +551,12 @@ mod tests {
         let mut core_session = LaunchHandoffSession::with_worker_and_core_probe_for_test(
             success_worker,
             arcade_core_running,
-            false,
         );
-        assert!(core_session.begin_launch(
-            &nav,
-            &catalog,
-            None,
-            "/media/fat/_Arcade/1942.mra",
-            start,
-        ));
-        core_session.complete_loading_frame(start);
+        assert!(core_session.begin_launch(&nav, &catalog, None, "/media/fat/_Arcade/1942.mra",));
+        core_session.complete_loading_frame();
         assert!(matches!(
             core_session.poll_completion(start),
-            Some(LaunchHandoffCompletion::Success {
-                benchmark_terminal: false
-            })
+            Some(LaunchHandoffCompletion::Success)
         ));
         assert_eq!(
             core_session.runtime_action(start + Duration::from_millis(600)),

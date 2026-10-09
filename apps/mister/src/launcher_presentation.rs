@@ -30,7 +30,7 @@ use mister_magik_ui::launcher::{
     MenuItemPresentation, MenuItemStatus, MisterUi, NavigationView, OverlayView, SettingsView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -328,105 +328,6 @@ macro_rules! set_view_string_if_changed {
             $view.$setter(SharedString::from(source));
         }
     }};
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BridgeChurnCounters {
-    pub(crate) model_replacements: u64,
-    pub(crate) row_mutations: u64,
-    pub(crate) row_allocations: u64,
-    pub(crate) shared_string_constructions: u64,
-    pub(crate) model_allocation_us: u64,
-}
-
-impl BridgeChurnCounters {
-    #[cfg(feature = "ui")]
-    pub(crate) fn saturating_sub(self, earlier: Self) -> Self {
-        Self {
-            model_replacements: self
-                .model_replacements
-                .saturating_sub(earlier.model_replacements),
-            row_mutations: self.row_mutations.saturating_sub(earlier.row_mutations),
-            row_allocations: self.row_allocations.saturating_sub(earlier.row_allocations),
-            shared_string_constructions: self
-                .shared_string_constructions
-                .saturating_sub(earlier.shared_string_constructions),
-            model_allocation_us: self
-                .model_allocation_us
-                .saturating_sub(earlier.model_allocation_us),
-        }
-    }
-}
-
-thread_local! {
-    static BRIDGE_CHURN_ENABLED: Cell<bool> = const { Cell::new(false) };
-    static BRIDGE_CHURN_COUNTERS: RefCell<BridgeChurnCounters> = const {
-        RefCell::new(BridgeChurnCounters {
-            model_replacements: 0,
-            row_mutations: 0,
-            row_allocations: 0,
-            shared_string_constructions: 0,
-            model_allocation_us: 0,
-        })
-    };
-}
-
-#[cfg(feature = "ui")]
-pub(crate) fn bridge_churn_begin() {
-    BRIDGE_CHURN_COUNTERS.with(|counters| *counters.borrow_mut() = BridgeChurnCounters::default());
-    BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(true));
-}
-
-#[cfg(feature = "ui")]
-pub(crate) fn bridge_churn_end() -> BridgeChurnCounters {
-    BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(false));
-    bridge_churn_snapshot()
-}
-
-#[cfg(feature = "ui")]
-pub(crate) fn bridge_churn_snapshot() -> BridgeChurnCounters {
-    BRIDGE_CHURN_COUNTERS.with(|counters| *counters.borrow())
-}
-
-pub(crate) fn bridge_churn_record_model_replacements(count: u64) {
-    bridge_churn_record(|counters| {
-        counters.model_replacements = counters.model_replacements.saturating_add(count);
-    });
-}
-
-pub(crate) fn bridge_churn_record_row_mutations(count: u64) {
-    bridge_churn_record(|counters| {
-        counters.row_mutations = counters.row_mutations.saturating_add(count);
-    });
-}
-
-pub(crate) fn bridge_churn_record_row_allocations(count: u64) {
-    bridge_churn_record(|counters| {
-        counters.row_allocations = counters.row_allocations.saturating_add(count);
-    });
-}
-
-pub(crate) fn bridge_churn_record_shared_strings(count: u64) {
-    bridge_churn_record(|counters| {
-        counters.shared_string_constructions =
-            counters.shared_string_constructions.saturating_add(count);
-    });
-}
-
-pub(crate) fn bridge_churn_record_model_allocation_us(elapsed_us: u128) {
-    bridge_churn_record(|counters| {
-        counters.model_allocation_us = counters
-            .model_allocation_us
-            .saturating_add(elapsed_us.min(u128::from(u64::MAX)) as u64);
-    });
-}
-
-fn bridge_churn_record(update: impl FnOnce(&mut BridgeChurnCounters)) {
-    BRIDGE_CHURN_ENABLED.with(|enabled| {
-        if enabled.get() {
-            BRIDGE_CHURN_COUNTERS.with(|counters| update(&mut counters.borrow_mut()));
-        }
-    });
 }
 
 struct HubText {
@@ -788,18 +689,6 @@ pub struct PresenterTiming {
     pub hub_counts_us: [u64; 2],
 }
 
-struct BridgeChurnMeasurement(bool);
-impl BridgeChurnMeasurement {
-    fn begin() -> Self {
-        Self(BRIDGE_CHURN_ENABLED.with(|enabled| enabled.replace(true)))
-    }
-}
-impl Drop for BridgeChurnMeasurement {
-    fn drop(&mut self) {
-        BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(self.0));
-    }
-}
-
 fn presenter_stage(start: &mut Option<Instant>) -> u64 {
     start.map_or(0, |previous| {
         let now = Instant::now();
@@ -852,7 +741,6 @@ impl LauncherViewPresenters {
         active_display_fallback: Option<(u16, u16)>,
         measure: bool,
     ) -> Option<PresenterTiming> {
-        let _churn = measure.then(BridgeChurnMeasurement::begin);
         let mut timing = PresenterTiming::default();
         let mut stage = measure.then(Instant::now);
         let navigation = app.global::<NavigationView>();
@@ -1299,7 +1187,6 @@ impl LauncherViewPresenters {
             if self.navigation.published_menu_items_key.as_ref() != Some(&key) {
                 let menu_items = self.menu_items(nav, catalog_version);
                 let menu_item_presentation = self.menu_item_presentation();
-                bridge_churn_record_model_replacements(2);
                 navigation.set_menu_item_presentation(menu_item_presentation);
                 navigation.set_menu_items(menu_items);
                 self.navigation.published_menu_items_key = Some(key);
@@ -1417,7 +1304,6 @@ impl LauncherViewPresenters {
                     .collect()
             });
             arcade.set_drawer_items(ModelRc::from(Rc::new(VecModel::from(drawer_items))));
-            bridge_churn_record_model_replacements(1);
             self.drawer_projection = projection;
             self.drawer_initialized = true;
         }
@@ -1451,20 +1337,6 @@ impl LauncherViewPresenters {
                 .expect("launcher menu presentation initialized")
                 .clone(),
         )
-    }
-
-    #[cfg(feature = "ui")]
-    pub(crate) fn republish_cached_menu_models(&self, app: &Launcher) {
-        let (Some(items), Some(presentation)) = (
-            self.navigation.menu_items.as_ref(),
-            self.navigation.menu_item_presentation.as_ref(),
-        ) else {
-            return;
-        };
-        let navigation = app.global::<NavigationView>();
-        bridge_churn_record_model_replacements(2);
-        navigation.set_menu_items(ModelRc::from(items.clone()));
-        navigation.set_menu_item_presentation(ModelRc::from(presentation.clone()));
     }
 
     pub fn license_lines(
@@ -1598,7 +1470,6 @@ fn sync_menu_item_presentation_row(
     if row.selected != selected || row.acknowledged != acknowledged {
         row.selected = selected;
         row.acknowledged = acknowledged;
-        bridge_churn_record_row_mutations(1);
         model.set_row_data(index, row);
     }
 }
@@ -1620,7 +1491,6 @@ fn settings_transaction_phase(
 }
 
 fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
-    let allocation_started = Instant::now();
     let rows = nav
         .current_menu_items()
         .iter()
@@ -1674,9 +1544,6 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
             }
         })
         .collect::<Vec<_>>();
-    bridge_churn_record_row_allocations(rows.len() as u64);
-    bridge_churn_record_shared_strings(rows.len().saturating_mul(3) as u64);
-    bridge_churn_record_model_allocation_us(allocation_started.elapsed().as_micros());
     Rc::new(VecModel::from(rows))
 }
 
@@ -1684,7 +1551,6 @@ fn build_menu_item_presentation(
     nav: &LauncherNav,
     feedback: &SelectionFeedbackStamp,
 ) -> Rc<VecModel<MenuItemPresentation>> {
-    let allocation_started = Instant::now();
     let rows = nav
         .current_menu_items()
         .iter()
@@ -1696,8 +1562,6 @@ fn build_menu_item_presentation(
             }),
         })
         .collect::<Vec<_>>();
-    bridge_churn_record_row_allocations(rows.len() as u64);
-    bridge_churn_record_model_allocation_us(allocation_started.elapsed().as_micros());
     Rc::new(VecModel::from(rows))
 }
 
@@ -1827,31 +1691,6 @@ mod tests {
         })
         .join()
         .unwrap();
-    }
-
-    #[test]
-    fn measured_churn_preserves_outer_profile_and_restores_disabled_state() {
-        BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(false));
-        let before = bridge_churn_snapshot();
-        {
-            let _capture = BridgeChurnMeasurement::begin();
-            bridge_churn_record_model_replacements(2);
-        }
-        assert_eq!(
-            bridge_churn_snapshot()
-                .saturating_sub(before)
-                .model_replacements,
-            2
-        );
-        BRIDGE_CHURN_ENABLED.with(|enabled| assert!(!enabled.get()));
-        bridge_churn_begin();
-        {
-            let _capture = BridgeChurnMeasurement::begin();
-            bridge_churn_record_model_replacements(3);
-        }
-        BRIDGE_CHURN_ENABLED.with(|enabled| assert!(enabled.get()));
-        bridge_churn_record_model_replacements(1);
-        assert_eq!(bridge_churn_end().model_replacements, 4);
     }
 
     #[test]

@@ -35,41 +35,17 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("ui", CommandKind::Fpga),
     #[cfg(mister_bench_scenes)]
     CommandSpec::new("scenes", CommandKind::Fpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("vsync-probe", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("cpu-profile-smoke", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("fb-map-report", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("fb-map-bandwidth", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("scanout-slots-map-report", CommandKind::PreFpga),
     CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
     CommandSpec::new("latch-readiness-report", CommandKind::Fpga),
-    #[cfg(all(feature = "diagnostics", feature = "ui"))]
-    CommandSpec::new("fpga-latch-post-report", CommandKind::Fpga),
-    #[cfg(all(feature = "diagnostics", feature = "ui"))]
-    CommandSpec::new("fpga-latch-pattern", CommandKind::Fpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("input", CommandKind::Fpga),
     CommandSpec::new("library-refresh", CommandKind::PreFpga),
     CommandSpec::new("request-library-rebuild", CommandKind::PreFpga),
     CommandSpec::new("toggle-simple-joystick-setting", CommandKind::PreFpga),
     CommandSpec::new("display-persist", CommandKind::PreFpga),
     CommandSpec::new("purge-library-data", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
-    CommandSpec::new("benchmark-capabilities", CommandKind::PreFpga),
-    CommandSpec::new("input-integrity-driver", CommandKind::PreFpga),
-    CommandSpec::new("pmu-probe", CommandKind::PreFpga),
-    CommandSpec::new("pmu-profile", CommandKind::PreFpga),
     CommandSpec::new("search-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_CORPUS_INVENTORY_COMMAND, CommandKind::PreFpga),
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
-    #[cfg(feature = "bench-tools")]
-    CommandSpec::new("media-bench-save", CommandKind::PreFpga),
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    CommandSpec::new("preview-pack-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_INSPECT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
@@ -78,8 +54,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(RUNTIME_METADATA_QUALIFICATION_COMMAND, CommandKind::PreFpga),
     // Internal supervised child. It deliberately does not take the UI process lock.
     CommandSpec::new(CATALOG_WORKER_COMMAND, CommandKind::PreFpga),
-    #[cfg(feature = "bench-tools")]
-    CommandSpec::new("framebuffer-stream-scalar-bench", CommandKind::PreFpga),
 ];
 
 pub fn find_command(name: &str) -> Option<&'static CommandSpec> {
@@ -227,14 +201,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
         assert!(is_known_command("catalog-inspect"));
         assert!(is_known_command("catalog-neogeo-family-audit"));
         assert!(is_known_command("catalog-registry-report"));
-        assert!(is_known_command("benchmark-capabilities"));
-        assert!(is_known_command("pmu-probe"));
-        assert!(is_known_command("pmu-profile"));
         assert!(is_known_command("search-bench"));
         assert!(is_known_command("media-bench-download"));
         assert!(is_known_command("read"));
@@ -270,66 +240,6 @@ mod tests {
         ] {
             assert!(!is_known_command(command), "{command}");
         }
-    }
-
-    #[test]
-    #[cfg(feature = "diagnostics")]
-    fn diagnostics_command_list_exposes_diagnostics() {
-        for command in [
-            "read",
-            "vsync-probe",
-            "cpu-profile-smoke",
-            "fb-map-report",
-            "fb-map-bandwidth",
-            "scanout-slots-map-report",
-            "fpga-latch-report",
-            "input",
-            "catalog-inspect",
-            "preview-pack-bench",
-            RUNTIME_METADATA_QUALIFICATION_COMMAND,
-        ] {
-            assert!(is_known_command(command), "{command}");
-        }
-        #[cfg(feature = "ui")]
-        for command in ["fpga-latch-post-report", "fpga-latch-pattern"] {
-            assert!(is_known_command(command), "{command}");
-        }
-        #[cfg(not(feature = "ui"))]
-        for command in ["fpga-latch-post-report", "fpga-latch-pattern"] {
-            assert!(!is_known_command(command), "{command}");
-        }
-        #[cfg(feature = "bench-tools")]
-        assert!(is_known_command("framebuffer-stream-scalar-bench"));
-        #[cfg(not(feature = "bench-tools"))]
-        assert!(!is_known_command("framebuffer-stream-scalar-bench"));
-        assert!(!is_known_command("audio-tone"));
-        assert_command_kind("read", CommandKind::Fpga);
-        assert_command_kind("vsync-probe", CommandKind::PreFpga);
-        assert_command_kind("cpu-profile-smoke", CommandKind::PreFpga);
-        assert_command_kind("fb-map-report", CommandKind::PreFpga);
-        assert_command_kind("fb-map-bandwidth", CommandKind::PreFpga);
-        assert_command_kind("scanout-slots-map-report", CommandKind::PreFpga);
-        assert_command_kind("fpga-latch-report", CommandKind::Fpga);
-        #[cfg(feature = "ui")]
-        assert_command_kind("fpga-latch-post-report", CommandKind::Fpga);
-        #[cfg(feature = "ui")]
-        assert_command_kind("fpga-latch-pattern", CommandKind::Fpga);
-        assert_command_kind("input", CommandKind::Fpga);
-    }
-
-    #[test]
-    #[cfg(all(feature = "bench-tools", not(feature = "diagnostics")))]
-    fn bench_tool_command_list_exposes_benchmarks() {
-        for command in [
-            "media-bench-download",
-            "media-bench-save",
-            "fpga-latch-report",
-            "preview-pack-bench",
-        ] {
-            assert!(is_known_command(command), "{command}");
-        }
-        assert!(!is_known_command("audio-tone"));
-        assert_command_kind("fpga-latch-report", CommandKind::Fpga);
     }
 
     #[test]

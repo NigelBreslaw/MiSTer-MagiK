@@ -17,8 +17,7 @@ use std::time::{Duration, Instant};
 use mister_magik_ui as slint_ui;
 
 use crate::arcade_catalog::{
-    self, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeGameView,
-    HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget,
+    self, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeGameView, LaunchTarget,
 };
 use crate::arcade_list_renderer::{
     ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ArcadeListCompositionStats,
@@ -28,11 +27,8 @@ use crate::arcade_list_renderer::{
 use crate::boot_analytics;
 #[cfg(not(mister_ui_scope_launcher))]
 use crate::controller_db::ControllerDb;
-use crate::cpu_profile;
 use crate::crt_arcade_overlay::CrtArcadeOverlayState;
 use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
-#[cfg(not(mister_ui_scope_launcher))]
-use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::preview_state::{
@@ -80,12 +76,10 @@ use mister_magik_fb::launcher_runtime::lifecycle::*;
 use mister_magik_fb::launcher_runtime::media::*;
 use mister_magik_fb::launcher_runtime::navigation_transition::*;
 use mister_magik_fb::launcher_runtime::orientation_transition::*;
-use mister_magik_fb::launcher_runtime::orientation_transition_bench::*;
 use mister_magik_fb::launcher_runtime::presentation_director::*;
 use mister_magik_fb::launcher_runtime::settings::{
     ConfirmedOrientationStore, FileSettingsStore, SettingsStore,
 };
-use mister_magik_fb::launcher_runtime::settings_navigation_bench::*;
 use mister_magik_fb::launcher_runtime::transition_plan::{
     NavigationDisplay, card_home_owns_source, crt_navigation_layout, is_card_edge,
     navigation_geometry, navigation_transition_for_intent,
@@ -94,33 +88,15 @@ use mister_magik_fb::launcher_runtime::transition_spec::TransitionStart;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
 
-fn launcher_startup_orientation(
-    persisted: ScreenOrientation,
-    benchmark_override: Option<ScreenOrientation>,
-    orientation_benchmark: bool,
-    settings_navigation_benchmark: bool,
-) -> ScreenOrientation {
-    if let Some(orientation) = benchmark_override {
-        orientation
-    } else if orientation_benchmark || settings_navigation_benchmark {
-        ScreenOrientation::Normal
-    } else {
-        persisted
-    }
-}
-
 mod arcade_drawer;
 mod catalog_worker;
 pub(crate) use catalog_worker::run_catalog_worker_child;
 #[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
 mod crt_backdrop_controller;
-mod crt_trial_loop;
-pub(crate) mod latch_v5_qualification;
 mod launch_handoff_session;
-mod launcher_automation;
-pub(crate) mod launcher_bench;
 mod launcher_bridge;
+mod launcher_bridge_sync;
 mod launcher_card_home;
 #[cfg(feature = "ui-preview")]
 pub struct NativeCardPreview {
@@ -192,18 +168,14 @@ impl NativeCardPreview {
     }
 }
 
-mod launcher_catalog_publication_test;
 mod launcher_catalog_session;
 mod launcher_compositor;
 mod launcher_confirmation;
 #[doc(hidden)]
 pub mod launcher_display_session;
-mod launcher_execution_trace;
 mod launcher_frame_accounting;
 #[cfg(test)]
 mod launcher_frame_pipeline;
-pub(crate) mod launcher_gui_profile;
-mod launcher_input_latency_lab;
 mod launcher_loop;
 mod launcher_pacing;
 mod launcher_present;
@@ -241,21 +213,14 @@ mod video_loop;
 use catalog_worker::*;
 #[cfg(not(mister_ui_scope_launcher))]
 use controller_loop::*;
-use crt_trial_loop::*;
-use latch_v5_qualification::*;
 use launch_handoff_session::*;
-use launcher_automation::*;
-use launcher_bench::*;
 use launcher_bridge::*;
-use launcher_catalog_publication_test::*;
+use launcher_bridge_sync::*;
 use launcher_catalog_session::*;
 use launcher_compositor::*;
 use launcher_display_session::*;
-use launcher_execution_trace::*;
 use launcher_frame_accounting::*;
-use launcher_gui_profile::*;
-use launcher_input_latency_lab::*;
-use launcher_loop::*;
+
 use launcher_present::*;
 use launcher_scheduler::*;
 use launcher_screensaver::LauncherScreensaverLoader;
@@ -304,8 +269,6 @@ pub const UI_SCENES: &[&str] = &[
     "launcher",
     #[cfg(not(mister_ui_scope_launcher))]
     "controller_test",
-    "crt_probe", // Bounded attended slot diagnostics; never a production launcher mode.
-    "crt_trial",
     #[cfg(not(mister_ui_scope_launcher))]
     "tear_pattern",
     #[cfg(all(
@@ -402,7 +365,6 @@ macro_rules! with_scene_app {
 
 pub fn run_ui(
     f: &mut Fpga,
-    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
     mister_magik_fb::framebuffer::target::configure_dirty_rect_broad_pct(
@@ -435,16 +397,6 @@ pub fn run_ui(
         }
     }
 
-    if scene == "crt_probe" {
-        run_crt_probe_loop(secs, &ui, f, &mut display_session);
-        return;
-    }
-
-    if scene == "crt_trial" {
-        run_crt_trial_loop(secs, &ui, f, &mut display_session);
-        return;
-    }
-
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     let animation_clock = AnimationClock::new(
         ui.output_route()
@@ -470,16 +422,7 @@ pub fn run_ui(
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
-                run_video_playback_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    &window,
-                    pad,
-                    app,
-                    &animation_clock,
-                    launcher_config.profiles(),
-                );
+                run_video_playback_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
             });
         }
         #[cfg(not(mister_ui_scope_launcher))]
@@ -497,25 +440,12 @@ pub fn run_ui(
             with_scene_app!(tear_pattern::TearPattern, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
-                run_tear_pattern_loop(
-                    secs,
-                    &ui,
-                    &mut disp,
-                    &window,
-                    &animation_clock,
-                    launcher_config.profiles(),
-                );
+                run_tear_pattern_loop(secs, &ui, &mut disp, &window, &animation_clock);
             });
         }
         "launcher" => {
             let launcher_settings = crate::settings::MagikSettings::load();
-            let benchmark = launcher_config.benchmark();
-            let launcher_orientation = launcher_startup_orientation(
-                launcher_settings.screen_orientation,
-                benchmark.arcade_orientation(),
-                benchmark.orientation_transitions(),
-                benchmark.settings_navigation(),
-            );
+            let launcher_orientation = launcher_settings.screen_orientation;
             let launcher_layout = UiLayoutGeometry::for_display(&ui, launcher_orientation);
             with_scene_app_layout!(launcher::Launcher, &ui, &launcher_layout, &window, app, {
                 app.global::<slint_ui::launcher::MisterUi>()
@@ -535,20 +465,19 @@ pub fn run_ui(
                 let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 let pad = open_pads();
                 init_launcher_bridge(&app, &pad);
-                run_launcher_loop(
+                launcher_loop::run_frame_loop(launcher_loop::Env {
                     secs,
-                    &ui,
-                    &mut disp,
+                    ui: &ui,
+                    disp: &mut disp,
                     f,
-                    &mut display_session,
-                    &window,
-                    &mut target,
+                    display_session: &mut display_session,
+                    window: &window,
+                    target: &mut target,
                     pad,
                     app,
-                    &animation_clock,
-                    process_entry_cpu_profile,
+                    animation_clock: &animation_clock,
                     launcher_config,
-                );
+                });
             });
         }
         _ => unreachable!(),

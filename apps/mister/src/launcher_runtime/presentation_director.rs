@@ -93,7 +93,6 @@ pub struct PendingNavigation {
 pub enum OrientationIntent {
     Confirm,
     Rollback,
-    Benchmark,
 }
 
 /// What the presenter acknowledged for the frame composition decided.
@@ -711,11 +710,8 @@ mod tests {
                 match rng.below(9) {
                     0 | 1 => {
                         let chart_was_free = d.chart.is_live();
-                        let intent = [
-                            OrientationIntent::Confirm,
-                            OrientationIntent::Rollback,
-                            OrientationIntent::Benchmark,
-                        ][rng.below(3)];
+                        let intent =
+                            [OrientationIntent::Confirm, OrientationIntent::Rollback][rng.below(2)];
                         let began = d.begin_orientation(
                             ScreenOrientation::Normal,
                             ScreenOrientation::MonitorClockwise,

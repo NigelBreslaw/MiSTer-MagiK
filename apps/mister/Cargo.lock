@@ -3251,7 +3251,6 @@ dependencies = [
  "mister-magik-screenshot-parade",
  "mister-magik-tooling-support",
  "mister-magik-ui",
- "pprof",
  "quick-xml 0.42.0",
  "serde",
  "serde_json",
