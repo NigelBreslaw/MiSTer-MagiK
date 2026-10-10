@@ -200,14 +200,21 @@ def main() -> int:
             "crates/framebuffer-scenes/Cargo.toml",
             "mister/platform/contracts/scanout/Cargo.toml",
             "apps/mister/.cargo/config.toml",
-            "scripts/magik_ci/host.py",
-            ".github/workflows/ci.yml",
         ):
             source = fixture / relative
             source.write_bytes(source.read_bytes() + b"\n")
             current = MODULE.identities(fixture)
             assert current["host_build_cache"] != previous["host_build_cache"], relative
             previous = current
+
+        # Changing orchestration must not discard valid dependency artifacts.
+        for relative in ("scripts/magik_ci/host.py", ".github/workflows/ci.yml"):
+            source = fixture / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("changed orchestration\n")
+            current = MODULE.identities(fixture)
+            assert current["host_build_cache"] == previous["host_build_cache"]
+            assert current["tooling_build_cache"] == previous["tooling_build_cache"]
 
         for relative in (
             "magik/agent/src/lib.rs",
@@ -222,7 +229,6 @@ def main() -> int:
         for relative in (
             "magik/agent/Cargo.lock",
             "magik/probe/Cargo.toml",
-            ".github/workflows/ci.yml",
         ):
             source = fixture / relative
             source.write_bytes(source.read_bytes() + b"\n")

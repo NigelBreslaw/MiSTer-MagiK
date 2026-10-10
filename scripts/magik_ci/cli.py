@@ -106,6 +106,7 @@ def parser() -> argparse.ArgumentParser:
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
     assurance_scope.add_argument("--group", dest="host_group", choices=host.HOST_GROUPS)
+    assurance.add_argument("--shard")
     candidates = ci_sub.add_parser("platform-candidates")
     candidates.add_argument("artifacts", type=Path)
     candidates.add_argument("name")
@@ -356,8 +357,14 @@ def main() -> int:
 
             changes.execute(root, args.event_name, args.event, args.github_output)
         elif args.command == "host-assurance":
+            if args.shard is not None and args.shard not in host.HOST_SHARDS.get(
+                args.host_group, ()
+            ):
+                argument_parser.error(
+                    "--shard must name a shard of the selected --group"
+                )
             if args.host_group:
-                host.execute(root, args.host_group)
+                host.execute(root, args.host_group, shard=args.shard)
             else:
                 metadata.host_assurance(args.paths)
         elif args.command == "platform-candidates":

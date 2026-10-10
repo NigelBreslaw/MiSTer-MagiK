@@ -11,6 +11,11 @@ import subprocess
 import time
 from pathlib import Path
 
+HOST_SHARDS = {
+    "domain": ("core", "rendering"),
+    "app": ("core", "ui", "preview", "scenes"),
+}
+
 HOST_GROUPS = (
     "static",
     "domain",
@@ -37,7 +42,37 @@ def _crate_commands(manifest: str) -> list[list[str]]:
     ]
 
 
-def commands(group: str) -> list[list[str]]:
+def _shard(group: str, command: list[str]) -> str:
+    if group == "domain":
+        return (
+            "rendering"
+            if "crates/framebuffer-scenes/Cargo.toml" in command
+            and "--features" in command
+            else "core"
+        )
+    if command[-1] == "scripts/tests/test-slint-build-contract.py":
+        return "scenes"
+    if (
+        command[:2] in (["cargo", "test"], ["cargo", "clippy"])
+        and "--features" in command
+    ):
+        features = command[command.index("--features") + 1]
+        return {
+            "ui": "ui",
+            "ui-preview": "preview",
+            "ui,signed-media-manifests": "preview",
+            "ui,bench-scenes": "scenes",
+        }.get(features, "core")
+    return "core"
+
+
+def commands(group: str, *, shard: str | None = None) -> list[list[str]]:
+    if shard is not None:
+        if shard not in HOST_SHARDS.get(group, ()):
+            raise ValueError(f"unsupported host assurance shard: {group}/{shard}")
+        return [
+            command for command in commands(group) if _shard(group, command) == shard
+        ]
     if group == "static":
         return []
     if group == "domain":
@@ -263,8 +298,8 @@ def commands(group: str) -> list[list[str]]:
     raise ValueError(f"unsupported host assurance group: {group}")
 
 
-def execute(repository: Path, group: str) -> None:
-    group_commands = commands(group)
+def execute(repository: Path, group: str, *, shard: str | None = None) -> None:
+    group_commands = commands(group, shard=shard)
     if group == "static":
         from .assurance import execute as execute_fast
 
@@ -282,11 +317,12 @@ def execute(repository: Path, group: str) -> None:
     )
     if group == "domain":
         environment["CARGO_TARGET_DIR"] = str(repository / "target/ci-host-domain")
+    label = f"{group}/{shard}" if shard else group
     failures: list[subprocess.CalledProcessError] = []
     for index, command in enumerate(group_commands, start=1):
         started = time.monotonic()
         rendered = shlex.join(command)
-        print(f"host-assurance[{group}] {index}/{total} start: {rendered}", flush=True)
+        print(f"host-assurance[{label}] {index}/{total} start: {rendered}", flush=True)
         outcome = "failed"
         try:
             subprocess.run(command, cwd=repository, env=environment, check=True)
@@ -296,7 +332,7 @@ def execute(repository: Path, group: str) -> None:
         finally:
             elapsed = time.monotonic() - started
             print(
-                f"host-assurance[{group}] {index}/{total} {outcome} "
+                f"host-assurance[{label}] {index}/{total} {outcome} "
                 f"elapsed={elapsed:.2f}s: {rendered}",
                 flush=True,
             )

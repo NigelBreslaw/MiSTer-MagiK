@@ -30,7 +30,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/platform/runtime/Cargo.lock",
     ),
     "tooling_build_cache": (
-        ".github/workflows/ci.yml",
         ".cargo/config.toml",
         "magik/.cargo/config.toml",
         "magik/agent/Cargo.lock",
@@ -47,7 +46,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/platform/contracts/*/Cargo.toml",
     ),
     "host_build_cache": (
-        ".github/workflows/ci.yml",
         "apps/mister/Cargo.lock",
         "apps/mister/Cargo.toml",
         "apps/mister/.cargo/config.toml",
@@ -58,7 +56,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/platform/runtime/Cargo.toml",
         "mister/platform/contracts/*/Cargo.lock",
         "mister/platform/contracts/*/Cargo.toml",
-        "scripts/magik_ci/host.py",
     ),
     "arm_build_cache": (
         "apps/mister/Cargo.lock",

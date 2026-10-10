@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
-from scripts.magik_ci import build, bundle, databases, host, metadata
+from scripts.magik_ci import build, bundle, cli, databases, host, metadata
 from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.cli import parser
-from scripts.magik_ci.host import HOST_GROUPS, commands
+from scripts.magik_ci.host import HOST_GROUPS, HOST_SHARDS, commands
 from scripts.magik_ci.manifest import candidate_id, parse_fields, serialize
 from scripts.magik_ci.python_tests import SLOW_TEST
 from scripts.magik_ci.python_tests import commands as python_test_commands
@@ -464,6 +464,49 @@ with tempfile.TemporaryDirectory() as directory:
             ],
             commands("app"),
         )
+
+    def test_parallel_host_shards_preserve_every_command_once(self) -> None:
+        for group, shards in HOST_SHARDS.items():
+            partition = [
+                command for shard in shards for command in commands(group, shard=shard)
+            ]
+            self.assertCountEqual(partition, commands(group))
+            self.assertEqual(
+                len(partition), len({tuple(command) for command in partition})
+            )
+        self.assertEqual(
+            {shard: len(commands("app", shard=shard)) for shard in HOST_SHARDS["app"]},
+            {"core": 5, "ui": 3, "preview": 2, "scenes": 2},
+        )
+        self.assertEqual(len(commands("domain", shard="rendering")), 4)
+        for group, shard in (
+            ("app", "rendering"),
+            ("static", "core"),
+            ("domain", "ui"),
+        ):
+            with self.assertRaises(ValueError):
+                commands(group, shard=shard)
+
+    def test_host_shard_cli_dispatch(self) -> None:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "magik-ci",
+                    "ci",
+                    "host-assurance",
+                    "--group",
+                    "domain",
+                    "--shard",
+                    "rendering",
+                ],
+            ),
+            patch.object(cli.host, "execute") as execute,
+        ):
+            self.assertEqual(cli.main(), 0)
+        self.assertEqual(execute.call_args.args[1], "domain")
+        self.assertEqual(execute.call_args.kwargs, {"shard": "rendering"})
 
     def test_full_app_execution_keeps_profiles_and_propagates_failures(self) -> None:
         with patch.object(host.subprocess, "run") as run:
