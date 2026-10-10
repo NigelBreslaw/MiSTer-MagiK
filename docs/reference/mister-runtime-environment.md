@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Current controls: 163. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Current controls: 162. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -66,7 +66,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Current controls: 163. H
 | `MISTER_INPUT_LATENCY_LAB_SESSION` | benchmark | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls input latency lab session behavior; value policy: document | benchmark only | `apps/mister/src/process_config.rs` |
 | `MISTER_LIBRARY_NAMESPACE_BACKEND` | production | enum token | uses the owner-defined mode when unset or unrecognized | enum | — | command | — | public | — | Controls library namespace backend behavior; value policy: document | internal runtime | `crates/catalog/src/namespace_walk.rs` |
 | `MISTER_LIBRARY_PATH_MAP` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls library path map behavior; value policy: document | internal runtime | `crates/catalog/src/catalog_config.rs` |
-| `MISTER_LIBRARY_REFRESH_LOCK` | production | path | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls library refresh lock behavior; value policy: document | internal runtime | `apps/mister/src/app_entry.rs` |
 | `MISTER_LIBRARY_ROOTS` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls library roots behavior; value policy: document | internal runtime | `crates/catalog/src/catalog_config.rs` |
 | `MISTER_LIBRARY_SQLITE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls library sqlite behavior; value policy: document | internal runtime | `crates/catalog/src/device_layout.rs` |
 | `MISTER_LIBRARY_SQLITE_BUILD_DIR` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls library sqlite build dir behavior; value policy: document | internal runtime | `crates/catalog/src/catalog_config.rs` |
