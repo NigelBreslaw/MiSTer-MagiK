@@ -6,7 +6,7 @@ import contextlib
 import importlib
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ def fresh_session(
     timeout: float = 20,
     profile_id: str | None = None,
     concept_session: bool = False,
-) -> Iterator[Any]:
+) -> Generator[Any, None, None]:
     """Attach a fresh Slint test session over the native agent only."""
     environment = {
         key: value
