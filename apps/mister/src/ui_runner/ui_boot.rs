@@ -130,7 +130,7 @@ impl UiBootFramebufferSession {
                 boot_analytics::event("display_config_detect_failed", format!("error={e}"));
             }
         }
-        if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
+        if !anonymous_latch_source && std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
             crate::ui_logln!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
         }
 
@@ -139,19 +139,22 @@ impl UiBootFramebufferSession {
             mister_magik_fb::framebuffer::ownership::FramebufferRouteGuard::new(
                 config.route_reassert_frames(),
             ),
+            !anonymous_latch_source,
         );
         let route = display_session.route();
-        boot_analytics::event(
-            "initial_fb_enable_direct_attempt",
-            format!(
-                "w={} h={} mode=fpga-scale-scan scan={}x{} direct_video={}",
-                disp.width(),
-                disp.height(),
-                ui.scan_w(),
-                ui.scan_h(),
-                route.direct_video()
-            ),
-        );
+        if !anonymous_latch_source {
+            boot_analytics::event(
+                "initial_fb_enable_direct_attempt",
+                format!(
+                    "w={} h={} mode=fpga-scale-scan scan={}x{} direct_video={}",
+                    disp.width(),
+                    disp.height(),
+                    ui.scan_w(),
+                    ui.scan_h(),
+                    route.direct_video()
+                ),
+            );
+        }
         let support_flag = match display_session.enable_initial(f) {
             Ok(flag) => flag,
             Err(e) => {
@@ -159,29 +162,33 @@ impl UiBootFramebufferSession {
                 std::process::exit(1);
             }
         };
-        boot_analytics::event(
-            "initial_fb_enable_direct_done",
-            format!("support_flag={support_flag}"),
-        );
-        boot_analytics::event(
-            "rust_framebuffer_route_completed",
-            format!(
-                "format={} w={} h={} output={}x{} scan={}x{} support_flag={support_flag}",
-                production_label(),
-                disp.width(),
-                disp.height(),
-                ui.output_w(),
-                ui.output_h(),
-                ui.scan_w(),
-                ui.scan_h()
-            ),
-        );
+        if let Some(support_flag) = support_flag {
+            boot_analytics::event(
+                "initial_fb_enable_direct_done",
+                format!("support_flag={support_flag}"),
+            );
+            boot_analytics::event(
+                "rust_framebuffer_route_completed",
+                format!(
+                    "format={} w={} h={} output={}x{} scan={}x{} support_flag={support_flag}",
+                    production_label(),
+                    disp.width(),
+                    disp.height(),
+                    ui.output_w(),
+                    ui.output_h(),
+                    ui.scan_w(),
+                    ui.scan_h()
+                ),
+            );
+        } else {
+            boot_analytics::event("initial_fb_route_deferred", "awaiting-first-scanout-slot");
+        }
         if fb_mode_action == FbModeAction::WriteMode {
             settle_boot_black_frame("ui-startup", &mut disp, f, &mut display_session);
         }
-        disp.record_visual_sample("after_initial_route_before_slint_draw");
+        disp.record_visual_sample("after_boot_framebuffer_prepare_before_slint_draw");
         crate::ui_logln!(
-            "fb routed (support_flag={support_flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
+            "boot framebuffer prepared (legacy_route_support={support_flag:?}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
         );
 
         Self {
@@ -213,10 +220,11 @@ pub fn settle_boot_black_frame(
     for _ in 0..frames {
         disp.clear_black();
         match display_session.enable_boot_settle(f) {
-            Ok(flag) => {
+            Ok(Some(flag)) => {
                 routed += 1;
                 last_flag = flag;
             }
+            Ok(None) => return,
             Err(e) => {
                 crate::ui_errln!(
                     "warning: failed to reassert black framebuffer route during {label}: {e}"
