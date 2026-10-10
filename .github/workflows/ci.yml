@@ -1,0 +1,730 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: MiSTer MagiK CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CROSS_VERSION: 0.2.5
+  DOCKER_DEFAULT_PLATFORM: linux/amd64
+  MISTER_CARGO_TIMINGS: "0"
+
+jobs:
+  changes:
+    name: Select affected checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tooling: ${{ steps.changes.outputs.tooling }}
+      scanout: ${{ steps.changes.outputs.scanout }}
+      fpga: ${{ steps.changes.outputs.fpga }}
+      kernel: ${{ steps.changes.outputs.kernel }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Select checks from the complete Git diff
+        id: changes
+        run: >-
+          scripts/magik-ci ci changes --event-name "$GITHUB_EVENT_NAME"
+          --event "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
+
+  launcher-neon-parity:
+    name: launcher-neon-parity
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check current and fast NEON kernels
+        run: scripts/magik-ci neon-parity
+
+  host-dev-group:
+    name: host-dev (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [static, domain, catalog, tools]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/host-validation
+        with:
+          group: ${{ matrix.group }}
+
+  host-dev-app-shard:
+    name: host-dev (app / ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [checks, ui, ui-preview, bench-scenes]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/host-validation
+        with:
+          group: app
+          app-shard: ${{ matrix.shard }}
+          assets-ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
+
+  host-dev-app:
+    name: host-dev (app)
+    runs-on: ubuntu-24.04
+    needs: host-dev-app-shard
+    if: always()
+    steps:
+      - name: Require every app validation shard
+        env:
+          SHARD_RESULT: ${{ needs.host-dev-app-shard.result }}
+        run: test "$SHARD_RESULT" = success
+
+  host-dev:
+    name: host-dev
+    runs-on: ubuntu-24.04
+    needs: [changes, host-dev-group, host-dev-app, python-quality]
+    if: always()
+    steps:
+      - name: Require every host validation group
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          GROUP_RESULT: ${{ needs.host-dev-group.result }}
+          APP_RESULT: ${{ needs.host-dev-app.result }}
+          PYTHON_RESULT: ${{ needs.python-quality.result }}
+        run: test "$CHANGES_RESULT" = success && test "$GROUP_RESULT" = success && test "$APP_RESULT" = success && test "$PYTHON_RESULT" = success
+
+  python-quality:
+    name: python-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Python toolchain
+        uses: ./.github/actions/setup-python-tools
+      - name: Check formatting
+        id: format
+        continue-on-error: true
+        run: scripts/magik-ci quality format
+      - name: Lint Python tooling
+        id: lint
+        continue-on-error: true
+        run: scripts/magik-ci quality lint
+      - name: Type-check Python tooling
+        id: typecheck
+        continue-on-error: true
+        run: scripts/magik-ci quality typecheck
+      - name: Run Python tests
+        id: tests
+        continue-on-error: true
+        run: uv run pytest scripts/tests -q --ignore scripts/tests/test-slint-build-contract.py
+      - name: Summarize Python quality
+        if: always()
+        env:
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          TYPECHECK_OUTCOME: ${{ steps.typecheck.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          status=0
+          report() {
+            label="$1"
+            outcome="$2"
+            if [ "$outcome" = success ]; then
+              echo "$label: passed"
+            else
+              echo "::error::$label: $outcome"
+              status=1
+            fi
+          }
+          report format "$FORMAT_OUTCOME"
+          report lint "$LINT_OUTCOME"
+          report typecheck "$TYPECHECK_OUTCOME"
+          report tests "$TESTS_OUTCOME"
+          exit "$status"
+
+  arm-build:
+    name: arm-ci-fast
+    # Dependabot PRs cannot access the private build-assets key. Their public
+    # Rust ARM assurance remains required below.
+    if: >-
+      ${{
+        github.event_name != 'pull_request' ||
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve private asset revision
+        id: magik-assets-ref
+        run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout private build assets
+        uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/mister-magik-private-assets
+          ref: ${{ steps.magik-assets-ref.outputs.sha }}
+          path: private/magik-assets
+          ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
+
+
+      - name: Compute cache identities
+        id: cache-id
+        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        working-directory: apps/mister
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_arm }}
+          restore-keys: |
+            cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+
+      - name: Cache cross binary
+        uses: actions/cache@v6
+        id: cross-cache
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.CROSS_VERSION }}-${{ steps.cache-id.outputs.cross_abi }}
+
+      - name: Install cross
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Pull cross image
+        run: |
+          started="$(date +%s)"
+          docker pull "${{ steps.cache-id.outputs.cross_image }}"
+          finished="$(date +%s)"
+          printf 'cross_image_pull_seconds=%s\n' "$((finished - started))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache minimal FFmpeg
+        uses: actions/cache@v6
+        with:
+          path: apps/mister/target/ffmpeg-minimal/armv7
+          key: ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.ffmpeg }}
+
+      - name: Cache ARM build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            apps/mister/target/ci-fast
+            !apps/mister/target/ci-fast/incremental
+            apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast
+            !apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/incremental
+          # Actions caches are immutable. Keep this dependency baseline exact-only:
+          # a rolling restore prefix would copy stale Cargo artifacts into every new key.
+          key: target-arm-v4-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_build_cache }}
+
+      - name: Build ARM binary
+        env:
+          MISTER_CARGO_TIMINGS: "1"
+        run: |
+          docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
+          MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build runtime-ci
+
+      - name: Report ARM cache footprint
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ARM target cache footprint"
+            echo
+            echo "| Path | Uncompressed size |"
+            echo "| --- | ---: |"
+            for path in \
+              apps/mister/target/ci-fast \
+              apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast
+            do
+              if [[ -d "$path" ]]; then
+                kib="$(du -sk "$path" | awk '{print $1}')"
+                mib="$(( (kib + 1023) / 1024 ))"
+                printf '| `%s` | %s MiB |\n' "$path" "$mib"
+              else
+                printf '| `%s` | not present |\n' "$path"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Cargo timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-timings-ci-fast
+          path: apps/mister/target/cargo-timings/*.html
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Check ARM shared libraries
+        run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
+
+      - name: Upload ARM binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: mister-magik-fb-ci-fast
+          path: apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
+          if-no-files-found: error
+
+  arm-library-check:
+    name: arm-library-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve private asset revision
+        id: magik-assets-ref
+        run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout private build assets
+        uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/mister-magik-private-assets
+          ref: ${{ steps.magik-assets-ref.outputs.sha }}
+          path: private/magik-assets
+          ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
+
+      - name: Compute cache identities
+        id: cache-id
+        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        working-directory: apps/mister
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_arm }}
+          restore-keys: |
+            cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+
+      - name: Cache cross binary
+        uses: actions/cache@v6
+        id: cross-cache
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.CROSS_VERSION }}-${{ steps.cache-id.outputs.cross_abi }}
+
+      - name: Install cross
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Pull cross image
+        run: docker pull "${{ steps.cache-id.outputs.cross_image }}"
+
+      - name: Cache ARM library check outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            apps/mister/target/debug
+            !apps/mister/target/debug/incremental
+            apps/mister/target/armv7-unknown-linux-gnueabihf/debug
+            !apps/mister/target/armv7-unknown-linux-gnueabihf/debug/incremental
+          key: target-arm-library-v1-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-check-debug0-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_build_cache }}-${{ hashFiles('scripts/magik_ci/build.py') }}
+
+      - name: Check ARM no-default library
+        run: MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build runtime-library-ci
+
+      - name: Report ARM library cache footprint
+        if: always()
+        run: |
+          for path in apps/mister/target/debug apps/mister/target/armv7-unknown-linux-gnueabihf/debug; do
+            if [ -d "$path" ]; then
+              kib="$(du -sk "$path" | awk '{print $1}')"
+              printf 'ARM library cache (%s): %s MiB\n' "$path" "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+  tooling-tests:
+    needs: changes
+    if: needs.changes.outputs.tooling == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci-tooling
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-python-tools
+      # These are host-only fixtures; the private on-device test driver is unused.
+      - run: uv export --frozen --extra mcp --project magik/host --no-emit-project --no-emit-package slint-testing --output-file /tmp/magik-host-requirements.txt > /dev/null
+      - run: uv pip install --python .venv/bin/python -r /tmp/magik-host-requirements.txt
+      - run: uv run pytest magik/host/tests -q
+      - run: uv run pytest magik/scenarios --collect-only -q
+      - run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Compute cache identities
+        id: cache-id
+        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-tooling-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ steps.cache-id.outputs.tooling_build_cache }}
+          restore-keys: |
+            cargo-tooling-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-
+      - name: Cache tooling build outputs
+        uses: actions/cache@v6
+        with:
+          path: target/ci-tooling/debug
+          # Share dependencies across agent, probe and catalog. Keep one immutable
+          # baseline per dependency/profile identity, including incremental state.
+          key: target-tooling-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-debug0-incremental-${{ steps.cache-id.outputs.tooling_build_cache }}
+      - run: cargo test --locked --manifest-path magik/agent/Cargo.toml
+      - run: cargo test --locked
+        working-directory: magik/probe
+      - run: cargo test --locked --manifest-path magik/probe/Cargo.toml -p mister-magik-tooling-support
+      - run: cargo test --locked --manifest-path crates/catalog/Cargo.toml --features builder,development-layout device_layout
+      - name: Report tooling cache footprint
+        if: always()
+        run: |
+          if [ -d "$CARGO_TARGET_DIR/debug" ]; then
+            kib="$(du -sk "$CARGO_TARGET_DIR/debug" | awk '{print $1}')"
+            printf 'Tooling build cache: %s MiB\n' "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  architecture-trends:
+    if: github.event_name == 'pull_request'
+    name: Advisory hotspot summary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+
+      - name: Generate advisory architecture reports
+        id: report
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          mkdir -p build/architecture-trends
+          scripts/magik-ci architecture report \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --format json \
+            --output build/architecture-trends/architecture-report.json
+          scripts/magik-ci architecture report \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --format markdown \
+            --output build/architecture-trends/architecture-report.md
+          cat build/architecture-trends/architecture-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Explain unavailable advisory report
+        if: steps.report.outcome == 'failure'
+        run: |
+          echo '## Architecture hotspot summary unavailable' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The advisory report could not be generated. Blocking architecture checks remain independent.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload architecture report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: architecture-trends-${{ github.event.pull_request.number }}
+          path: build/architecture-trends/architecture-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  contract:
+    needs: changes
+    if: needs.changes.outputs.scanout == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install contract tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Check cross-language scanout contract
+        run: scripts/checks/check-scanout-slots-contract.sh
+
+  latch-rtl:
+    needs: changes
+    if: needs.changes.outputs.fpga == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read qualified Menu source revision
+        id: menu-source
+        run: |
+          set -euo pipefail
+          mapfile -t menu_refs < mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit
+          if [[ ${#menu_refs[@]} -ne 1 ]]; then
+            echo "qualified Menu source revision must be exactly one line" >&2
+            exit 2
+          fi
+          menu_ref="${menu_refs[0]}"
+          if [[ ! "$menu_ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid qualified Menu source revision: $menu_ref" >&2
+            exit 2
+          fi
+          printf 'commit=%s\n' "$menu_ref" >> "$GITHUB_OUTPUT"
+      - name: Install FPGA fast-gate tools
+        run: sudo apt-get update && sudo apt-get install -y ghdl iverilog verilator lcov
+      - name: Check out pinned Menu source
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Menu_MiSTer
+          ref: ${{ steps.menu-source.outputs.commit }}
+          path: build/Menu_MiSTer
+      - name: Run warning-clean Icarus simulation
+        run: scripts/tests/test-fpga-vblank-latch.sh
+      - name: Verify latch and passive diagnostics contracts
+        run: scripts/checks/check-latch-protocol.py
+      - name: Verify Quartus resource and timing policy fixtures
+        run: python3 scripts/tests/test-fpga-quartus-delta.py
+      - name: Lint custom RTL
+        run: >-
+          verilator --lint-only --Wall --Wno-fatal
+          -Imister/platform/fpga/menu-vblank-latch
+          mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_output.sv
+      - name: Verify pinned patch integration and opcode ownership
+        run: scripts/checks/check-fpga-latch-integration.py --simulate build/Menu_MiSTer
+      - name: Measure reachable custom RTL coverage
+        run: |
+          set -euo pipefail
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf "$build_dir"' EXIT
+          verilator --cc --exe --build --timing --coverage-line \
+            --top-module tb_mister_magik_vblank_latch \
+            --Mdir "$build_dir/obj" \
+            -Imister/platform/fpga/menu-vblank-latch \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
+            mister/platform/fpga/menu-vblank-latch/tb_mister_magik_vblank_latch.sv \
+            "$GITHUB_WORKSPACE/mister/platform/fpga/menu-vblank-latch/verilator_coverage_main.cpp"
+          (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_vblank_latch")
+          verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
+          scripts/checks/check-fpga-latch-coverage.py "$build_dir/annotated"
+      - name: Measure production bridge coverage
+        run: |
+          set -euo pipefail
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf "$build_dir"' EXIT
+          verilator --cc --exe --build --timing --coverage-line --Wno-fatal \
+            --top-module tb_mister_magik_sys_top_integration \
+            --Mdir "$build_dir/obj" \
+            -Imister/platform/fpga/menu-vblank-latch \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv \
+            mister/platform/fpga/menu-vblank-latch/tb_mister_magik_sys_top_integration.sv \
+            "$GITHUB_WORKSPACE/mister/platform/fpga/menu-vblank-latch/verilator_sys_top_coverage_main.cpp"
+          (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_sys_top_integration")
+          verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
+          scripts/checks/check-fpga-latch-coverage.py "$build_dir/annotated" \
+            --source mister_magik_latch_sys_top_bridge.sv
+
+  contract-and-build:
+    needs: changes
+    if: needs.changes.outputs.kernel == 'true'
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    timeout-minutes: 15
+    steps:
+      - name: Bootstrap Git for provenance-preserving checkout
+        run: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git ca-certificates
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Trust the container-mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install kernel module tools
+        run: >-
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+          make gcc-arm-linux-gnueabihf flex bison bc libssl-dev libelf-dev kmod
+          sparse python3 ripgrep
+
+      - name: Fetch pinned MiSTer kernel with provenance
+        run: |
+          set -eu
+          git init build/Linux-Kernel_MiSTer
+          git -C build/Linux-Kernel_MiSTer remote add origin https://github.com/MiSTer-devel/Linux-Kernel_MiSTer.git
+          git -C build/Linux-Kernel_MiSTer fetch --depth=1 origin f0fb626acadd07f0718934826b143b6e4c9ce81c
+          git -C build/Linux-Kernel_MiSTer checkout --detach FETCH_HEAD
+
+      - name: Check one-job contract
+        run: |
+          scripts/checks/check-scanout-slots-contract.sh
+          python3 scripts/tests/test-scanout-platform-contract.py
+
+      - name: Build and attest module
+        run: >-
+          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
+          scripts/build-scanout-slots-module.sh
+
+      - name: Warning-clean rebuild
+        run: >-
+          make -C mister/platform/kernel/scanout-slots
+          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
+          ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- W=1 all
+
+      - name: Sparse type check
+        run: >-
+          make -C mister/platform/kernel/scanout-slots
+          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
+          ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+          C=2 CHECK=sparse all
+
+      - name: Kernel style checks
+        run: |
+          set -eu
+          # The pinned Linux tree predates SPDX GPL-3.0-or-later. The project
+          # license check enforces the current identifier; checkpatch still
+          # verifies every other kernel style rule here.
+          "$PWD/build/Linux-Kernel_MiSTer/scripts/checkpatch.pl" --no-tree --strict --file \
+            --ignore SPDX_LICENSE_TAG \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h \
+            mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h
+
+      - name: Audit module imports and metadata
+        run: |
+          set -eu
+          scripts/checks/check-scanout-slots-contract.sh
+          grep -q '^vermagic:[[:space:]]*5\.15\.1-MiSTer ' build/scanout-slots/modinfo.txt
+          grep -q '^kernel_revision=f0fb626acadd07f0718934826b143b6e4c9ce81c$' build/scanout-slots/provenance.txt
+          grep -q '^source_dirty=0$' build/scanout-slots/provenance.txt
+          test "$(sed -n 's/^source_revision=//p' build/scanout-slots/provenance.txt)" = \
+            "$(sed -n 's/^observed_source_revision=//p' build/scanout-slots/provenance.txt)"
+          grep -q '^observed_source_dirty=0$' build/scanout-slots/provenance.txt
+          grep -q '^platform_contract_sha256=[0-9a-f]\{64\}$' build/scanout-slots/provenance.txt
+          grep -q '^license:[[:space:]]*Proprietary$' build/scanout-slots/modinfo.txt
+          grep -q '^mister_magik_source_license:[[:space:]]*GPL-3.0-or-later$' build/scanout-slots/modinfo.txt
+
+  clang-build:
+    needs: changes
+    if: needs.changes.outputs.kernel == 'true'
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out pinned MiSTer kernel
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Linux-Kernel_MiSTer
+          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
+          path: build/Linux-Kernel_MiSTer
+
+      - name: Install Clang kernel tools
+        run: >-
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+          make clang llvm lld flex bison bc libssl-dev libelf-dev
+
+      - name: Prepare pinned kernel with Clang
+        run: |
+          set -eu
+          make -C build/Linux-Kernel_MiSTer O="$GITHUB_WORKSPACE/build/scanout-slots-clang" \
+            ARCH=arm LLVM=1 LOCALVERSION=-MiSTer MiSTer_defconfig
+          make -C build/Linux-Kernel_MiSTer O="$GITHUB_WORKSPACE/build/scanout-slots-clang" \
+            ARCH=arm LLVM=1 LOCALVERSION=-MiSTer modules_prepare
+
+      - name: Build module with Clang warnings denied
+        run: >-
+          make -C mister/platform/kernel/scanout-slots
+          KERNEL_SRC="$GITHUB_WORKSPACE/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$GITHUB_WORKSPACE/build/scanout-slots-clang"
+          ARCH=arm LLVM=1 WERROR=1 W=1 all
+
+  coccinelle:
+    needs: changes
+    if: needs.changes.outputs.kernel == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out pinned MiSTer kernel
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Linux-Kernel_MiSTer
+          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
+          path: build/Linux-Kernel_MiSTer
+
+      - name: Install semantic checker
+        run: sudo apt-get update && sudo apt-get install -y coccinelle
+
+      - name: Run Coccinelle reports
+        run: >-
+          make -C build/Linux-Kernel_MiSTer
+          M="$GITHUB_WORKSPACE/mister/platform/kernel/scanout-slots"
+          coccicheck MODE=report

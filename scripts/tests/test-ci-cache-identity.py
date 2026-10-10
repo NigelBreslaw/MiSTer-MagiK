@@ -222,7 +222,7 @@ def main() -> int:
         for relative in (
             "magik/agent/Cargo.lock",
             "magik/probe/Cargo.toml",
-            ".github/workflows/magik.yml",
+            ".github/workflows/ci.yml",
         ):
             source = fixture / relative
             source.write_bytes(source.read_bytes() + b"\n")

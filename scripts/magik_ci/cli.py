@@ -67,6 +67,14 @@ def parser() -> argparse.ArgumentParser:
     )
     ci = sub.add_parser("ci")
     ci_sub = ci.add_subparsers(dest="command", required=True)
+    changes_parser = ci_sub.add_parser("changes")
+    changes_parser.add_argument(
+        "--event-name",
+        required=True,
+        choices=("pull_request", "push", "workflow_dispatch"),
+    )
+    changes_parser.add_argument("--event", type=Path, required=True)
+    changes_parser.add_argument("--github-output", type=Path, required=True)
     distribution = ci_sub.add_parser("distribution")
     distribution_sub = distribution.add_subparsers(dest="action", required=True)
     stage_artwork = distribution_sub.add_parser("stage-artwork")
@@ -344,7 +352,11 @@ def main() -> int:
     elif args.group == "quality":
         quality.execute(root, args.checks)
     elif args.group == "ci":
-        if args.command == "host-assurance":
+        if args.command == "changes":
+            from . import changes
+
+            changes.execute(root, args.event_name, args.event, args.github_output)
+        elif args.command == "host-assurance":
             if args.app_shard is not None and args.host_group != "app":
                 argument_parser.error("--app-shard requires --group app")
             if args.host_group:

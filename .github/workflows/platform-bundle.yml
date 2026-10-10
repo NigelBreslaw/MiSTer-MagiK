@@ -40,7 +40,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
-      current-version: ${{ steps.plan.outputs.current_version }}
       next-version: ${{ steps.plan.outputs.next_version }}
       release-tag: ${{ steps.plan.outputs.release_tag }}
       update-needed: ${{ steps.plan.outputs.update_needed }}
@@ -52,7 +51,6 @@ jobs:
       fpga-synthesis-id: ${{ steps.identity.outputs.fpga_synthesis_id }}
       kernel-id: ${{ steps.reuse.outputs.kernel_id || steps.baseline.outputs.kernel_id }}
       main-revision: ${{ steps.identity.outputs.main_revision }}
-      bundle-id: ${{ steps.plan.outputs.bundle_id }}
       candidate-hit: ${{ steps.reuse.outputs.candidate_hit }}
       main-cache-hit: ${{ steps.reuse.outputs.main_hit }}
       fpga-cache-hit: ${{ steps.reuse.outputs.fpga_hit }}
@@ -858,9 +856,6 @@ jobs:
       (needs.build-kernel.result == 'success' || needs.build-kernel.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    outputs:
-      next-version: ${{ needs.plan.outputs.next-version }}
-      release-tag: ${{ needs.plan.outputs.release-tag }}
     steps:
       - uses: actions/checkout@v7
 
