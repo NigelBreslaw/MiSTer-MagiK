@@ -201,7 +201,7 @@ def main() -> int:
             "mister/platform/contracts/scanout/Cargo.toml",
             "apps/mister/.cargo/config.toml",
             "scripts/magik_ci/host.py",
-            ".github/actions/host-validation/action.yml",
+            ".github/workflows/ci.yml",
         ):
             source = fixture / relative
             source.write_bytes(source.read_bytes() + b"\n")

@@ -24,10 +24,10 @@ env:
   MISTER_CARGO_TIMINGS: "0"
 
 jobs:
-  changes:
-    name: Select affected checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+  launcher-neon-parity:
+    name: launcher-neon-parity
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
     outputs:
       tooling: ${{ steps.changes.outputs.tooling }}
       scanout: ${{ steps.changes.outputs.scanout }}
@@ -36,91 +36,81 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
       - name: Select checks from the complete Git diff
         id: changes
         run: >-
           scripts/magik-ci ci changes --event-name "$GITHUB_EVENT_NAME"
           --event "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
-
-  launcher-neon-parity:
-    name: launcher-neon-parity
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
       - name: Check current and fast NEON kernels
         run: scripts/magik-ci neon-parity
 
-  host-dev-group:
-    name: host-dev (${{ matrix.group }})
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [static, domain, catalog, tools]
+  host-dev:
+    name: host-dev
+    needs: launcher-neon-parity
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/host-validation
         with:
-          group: ${{ matrix.group }}
-
-  host-dev-app-shard:
-    name: host-dev (app / ${{ matrix.shard }})
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [checks, ui, ui-preview, bench-scenes]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      CARGO_INCREMENTAL: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/host-validation
-        with:
-          group: app
-          app-shard: ${{ matrix.shard }}
-          assets-ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
-
-  host-dev-app:
-    name: host-dev (app)
-    runs-on: ubuntu-24.04
-    needs: host-dev-app-shard
-    if: always()
-    steps:
-      - name: Require every app validation shard
-        env:
-          SHARD_RESULT: ${{ needs.host-dev-app-shard.result }}
-        run: test "$SHARD_RESULT" = success
-
-  host-dev:
-    name: host-dev
-    runs-on: ubuntu-24.04
-    needs: [changes, host-dev-group, host-dev-app, python-quality]
-    if: always()
-    steps:
-      - name: Require every host validation group
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          GROUP_RESULT: ${{ needs.host-dev-group.result }}
-          APP_RESULT: ${{ needs.host-dev-app.result }}
-          PYTHON_RESULT: ${{ needs.python-quality.result }}
-        run: test "$CHANGES_RESULT" = success && test "$GROUP_RESULT" = success && test "$APP_RESULT" = success && test "$PYTHON_RESULT" = success
-
-  python-quality:
-    name: python-quality
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+          fetch-depth: 0
       - name: Install Python toolchain
         uses: ./.github/actions/setup-python-tools
+      - name: Resolve private asset revision
+        id: magik-assets-ref
+        run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
+      - name: Checkout private build assets
+        uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/mister-magik-private-assets
+          ref: ${{ steps.magik-assets-ref.outputs.sha }}
+          path: private/magik-assets
+          ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
+      - name: Compute cache identities
+        id: cache-id
+        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+      - name: Install Rust toolchain
+        working-directory: apps/mister
+        run: |
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
+          test -n "$toolchain"
+          rustup default "$toolchain"
+          rustup show
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_host }}
+          restore-keys: |
+            cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+      - name: Optimize rendering tests
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [profile.test.package.mister-magik-framebuffer-scenes]
+          opt-level = 1
+          EOF
+      - name: Cache host build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            target/ci-host-domain/debug
+            apps/mister/target/debug
+          # One exact dependency baseline replaces four app shard caches.
+          key: target-host-v2-${{ runner.os }}-${{ runner.arch }}-test-scenes-opt1-app-incremental-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_build_cache }}
+      - name: Cache tooling build outputs
+        if: needs.launcher-neon-parity.outputs.tooling == 'true'
+        uses: actions/cache@v6
+        with:
+          path: target/ci-tooling/debug
+          key: target-tooling-v1-${{ runner.os }}-${{ runner.arch }}-1.99.0-debug0-incremental-${{ steps.cache-id.outputs.tooling_build_cache }}
       - name: Check formatting
         id: format
         continue-on-error: true
@@ -137,21 +127,93 @@ jobs:
         id: tests
         continue-on-error: true
         run: uv run pytest scripts/tests -q --ignore scripts/tests/test-slint-build-contract.py
-      - name: Summarize Python quality
+      - name: Host assurance (static)
+        id: static
+        continue-on-error: true
+        run: scripts/magik-ci ci host-assurance --group static
+      - name: Host assurance (domain)
+        id: domain
+        continue-on-error: true
+        run: scripts/magik-ci ci host-assurance --group domain
+      - name: Host assurance (catalog)
+        id: catalog
+        continue-on-error: true
+        run: scripts/magik-ci ci host-assurance --group catalog
+      - name: Host assurance (app)
+        id: app
+        continue-on-error: true
+        env:
+          CARGO_INCREMENTAL: "1"
+        run: scripts/magik-ci ci host-assurance --group app
+      - name: Host assurance (tools)
+        id: tools
+        continue-on-error: true
+        run: scripts/magik-ci ci host-assurance --group tools
+      - name: Tooling tests
+        id: tooling
+        if: needs.launcher-neon-parity.outputs.tooling == 'true'
+        continue-on-error: true
+        env:
+          RUSTUP_TOOLCHAIN: "1.99.0"
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci-tooling
+          CARGO_INCREMENTAL: "1"
+        run: |
+          uv export --frozen --extra mcp --project magik/host --no-emit-project --no-emit-package slint-testing --output-file /tmp/magik-host-requirements.txt > /dev/null
+          uv pip install --python .venv/bin/python -r /tmp/magik-host-requirements.txt
+          uv run pytest magik/host/tests -q
+          uv run pytest magik/scenarios --collect-only -q
+          cargo test --locked --manifest-path magik/agent/Cargo.toml
+          (cd magik/probe && cargo test --locked)
+          cargo test --locked --manifest-path magik/probe/Cargo.toml -p mister-magik-tooling-support
+          cargo test --locked --manifest-path crates/catalog/Cargo.toml --features builder,development-layout device_layout
+      - name: Check cross-language scanout contract
+        id: scanout
+        if: needs.launcher-neon-parity.outputs.scanout == 'true'
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y ripgrep
+          scripts/checks/check-scanout-slots-contract.sh
+      - name: Check out pinned MiSTer kernel for semantic analysis
+        if: needs.launcher-neon-parity.outputs.kernel == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Linux-Kernel_MiSTer
+          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
+          path: build/Linux-Kernel_MiSTer
+      - name: Run Coccinelle reports
+        id: coccinelle
+        if: needs.launcher-neon-parity.outputs.kernel == 'true'
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y coccinelle
+          make -C build/Linux-Kernel_MiSTer \
+            M="$GITHUB_WORKSPACE/mister/platform/kernel/scanout-slots" \
+            coccicheck MODE=report
+      - name: Require every selected host check
         if: always()
         env:
           FORMAT_OUTCOME: ${{ steps.format.outcome }}
           LINT_OUTCOME: ${{ steps.lint.outcome }}
           TYPECHECK_OUTCOME: ${{ steps.typecheck.outcome }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          STATIC_OUTCOME: ${{ steps.static.outcome }}
+          DOMAIN_OUTCOME: ${{ steps.domain.outcome }}
+          CATALOG_OUTCOME: ${{ steps.catalog.outcome }}
+          APP_OUTCOME: ${{ steps.app.outcome }}
+          TOOLS_OUTCOME: ${{ steps.tools.outcome }}
+          TOOLING_OUTCOME: ${{ steps.tooling.outcome }}
+          SCANOUT_OUTCOME: ${{ steps.scanout.outcome }}
+          COCCINELLE_OUTCOME: ${{ steps.coccinelle.outcome }}
+          TOOLING_SELECTED: ${{ needs.launcher-neon-parity.outputs.tooling }}
+          SCANOUT_SELECTED: ${{ needs.launcher-neon-parity.outputs.scanout }}
+          KERNEL_SELECTED: ${{ needs.launcher-neon-parity.outputs.kernel }}
         run: |
           status=0
           report() {
             label="$1"
             outcome="$2"
-            if [ "$outcome" = success ]; then
-              echo "$label: passed"
-            else
+            echo "$label: $outcome" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$outcome" != success ]; then
               echo "::error::$label: $outcome"
               status=1
             fi
@@ -160,19 +222,41 @@ jobs:
           report lint "$LINT_OUTCOME"
           report typecheck "$TYPECHECK_OUTCOME"
           report tests "$TESTS_OUTCOME"
+          report static "$STATIC_OUTCOME"
+          report domain "$DOMAIN_OUTCOME"
+          report catalog "$CATALOG_OUTCOME"
+          report app "$APP_OUTCOME"
+          report tools "$TOOLS_OUTCOME"
+          case "$TOOLING_SELECTED" in
+            true) report tooling "$TOOLING_OUTCOME" ;;
+            false) echo 'tooling: not affected' >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo '::error::Affected-check selection failed'; status=1 ;;
+          esac
+          case "$SCANOUT_SELECTED" in
+            true) report scanout "$SCANOUT_OUTCOME" ;;
+            false) echo 'scanout: not affected' >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo '::error::Affected-check selection failed'; status=1 ;;
+          esac
+          case "$KERNEL_SELECTED" in
+            true) report coccinelle "$COCCINELLE_OUTCOME" ;;
+            false) echo 'coccinelle: not affected' >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo '::error::Affected-check selection failed'; status=1 ;;
+          esac
           exit "$status"
+      - name: Report host cache footprint
+        if: always()
+        run: |
+          for path in target/ci-host-domain/debug apps/mister/target/debug target/ci-tooling/debug; do
+            if [ -d "$path" ]; then
+              kib="$(du -sk "$path" | awk '{print $1}')"
+              printf 'Host build cache (%s): %s MiB\n' "$path" "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
   arm-build:
     name: arm-ci-fast
-    # Dependabot PRs cannot access the private build-assets key. Their public
-    # Rust ARM assurance remains required below.
-    if: >-
-      ${{
-        github.event_name != 'pull_request' ||
-        github.event.pull_request.user.login != 'dependabot[bot]'
-      }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -226,6 +310,7 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Pull cross image
+        id: cross-image
         run: |
           started="$(date +%s)"
           docker pull "${{ steps.cache-id.outputs.cross_image }}"
@@ -250,7 +335,11 @@ jobs:
           # a rolling restore prefix would copy stale Cargo artifacts into every new key.
           key: target-arm-v4-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_build_cache }}
 
+      # Dependabot cannot build the private-assets binary; retain its library check.
       - name: Build ARM binary
+        if: github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]'
+        id: binary
+        continue-on-error: true
         env:
           MISTER_CARGO_TIMINGS: "1"
         run: |
@@ -281,7 +370,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Cargo timings
-        if: always()
+        if: ${{ !cancelled() && steps.binary.outcome != 'skipped' }}
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-ci-fast
@@ -290,76 +379,19 @@ jobs:
           retention-days: 14
 
       - name: Check ARM shared libraries
+        if: steps.binary.outcome == 'success'
         run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
 
       - name: Upload ARM binary
+        if: steps.binary.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: mister-magik-fb-ci-fast
           path: apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
           if-no-files-found: error
 
-  arm-library-check:
-    name: arm-library-check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Resolve private asset revision
-        id: magik-assets-ref
-        run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout private build assets
-        uses: actions/checkout@v7
-        with:
-          repository: NigelBreslaw/mister-magik-private-assets
-          ref: ${{ steps.magik-assets-ref.outputs.sha }}
-          path: private/magik-assets
-          ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
-
-      - name: Compute cache identities
-        id: cache-id
-        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
-
-      - name: Install Rust toolchain
-        working-directory: apps/mister
-        run: rustup show
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_arm }}
-          restore-keys: |
-            cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
-
-      - name: Cache cross binary
-        uses: actions/cache@v6
-        id: cross-cache
-        with:
-          path: ~/.cargo/bin/cross
-          key: cross-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.CROSS_VERSION }}-${{ steps.cache-id.outputs.cross_abi }}
-
-      - name: Install cross
-        if: steps.cross-cache.outputs.cache-hit != 'true'
-        run: cargo install cross --version "$CROSS_VERSION" --locked
-
-      - name: Log in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-
-      - name: Pull cross image
-        run: docker pull "${{ steps.cache-id.outputs.cross_image }}"
-
       - name: Cache ARM library check outputs
+        if: ${{ !cancelled() && steps.cross-image.outcome == 'success' }}
         uses: actions/cache@v6
         with:
           path: |
@@ -370,6 +402,12 @@ jobs:
           key: target-arm-library-v1-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-check-debug0-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_build_cache }}-${{ hashFiles('scripts/magik_ci/build.py') }}
 
       - name: Check ARM no-default library
+        if: ${{ !cancelled() && steps.cross-image.outcome == 'success' }}
+        id: library
+        continue-on-error: true
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
         run: MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build runtime-library-ci
 
       - name: Report ARM library cache footprint
@@ -382,129 +420,21 @@ jobs:
             fi
           done
 
-  tooling-tests:
-    needs: changes
-    if: needs.changes.outputs.tooling == 'true'
-    runs-on: ubuntu-24.04
-    env:
-      RUSTUP_TOOLCHAIN: "1.99.0"
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci-tooling
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-      CARGO_INCREMENTAL: "1"
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-python-tools
-      # These are host-only fixtures; the private on-device test driver is unused.
-      - run: uv export --frozen --extra mcp --project magik/host --no-emit-project --no-emit-package slint-testing --output-file /tmp/magik-host-requirements.txt > /dev/null
-      - run: uv pip install --python .venv/bin/python -r /tmp/magik-host-requirements.txt
-      - run: uv run pytest magik/host/tests -q
-      - run: uv run pytest magik/scenarios --collect-only -q
-      - run: rustup toolchain install 1.99.0 --profile minimal
-      - name: Compute cache identities
-        id: cache-id
-        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-tooling-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ steps.cache-id.outputs.tooling_build_cache }}
-          restore-keys: |
-            cargo-tooling-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-
-      - name: Cache tooling build outputs
-        uses: actions/cache@v6
-        with:
-          path: target/ci-tooling/debug
-          # Share dependencies across agent, probe and catalog. Keep one immutable
-          # baseline per dependency/profile identity, including incremental state.
-          key: target-tooling-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-debug0-incremental-${{ steps.cache-id.outputs.tooling_build_cache }}
-      - run: cargo test --locked --manifest-path magik/agent/Cargo.toml
-      - run: cargo test --locked
-        working-directory: magik/probe
-      - run: cargo test --locked --manifest-path magik/probe/Cargo.toml -p mister-magik-tooling-support
-      - run: cargo test --locked --manifest-path crates/catalog/Cargo.toml --features builder,development-layout device_layout
-      - name: Report tooling cache footprint
+      - name: Require both ARM configurations
         if: always()
-        run: |
-          if [ -d "$CARGO_TARGET_DIR/debug" ]; then
-            kib="$(du -sk "$CARGO_TARGET_DIR/debug" | awk '{print $1}')"
-            printf 'Tooling build cache: %s MiB\n' "$(( (kib + 1023) / 1024 ))" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-  architecture-trends:
-    if: github.event_name == 'pull_request'
-    name: Advisory hotspot summary
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout exact pull request head
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-
-      - name: Generate advisory architecture reports
-        id: report
-        continue-on-error: true
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BINARY_OUTCOME: ${{ steps.binary.outcome }}
+          LIBRARY_OUTCOME: ${{ steps.library.outcome }}
+          DEPENDABOT: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' }}
         run: |
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          test "$LIBRARY_OUTCOME" = success
+          if [ "$DEPENDABOT" != true ]; then
+            test "$BINARY_OUTCOME" = success
           fi
-          git cat-file -e "${BASE_SHA}^{commit}"
-          git cat-file -e "${HEAD_SHA}^{commit}"
-          mkdir -p build/architecture-trends
-          scripts/magik-ci architecture report \
-            --base "$BASE_SHA" \
-            --head "$HEAD_SHA" \
-            --format json \
-            --output build/architecture-trends/architecture-report.json
-          scripts/magik-ci architecture report \
-            --base "$BASE_SHA" \
-            --head "$HEAD_SHA" \
-            --format markdown \
-            --output build/architecture-trends/architecture-report.md
-          cat build/architecture-trends/architecture-report.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Explain unavailable advisory report
-        if: steps.report.outcome == 'failure'
-        run: |
-          echo '## Architecture hotspot summary unavailable' >> "$GITHUB_STEP_SUMMARY"
-          echo 'The advisory report could not be generated. Blocking architecture checks remain independent.' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload architecture report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: architecture-trends-${{ github.event.pull_request.number }}
-          path: build/architecture-trends/architecture-report.json
-          if-no-files-found: warn
-          retention-days: 14
-
-  contract:
-    needs: changes
-    if: needs.changes.outputs.scanout == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install contract tools
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
-
-      - name: Check cross-language scanout contract
-        run: scripts/checks/check-scanout-slots-contract.sh
 
   latch-rtl:
-    needs: changes
-    if: needs.changes.outputs.fpga == 'true'
+    needs: launcher-neon-parity
+    if: ${{ !cancelled() && needs.launcher-neon-parity.outputs.fpga == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -585,8 +515,8 @@ jobs:
             --source mister_magik_latch_sys_top_bridge.sv
 
   contract-and-build:
-    needs: changes
-    if: needs.changes.outputs.kernel == 'true'
+    needs: launcher-neon-parity
+    if: ${{ !cancelled() && needs.launcher-neon-parity.outputs.kernel == 'true' }}
     runs-on: ubuntu-24.04
     container: ubuntu:20.04
     timeout-minutes: 15
@@ -670,8 +600,8 @@ jobs:
           grep -q '^mister_magik_source_license:[[:space:]]*GPL-3.0-or-later$' build/scanout-slots/modinfo.txt
 
   clang-build:
-    needs: changes
-    if: needs.changes.outputs.kernel == 'true'
+    needs: launcher-neon-parity
+    if: ${{ !cancelled() && needs.launcher-neon-parity.outputs.kernel == 'true' }}
     runs-on: ubuntu-24.04
     container: ubuntu:22.04
     timeout-minutes: 15
@@ -704,27 +634,3 @@ jobs:
           KERNEL_SRC="$GITHUB_WORKSPACE/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$GITHUB_WORKSPACE/build/scanout-slots-clang"
           ARCH=arm LLVM=1 WERROR=1 W=1 all
-
-  coccinelle:
-    needs: changes
-    if: needs.changes.outputs.kernel == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Check out pinned MiSTer kernel
-        uses: actions/checkout@v7
-        with:
-          repository: MiSTer-devel/Linux-Kernel_MiSTer
-          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
-          path: build/Linux-Kernel_MiSTer
-
-      - name: Install semantic checker
-        run: sudo apt-get update && sudo apt-get install -y coccinelle
-
-      - name: Run Coccinelle reports
-        run: >-
-          make -C build/Linux-Kernel_MiSTer
-          M="$GITHUB_WORKSPACE/mister/platform/kernel/scanout-slots"
-          coccicheck MODE=report
