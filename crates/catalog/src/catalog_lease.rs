@@ -6,7 +6,7 @@
 //! The lock is advisory and held by the process that performs generation
 //! selection and publication.  The diagnostic lock-file contents are never
 //! used to infer ownership; the kernel lock is the authority and is released
-//! automatically when the owning process exits.
+//! when the lease ends or all owning file descriptors are closed.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -76,6 +76,14 @@ pub struct CatalogMutationLease {
     #[cfg(test)]
     path: PathBuf,
     _file: File,
+}
+
+impl Drop for CatalogMutationLease {
+    fn drop(&mut self) {
+        // A forked helper can retain this open-file description until exec.
+        // End ownership now rather than waiting for every duplicate to close.
+        unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) };
+    }
 }
 
 impl CatalogMutationLease {
@@ -191,6 +199,26 @@ mod tests {
         drop(first);
         let second = CatalogMutationLease::acquire(&path).expect("released lease");
         assert_eq!(second.path(), path);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn dropping_lease_unlocks_while_a_duplicate_descriptor_is_open() {
+        let path = unique_path("catalog-lease-duplicate");
+        let first = CatalogMutationLease::acquire(&path).expect("first lease");
+        let duplicate = first
+            .file()
+            .try_clone()
+            .expect("duplicate lease descriptor");
+        assert!(matches!(
+            CatalogMutationLease::acquire(&path),
+            Err(CatalogLeaseError::Busy { .. })
+        ));
+
+        drop(first);
+        let second = CatalogMutationLease::acquire(&path).expect("released lease");
+        drop(second);
+        drop(duplicate);
         let _ = fs::remove_file(path);
     }
 

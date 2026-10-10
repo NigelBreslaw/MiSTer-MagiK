@@ -278,6 +278,24 @@ fn running_for_state(state: &Value) -> Result<Value, String> {
         Err(error) => Err(error.to_string()),
     }
 }
+
+fn resume_unless_launcher_running(
+    status: Option<&Value>,
+    resume: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    // Main rejects Resume while it already owns a starting/active child.
+    // Recovery that only inspects or cleans a completed install never paused it.
+    if status.is_some_and(|state| {
+        state["launcher_pid"].as_u64().is_some_and(|pid| pid > 0)
+            && matches!(
+                state["launcher_state"].as_str(),
+                Some("LauncherStarting" | "LauncherActive")
+            )
+    }) {
+        return Ok(());
+    }
+    resume()
+}
 impl Agent {
     pub(crate) fn app_path(&self, artifact: &str) -> PathBuf {
         if artifact == "magik" {
@@ -344,7 +362,11 @@ impl Agent {
                 }
                 Ok(())
             },
-            || crate::main_control::handoff("mister_magik_resume\n"),
+            || {
+                resume_unless_launcher_running(crate::device::status().ok().as_ref(), || {
+                    crate::main_control::handoff("mister_magik_resume\n")
+                })
+            },
         )
     }
     fn recover_legacy_backups(&self) -> Result<(), String> {
@@ -541,6 +563,26 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn installation_reconciliation_does_not_resume_an_already_running_child() {
+        for phase in ["LauncherActive", "LauncherStarting"] {
+            let state = json!({"launcher_pid":42,"launcher_state":phase});
+            resume_unless_launcher_running(Some(&state), || panic!("Main would reject Resume"))
+                .unwrap();
+        }
+        for state in [
+            None,
+            Some(json!({"launcher_pid":0,"launcher_state":"LauncherSuspended"})),
+        ] {
+            let called = std::cell::Cell::new(false);
+            resume_unless_launcher_running(state.as_ref(), || {
+                called.set(true);
+                Ok(())
+            })
+            .unwrap();
+            assert!(called.get());
+        }
+    }
     const OLD_ENV: &[u8] = b"operator-settings\n# BEGIN magik managed launcher\nexport MISTER_MAGIK_PATH='/old'\n# END magik managed launcher\n";
     const NEW_ENV: &[u8] = b"operator-settings\n# BEGIN magik managed launcher\nexport MISTER_MAGIK_PATH='/new'\n# END magik managed launcher\n";
     fn valid_manifest(hash: &str) -> String {

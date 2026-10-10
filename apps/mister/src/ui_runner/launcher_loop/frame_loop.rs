@@ -1338,10 +1338,6 @@ impl<'a> FrameLoop<'a> {
 
         let system_entry_handoff_only = should_poll_system_entry_handoff(
             background_work_allowed,
-            self.lib.pending_collection_entry.is_some(),
-            self.lib
-                .launch_return_session
-                .protects_hydrating_collection(&self.ui.nav),
             self.lib.scheduler.system_entry_prepare_active(),
         );
         let catalog_poll_scope = catalog_poll_scope(

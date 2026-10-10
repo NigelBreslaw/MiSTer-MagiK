@@ -2429,13 +2429,11 @@ fn catalog_poll_scope(
 
 fn should_poll_system_entry_handoff(
     background_work_allowed: bool,
-    collection_entry_pending: bool,
-    launch_return_hydrating: bool,
     system_entry_prepare_active: bool,
 ) -> bool {
-    !background_work_allowed
-        && system_entry_prepare_active
-        && (collection_entry_pending || launch_return_hydrating)
+    // Completion clears the active job that itself disables background work.
+    // Arcade has no pending navigation entry, and Back may cancel one too.
+    !background_work_allowed && system_entry_prepare_active
 }
 
 fn update_catalog_ready_stationary_edge_since(
@@ -2856,6 +2854,29 @@ fn apply_lifecycle_effects(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn adopt_system_shard(
+    nav: &mut LauncherNav,
+    catalog: &mut ArcadeCatalog,
+    prepared_catalog: ArcadeCatalog,
+    catalog_version: &mut usize,
+    system_id: &str,
+    preview: &mut PreviewState,
+    scheduler: &LauncherScheduler,
+    preview_prelude: Option<crate::preview_state::SystemEntryPreviewPrelude>,
+) {
+    nav.catalog_system_hydration_finished(system_id);
+    let retired_catalog = std::mem::replace(catalog, prepared_catalog);
+    *catalog_version = (*catalog_version).wrapping_add(1);
+    if let Some(prelude) = preview_prelude
+        && let Some(game) = catalog.system_game_at(system_id, 0)
+    {
+        preview.adopt_system_entry_preview(game, prelude);
+    }
+    scheduler.retire_catalog(retired_catalog);
+    nav.sync_launcher_taxonomy(catalog);
+}
+
 fn apply_catalog_session_effects(
     effects: CatalogSessionEffects,
     app: &slint_ui::launcher::Launcher,
@@ -3224,16 +3245,16 @@ fn apply_catalog_session_effects(
                     continue;
                 }
                 let adoption_started = Instant::now();
-                nav.catalog_system_hydration_finished(&system_id);
-                let retired_catalog = std::mem::replace(catalog, prepared_catalog);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                if let Some(prelude) = preview_prelude
-                    && let Some(game) = catalog.system_game_at(&system_id, 0)
-                {
-                    preview.adopt_system_entry_preview(game, prelude);
-                }
-                scheduler.retire_catalog(retired_catalog);
-                nav.sync_launcher_taxonomy(catalog);
+                adopt_system_shard(
+                    nav,
+                    catalog,
+                    prepared_catalog,
+                    catalog_version,
+                    &system_id,
+                    preview,
+                    scheduler,
+                    preview_prelude,
+                );
                 let return_restored =
                     reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 if return_restored {
@@ -3576,6 +3597,111 @@ fn summary_seed_catalog_worker_starts_immediately(
 mod tests {
     use super::*;
     use crate::input_event::InputSourceKind;
+
+    fn cold_arcade_completion_sequence(back_before_ready: bool) {
+        for transition_owned in [false, true] {
+            let loaded = catalog_for_media_systems(&["arcade"]);
+            let mut catalog = summary_catalog_for_media_systems(&["arcade"]);
+            let mut nav = LauncherNav::new();
+            assert!(nav.open_default_arcade(&catalog));
+            let (mut scheduler, complete) = LauncherScheduler::pending_test_system_entry();
+            let mut preview = PreviewState::new();
+            let mut adoption = SystemEntryAdoption::default();
+            let now = Instant::now();
+            let mut version = 1;
+            let id = crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID;
+            let entry = begin_cold_collection_entry(
+                &mut scheduler,
+                &mut nav,
+                &mut preview,
+                &catalog,
+                version,
+                id,
+                now,
+                "test-open-arcade",
+                false,
+                &mut adoption,
+                now,
+            );
+            assert!(entry.pending.is_none());
+            assert!(scheduler.system_entry_prepare_active());
+            assert_eq!(
+                crate::launcher_presentation::active_games_load_state(&catalog, &nav),
+                slint_ui::launcher::ArcadeLoadState::Loading
+            );
+            if back_before_ready {
+                assert!(nav.commit_navigation_intent(
+                    &launcher::LauncherEvent {
+                        action: LauncherAction::NavigateBack,
+                        path: None,
+                        settings: None,
+                    },
+                    &catalog
+                ));
+                assert_eq!(nav.screen, Screen::Home);
+            }
+            complete(loaded);
+            // Preparation itself disables background work. Arcade has no
+            // pending entry, and Back has removed any navigation protection.
+            let handoff =
+                should_poll_system_entry_handoff(false, scheduler.system_entry_prepare_active());
+            let scope = catalog_poll_scope(false, transition_owned, handoff).unwrap();
+            let mut events = CatalogJobEventBuf::new();
+            scheduler.poll_catalog(&mut events, scope);
+            assert!(!scheduler.system_entry_prepare_active());
+            let CatalogWorkerMessage::SystemShardReady {
+                system_id,
+                catalog: prepared,
+                base_catalog_version,
+                game_count,
+                preview_prelude,
+                ..
+            } = events
+                .drain()
+                .next()
+                .expect("Arcade completion must be collected")
+            else {
+                panic!("expected completed Arcade shard");
+            };
+            assert_eq!(base_catalog_version, version);
+            assert!(game_count > 0);
+            adopt_system_shard(
+                &mut nav,
+                &mut catalog,
+                prepared,
+                &mut version,
+                &system_id,
+                &mut preview,
+                &scheduler,
+                preview_prelude,
+            );
+            assert!(catalog.system_game_count(id) > 0);
+            assert!(!nav.catalog_system_hydration_is_loading(id));
+            if back_before_ready {
+                assert_eq!(
+                    nav.screen,
+                    Screen::Home,
+                    "late completion must not reopen Arcade"
+                );
+                assert!(nav.active_collection_id().is_none());
+                assert!(nav.open_default_arcade(&catalog));
+            }
+            assert_eq!(
+                crate::launcher_presentation::active_games_load_state(&catalog, &nav),
+                slint_ui::launcher::ArcadeLoadState::Ready
+            );
+        }
+    }
+
+    #[test]
+    fn cold_arcade_completion_reaches_games_without_a_pending_navigation_entry() {
+        cold_arcade_completion_sequence(false);
+    }
+
+    #[test]
+    fn cold_arcade_completion_after_back_preserves_home_and_allows_reentry() {
+        cold_arcade_completion_sequence(true);
+    }
 
     #[test]
     fn queued_settings_activation_retains_its_transition_source_on_the_settling_tick() {
@@ -5364,21 +5490,12 @@ mod tests {
             &restored_nav,
         ));
         assert!(session.protects_hydrating_collection(&restored_nav));
-        assert!(should_poll_system_entry_handoff(
-            false,
-            false,
-            session.protects_hydrating_collection(&restored_nav),
-            true,
-        ));
+        assert!(should_poll_system_entry_handoff(false, true));
 
         restored_nav.catalog_system_hydration_failed("arcade");
         assert!(!session.protects_hydrating_collection(&restored_nav));
-        assert!(!should_poll_system_entry_handoff(
-            false,
-            false,
-            session.protects_hydrating_collection(&restored_nav),
-            true,
-        ));
+        // Terminal work must still be collected after navigation protection ends.
+        assert!(should_poll_system_entry_handoff(false, true));
     }
 
     #[test]
