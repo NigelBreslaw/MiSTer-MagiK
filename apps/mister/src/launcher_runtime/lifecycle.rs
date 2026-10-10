@@ -233,7 +233,6 @@ pub enum RecoveryReason {
 pub enum StartupMode {
     ColdNoCatalog,
     WarmCatalog,
-    WarmCatalogHydrating,
     ReturnFromGame,
 }
 
@@ -242,7 +241,6 @@ impl StartupMode {
         match self {
             Self::ColdNoCatalog => "cold_no_catalog",
             Self::WarmCatalog => "warm_catalog",
-            Self::WarmCatalogHydrating => "warm_catalog_hydrating",
             Self::ReturnFromGame => "return_from_game",
         }
     }
@@ -563,7 +561,6 @@ impl LauncherLifecycle {
         self.startup_reveal_state = match mode {
             StartupMode::ColdNoCatalog => StartupRevealState::CatalogProgressVisible,
             StartupMode::WarmCatalog => StartupRevealState::RevealLauncher,
-            StartupMode::WarmCatalogHydrating => StartupRevealState::HoldBlack,
             StartupMode::ReturnFromGame => StartupRevealState::HoldBlackReturn,
         };
         out.startup_event("startup_entry_classified", format!("mode={}", mode.label()));
@@ -575,11 +572,8 @@ impl LauncherLifecycle {
                 out.startup_event("startup_shell_visible", "mode=warm_catalog");
                 out.startup_event(
                     "launcher_reveal_ready",
-                    "mode=warm_catalog catalog_state=hydrating",
+                    "mode=warm_catalog catalog_state=ready",
                 );
-            }
-            StartupRevealState::HoldBlack => {
-                out.startup_event("startup_hold_black", format!("mode={}", mode.label()));
             }
             StartupRevealState::HoldBlackReturn => {
                 out.startup_event("startup_hold_black", "mode=return_from_game");
@@ -614,7 +608,7 @@ impl LauncherLifecycle {
             StartupRevealState::CatalogProgressVisible if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
-            StartupRevealState::CatalogProgressVisible | StartupRevealState::HoldBlack
+            StartupRevealState::CatalogProgressVisible
                 if self.startup_hard_deadline_reached(now) =>
             {
                 out.startup_event(
@@ -622,9 +616,6 @@ impl LauncherLifecycle {
                     format!("elapsed_ms={}", startup_elapsed.as_millis()),
                 );
                 self.mark_reveal_ready("preview_state=startup_hard_timeout", out);
-            }
-            StartupRevealState::HoldBlack if catalog_ready => {
-                self.mark_reveal_ready("preview_state=not_required", out);
             }
             StartupRevealState::WaitRelevantPreview
                 if self.return_preview_wait_started_at.is_some_and(|started| {
@@ -660,16 +651,9 @@ impl LauncherLifecycle {
     }
 
     pub fn startup_hard_deadline_reached(&self, now: Instant) -> bool {
-        matches!(
-            self.startup_mode,
-            StartupMode::ColdNoCatalog | StartupMode::WarmCatalogHydrating
-        ) && now.saturating_duration_since(self.startup_started_at)
-            >= Self::COLD_STARTUP_MAX_DURATION
-    }
-
-    pub fn startup_waiting_for_initial_catalog(&self) -> bool {
-        self.startup_mode == StartupMode::WarmCatalogHydrating
-            && self.startup_reveal_state == StartupRevealState::HoldBlack
+        self.startup_mode == StartupMode::ColdNoCatalog
+            && now.saturating_duration_since(self.startup_started_at)
+                >= Self::COLD_STARTUP_MAX_DURATION
     }
 
     pub fn startup_waiting_for_return_catalog(&self) -> bool {
@@ -1378,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn warm_start_reveals_shell_before_catalog_hydration() {
+    fn warm_start_reveals_seeded_catalog_without_waiting_for_game_rows() {
         let now = Instant::now();
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
@@ -1402,71 +1386,6 @@ mod tests {
         assert_eq!(status.input_enabled_ms, 37);
         assert!(effect_names(&effects).contains(&"launcher_revealed"));
         assert!(effect_names(&effects).contains(&"launcher_input_enabled"));
-    }
-
-    #[test]
-    fn warm_catalog_hydration_holds_black_until_catalog_ready() {
-        let now = Instant::now();
-        let mut lifecycle = lifecycle();
-        let mut effects = LifecycleEffects::new();
-
-        lifecycle.begin_startup_reveal(StartupMode::WarmCatalogHydrating, now, &mut effects);
-        assert_eq!(
-            lifecycle.startup_status().state,
-            StartupRevealState::HoldBlack
-        );
-        assert!(!lifecycle.startup_can_present_frame());
-        assert!(!lifecycle.startup_input_enabled());
-        assert!(lifecycle.startup_waiting_for_initial_catalog());
-        assert!(effect_names(&effects).contains(&"startup_hold_black"));
-        assert!(!effect_names(&effects).contains(&"launcher_reveal_ready"));
-        effects.clear();
-
-        lifecycle.tick_startup_reveal(now + Duration::from_millis(1), false, &mut effects);
-        assert_eq!(
-            lifecycle.startup_status().state,
-            StartupRevealState::HoldBlack
-        );
-        assert!(effects.as_slice().is_empty());
-
-        lifecycle.tick_startup_reveal(now + Duration::from_millis(2), true, &mut effects);
-        assert_eq!(
-            lifecycle.startup_status().state,
-            StartupRevealState::RevealLauncher
-        );
-        assert!(!lifecycle.startup_waiting_for_initial_catalog());
-        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
-    }
-
-    #[test]
-    fn warm_catalog_hydration_fails_open_after_startup_deadline() {
-        let now = Instant::now();
-        let mut lifecycle = lifecycle();
-        let mut effects = LifecycleEffects::new();
-
-        lifecycle.begin_startup_reveal(StartupMode::WarmCatalogHydrating, now, &mut effects);
-        effects.clear();
-
-        lifecycle.tick_startup_reveal(
-            now + LauncherLifecycle::COLD_STARTUP_MAX_DURATION - Duration::from_millis(1),
-            false,
-            &mut effects,
-        );
-        assert_eq!(
-            lifecycle.startup_status().state,
-            StartupRevealState::HoldBlack
-        );
-
-        lifecycle.tick_startup_reveal(
-            now + LauncherLifecycle::COLD_STARTUP_MAX_DURATION,
-            false,
-            &mut effects,
-        );
-        assert_eq!(
-            lifecycle.startup_status().state,
-            StartupRevealState::RevealLauncher
-        );
-        assert!(effect_names(&effects).contains(&"startup_hard_timeout"));
     }
 
     #[test]

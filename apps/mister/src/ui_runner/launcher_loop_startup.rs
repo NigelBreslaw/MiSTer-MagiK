@@ -59,7 +59,7 @@ pub(super) fn build_domains(
         launcher_config.media_worker().clone(),
     );
     let catalog_events = CatalogJobEventBuf::new();
-    let deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
+    let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
     let pending_catalog_ready: Option<CatalogWorkerMessage> = None;
     let pending_collection_entry: Option<PendingCollectionEntry> = None;
     let deferred_settings_activation = DeferredSettingsActivation::default();
@@ -339,18 +339,10 @@ pub(super) fn build_domains(
     let mut catalog_session = LauncherCatalogSession::new(false);
     let media_session = ScreenshotMediaUpdateSession::default();
     let capsule_seed_ready = catalog_ready;
-    let warm_registry_hydration_pending = !predecessor_catalog_migration_required
-        && defer_warm_registry_hydration(
-            capsule_seed_ready,
-            startup_return_requested,
-            mister_magik_catalog::shard_registry::manifest_slots_present(
-                launcher_config.catalog_paths().sharded_catalog_dir(),
-            ),
-            catalog_refresh,
-        );
-    let sharded_seed = (!predecessor_catalog_migration_required
-        && !capsule_seed_ready
-        && !warm_registry_hydration_pending)
+    // Registry summaries already contain the Home counts. Seed them before
+    // preparing card pixels; game rows remain lazy until a collection opens.
+    let mut startup_catalog_error = None;
+    let sharded_seed = (!predecessor_catalog_migration_required && !capsule_seed_ready)
         .then(|| {
             read_sharded_registry_seed(
                 &arcade_root,
@@ -358,7 +350,23 @@ pub(super) fn build_domains(
                 start,
             )
         })
-        .flatten();
+        .and_then(|result| match result {
+            Ok(seed) => Some(seed),
+            Err(error) => {
+                // Preserve the normal warm-start recovery path for an invalid
+                // registry. A failed read is not permission to rebuild it.
+                if !catalog_refresh
+                    && !startup_return_requested
+                    && mister_magik_catalog::shard_registry::manifest_slots_present(
+                        launcher_config.catalog_paths().sharded_catalog_dir(),
+                    )
+                {
+                    startup_catalog_error = Some(error.to_string());
+                }
+                None
+            }
+        });
+    let startup_catalog_load_failed = startup_catalog_error.is_some();
     let sharded_seed_ready = sharded_seed.is_some();
     let sharded_catalog_fingerprint = sharded_seed
         .as_ref()
@@ -460,24 +468,9 @@ pub(super) fn build_domains(
         } else {
             catalog_session.mark_refresh_done();
         }
-    } else if warm_registry_hydration_pending {
-        print_startup_event(
-            start,
-            "catalog_registry_deferred",
-            format!(
-                "path={} reveal=catalog_ready",
-                launcher_config
-                    .catalog_paths()
-                    .sharded_catalog_dir()
-                    .display()
-            ),
-        );
-        catalog_session.defer_catalog_worker(
-            arcade_root.clone(),
-            CatalogWorkerRequest::StrictLoad,
-            CatalogWorkerInitialCache::AlreadyProbedMissing,
-            CatalogExecutionMode::BackgroundInteractive,
-        );
+    } else if let Some(error) = startup_catalog_error {
+        catalog_session.mark_refresh_done();
+        deferred_catalog_events.push_back(CatalogWorkerMessage::LoadFailed { error });
     } else {
         match catalog_startup_without_registry_plan(catalog_worker_enabled) {
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
@@ -617,7 +610,6 @@ pub(super) fn build_domains(
             catalog_ready,
             catalog_worker_enabled,
             catalog_session.foreground_update(),
-            warm_registry_hydration_pending,
         ),
         false,
         catalog_scan_message(catalog_session.foreground_update()),
@@ -670,8 +662,6 @@ pub(super) fn build_domains(
         StartupMode::ColdNoCatalog
     } else if startup_return_requested || launch_return_restored {
         StartupMode::ReturnFromGame
-    } else if warm_registry_hydration_pending {
-        StartupMode::WarmCatalogHydrating
     } else if catalog_ready {
         StartupMode::WarmCatalog
     } else {
@@ -701,12 +691,13 @@ pub(super) fn build_domains(
     let _ = lifecycle.classify_startup_catalog(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
-    let startup_intro_eligible = startup_intro_is_eligible(
-        startup_mode,
-        predecessor_catalog_migration_required,
-        screensaver_start_mode,
-        layout.is_portrait(),
-    );
+    let startup_intro_eligible = !startup_catalog_load_failed
+        && startup_intro_is_eligible(
+            startup_mode,
+            predecessor_catalog_migration_required,
+            screensaver_start_mode,
+            layout.is_portrait(),
+        );
     let startup_intro = if startup_intro_eligible
         && launcher_presenter.startup_intro_native_hidden_slots_available(ui)
     {
