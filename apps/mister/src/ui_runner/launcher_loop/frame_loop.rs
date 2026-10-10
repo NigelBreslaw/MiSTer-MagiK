@@ -1301,7 +1301,6 @@ impl<'a> FrameLoop<'a> {
             self.lib.catalog_ready,
             self.diag.frame_accounting.first_visible_copy_done(),
             startup_return_waiting_for_catalog,
-            self.lib.lifecycle.startup_waiting_for_initial_catalog(),
             self.lib
                 .lifecycle
                 .catalog_worker_start_delay(catalog_background_validation_delay()),
@@ -1310,8 +1309,7 @@ impl<'a> FrameLoop<'a> {
             && let Some(worker) = self.lib.catalog_session.maybe_start_deferred_worker(
                 self.lib.scheduler.catalog_worker_running(),
                 self.diag.frame_accounting.first_visible_copy_done()
-                    || startup_return_waiting_for_catalog
-                    || self.lib.lifecycle.startup_waiting_for_initial_catalog(),
+                    || startup_return_waiting_for_catalog,
                 deferred_worker_policy.allowed,
                 loop_start,
                 deferred_worker_policy.delay,
@@ -3648,6 +3646,25 @@ impl<'a> FrameLoop<'a> {
             }
         } else if let Some(session) = self.fx.launcher_card_home.as_mut() {
             session.set_inactive();
+        }
+        // A ready catalog can precede the card worker's matching pixels (for
+        // example, a publication during startup). Do not reveal retained faces.
+        if custom_home_active
+            && self.fx.startup_intro.is_none()
+            && self.lib.lifecycle.startup_status().state == StartupRevealState::RevealLauncher
+            && self.fx.launcher_card_home.as_ref().is_some_and(|session| {
+                !session.content_ready(
+                    super::launcher_card_home::scene_for_display(self.env.ui, self.out.layout),
+                    &self.lib.card_level,
+                )
+            })
+        {
+            self.env.window.request_redraw();
+            let _ = self
+                .env
+                .pad
+                .wait_for_input(self.inp.input_observation, Duration::from_millis(1));
+            return Err(EndFrame);
         }
         let custom_home_scene_ready = self.fx.launcher_card_home.as_ref().is_some_and(|session| {
             session.scene_ready(super::launcher_card_home::scene_for_display(
@@ -6329,16 +6346,34 @@ impl<'a> FrameLoop<'a> {
                     .global::<slint_ui::launcher::NavigationView>()
                     .get_menu_items()
                     .row_count();
+                let home = crate::launcher_home::LauncherHomeSnapshot::from_runtime(
+                    &self.ui.nav,
+                    &self.lib.catalog,
+                );
+                let home_content_ready =
+                    self.fx.launcher_card_home.as_ref().is_some_and(|session| {
+                        session.content_ready(
+                            super::launcher_card_home::scene_for_display(
+                                self.env.ui,
+                                self.out.layout,
+                            ),
+                            &self.lib.card_level,
+                        )
+                    });
                 print_startup_event(
                     self.out.start,
                     "launcher_first_frame_presented",
                     format!(
-                        "screen={} systems={} nav_menu_items={} bridge_menu_items={} catalog_ready={}",
+                        "screen={} systems={} nav_menu_items={} bridge_menu_items={} catalog_ready={} home_content_ready={} library_games={} arcade_games={} favourites={}",
                         screen_label(self.ui.nav.screen),
                         self.lib.catalog.systems.len(),
                         nav_menu_items,
                         bridge_menu_items,
-                        u8::from(self.lib.catalog_ready)
+                        u8::from(self.lib.catalog_ready),
+                        u8::from(home_content_ready),
+                        home.library_games,
+                        home.cards[0].games.unwrap_or(0),
+                        home.favourites,
                     ),
                 );
             }

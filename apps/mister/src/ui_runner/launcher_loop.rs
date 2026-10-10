@@ -1451,7 +1451,7 @@ fn read_sharded_registry_seed(
     root: &str,
     storage: &Path,
     start: Instant,
-) -> Option<ShardedCatalogSeed> {
+) -> Result<ShardedCatalogSeed, ShardedCatalogSeedLoadError> {
     let load_started = Instant::now();
     match load_sharded_registry_seed_at(root, storage) {
         Ok(seed) => {
@@ -1466,9 +1466,8 @@ fn read_sharded_registry_seed(
                     seed.catalog.systems.len()
                 ),
             );
-            Some(seed)
+            Ok(seed)
         }
-        Err(error) if error.status == "empty" => None,
         Err(error) => {
             print_startup_event(
                 start,
@@ -1480,7 +1479,7 @@ fn read_sharded_registry_seed(
                     storage.display()
                 ),
             );
-            None
+            Err(error)
         }
     }
 }
@@ -3455,29 +3454,23 @@ fn startup_intro_is_eligible(
 struct DeferredCatalogWorkerStartPolicy {
     allowed: bool,
     delay: Duration,
-    foreground: bool,
 }
 
 fn deferred_catalog_worker_start_policy(
     catalog_ready: bool,
     first_visible_copy_done: bool,
     startup_return_waiting_for_catalog: bool,
-    startup_waiting_for_initial_catalog: bool,
     background_delay: Duration,
 ) -> DeferredCatalogWorkerStartPolicy {
     if catalog_ready {
         DeferredCatalogWorkerStartPolicy {
             allowed: true,
             delay: background_delay,
-            foreground: false,
         }
     } else {
         DeferredCatalogWorkerStartPolicy {
-            allowed: first_visible_copy_done
-                || startup_return_waiting_for_catalog
-                || startup_waiting_for_initial_catalog,
+            allowed: first_visible_copy_done || startup_return_waiting_for_catalog,
             delay: Duration::ZERO,
-            foreground: true,
         }
     }
 }
@@ -3508,11 +3501,8 @@ fn initial_catalog_scan_visible(
     catalog_ready: bool,
     catalog_worker_enabled: bool,
     foreground_update: bool,
-    startup_waiting_for_initial_catalog: bool,
 ) -> bool {
-    catalog_worker_enabled
-        && !startup_waiting_for_initial_catalog
-        && (foreground_update || !catalog_ready)
+    catalog_worker_enabled && (foreground_update || !catalog_ready)
 }
 
 fn should_draw_arcade_overlay(
@@ -3552,18 +3542,6 @@ fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> Catalog
     } else {
         CatalogWorkerRequest::LoadOnly
     }
-}
-
-fn defer_warm_registry_hydration(
-    capsule_seed_ready: bool,
-    startup_return_requested: bool,
-    manifest_slots_present: bool,
-    forced_refresh_requested: bool,
-) -> bool {
-    !capsule_seed_ready
-        && !startup_return_requested
-        && manifest_slots_present
-        && !forced_refresh_requested
 }
 
 fn summary_seed_catalog_worker_request(
@@ -6168,8 +6146,8 @@ mod tests {
 
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
-        assert!(!initial_catalog_scan_visible(true, true, false, false));
-        assert!(initial_catalog_scan_visible(true, true, true, false));
+        assert!(!initial_catalog_scan_visible(true, true, false));
+        assert!(initial_catalog_scan_visible(true, true, true));
     }
 
     #[test]
@@ -6189,10 +6167,9 @@ mod tests {
 
     #[test]
     pub(super) fn missing_catalog_shows_catalog_popup_on_home_or_arcade_boot() {
-        assert!(initial_catalog_scan_visible(false, true, false, false));
-        assert!(!initial_catalog_scan_visible(true, true, false, false));
-        assert!(!initial_catalog_scan_visible(false, false, false, false));
-        assert!(!initial_catalog_scan_visible(false, true, false, true));
+        assert!(initial_catalog_scan_visible(false, true, false));
+        assert!(!initial_catalog_scan_visible(true, true, false));
+        assert!(!initial_catalog_scan_visible(false, false, false));
     }
 
     #[test]
@@ -6645,15 +6622,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn warm_registry_hydration_is_deferred_only_for_normal_boot() {
-        assert!(defer_warm_registry_hydration(false, false, true, false));
-        assert!(!defer_warm_registry_hydration(true, false, true, false));
-        assert!(!defer_warm_registry_hydration(false, true, true, false));
-        assert!(!defer_warm_registry_hydration(false, false, false, false));
-        assert!(!defer_warm_registry_hydration(false, false, true, true));
-    }
-
-    #[test]
     pub(super) fn summary_seed_skips_refresh_but_preserves_return_hydration() {
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, false, false),
@@ -6695,19 +6663,13 @@ mod tests {
 
     #[test]
     pub(super) fn cold_catalog_worker_starts_after_first_copy_without_delay() {
-        let before_copy = deferred_catalog_worker_start_policy(
-            false,
-            false,
-            false,
-            false,
-            Duration::from_secs(2),
-        );
+        let before_copy =
+            deferred_catalog_worker_start_policy(false, false, false, Duration::from_secs(2));
         assert!(!before_copy.allowed);
         assert_eq!(before_copy.delay, Duration::ZERO);
-        assert!(before_copy.foreground);
 
         let after_copy =
-            deferred_catalog_worker_start_policy(false, true, false, false, Duration::from_secs(2));
+            deferred_catalog_worker_start_policy(false, true, false, Duration::from_secs(2));
         assert!(after_copy.allowed);
         assert_eq!(after_copy.delay, Duration::ZERO);
         assert!(matches!(
@@ -6726,25 +6688,15 @@ mod tests {
     #[test]
     pub(super) fn return_hydration_can_start_before_a_visible_copy() {
         let policy =
-            deferred_catalog_worker_start_policy(false, false, true, false, Duration::from_secs(2));
+            deferred_catalog_worker_start_policy(false, false, true, Duration::from_secs(2));
         assert!(policy.allowed);
         assert_eq!(policy.delay, Duration::ZERO);
-        assert!(policy.foreground);
-    }
-
-    #[test]
-    pub(super) fn initial_hydration_can_start_before_a_visible_copy() {
-        let policy =
-            deferred_catalog_worker_start_policy(false, false, false, true, Duration::from_secs(2));
-        assert!(policy.allowed);
-        assert_eq!(policy.delay, Duration::ZERO);
-        assert!(policy.foreground);
     }
 
     #[test]
     pub(super) fn warm_catalog_worker_starts_without_an_interaction_gate() {
         let delay = Duration::from_secs(2);
-        let allowed = deferred_catalog_worker_start_policy(true, true, false, false, delay);
+        let allowed = deferred_catalog_worker_start_policy(true, true, false, delay);
         assert!(allowed.allowed);
         assert_eq!(allowed.delay, delay);
         assert!(matches!(
@@ -7155,6 +7107,72 @@ mod tests {
                 .find(|system| system.id == "snes")
                 .map(|system| system.count),
             Some(10)
+        );
+    }
+
+    #[test]
+    fn rejected_startup_registry_uses_load_failure_recovery_without_a_builder() {
+        let storage = std::env::temp_dir().join(format!(
+            "magik-rejected-startup-registry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(storage.join("registry")).unwrap();
+        std::fs::write(storage.join("registry/manifest-a.json"), b"{broken").unwrap();
+        let now = Instant::now();
+        let error = read_sharded_registry_seed("/unavailable/arcade", &storage, now)
+            .err()
+            .expect("a rejected registry must not become an absent catalog");
+        assert!(mister_magik_catalog::shard_registry::manifest_slots_present(&storage));
+        std::fs::remove_dir_all(&storage).unwrap();
+
+        let mut session = LauncherCatalogSession::new(false);
+        session.mark_refresh_done();
+        let mut lifecycle = LauncherLifecycle::new(
+            LauncherLifecycleConfig {
+                catalog_worker_enabled: true,
+            },
+            now,
+        );
+        let mut effects = LifecycleEffects::new();
+        lifecycle.begin_startup_reveal(StartupMode::ColdNoCatalog, now, &mut effects);
+        lifecycle.classify_startup_catalog(
+            StartupCatalogState::Building {
+                mode: CatalogBuildMode::FirstBuild,
+                foreground_catalog_update: false,
+                has_stale_catalog: false,
+            },
+            &mut effects,
+        );
+        let failure = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                catalog_partial: false,
+            },
+            CatalogWorkerMessage::LoadFailed {
+                error: error.to_string(),
+            },
+        );
+        for effect in failure.into_effects() {
+            if let CatalogSessionEffect::Lifecycle(input) = effect {
+                lifecycle.handle(input, &mut effects);
+            }
+        }
+        assert!(matches!(
+            lifecycle.state(),
+            LauncherLifecycleState::CatalogLoadFailed { .. }
+        ));
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(
+            session
+                .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO)
+                .is_none()
         );
     }
 

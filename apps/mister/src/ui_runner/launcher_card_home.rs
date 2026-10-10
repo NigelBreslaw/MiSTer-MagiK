@@ -1651,6 +1651,51 @@ mod tests {
     use crate::launcher_home::{LauncherHomeCounts, LauncherHomeSnapshot, LevelCard, LevelSummary};
     use std::time::{Duration, Instant};
 
+    #[test]
+    fn registry_counts_are_present_in_the_first_home_frame_without_hydrating_games() {
+        use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry};
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            std::path::PathBuf::from("/unavailable/arcade"),
+            vec![],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 942,
+            }],
+            vec![],
+        );
+        assert!(catalog.games.is_empty());
+        let mut nav = crate::launcher::LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let level = CardLevelSnapshot::from_runtime(&nav, &catalog);
+        let expected =
+            CardLevelSnapshot::root(&LauncherHomeSnapshot::from_counts(LauncherHomeCounts {
+                arcade: 942,
+                collections: 1,
+                ..Default::default()
+            }));
+        assert_eq!(level, expected);
+        let scene = LauncherScene::new(960, 540);
+        let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        assert!(session.content_ready(scene, &level));
+        assert!(
+            session.update_from_navigation(scene, &level, 0, 0.0, "07:28", 0, true, None, None,)
+        );
+        assert!(session.pending.is_none());
+        let first_frame = session.render().to_vec();
+        let mut reference = prepare(scene, &expected, 0, "07:28", &session.fonts);
+        reference.render_frame(session.frame);
+        assert_eq!(first_frame, reference.pixels());
+
+        let empty = CardLevelSnapshot::root(&LauncherHomeSnapshot::from_counts(
+            LauncherHomeCounts::default(),
+        ));
+        let mut empty_reference = prepare(scene, &empty, 0, "07:28", &session.fonts);
+        empty_reference.render_frame(session.frame);
+        assert_ne!(first_frame, empty_reference.pixels());
+        assert!(catalog.games.is_empty());
+    }
+
     fn snapshot() -> CardLevelSnapshot {
         CardLevelSnapshot::root(&LauncherHomeSnapshot::from_counts(LauncherHomeCounts {
             arcade: 1,

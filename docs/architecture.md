@@ -828,7 +828,8 @@ progress, or the restored launcher:
 stateDiagram-v2
     [*] --> ClassifyEntry
 
-    ClassifyEntry --> ColdNoCatalog: no valid catalog
+    ClassifyEntry --> ColdNoCatalog: no catalog
+    ClassifyEntry --> CatalogRecovery: existing registry rejected
     ClassifyEntry --> WarmCatalog: valid catalog
     ClassifyEntry --> ReturnFromGame: Main return flag + launch return state
 
@@ -836,8 +837,9 @@ stateDiagram-v2
     IntroVisible --> CaptureLauncher: existing launcher_reveal_ready transition
     CaptureLauncher --> RevealLauncher: 20s confirmed-refresh endpoint
 
-    WarmCatalog --> HoldBlack: keep framebuffer black
-    HoldBlack --> RevealLauncher: catalog loaded + bridge synced + first frame ready
+    WarmCatalog --> PrepareHome: read validated registry summaries
+    PrepareHome --> RevealLauncher: matching card pixels prepared + bridge synced
+    CatalogRecovery --> RevealLauncher: show Retry/Rebuild dialog
 
     ReturnFromGame --> HoldBlackReturn: keep framebuffer black
     HoldBlackReturn --> RestoreContext: valid return capsule
@@ -866,9 +868,14 @@ half density at their native framebuffer geometry with the complete 16:9 scene
 centred in the 4:3 raster. The 240p handoff derives its native target through
 the standard centred 640×480-to-640×240 transform while retaining the original
 composition cache. Warm boot and return-from-game keep HDMI black until the
-first intended launcher frame is ready. Warm registry startup opens the
-generation-bound CPU0 entry reader before reveal; each bounded entry prelude
-and complete collection, including Arcade, remains lazy until activation.
+first intended launcher frame is ready. Warm startup reads the persisted registry
+counts and the worker-owned user-state snapshot before preparing Home cards and
+the library summary, including favourites. It opens the
+generation-bound CPU0 entry reader before reveal. The first Home reveal requires
+prepared card content matching those counts, not just a ready catalog or matching
+scene geometry. Each bounded entry prelude and complete collection, including
+Arcade, remains lazy until activation. A rejected existing registry enters the
+normal load-failure recovery UI without starting a replacement build.
 Return-from-game consumes a
 bounded catalog capsule when possible. If that capsule is unavailable, only the
 registry and selected system mini-nav are foreground reveal work. Return-from-game
