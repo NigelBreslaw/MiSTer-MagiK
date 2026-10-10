@@ -233,8 +233,8 @@ pub(super) fn build_domains(
             .to_path_buf(),
         PathBuf::from("/media/fat"),
     );
-    let user_state_session = UserStateSession::start(user_state_path, user_state_media_root);
-    let user_state_catalog_version = None;
+    let mut user_state_session = UserStateSession::start(user_state_path, user_state_media_root);
+    let mut user_state_catalog_version = None;
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     crate::ui_logln!(
@@ -536,6 +536,30 @@ pub(super) fn build_domains(
         }
     }
     nav.set_arcade_exit_locked(return_capsule_active);
+    if catalog_ready {
+        let user_state_started = Instant::now();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+            .unwrap_or(0);
+        match user_state_session.load_initial_snapshot(&catalog, now) {
+            Ok(snapshot) => {
+                nav.set_user_state_snapshot(&catalog, snapshot);
+                user_state_catalog_version = Some(catalog_version);
+                print_startup_event(
+                    start,
+                    "user_state_seed_ready",
+                    format!(
+                        "favourites={} elapsed_us={}",
+                        nav.favourite_count(),
+                        user_state_started.elapsed().as_micros(),
+                    ),
+                );
+            }
+            Err(error) => crate::ui_errln!("initial user-state: {error}"),
+        }
+    }
     crate::device_art::warm_in_background();
     // One snapshot of the visible card level, rebuilt only when it no longer
     // matches navigation so the render loop does not allocate labels per frame.

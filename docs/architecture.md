@@ -864,7 +864,8 @@ centred in the 4:3 raster. The 240p handoff derives its native target through
 the standard centred 640×480-to-640×240 transform while retaining the original
 composition cache. Warm boot and return-from-game keep HDMI black until the
 first intended launcher frame is ready. Warm startup reads the persisted registry
-counts before preparing Home cards and the library summary. It opens the
+counts and the worker-owned user-state snapshot before preparing Home cards and
+the library summary, including favourites. It opens the
 generation-bound CPU0 entry reader before reveal. The first Home reveal requires
 prepared card content matching those counts, not just a ready catalog or matching
 scene geometry. Each bounded entry prelude and complete collection, including

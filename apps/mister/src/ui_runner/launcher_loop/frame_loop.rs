@@ -6364,7 +6364,7 @@ impl<'a> FrameLoop<'a> {
                     self.out.start,
                     "launcher_first_frame_presented",
                     format!(
-                        "screen={} systems={} nav_menu_items={} bridge_menu_items={} catalog_ready={} home_content_ready={} library_games={} arcade_games={}",
+                        "screen={} systems={} nav_menu_items={} bridge_menu_items={} catalog_ready={} home_content_ready={} library_games={} arcade_games={} favourites={}",
                         screen_label(self.ui.nav.screen),
                         self.lib.catalog.systems.len(),
                         nav_menu_items,
@@ -6373,6 +6373,7 @@ impl<'a> FrameLoop<'a> {
                         u8::from(home_content_ready),
                         home.library_games,
                         home.cards[0].games.unwrap_or(0),
+                        home.favourites,
                     ),
                 );
             }

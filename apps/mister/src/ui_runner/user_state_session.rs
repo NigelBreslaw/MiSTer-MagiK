@@ -84,6 +84,31 @@ impl UserStateSession {
         Ok(())
     }
 
+    /// Seed Home before preparing its first pixels. Database work stays on the
+    /// worker; a broken or unavailable store must not hold startup indefinitely.
+    pub(super) fn load_initial_snapshot(
+        &mut self,
+        catalog: &crate::arcade_catalog::ArcadeCatalog,
+        now: i64,
+    ) -> Result<UserStateSnapshot, String> {
+        self.refresh(catalog, now)?;
+        match self.events.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(UserStateEvent::Snapshot { snapshot, .. }) => Ok(snapshot),
+            Ok(UserStateEvent::Failed { error, .. }) => Err(error),
+            Ok(UserStateEvent::Unavailable { error }) => {
+                self.mark_unavailable();
+                Err(error)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("initial user-state snapshot timed out".into())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.mark_unavailable();
+                Err("user-state worker disconnected".into())
+            }
+        }
+    }
+
     pub(super) fn set_favourite(
         &mut self,
         game: UserGameIdentity,
@@ -299,6 +324,35 @@ mod tests {
             "{event:?}"
         );
         session
+    }
+
+    #[test]
+    fn initial_snapshot_contains_persisted_favourites_before_home_preparation() {
+        let root = TestDirectory::new();
+        let path = root.0.join("state.sqlite3");
+        let store = UserStateStore::open(&path).unwrap();
+        store.set_favourite(&game(), true, 20).unwrap();
+        let catalog = crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]);
+        let mut session = UserStateSession::start(path, root.0.clone());
+        let snapshot = session.load_initial_snapshot(&catalog, 30).unwrap();
+        let mut nav = crate::launcher::LauncherNav::new();
+        nav.set_user_state_snapshot(&catalog, snapshot);
+        let home = crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog);
+        assert_eq!(home.favourites, 1);
+        assert_eq!(home.cards[4].games, Some(1));
+        assert!(session.poll().is_none());
+        assert!(session.available());
+    }
+
+    #[test]
+    fn initial_snapshot_reports_an_unavailable_store() {
+        let root = TestDirectory::new();
+        let path = root.0.join("state.sqlite3");
+        std::fs::write(&path, b"not a sqlite database").unwrap();
+        let mut session = UserStateSession::start(path, root.0.clone());
+        let catalog = crate::arcade_catalog::ArcadeCatalog::new(PathBuf::new(), vec![], vec![]);
+        assert!(session.load_initial_snapshot(&catalog, 30).is_err());
+        assert!(!session.available());
     }
 
     #[test]
