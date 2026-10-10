@@ -539,7 +539,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_host_app_workflow_requires_every_shard(self) -> None:
         root = Path(__file__).resolve().parents[2]
-        workflow = (root / ".github/workflows/rust-arm.yml").read_text()
+        workflow = (root / ".github/workflows/ci.yml").read_text()
         shards = workflow.split("\n  host-dev-app-shard:\n", 1)[1].split(
             "\n  host-dev-app:\n", 1
         )[0]
@@ -556,8 +556,12 @@ with tempfile.TemporaryDirectory() as directory:
         gate = workflow.split("\n  host-dev:\n", 1)[1].split(
             "\n  python-quality:\n", 1
         )[0]
-        self.assertIn("needs: [host-dev-group, host-dev-app, python-quality]", gate)
+        self.assertIn(
+            "needs: [changes, host-dev-group, host-dev-app, python-quality]", gate
+        )
         self.assertIn('test "$APP_RESULT" = success', gate)
+        self.assertIn('test "$CHANGES_RESULT" = success', gate)
+        self.assertIn("cancel-in-progress: true", workflow)
         action = (root / ".github/actions/host-validation/action.yml").read_text()
         self.assertIn("format('-{0}', inputs.app-shard)", action)
 

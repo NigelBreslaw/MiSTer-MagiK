@@ -30,7 +30,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/platform/runtime/Cargo.lock",
     ),
     "tooling_build_cache": (
-        ".github/workflows/magik.yml",
+        ".github/workflows/ci.yml",
         ".cargo/config.toml",
         "magik/.cargo/config.toml",
         "magik/agent/Cargo.lock",

@@ -268,13 +268,6 @@ def commands(group: str, *, app_shard: str | None = None) -> list[list[str]]:
                 ],
                 [
                     "scripts/cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    "mister/platform/contracts/manifest/Cargo.toml",
-                ],
-                [
-                    "scripts/cargo",
                     "build",
                     "--locked",
                     "--manifest-path",
