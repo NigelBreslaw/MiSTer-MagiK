@@ -118,6 +118,10 @@ Production boot stays compatible with stock MiSTer:
    and start the selected layout's `mister-magik-fb ui launcher 0` on `tty2`.
    Rust independently derives the same application root from its executable
    location.
+   On the scanout-slot path, Rust prepares a CPU-only composition surface and
+   retains Main's native black route until it publishes the first completed
+   slot. It does not select or reassert Main's legacy framebuffer for that
+   anonymous surface.
 9. Child spawn enters `LauncherStarting`, not `LauncherActive`. Rust reports
    internal readiness only after two completed latch posts intended for
    display have advancing sequence and route epochs on alternating slots.
