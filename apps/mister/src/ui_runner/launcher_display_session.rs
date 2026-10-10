@@ -30,6 +30,7 @@ pub struct LauncherDisplaySession {
     fb_width: usize,
     fb_height: usize,
     route_guard: FramebufferRouteGuard,
+    framebuffer_is_mapped: bool,
     reassert_count: u64,
     last_reassert_frame: u64,
     last_reassert_ok: bool,
@@ -38,18 +39,20 @@ pub struct LauncherDisplaySession {
 
 impl LauncherDisplaySession {
     pub fn new(ui: &UiDisplay) -> Self {
-        Self::with_guard(ui, FramebufferRouteGuard::from_env())
+        Self::with_guard(ui, FramebufferRouteGuard::from_env(), true)
     }
 
     pub(in crate::ui_runner) fn with_guard(
         ui: &UiDisplay,
         route_guard: FramebufferRouteGuard,
+        framebuffer_is_mapped: bool,
     ) -> Self {
         Self {
             route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video()),
             fb_width: ui.fb_w(),
             fb_height: ui.fb_h(),
             route_guard,
+            framebuffer_is_mapped,
             reassert_count: 0,
             last_reassert_frame: 0,
             last_reassert_ok: false,
@@ -61,28 +64,23 @@ impl LauncherDisplaySession {
         self.route
     }
 
-    pub fn enable_initial(&mut self, hardware: &mut Fpga) -> io::Result<u16> {
+    pub fn enable_initial(&mut self, hardware: &mut Fpga) -> io::Result<Option<u16>> {
         self.enable_route(hardware)
     }
 
-    pub(in crate::ui_runner) fn enable_initial_for_source(
-        &mut self,
-        hardware: &mut impl LauncherDisplayHardware,
-        framebuffer_is_mapped: bool,
-    ) -> io::Result<Option<u16>> {
-        if framebuffer_is_mapped {
-            self.enable_route(hardware).map(Some)
-        } else {
-            Ok(None)
+    pub fn enable_boot_settle(&mut self, hardware: &mut Fpga) -> io::Result<Option<u16>> {
+        self.enable_route(hardware)
+    }
+
+    fn enable_route(&self, hardware: &mut impl LauncherDisplayHardware) -> io::Result<Option<u16>> {
+        // Anonymous composition is displayed through completed scanout slots.
+        // The legacy route points at Main's buffer, not this render surface.
+        if !self.framebuffer_is_mapped {
+            return Ok(None);
         }
-    }
-
-    pub fn enable_boot_settle(&mut self, hardware: &mut Fpga) -> io::Result<u16> {
-        self.enable_route(hardware)
-    }
-
-    fn enable_route(&self, hardware: &mut impl LauncherDisplayHardware) -> io::Result<u16> {
-        hardware.enable_launcher_route(self.route, self.fb_width, self.fb_height)
+        hardware
+            .enable_launcher_route(self.route, self.fb_width, self.fb_height)
+            .map(Some)
     }
 
     pub(super) fn begin_frame(
@@ -105,6 +103,12 @@ impl LauncherDisplaySession {
         frame: u64,
         hardware: &mut impl LauncherDisplayHardware,
     ) -> FramebufferRouteAction {
+        if !self.framebuffer_is_mapped {
+            return FramebufferRouteAction {
+                reassert_route: false,
+                force_full_present: false,
+            };
+        }
         let mut action = self.route_guard.tick(frame);
         if !action.reassert_route {
             return action;
@@ -118,7 +122,7 @@ impl LauncherDisplaySession {
                 self.last_reassert_error.clear();
                 boot_analytics::event(
                     "launcher_fb_route_reasserted",
-                    format!("frame={frame} support_flag={flag}"),
+                    format!("frame={frame} support_flag={flag:?}"),
                 );
             }
             Err(e) => {
@@ -147,7 +151,7 @@ impl LauncherDisplaySession {
     pub(in crate::ui_runner) fn activate_fb0_route_with_hardware(
         &mut self,
         hardware: &mut impl LauncherDisplayHardware,
-    ) -> io::Result<u16> {
+    ) -> io::Result<Option<u16>> {
         self.enable_route(hardware)
     }
 
@@ -155,7 +159,7 @@ impl LauncherDisplaySession {
         &mut self,
         frame: u64,
         hardware: &mut Fpga,
-    ) -> io::Result<u16> {
+    ) -> io::Result<Option<u16>> {
         self.recover_after_launch_failure_with_hardware(frame, hardware)
     }
 
@@ -163,7 +167,10 @@ impl LauncherDisplaySession {
         &mut self,
         frame: u64,
         hardware: &mut impl LauncherDisplayHardware,
-    ) -> io::Result<u16> {
+    ) -> io::Result<Option<u16>> {
+        if !self.framebuffer_is_mapped {
+            return Ok(None);
+        }
         self.reassert_count = self.reassert_count.saturating_add(1);
         self.last_reassert_frame = frame;
         match self.enable_route(hardware) {
@@ -172,7 +179,7 @@ impl LauncherDisplaySession {
                 self.last_reassert_error.clear();
                 boot_analytics::event(
                     "launcher_fb_route_recovered",
-                    format!("frame={frame} support_flag={flag}"),
+                    format!("frame={frame} support_flag={flag:?}"),
                 );
                 Ok(flag)
             }
@@ -253,7 +260,7 @@ mod tests {
         );
         let plan = UiDisplayPlan::from_mister_ini_text(&ini).expect("display plan");
         let ui = UiDisplay::for_plan(plan);
-        LauncherDisplaySession::with_guard(&ui, FramebufferRouteGuard::new(interval_frames))
+        LauncherDisplaySession::with_guard(&ui, FramebufferRouteGuard::new(interval_frames), true)
     }
 
     fn session(interval_frames: u64) -> LauncherDisplaySession {
@@ -295,39 +302,36 @@ mod tests {
 
     #[test]
     fn anonymous_boot_does_not_select_the_main_framebuffer() {
-        let mut session = session(0);
+        let mut session = session(60);
+        session.framebuffer_is_mapped = false;
         let mut hardware = FakeHardware::default();
 
+        assert_eq!(session.enable_route(&mut hardware).unwrap(), None);
+        let action = session.begin_frame_with_hardware(60, &mut hardware);
+        assert!(!action.reassert_route);
+        assert!(!action.force_full_present);
         assert_eq!(
             session
-                .enable_initial_for_source(&mut hardware, false)
+                .recover_after_launch_failure_with_hardware(61, &mut hardware)
                 .unwrap(),
             None
         );
+        assert_eq!(session.reassert_count(), 0);
         assert_eq!(hardware.enable_calls, 0);
         assert_eq!(hardware.last_enable_args, None);
     }
 
     #[test]
     fn mapped_boot_selects_the_framebuffer_and_propagates_route_failure() {
-        let mut session = session(0);
+        let session = session(0);
         let mut hardware = FakeHardware {
             enable_results: vec![Ok(1), Err(io::Error::other("route failed"))],
             ..FakeHardware::default()
         };
 
-        assert_eq!(
-            session
-                .enable_initial_for_source(&mut hardware, true)
-                .unwrap(),
-            Some(1)
-        );
+        assert_eq!(session.enable_route(&mut hardware).unwrap(), Some(1));
         assert_eq!(hardware.enable_calls, 1);
-        assert!(
-            session
-                .enable_initial_for_source(&mut hardware, true)
-                .is_err()
-        );
+        assert!(session.enable_route(&mut hardware).is_err());
         assert_eq!(hardware.enable_calls, 2);
     }
 
@@ -340,7 +344,7 @@ mod tests {
             .activate_fb0_route_with_hardware(&mut hardware)
             .unwrap();
 
-        assert_eq!(support, 1);
+        assert_eq!(support, Some(1));
         assert_eq!(hardware.enable_calls, 1);
         assert_eq!(
             hardware.last_enable_args,
@@ -363,7 +367,7 @@ mod tests {
             .recover_after_launch_failure_with_hardware(42, &mut hardware)
             .unwrap();
 
-        assert_eq!(flag, 1);
+        assert_eq!(flag, Some(1));
         assert_eq!(hardware.enable_calls, 1);
         assert_eq!(session.reassert_count(), 1);
         assert_eq!(session.last_reassert_frame(), 42);

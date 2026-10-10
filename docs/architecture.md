@@ -121,7 +121,8 @@ Production boot stays compatible with stock MiSTer:
    On the scanout-slot path, Rust prepares a CPU-only composition surface and
    retains Main's native black route until it publishes the first completed
    slot. It does not select or reassert Main's legacy framebuffer for that
-   anonymous surface.
+   anonymous surface, including boot settling and launch-failure recovery.
+   The display session retains the buffer-backing policy for every route write.
 9. Child spawn enters `LauncherStarting`, not `LauncherActive`. Rust reports
    internal readiness only after two completed latch posts intended for
    display have advancing sequence and route epochs on alternating slots.
