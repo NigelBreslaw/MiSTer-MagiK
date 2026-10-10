@@ -137,12 +137,9 @@ impl UiBootFramebufferSession {
         let mut display_session = LauncherDisplaySession::with_guard(
             &ui,
             mister_magik_fb::framebuffer::ownership::FramebufferRouteGuard::new(
-                if anonymous_latch_source {
-                    0
-                } else {
-                    config.route_reassert_frames()
-                },
+                config.route_reassert_frames(),
             ),
+            !anonymous_latch_source,
         );
         let route = display_session.route();
         if !anonymous_latch_source {
@@ -158,14 +155,13 @@ impl UiBootFramebufferSession {
                 ),
             );
         }
-        let support_flag =
-            match display_session.enable_initial_for_source(f, !anonymous_latch_source) {
-                Ok(flag) => flag,
-                Err(e) => {
-                    crate::ui_errln!("failed to route framebuffer for Slint UI: {e}");
-                    std::process::exit(1);
-                }
-            };
+        let support_flag = match display_session.enable_initial(f) {
+            Ok(flag) => flag,
+            Err(e) => {
+                crate::ui_errln!("failed to route framebuffer for Slint UI: {e}");
+                std::process::exit(1);
+            }
+        };
         if let Some(support_flag) = support_flag {
             boot_analytics::event(
                 "initial_fb_enable_direct_done",
@@ -224,10 +220,11 @@ pub fn settle_boot_black_frame(
     for _ in 0..frames {
         disp.clear_black();
         match display_session.enable_boot_settle(f) {
-            Ok(flag) => {
+            Ok(Some(flag)) => {
                 routed += 1;
                 last_flag = flag;
             }
+            Ok(None) => return,
             Err(e) => {
                 crate::ui_errln!(
                     "warning: failed to reassert black framebuffer route during {label}: {e}"

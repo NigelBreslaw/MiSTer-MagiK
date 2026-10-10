@@ -1797,7 +1797,7 @@ mod tests {
             UiDisplayPlan::from_mister_ini_text("[Menu]\nvideo_mode=8\n[MiSTer]\ndirect_video=1\n")
                 .expect("display plan");
         let ui = UiDisplay::for_plan(plan);
-        LauncherDisplaySession::with_guard(&ui, FramebufferRouteGuard::disabled())
+        LauncherDisplaySession::with_guard(&ui, FramebufferRouteGuard::disabled(), true)
     }
 
     fn frame_plan() -> LauncherFramePlan {

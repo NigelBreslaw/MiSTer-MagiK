@@ -1402,7 +1402,7 @@ fn early_black_route(f: &mut Fpga) {
     boot_analytics::event(
         "early_black_route_completed",
         format!(
-            "format={} w={} h={} scan={}x{} support_flag={flag}",
+            "format={} w={} h={} scan={}x{} support_flag={flag:?}",
             production_label(),
             disp.width(),
             disp.height(),
@@ -1411,7 +1411,7 @@ fn early_black_route(f: &mut Fpga) {
         ),
     );
     crate::ui_logln!(
-        "early-black: routed {} {}x{} -> {}x{} support_flag={flag}",
+        "early-black: routed {} {}x{} -> {}x{} support_flag={flag:?}",
         production_label(),
         disp.width(),
         disp.height(),
