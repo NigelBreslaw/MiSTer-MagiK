@@ -239,3 +239,21 @@ simulations. Each independent removal of a write-accounting predicate still
 fails. `build/refinement-1/host-summary.json` and `SHA256SUMS` bind 562 evidence
 files, including an applied-source equality check for a final patch-context
 normalization. Device state was untouched throughout these host checks.
+
+
+## SPDIF path identity approval, 11 October 2026
+
+Candidate `cde7137a6` passed the seed-2 timing, area, warning and CDC checks:
+setup 0.609 ns, hold 0.250 ns, 213 additional ALMs and 201 additional registers.
+The remaining failure was the exact unconstrained-output inventory. Its two
+extra LED paths matched the existing exception, but one SPDIF path used a
+fitter-created copy of its original register. Both complete path tables and the
+fitter duplication record identify the same source, destination and clock.
+
+The approved checker change normalizes that exact substitution only after
+checking its fitter evidence in both analyses. It retains the pinned logical
+inventory hash and all numerical gates. The checker passes 64 tests, including
+missing or ambiguous duplication evidence, incorrect tuples, additional paths
+and inconsistent setup/hold substitutions. No RTL, constraint or fitter input
+changes accompany this approval. Review evidence is in `build/refinement-2/`;
+its proposal evaluation did not issue a build certificate or deploy anything.

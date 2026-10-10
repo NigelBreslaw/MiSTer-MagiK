@@ -419,30 +419,38 @@ CAUSAL_LED_CLOCK = (
 )
 
 
+CAUSAL_SPDIF_PATH = (
+    "audio_out:audio_out|spdif:toslink|spdif_out_q",
+    "SDCD_SPDIF",
+    "pll_audio|pll_audio_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk",
+)
+
+
 def validate_causal_led_exception(text: str) -> dict[str, object]:
-    """Fail closed unless both full path tables prove the approved LED copies."""
+    """Validate complete path tables and exact fitter evidence for known copies."""
     sections: dict[str, list[list[tuple[str, ...]]]] = {"Setup": [], "Hold": []}
     analysis = ""
     rows: list[tuple[str, ...]] | None = None
     header = False
-    duplication_count = 0
+    duplications = {CAUSAL_LED_SOURCE: 0, CAUSAL_SPDIF_PATH[0]: 0}
     errors: list[str] = []
     for line in text.splitlines() + [""]:
         cells = [cell.strip() for cell in line.split(";")]
-        if cells == [
-            "",
-            CAUSAL_LED_SOURCE,
-            "Duplicated",
-            "Router Logic Cell Insertion and Logic Duplication",
-            "Routability optimization",
-            "",
-            "",
-            CAUSAL_LED_SOURCE + "~DUPLICATE",
-            "",
-            "",
-            "",
-        ]:
-            duplication_count += 1
+        for source in duplications:
+            if cells == [
+                "",
+                source,
+                "Duplicated",
+                "Router Logic Cell Insertion and Logic Duplication",
+                "Routability optimization",
+                "",
+                "",
+                source + "~DUPLICATE",
+                "",
+                "",
+                "",
+            ]:
+                duplications[source] += 1
         if len(cells) == 3 and cells[1] in ("Setup Analysis", "Hold Analysis"):
             analysis = cells[1].split()[0]
         if (
@@ -469,7 +477,7 @@ def validate_causal_led_exception(text: str) -> dict[str, object]:
                 else:
                     sections[analysis].append(rows)
                 rows = None
-    if duplication_count != 1:
+    if duplications[CAUSAL_LED_SOURCE] != 1:
         errors.append("fitter_duplication_evidence")
     expected_extra = {
         (CAUSAL_LED_SOURCE + "~DUPLICATE", port, CAUSAL_LED_CLOCK)
@@ -479,6 +487,7 @@ def validate_causal_led_exception(text: str) -> dict[str, object]:
         (CAUSAL_LED_SOURCE, port, CAUSAL_LED_CLOCK) for port in ("LED[0]", "LED[4]")
     }
     hashes = {}
+    spdif_tables = []
     for kind, tables in sections.items():
         if len(tables) != 1:
             errors.append(kind + "_table_count")
@@ -489,21 +498,35 @@ def validate_causal_led_exception(text: str) -> dict[str, object]:
             errors.append(kind + "_path_count")
         if not expected_extra | expected_original <= unique:
             errors.append(kind + "_led_identity")
-        canonical = sorted(unique - expected_extra)
+        canonical_paths = unique - expected_extra
+        spdif_copy = (CAUSAL_SPDIF_PATH[0] + "~DUPLICATE", *CAUSAL_SPDIF_PATH[1:])
+        if spdif_copy in canonical_paths:
+            if (
+                duplications[CAUSAL_SPDIF_PATH[0]] != 1
+                or CAUSAL_SPDIF_PATH in canonical_paths
+            ):
+                errors.append(kind + "_spdif_duplication_evidence")
+            canonical_paths = canonical_paths - {spdif_copy} | {CAUSAL_SPDIF_PATH}
+            spdif_tables.append(kind)
+        canonical = sorted(canonical_paths)
         digest = hashlib.sha256(
             json.dumps(canonical, separators=(",", ":")).encode()
         ).hexdigest()
         hashes[kind] = digest
         if digest != CAUSAL_LED_CANONICAL_PATHS_SHA256:
             errors.append(kind + "_canonical_path_identity")
+    if spdif_tables and set(spdif_tables) != {"Setup", "Hold"}:
+        errors.append("spdif_analysis_mismatch")
     return {
         "valid": not errors,
         "errors": errors,
+        "canonicalized_spdif_tables": spdif_tables,
+        "spdif_fitter_duplication_records": duplications[CAUSAL_SPDIF_PATH[0]],
         "expected_raw_path_count": 160,
         "expected_canonical_path_count": 158,
         "canonical_sha256": hashes,
         "allowed_extra_paths": sorted(expected_extra),
-        "fitter_duplication_records": duplication_count,
+        "fitter_duplication_records": duplications[CAUSAL_LED_SOURCE],
     }
 
 

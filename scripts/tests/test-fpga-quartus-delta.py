@@ -1278,6 +1278,93 @@ class CausalLedExceptionTest(unittest.TestCase):
                 )
                 self.assertFalse(result["valid"], result)
 
+    def spdif_evidence(self):
+        original = self.module.CAUSAL_SPDIF_PATH
+        duplicate = (original[0] + "~DUPLICATE", *original[1:])
+        self.canonical[2] = original
+        self.module.CAUSAL_LED_CANONICAL_PATHS_SHA256 = hashlib.sha256(
+            json.dumps(sorted(self.canonical), separators=(",", ":")).encode()
+        ).hexdigest()
+        paths = [duplicate if row == original else row for row in self.canonical]
+        paths += self.extra
+        fitter = (
+            f"; {original[0]} ; Duplicated ; "
+            "Router Logic Cell Insertion and Logic Duplication ; "
+            f"Routability optimization ; ; ; {duplicate[0]} ; ; ;\n"
+        )
+        return fitter, paths
+
+    def test_spdif_substitution_preserves_pinned_logical_inventory(self):
+        fitter, paths = self.spdif_evidence()
+        result = self.module.validate_causal_led_exception(
+            self.fitter
+            + fitter
+            + self.table("Setup", paths)
+            + self.table("Hold", paths)
+        )
+        self.assertTrue(result["valid"], result)
+        self.assertEqual(result["canonicalized_spdif_tables"], ["Setup", "Hold"])
+        self.assertEqual(result["spdif_fitter_duplication_records"], 1)
+        self.assertEqual(result["expected_raw_path_count"], 160)
+
+    def test_spdif_requires_exact_unambiguous_fitter_record(self):
+        fitter, paths = self.spdif_evidence()
+        for evidence in (
+            "",
+            fitter * 2,
+            fitter.replace("Duplicated", "Moved"),
+            fitter.replace("Routability optimization", "other reason"),
+        ):
+            with self.subTest(evidence=evidence):
+                result = self.module.validate_causal_led_exception(
+                    self.fitter
+                    + evidence
+                    + self.table("Setup", paths)
+                    + self.table("Hold", paths)
+                )
+                self.assertFalse(result["valid"], result)
+
+    def test_spdif_requires_exact_source_destination_and_clock(self):
+        fitter, paths = self.spdif_evidence()
+        duplicate = paths[2]
+        for index in range(3):
+            wrong = tuple(
+                "wrong" if i == index else value for i, value in enumerate(duplicate)
+            )
+            changed = [wrong if row == duplicate else row for row in paths]
+            with self.subTest(index=index):
+                result = self.module.validate_causal_led_exception(
+                    self.fitter
+                    + fitter
+                    + self.table("Setup", changed)
+                    + self.table("Hold", changed)
+                )
+                self.assertFalse(result["valid"], result)
+
+    def test_spdif_cannot_add_paths_or_hide_another_change(self):
+        fitter, paths = self.spdif_evidence()
+        for changed in (
+            paths + [self.canonical[2]],
+            paths + [paths[2]],
+            paths[:3] + paths[4:],
+            paths[:3] + [("other", "port", "clk")] + paths[4:],
+        ):
+            with self.subTest(changed=changed[2:5]):
+                result = self.module.validate_causal_led_exception(
+                    self.fitter
+                    + fitter
+                    + self.table("Setup", changed)
+                    + self.table("Hold", changed)
+                )
+                self.assertFalse(result["valid"], result)
+
+    def test_spdif_requires_the_same_substitution_in_both_analyses(self):
+        fitter, paths = self.spdif_evidence()
+        result = self.module.validate_causal_led_exception(
+            self.fitter + fitter + self.table("Setup", paths) + self.table("Hold")
+        )
+        self.assertFalse(result["valid"], result)
+
     def compare(self, *, causal=True, extra="", count=160):
         baseline = self.module.parse_report(
             BASE

@@ -59,9 +59,18 @@ hold tables must contain those copies and their original paths with the exact
 clock, and the fitter must report the exact duplication. After removing just
 those two rows, all 158 remaining source/destination/clock tuples must match the
 pinned inventory hash audited from candidate `31edb466a3a6`. The checker retains
-the raw count and exception evidence, rejects other changes, and applies every
-existing area, timing and CDC gate. This exception does not apply to other
-profiles or authorize RTL, seed, constraint or fitter changes.
+the raw count and exception evidence and applies every existing area, timing
+and CDC gate. This exception does not apply to other profiles or authorize RTL,
+seed, constraint or fitter changes.
+
+The approved 2026-10-11 SPDIF identity normalization permits one substitution
+within that inventory: `audio_out:audio_out|spdif:toslink|spdif_out_q~DUPLICATE`
+may replace `spdif_out_q` for `SDCD_SPDIF` on the exact audio PLL clock. Both
+setup and hold tables must make the same substitution, and exactly one fitter
+record must identify its routability duplication. The original and copy cannot
+both occupy that tuple. Normalization must recover the unchanged pinned
+158-tuple hash; the raw 160-path limit and every numerical gate remain unchanged.
+Other source, destination, clock, count or fitter-evidence changes fail closed.
 
 ## Development sequence
 
