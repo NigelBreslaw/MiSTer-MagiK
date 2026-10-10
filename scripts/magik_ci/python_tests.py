@@ -13,7 +13,7 @@ PYTHON_CONFIG = {
     ".python-version",
     ".github/actions/setup-python-tools/action.yml",
     ".github/workflows/game-databases.yml",
-    ".github/workflows/rust-arm.yml",
+    ".github/workflows/ci.yml",
     "pyproject.toml",
     "uv.lock",
 }

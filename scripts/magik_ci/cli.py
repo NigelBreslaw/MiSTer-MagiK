@@ -67,6 +67,14 @@ def parser() -> argparse.ArgumentParser:
     )
     ci = sub.add_parser("ci")
     ci_sub = ci.add_subparsers(dest="command", required=True)
+    changes_parser = ci_sub.add_parser("changes")
+    changes_parser.add_argument(
+        "--event-name",
+        required=True,
+        choices=("pull_request", "push", "workflow_dispatch"),
+    )
+    changes_parser.add_argument("--event", type=Path, required=True)
+    changes_parser.add_argument("--github-output", type=Path, required=True)
     distribution = ci_sub.add_parser("distribution")
     distribution_sub = distribution.add_subparsers(dest="action", required=True)
     stage_artwork = distribution_sub.add_parser("stage-artwork")
@@ -98,7 +106,7 @@ def parser() -> argparse.ArgumentParser:
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
     assurance_scope.add_argument("--group", dest="host_group", choices=host.HOST_GROUPS)
-    assurance.add_argument("--app-shard", choices=host.APP_SHARDS)
+    assurance.add_argument("--shard")
     candidates = ci_sub.add_parser("platform-candidates")
     candidates.add_argument("artifacts", type=Path)
     candidates.add_argument("name")
@@ -344,11 +352,19 @@ def main() -> int:
     elif args.group == "quality":
         quality.execute(root, args.checks)
     elif args.group == "ci":
-        if args.command == "host-assurance":
-            if args.app_shard is not None and args.host_group != "app":
-                argument_parser.error("--app-shard requires --group app")
+        if args.command == "changes":
+            from . import changes
+
+            changes.execute(root, args.event_name, args.event, args.github_output)
+        elif args.command == "host-assurance":
+            if args.shard is not None and args.shard not in host.HOST_SHARDS.get(
+                args.host_group, ()
+            ):
+                argument_parser.error(
+                    "--shard must name a shard of the selected --group"
+                )
             if args.host_group:
-                host.execute(root, args.host_group, app_shard=args.app_shard)
+                host.execute(root, args.host_group, shard=args.shard)
             else:
                 metadata.host_assurance(args.paths)
         elif args.command == "platform-candidates":

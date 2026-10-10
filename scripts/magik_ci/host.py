@@ -11,7 +11,10 @@ import subprocess
 import time
 from pathlib import Path
 
-APP_SHARDS = ("checks", "ui", "ui-preview", "bench-scenes")
+HOST_SHARDS = {
+    "domain": ("core", "rendering"),
+    "app": ("core", "ui", "preview", "scenes"),
+}
 
 HOST_GROUPS = (
     "static",
@@ -39,23 +42,36 @@ def _crate_commands(manifest: str) -> list[list[str]]:
     ]
 
 
-def _app_shard(command: list[str]) -> str:
-    if command[:2] == ["cargo", "test"] and "--features" in command:
+def _shard(group: str, command: list[str]) -> str:
+    if group == "domain":
+        return (
+            "rendering"
+            if "crates/framebuffer-scenes/Cargo.toml" in command
+            and "--features" in command
+            else "core"
+        )
+    if command[-1] == "scripts/tests/test-slint-build-contract.py":
+        return "scenes"
+    if (
+        command[:2] in (["cargo", "test"], ["cargo", "clippy"])
+        and "--features" in command
+    ):
         features = command[command.index("--features") + 1]
         return {
             "ui": "ui",
-            "ui-preview": "ui-preview",
-            "ui,bench-scenes": "bench-scenes",
-        }.get(features, "checks")
-    return "checks"
+            "ui-preview": "preview",
+            "ui,signed-media-manifests": "preview",
+            "ui,bench-scenes": "scenes",
+        }.get(features, "core")
+    return "core"
 
 
-def commands(group: str, *, app_shard: str | None = None) -> list[list[str]]:
-    if app_shard is not None:
-        if group != "app" or app_shard not in APP_SHARDS:
-            raise ValueError(f"unsupported app assurance shard: {group}/{app_shard}")
+def commands(group: str, *, shard: str | None = None) -> list[list[str]]:
+    if shard is not None:
+        if shard not in HOST_SHARDS.get(group, ()):
+            raise ValueError(f"unsupported host assurance shard: {group}/{shard}")
         return [
-            command for command in commands("app") if _app_shard(command) == app_shard
+            command for command in commands(group) if _shard(group, command) == shard
         ]
     if group == "static":
         return []
@@ -268,13 +284,6 @@ def commands(group: str, *, app_shard: str | None = None) -> list[list[str]]:
                 ],
                 [
                     "scripts/cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    "mister/platform/contracts/manifest/Cargo.toml",
-                ],
-                [
-                    "scripts/cargo",
                     "build",
                     "--locked",
                     "--manifest-path",
@@ -289,8 +298,8 @@ def commands(group: str, *, app_shard: str | None = None) -> list[list[str]]:
     raise ValueError(f"unsupported host assurance group: {group}")
 
 
-def execute(repository: Path, group: str, *, app_shard: str | None = None) -> None:
-    group_commands = commands(group, app_shard=app_shard)
+def execute(repository: Path, group: str, *, shard: str | None = None) -> None:
+    group_commands = commands(group, shard=shard)
     if group == "static":
         from .assurance import execute as execute_fast
 
@@ -308,7 +317,8 @@ def execute(repository: Path, group: str, *, app_shard: str | None = None) -> No
     )
     if group == "domain":
         environment["CARGO_TARGET_DIR"] = str(repository / "target/ci-host-domain")
-    label = f"{group}/{app_shard}" if app_shard else group
+    label = f"{group}/{shard}" if shard else group
+    failures: list[subprocess.CalledProcessError] = []
     for index, command in enumerate(group_commands, start=1):
         started = time.monotonic()
         rendered = shlex.join(command)
@@ -317,6 +327,8 @@ def execute(repository: Path, group: str, *, app_shard: str | None = None) -> No
         try:
             subprocess.run(command, cwd=repository, env=environment, check=True)
             outcome = "passed"
+        except subprocess.CalledProcessError as error:
+            failures.append(error)
         finally:
             elapsed = time.monotonic() - started
             print(
@@ -324,3 +336,5 @@ def execute(repository: Path, group: str, *, app_shard: str | None = None) -> No
                 f"elapsed={elapsed:.2f}s: {rendered}",
                 flush=True,
             )
+    if failures:
+        raise failures[0]
