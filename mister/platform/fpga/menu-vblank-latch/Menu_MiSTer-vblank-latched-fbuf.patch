@@ -382,7 +382,7 @@ index a735e6b..ad28a0d 100644
  
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
-@@ -1672,15 +1956,25 @@ BEGIN
+@@ -1672,15 +1956,28 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
@@ -393,6 +393,9 @@ index a735e6b..ad28a0d 100644
  			avl_state<=sIDLE;
  			avl_write_sr<='0';
  			avl_read_sr<='0';
++			avl_read_sync<='0';
++			avl_read_sync2<='0';
++			avl_read_pulse<='0';
  			avl_readdataack<='0';
 +			avl_completion_pending<='0';
 +			avl_completion_ack_meta<='0';
@@ -408,7 +411,7 @@ index a735e6b..ad28a0d 100644
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1774,34 +2068,107 @@ BEGIN
+@@ -1774,34 +2071,107 @@ BEGIN
  					END IF;
  					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
  
@@ -525,7 +528,7 @@ index a735e6b..ad28a0d 100644
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
-@@ -1869,6 +2236,7 @@ BEGIN
+@@ -1869,6 +2239,7 @@ BEGIN
  		VARIABLE hcarry_v,vcarry_v : boolean;
  		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
  		VARIABLE off_v : natural RANGE 0 TO 15;
@@ -533,7 +536,11 @@ index a735e6b..ad28a0d 100644
  	BEGIN
  		IF o_reset_na='0' THEN
  			o_copy<=sWAIT;
-@@ -1877,6 +2245,13 @@ BEGIN
+@@ -1877,6 +2248,17 @@ BEGIN
++			o_read<='0';
++			o_readack_sync<='0';
++			o_readack_sync2<='0';
++			o_readack<='0';
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';
@@ -547,7 +554,7 @@ index a735e6b..ad28a0d 100644
  
  		ELSIF rising_edge(o_clk) THEN
  			------------------------------------------------------
-@@ -2026,6 +2401,13 @@ BEGIN
+@@ -2026,6 +2408,13 @@ BEGIN
  			o_readdataack_sync<=avl_readdataack; -- <ASYNC>
  			o_readdataack_sync2<=o_readdataack_sync;
  			o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;
@@ -561,7 +568,7 @@ index a735e6b..ad28a0d 100644
  
  			------------------------------------------------------
  			lev_inc_v:='0';
-@@ -2036,6 +2418,7 @@ BEGIN
+@@ -2036,6 +2425,7 @@ BEGIN
  
  			-- Force preload 2 lines at top of screen
  			IF o_hsv(0)='1' AND o_hsv(1)='0' THEN
@@ -569,7 +576,7 @@ index a735e6b..ad28a0d 100644
  				IF o_vcpt_pre3=o_vmin THEN
  					o_fload<=2;
  					o_bibu<='0';
-@@ -2059,6 +2442,7 @@ BEGIN
+@@ -2059,6 +2449,7 @@ BEGIN
  					--------------------------------------------------
  				WHEN sDISP =>
  					IF o_hsp='1' THEN
@@ -577,7 +584,7 @@ index a735e6b..ad28a0d 100644
  						o_state<=sHSYNC;
  						o_hsp<='0';
  					END IF;
-@@ -2067,6 +2451,7 @@ BEGIN
+@@ -2067,6 +2458,7 @@ BEGIN
  
  					--------------------------------------------------
  				WHEN sHSYNC =>
@@ -585,7 +592,7 @@ index a735e6b..ad28a0d 100644
  					dif_v :=(o_vacc_next - 2*o_vsize + 16384) MOD 16384;
  					IF o_prim THEN
  						IF dif_v>=8192 THEN
-@@ -2092,6 +2477,7 @@ BEGIN
+@@ -2092,6 +2484,7 @@ BEGIN
  					END IF;
  
  					IF vcarry_v THEN
@@ -593,7 +600,7 @@ index a735e6b..ad28a0d 100644
  						o_vacpt<=o_vacpt+1;
  					END IF;
  					IF vcarry_v AND o_prim THEN
-@@ -2102,16 +2488,30 @@ BEGIN
+@@ -2102,16 +2495,30 @@ BEGIN
  					o_hbcpt<=0; -- Clear burst counter on line
  					o_divstart<=to_std_logic(NOT vcarry_v);
  					IF NOT vcarry_v  OR o_fload>0 THEN
@@ -624,7 +631,7 @@ index a735e6b..ad28a0d 100644
  						lev_inc_v:='1';
  						o_read_pre<=NOT o_read_pre;
  						o_state <=sWAITREAD;
-@@ -2127,6 +2527,7 @@ BEGIN
+@@ -2127,6 +2534,7 @@ BEGIN
  					o_adrsa<='1';
  
  				WHEN sWAITREAD =>
@@ -632,7 +639,7 @@ index a735e6b..ad28a0d 100644
  					IF o_readack='1' THEN
  						o_hbcpt<=o_hbcpt+1;
  						IF o_hbcpt<o_hburst-1 THEN
-@@ -2142,6 +2543,11 @@ BEGIN
+@@ -2142,6 +2550,11 @@ BEGIN
  
  					--------------------------------------------------
  			END CASE;
@@ -644,7 +651,7 @@ index a735e6b..ad28a0d 100644
  
  			o_read<=o_read_pre AND o_run;
  			o_rline<=o_vacpt(0); -- Even/Odd line for interlaced video
-@@ -2208,6 +2614,8 @@ BEGIN
+@@ -2208,6 +2621,8 @@ BEGIN
  						o_acpt<=0;
  						o_first<='1';
  						o_last<='0';
@@ -653,7 +660,7 @@ index a735e6b..ad28a0d 100644
  					END IF;
  
  					IF o_bibv(0)='0' THEN
-@@ -2254,7 +2662,20 @@ BEGIN
+@@ -2254,7 +2669,20 @@ BEGIN
  						o_last <=to_std_logic(o_hacpt>=o_ihsizem);
  					END IF;
  
@@ -675,7 +682,7 @@ index a735e6b..ad28a0d 100644
  						o_sh<='1';
  						o_acpt<=(o_acpt+1) MOD 16;
  
-@@ -2266,8 +2687,9 @@ BEGIN
+@@ -2266,8 +2694,9 @@ BEGIN
  							o_ad<=(o_ad+1) MOD (2*BLEN);
  						END IF;
  
