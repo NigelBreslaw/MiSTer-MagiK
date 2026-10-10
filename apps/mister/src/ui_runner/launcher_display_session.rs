@@ -65,6 +65,18 @@ impl LauncherDisplaySession {
         self.enable_route(hardware)
     }
 
+    pub(in crate::ui_runner) fn enable_initial_for_source(
+        &mut self,
+        hardware: &mut impl LauncherDisplayHardware,
+        framebuffer_is_mapped: bool,
+    ) -> io::Result<Option<u16>> {
+        if framebuffer_is_mapped {
+            self.enable_route(hardware).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn enable_boot_settle(&mut self, hardware: &mut Fpga) -> io::Result<u16> {
         self.enable_route(hardware)
     }
@@ -279,6 +291,44 @@ mod tests {
         assert!(!session.last_reassert_ok());
         assert!(!session.route_ok());
         assert_eq!(session.last_reassert_error(), "route failed");
+    }
+
+    #[test]
+    fn anonymous_boot_does_not_select_the_main_framebuffer() {
+        let mut session = session(0);
+        let mut hardware = FakeHardware::default();
+
+        assert_eq!(
+            session
+                .enable_initial_for_source(&mut hardware, false)
+                .unwrap(),
+            None
+        );
+        assert_eq!(hardware.enable_calls, 0);
+        assert_eq!(hardware.last_enable_args, None);
+    }
+
+    #[test]
+    fn mapped_boot_selects_the_framebuffer_and_propagates_route_failure() {
+        let mut session = session(0);
+        let mut hardware = FakeHardware {
+            enable_results: vec![Ok(1), Err(io::Error::other("route failed"))],
+            ..FakeHardware::default()
+        };
+
+        assert_eq!(
+            session
+                .enable_initial_for_source(&mut hardware, true)
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(hardware.enable_calls, 1);
+        assert!(
+            session
+                .enable_initial_for_source(&mut hardware, true)
+                .is_err()
+        );
+        assert_eq!(hardware.enable_calls, 2);
     }
 
     #[test]
