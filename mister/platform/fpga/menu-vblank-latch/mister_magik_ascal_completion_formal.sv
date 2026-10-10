@@ -99,6 +99,7 @@ module mister_magik_ascal_completion_formal;
 		.avl_step(avl_step),
 		.o_step(o_step),
 		.waitrequest(waitrequest),
+		.boundary_busy(1'b0),
 		.return_valid(return_valid),
 		.vs_edge(vs_edge),
 		.schedule_read(schedule_read),

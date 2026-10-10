@@ -262,18 +262,18 @@ BEGIN
 		credits_v:=0;
 		phase_v:=0;
 		ASSERT NOT read_obligation_accept(
-			read_asserted_v,read_accepted_v,waitrequest_v,true)
+			read_asserted_v,read_accepted_v,waitrequest_v)
 			REPORT "wait-stalled request was charged before acceptance" SEVERITY failure;
 		waitrequest_v:='0';
 		ASSERT read_obligation_accept(
-			read_asserted_v,read_accepted_v,waitrequest_v,true)
+			read_asserted_v,read_accepted_v,waitrequest_v)
 			REPORT "reset assertion acceptance edge was not charged" SEVERITY failure;
 		credits_v:=return_credits_next(credits_v,phase_v,true,false,128);
 		read_accepted_v:='1';
 		acceptance_count_v:=acceptance_count_v+1;
 		FOR reset_cycle IN 0 TO 7 LOOP
 			ASSERT NOT read_obligation_accept(
-				read_asserted_v,read_accepted_v,waitrequest_v,true)
+				read_asserted_v,read_accepted_v,waitrequest_v)
 				REPORT "retained request was accepted more than once during reset"
 				SEVERITY failure;
 		END LOOP;
@@ -293,29 +293,21 @@ BEGIN
 			REPORT "wait-low terminator completion did not drain one obligation"
 			SEVERITY failure;
 
-		-- If reset releases before a stalled request is ever accepted, normal
-		-- scheduler execution cancels it and no retained credit is created.
+		-- Release keeps a stalled request eligible until physical acceptance.
 		read_asserted_v:='1';
 		read_accepted_v:='0';
 		waitrequest_v:='1';
-		credits_v:=0;
-		phase_v:=0;
-		FOR reset_cycle IN 0 TO 3 LOOP
-			ASSERT NOT read_obligation_accept(
-				read_asserted_v,read_accepted_v,waitrequest_v,true)
-				REPORT "unaccepted stalled request created a credit" SEVERITY failure;
-		END LOOP;
-		-- Reset has synchronously released into sIDLE before waitrequest drops.
-		-- The stale retained read is immediately ineligible and cannot be accepted.
-		waitrequest_v:='0';
 		ASSERT NOT read_obligation_accept(
-			read_asserted_v,read_accepted_v,waitrequest_v,false)
-			REPORT "reset-release waitrequest drop accepted an orphan request"
-			SEVERITY failure;
-		read_asserted_v:='0';
-		ASSERT return_words_remaining(credits_v,phase_v,128)=0
-			REPORT "release-before-accept cancellation retained an obligation"
-			SEVERITY failure;
+			read_asserted_v,read_accepted_v,waitrequest_v)
+			REPORT "stalled request created a credit" SEVERITY failure;
+		waitrequest_v:='0';
+		ASSERT read_obligation_accept(
+			read_asserted_v,read_accepted_v,waitrequest_v)
+			REPORT "release lost retained request" SEVERITY failure;
+		read_accepted_v:='1';
+		ASSERT NOT read_obligation_accept(
+			read_asserted_v,read_accepted_v,waitrequest_v)
+			REPORT "retained request accepted twice" SEVERITY failure;
 
 		-- Counterexample to the old reset assumption: half of an accepted burst
 		-- may arrive during reset and half after release. Retained accounting

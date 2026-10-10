@@ -22,10 +22,13 @@ def main():
     parser.add_argument(
         "--replay-only",
         action="store_true",
-        help="simulate the known boundary failure and require the observer to capture it",
+        help="simulate reset release and require physical credit conservation",
     )
     parser.add_argument("--depth", type=int, default=64)
+    parser.add_argument("--solver-timeout", type=int, default=180)
     args = parser.parse_args()
+    if args.depth < 1 or args.solver_timeout < 1:
+        parser.error("depth and solver timeout must be positive")
     root = Path(__file__).resolve().parents[2]
     rtl = root / "mister/platform/fpga/menu-vblank-latch"
     menu = args.menu_dir.resolve()
@@ -35,13 +38,16 @@ def main():
     ).strip()
     if actual != pin:
         parser.error("Menu revision differs from pinned source")
-    sysmem = (menu / "sys/sysmem.sv").read_text()
+    sysmem_path = args.scheduler_artifacts.resolve() / "sysmem.sv"
+    sysmem = sysmem_path.read_text()
     for fragment in (
         "vbuf_reset_0 <= reset_out;",
         "vbuf_reset_1 <= vbuf_reset_0;",
         ".rst_req_sync             (vbuf_reset_1)",
         ".read_master              (f2h_vbuf_read)",
         ".read_slave               (vbuf_read)",
+        ".busy                     (vbuf_terminating)",
+        "assign vbuf_busy = reset_out | vbuf_reset_0 | vbuf_reset_1 | vbuf_terminating;",
     ):
         if fragment not in sysmem:
             parser.error("sysmem binding changed: " + fragment)
@@ -49,7 +55,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     netlist = args.scheduler_artifacts.resolve() / "formal-dut.v"
     wrapper = rtl / "mister_magik_terminator_formal.sv"
-    terminator = menu / "sys/f2sdram_safe_terminator.sv"
+    terminator = args.scheduler_artifacts.resolve() / "f2sdram_safe_terminator.sv"
     # Yosys does not resolve the vendor's forward localparam references in ports.
     # Move the identical constant expressions into the parameter list; no logic changes.
     source = terminator.read_text()
@@ -105,45 +111,76 @@ def main():
         (out / "compile.log").write_text(compile_result.stdout + compile_result.stderr)
         if compile_result.returncode:
             return compile_result.returncode
-        result = subprocess.run(
-            ["vvp", str(out / "replay")],
-            cwd=out,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        (out / "replay.log").write_text(result.stdout + result.stderr)
-        passed = result.returncode == 0 and "PASS:" in result.stdout
+        results = []
+        cases = [(mode, 4, 2) for mode in range(7)]
+        cases += [(mode, 128, prior) for mode in (3, 4, 5, 6) for prior in (1, 2, 127)]
+        for mode, burst, prior in cases:
+            case = out / f"case-{mode}-{burst}-{prior}"
+            case.mkdir(exist_ok=True)
+            result = subprocess.run(
+                [
+                    "vvp",
+                    str(out / "replay"),
+                    f"+mode={mode}",
+                    f"+write_burst={burst}",
+                    f"+write_prior={prior}",
+                ],
+                cwd=case,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            (case / "replay.log").write_text(result.stdout + result.stderr)
+            results.append(
+                {
+                    "mode": mode,
+                    "burst": burst,
+                    "prior": prior,
+                    "passed": result.returncode == 0 and "PASS:" in result.stdout,
+                }
+            )
+            print(result.stdout)
+        passed = all(case["passed"] for case in results)
         (out / "result.json").write_text(
             json.dumps(
                 {
-                    "result": "detected-known-boundary-failure" if passed else "failed",
-                    "boundary_safe": False,
+                    "result": "simulation-pass" if passed else "failed",
+                    "scope": "finite connected-boundary regression",
+                    "cases": results,
                     "menu_commit": actual,
                     "inputs": {
                         str(p): hashlib.sha256(p.read_bytes()).hexdigest()
-                        for p in (netlist, terminator, normalized, observer, replay)
+                        for p in (
+                            netlist,
+                            terminator,
+                            normalized,
+                            observer,
+                            replay,
+                            sysmem_path,
+                            Path(__file__),
+                        )
                     },
                 },
                 indent=2,
             )
             + "\n"
         )
-        print(result.stdout)
         return 0 if passed else 1
-    inputs = [netlist, wrapper, terminator, normalized, menu / "sys/sysmem.sv"]
+    inputs = [netlist, wrapper, terminator, normalized, sysmem_path, Path(__file__)]
     commands = [
         f"read_verilog -formal {netlist}",
         f"read_verilog -formal -sv -DPROVE_BOUNDARY {normalized} {wrapper}",
         "hierarchy -check -top mister_magik_terminator_formal",
         "proc",
         "flatten",
+        "opt -full",
         "clk2fflogic",
         "opt_clean",
         "chformal -cover -remove",
         (
             f"sat -seq {args.depth} -set-assumes -set-init-zero -prove-asserts -verify "
-            f"-timeout 180 -dump_vcd {out / 'counterexample.vcd'} -show-public"
+            f"-timeout {args.solver_timeout} -dump_vcd {out / 'counterexample.vcd'} -show-public"
         ),
     ]
     result = subprocess.run(
@@ -155,11 +192,34 @@ def main():
     )
     (out / "proof.log").write_text(result.stdout)
     passed = result.returncode == 0 and "SUCCESS!" in result.stdout
+    covers = {}
+    if passed:
+        for witness in ("reset_with_read_seen", "read_after_write_seen"):
+            cover_commands = commands[:-1] + [
+                "chformal -assert -remove",
+                (
+                    f"sat -seq {args.depth} -set-assumes -set-init-zero -set-at {args.depth} {witness} 1 "
+                    f"-timeout {args.solver_timeout} -show {witness} -dump_vcd {out / (witness + '.vcd')}"
+                ),
+            ]
+            cover = subprocess.run(
+                ["yosys", "-Q", "-p", "; ".join(cover_commands)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            (out / (witness + ".log")).write_text(cover.stdout + cover.stderr)
+            covers[witness] = (
+                cover.returncode == 0
+                and "SAT solving finished - model found" in cover.stdout
+            )
+        passed = all(covers.values())
     (out / "result.json").write_text(
         json.dumps(
             {
                 "result": "bounded-pass" if passed else "failed",
                 "depth": args.depth,
+                "covers": covers,
                 "menu_commit": actual,
                 "inputs": {
                     str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs

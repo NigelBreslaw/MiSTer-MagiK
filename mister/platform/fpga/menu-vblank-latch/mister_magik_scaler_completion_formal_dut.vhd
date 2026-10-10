@@ -25,6 +25,7 @@ ENTITY mister_magik_scaler_completion_formal_dut IS
 		avl_step             : IN  std_logic;
 		o_step               : IN  std_logic;
 		waitrequest          : IN  std_logic;
+		boundary_busy        : IN  std_logic;
 		return_valid         : IN  std_logic;
 		vs_edge              : IN  std_logic;
 		schedule_read        : IN  std_logic;
@@ -72,6 +73,7 @@ ARCHITECTURE rtl OF mister_magik_scaler_completion_formal_dut IS
 	SIGNAL avl_reset_n,o_reset_n : std_logic:='0';
 	SIGNAL return_drain : std_logic:='1';
 	SIGNAL return_release_pending : std_logic:='0';
+	SIGNAL return_quiet : boolean;
 	SIGNAL return_credits : natural RANGE 0 TO 2:=0;
 	SIGNAL return_phase : natural RANGE 0 TO BLEN-1:=0;
 	SIGNAL write_phase : natural RANGE 0 TO 2*BLEN-1:=0;
@@ -106,25 +108,26 @@ BEGIN
 
 	-- A read obligation is charged on its first actual Avalon acceptance.
 	-- waitrequest may hold read_active through reset; the retained one-shot and
-	-- reset-epoch eligibility prevent both duplicate and orphan acceptance.
+	-- held request prevent both duplicate and orphan acceptance.
 	request_start_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
-		return_drain='0' AND read_active='0' AND
+		return_drain='0' AND boundary_busy='0' AND read_active='0' AND
 		read_pending>0 ELSE '0';
 	issue_event<='1' WHEN avl_step='1' AND read_obligation_accept(
-		read_active,read_accepted,waitrequest,
-		avl_reset_n='0' OR read_reset_seen='0') ELSE '0';
+		read_active,read_accepted,waitrequest) ELSE '0';
 	return_event<=avl_step AND return_valid;
 	write_event<=return_event AND avl_reset_n AND NOT return_drain;
 	completion_event<='1' WHEN write_event='1' AND
 		(write_phase MOD BLEN)=BLEN-2 ELSE '0';
 	align_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
 		((vs_edge='1' AND return_drain_ready(return_credits,return_phase)) OR
-		(return_drain='1' AND return_release_pending='1')) ELSE '0';
+		(return_drain='1' AND return_release_pending='1' AND return_quiet)) ELSE '0';
 	release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
-		return_drain='1' AND return_release_pending='1' ELSE '0';
+		return_drain='1' AND return_release_pending='1' AND return_quiet ELSE '0';
 	schedule_release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
 		return_drain='1' AND return_release_pending='0' AND
-		return_drain_ready(return_credits,return_phase) ELSE '0';
+		return_quiet ELSE '0';
+	return_quiet<=return_drain_ready(return_credits,return_phase) AND
+		(read_active='0' OR read_accepted='1') AND boundary_busy='0';
 	completion_seen<=o_step AND o_reset_n AND completion_pulse;
 	queue_overflow<='1' WHEN completion_queue_overflow(
 		request_toggle,completion_pending,ack_sync,completion_event) ELSE '0';
@@ -160,8 +163,7 @@ BEGIN
 	read_pending_o<=read_pending;
 	read_reset_seen_o<=read_reset_seen;
 	read_active_o<=read_active;
-	read_request_o<=read_active AND NOT read_accepted
-		WHEN avl_reset_n='0' OR read_reset_seen='0' ELSE '0';
+	read_request_o<=read_active AND NOT read_accepted;
 	read_accepted_o<=read_accepted;
 	readlev_o<=readlev;
 	copylev_o<=copylev;
@@ -274,7 +276,9 @@ BEGIN
 				ELSIF write_event='1' THEN
 					write_phase<=(write_phase+1) MOD (2*BLEN);
 				END IF;
-				IF release_event='1' THEN
+				IF NOT return_quiet THEN
+					return_release_pending<='0';
+				ELSIF release_event='1' THEN
 					return_drain<='0';
 					return_release_pending<='0';
 				ELSIF schedule_release_event='1' THEN
@@ -286,12 +290,12 @@ BEGIN
 				request_toggle<=queue_state_v(1);
 				completion_pending<=queue_state_v(0);
 
-				IF read_reset_seen='1' THEN
-					read_active<='0';
+				IF read_active='0' THEN
 					read_reset_seen<='0';
-				ELSIF request_start_event='1' THEN
+				END IF;
+				IF request_start_event='1' THEN
 					read_active<='1';
-				ELSIF issue_event='1' THEN
+				ELSIF issue_event='1' OR read_accepted='1' THEN
 					read_active<='0';
 				END IF;
 			END IF;

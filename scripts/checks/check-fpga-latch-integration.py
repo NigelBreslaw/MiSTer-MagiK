@@ -244,7 +244,7 @@ def main() -> None:
         "release_pending_o<=return_release_pending;",
         "IF align_event='1' THEN",
         "read_obligation_accept(",
-        "avl_reset_n='0' OR read_reset_seen='0')",
+        "read_active,read_accepted,waitrequest)",
         "ELSIF issue_event='1' THEN",
     ):
         if fragment not in formal_dut_source:
@@ -805,8 +805,7 @@ def main() -> None:
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
             "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
             "issued_v:=read_obligation_accept(": 1,
-            "avl_read_i,avl_read_accepted,avl_waitrequest,": 1,
-            "avl_reset_na='0' OR avl_state=sREAD);": 1,
+            "avl_read_i,avl_read_accepted,avl_waitrequest);": 1,
             "returned_v:=avl_readdatavalid='1';": 1,
             "ASSERT NOT return_accounting_invalid(": 1,
             "avl_return_credits<=return_credits_next(": 1,
@@ -818,12 +817,12 @@ def main() -> None:
             "avl_return_drain<='1';": 1,
             "SIGNAL avl_return_release_pending : std_logic:='0';": 1,
             "return_drain_ready(avl_return_credits,avl_return_phase)) OR": 1,
-            "ELSIF return_drain_ready(": 1,
-            "avl_return_credits,avl_return_phase) THEN": 1,
-            "IF avl_return_drain='0' THEN": 1,
+            "IF NOT avl_return_quiet THEN": 1,
+            "avl_return_quiet<=return_drain_ready(avl_return_credits,avl_return_phase) AND": 1,
+            "IF avl_return_drain='0' AND avl_boundary_busy='0' THEN": 1,
             "IF avl_read_i='1' AND avl_read_accepted='0' AND": 1,
             "avl_read<=avl_read_i AND NOT avl_read_accepted": 1,
-            "WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';": 1,
+            "(avl_read_i='0' OR avl_read_accepted='1') AND avl_boundary_busy='0';": 1,
             "WITH o_state SELECT magik_fetch_state(1 DOWNTO 0) <=": 1,
             "magik_fetch_state(2)<=o_ce;": 1,
             "magik_fetch_state(3)<=o_hsv(0) AND NOT o_hsv(1);": 1,
@@ -999,21 +998,44 @@ def main() -> None:
         drain_release = re.search(
             r"IF \(avl_o_vs_sync='0' AND avl_o_vs='1' AND\s*"
             r"return_drain_ready\(avl_return_credits,avl_return_phase\)\) OR\s*"
-            r"\(avl_return_drain='1' AND avl_return_release_pending='1'\) THEN\s*"
+            r"\(avl_return_drain='1' AND avl_return_release_pending='1' AND\s*"
+            r"avl_return_quiet\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
             r"END IF;\s*"
             r"IF avl_return_drain='1' THEN\s*"
-            r"IF avl_return_release_pending='1' THEN\s*"
+            r"IF NOT avl_return_quiet THEN\s*"
+            r"avl_return_release_pending<='0';\s*"
+            r"ELSIF avl_return_release_pending='1' THEN\s*"
             r"avl_return_drain<='0';\s*"
             r"avl_return_release_pending<='0';\s*"
-            r"ELSIF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"ELSE\s*"
             r"avl_return_release_pending<='1';\s*END IF;\s*END IF;",
             patched_ascal,
         )
         if drain_release is None:
             fail("drain release does not use one pipelined alignment cone")
         for topology_fragment, topology_source in (
+            (".avl_boundary_busy(vbuf_busy)", patched),
+            (".vbuf_busy(vbuf_busy)", patched),
+            (
+                "assign vbuf_busy = reset_out | vbuf_reset_0 | vbuf_reset_1 | vbuf_terminating;",
+                patched_sysmem,
+            ),
+            (".busy                     (vbuf_terminating)", patched_sysmem),
+            ("assign busy = terminating;", patched_terminator),
+            (
+                "wire valid_write_data      = state_write && write_master && !waitrequest_master;",
+                patched_terminator,
+            ),
+            ("wire burst_write_end       = valid_write_data &&", patched_terminator),
+            (
+                "write_terminate_counter    <= valid_write_data ? write_burstcounter + 1'd1 : write_burstcounter;",
+                patched_terminator,
+            ),
+            (
+                "if (!waitrequest_master && write_terminate_counter == burstcount_latch - 1'd1)",
+                patched_terminator,
+            ),
             (".reset_core_req(reset_req)", patched),
             (".reset_na   (~reset_req)", patched),
             (".avl_readdatavalid(vbuf_readdatavalid)", patched),

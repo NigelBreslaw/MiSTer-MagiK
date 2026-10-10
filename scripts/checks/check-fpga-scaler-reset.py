@@ -158,6 +158,14 @@ def main():
     cases += [(f"stage-{i}", {"scenario": i}) for i in range(1, 18) if i != 15]
     if not args.quick:
         cases += [
+            (
+                f"boundary-stall-{stall}-lead-{lead}",
+                {"scenario": 12, "release_stall": stall, "reset_lead": lead},
+            )
+            for stall in (0, 1, 2, 8, 129)
+            for lead in (0, 1, 3, 7)
+        ]
+        cases += [
             (f"partial-{n}", {"scenario": 3, "partial_beats": n})
             for n in (1, 2, 63, 126, 127)
         ]
@@ -199,7 +207,22 @@ def main():
         str(p): digest(p)
         for p in (patch, production, terminator, bench, Path(__file__))
     }
-    for variant, contents in (("baseline", baseline), ("candidate", source)):
+    withdrawn = source.replace(
+        "avl_read<=avl_read_i AND NOT avl_read_accepted;",
+        "avl_read<=avl_read_i AND NOT avl_read_accepted\n"
+        "\t\tWHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';",
+    )
+    withdrawn = withdrawn.replace(
+        "avl_read_i,avl_read_accepted,avl_waitrequest);",
+        "avl_read_i,avl_read_accepted,avl_waitrequest) AND\n"
+        "\t\t\t\t(avl_reset_na='0' OR avl_state=sREAD);",
+    )
+    assert withdrawn != source
+    for variant, contents in (
+        ("baseline", baseline),
+        ("withdrawn", withdrawn),
+        ("candidate", source),
+    ):
         work = out / variant
         work.mkdir(exist_ok=True)
         vhdl = work / "ascal.vhd"
@@ -286,7 +309,10 @@ def main():
             return record
 
         with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(simulate, case) for case in cases]
+            variant_cases = (
+                [("stage-12", {"scenario": 12})] if variant == "withdrawn" else cases
+            )
+            futures = [executor.submit(simulate, case) for case in variant_cases]
             for future in as_completed(futures):
                 record = future.result()
                 results.append(record)
@@ -303,11 +329,19 @@ def main():
         for r in results
         if r["variant"] == "baseline" and r["case"] == "idle-high"
     )
+    withdrawal_detected = any(
+        r["variant"] == "withdrawn"
+        and not r["passed"]
+        and any("PHYSICAL_LEDGER_MISMATCH" in line for line in r["output"])
+        for r in results
+    )
+    candidate_pass = candidate_pass and withdrawal_detected
     report = {
         "result": "pass" if candidate_pass and mutation_detected else "failed",
         "scope": "complete-production-RTL finite reset integration matrix",
         "menu_commit": pin,
         "mutation_detected": mutation_detected,
+        "withdrawal_detected": withdrawal_detected,
         "inputs": input_hashes,
         "baseline_ascal_sha256": hashlib.sha256(baseline.encode()).hexdigest(),
         "tools": {

@@ -222,13 +222,16 @@ def main() -> None:
         patched_source = patched_ascal.read_text()
         for fragment in (
             "FUNCTION read_obligation_accept(",
+            "IF avl_read_accepted='1' THEN\n\t\t\t\tavl_read_i<='0';",
+            "IF avl_return_drain='0' AND avl_boundary_busy='0' THEN",
+            "IF avl_read_i='0' AND avl_return_drain='0' AND\n\t\t\t\t\t\tavl_boundary_busy='0' THEN",
+            "avl_return_quiet<=return_drain_ready(avl_return_credits,avl_return_phase) AND",
+            "(avl_read_i='0' OR avl_read_accepted='1') AND avl_boundary_busy='0';",
             "issued_v:=read_obligation_accept(",
-            "avl_read_i,avl_read_accepted,avl_waitrequest,",
-            "avl_reset_na='0' OR avl_state=sREAD);",
+            "avl_read_i,avl_read_accepted,avl_waitrequest);",
             "IF avl_read_i='0' THEN",
             "ELSIF issued_v THEN",
             "avl_read<=avl_read_i AND NOT avl_read_accepted",
-            "WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';",
             "IF avl_readdatavalid='1' AND avl_return_drain='0' THEN",
         ):
             if fragment not in patched_source:
@@ -256,15 +259,17 @@ def main() -> None:
         guarded_drain_release = re.search(
             r"IF \(avl_o_vs_sync='0' AND avl_o_vs='1' AND\s*"
             r"return_drain_ready\(avl_return_credits,avl_return_phase\)\) OR\s*"
-            r"\(avl_return_drain='1' AND avl_return_release_pending='1'\) THEN\s*"
+            r"\(avl_return_drain='1' AND avl_return_release_pending='1' AND\s*"
+            r"avl_return_quiet\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
             r"END IF;\s*"
             r"IF avl_return_drain='1' THEN\s*"
-            r"IF avl_return_release_pending='1' THEN\s*"
+            r"IF NOT avl_return_quiet THEN\s*"
+            r"avl_return_release_pending<='0';\s*"
+            r"ELSIF avl_return_release_pending='1' THEN\s*"
             r"avl_return_drain<='0';\s*"
             r"avl_return_release_pending<='0';\s*"
-            r"ELSIF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"ELSE\s*"
             r"avl_return_release_pending<='1';\s*END IF;\s*END IF;",
             patched_source,
         )
@@ -347,6 +352,8 @@ def main() -> None:
             fail("GHDL synthesis did not emit the copy-tail formal DUT")
         if artifacts is not None:
             shutil.copy2(patched_ascal, artifacts / "patched-ascal.vhd")
+            for name in ("sysmem.sv", "f2sdram_safe_terminator.sv"):
+                shutil.copy2(work / "sys" / name, artifacts / name)
             shutil.copy2(netlist, artifacts / "formal-dut.v")
             shutil.copy2(tail_netlist, artifacts / "copy-tail-formal-dut.v")
             shutil.copy2(liveness_rtl, artifacts / "scaler-fetch-liveness.sv")

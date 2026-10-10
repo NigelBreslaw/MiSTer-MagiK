@@ -4,13 +4,16 @@
 module tb_mister_magik_scaler_reset;
  reg clk=0,oclk=0,reset_n=0,rv=0;
  reg avl_enable=1,output_enable=1,output_ce=1,allow_return=1,memory_wait=0;
- wire rd,wr,physical_rd,upwait,up_rv;
+ wire rd,wr,physical_rd,upwait,up_rv,terminating;
  wire [127:0] wdata,updata; wire [15:0] be;
  wire [27:0] addr,physical_addr;wire [7:0] physical_burst,burst;
  wire [15:0] cs,rs,fs;
- reg reset_0=1,reset_1=1;
+ reg reset_0=1,reset_1=1,hps_reset=0;
+ wire reset_out=!reset_n | hps_reset;
+ wire boundary_busy=reset_out | reset_0 | reset_1 | terminating;
  integer half_avl=5000,half_output=3367,clock_phase=0;
  integer scenario=0,reset_after=3,reset_hold=1000000,reset_offset=1000;
+ integer release_stall=0,reset_lead=0;
  integer return_gap=1,partial_beats=64,stop_domain=0,repeat_reset=0;
  integer pending=0,accepted=0,returned=0,cycles=0,old_words=0;
  integer epoch_issued=0,epoch_retired=0,epoch_completed=0,epoch_accepted=0;
@@ -30,7 +33,7 @@ module tb_mister_magik_scaler_reset;
   #(clock_phase);
   forever begin #(half_output);if(output_enable)oclk=~oclk;end
  end
- always @(posedge clk)begin reset_0<=!reset_n;reset_1<=reset_0;end
+ always @(posedge clk)begin reset_0<=reset_out;reset_1<=reset_0;end
  ascal dut (
   .i_r('0),
   .i_g('0),
@@ -103,6 +106,7 @@ module tb_mister_magik_scaler_reset;
   .poly_wr('0),
   .avl_clk(clk),
   .avl_waitrequest(upwait),
+  .avl_boundary_busy(boundary_busy),
   .avl_readdata(updata),
   .avl_readdatavalid(up_rv),
   .avl_burstcount(burst),
@@ -119,6 +123,7 @@ module tb_mister_magik_scaler_reset;
   .BURSTCOUNT_WIDTH(8)) terminator(
  .clk(clk),
   .rst_req_sync(reset_1),
+  .busy(terminating),
   .waitrequest_master(memory_wait),
  .burstcount_master(physical_burst),
   .address_master(physical_addr),
@@ -141,6 +146,14 @@ module tb_mister_magik_scaler_reset;
  // The runner supplies one-time values only for unspecified synthesized storage.
  // Explicit VHDL initial values are preserved; nothing is forced after power-up.
  `include "powerup.vh"
+
+ reg held_read=0;reg [27:0] held_addr;reg [7:0] held_burst;
+ always @(posedge clk)begin
+  if(held_read && (!physical_rd || physical_addr!=held_addr || physical_burst!=held_burst))
+   $fatal(1,"STALLED_DESCRIPTOR_CHANGED");
+  held_read=physical_rd && memory_wait;
+  held_addr=physical_addr;held_burst=physical_burst;
+ end
 
  // Independent responder: obligations originate only at the physical interface.
  always @(negedge clk)begin
@@ -208,10 +221,11 @@ module tb_mister_magik_scaler_reset;
   reset_pending=pending;accepted_at_reset=accepted;
   reset_copy=dut.o_copy;reset_phase=dut.o_read_pre;
   $display("RESET scenario=%0d pending=%0d phase=%0d copy=%0d accepted=%0d returned=%0d",scenario,pending,reset_phase,reset_copy,accepted,returned);
+  if(reset_lead)begin hps_reset=1;repeat(reset_lead)@(negedge clk);end
   reset_n=0;
   if(stop_domain==1)output_enable=0;
   if(stop_domain==2)avl_enable=0;
-  #(reset_hold);reset_n=1;
+  #(reset_hold);reset_n=1;hps_reset=0;
   #(reset_hold);output_enable=1;avl_enable=1;
   if(repeat_reset)begin
    #(reset_hold);reset_n=0;#(reset_hold);reset_n=1;
@@ -220,6 +234,8 @@ module tb_mister_magik_scaler_reset;
  end endtask
 
  initial begin
+  if($value$plusargs("release_stall=%d",release_stall))begin end
+  if($value$plusargs("reset_lead=%d",reset_lead))begin end
   if($value$plusargs("scenario=%d",scenario))begin end
   if($value$plusargs("reset_after=%d",reset_after))begin end
   if($value$plusargs("reset_hold=%d",reset_hold))begin end
@@ -261,7 +277,7 @@ module tb_mister_magik_scaler_reset;
     memory_wait=1;wait(rd);fork
      reset_core();
      begin
-      wait(!reset_n);wait(reset_n);@(posedge clk);#1000;memory_wait=0;
+      wait(!reset_n);wait(reset_n);repeat(release_stall)@(posedge clk);@(posedge clk);#1000;memory_wait=0;
      end
     join
    end
