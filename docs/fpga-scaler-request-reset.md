@@ -206,3 +206,36 @@ Final evidence is under `build/terminator-proof/` in the implementation worktree
 `summary.json` selects the final reports, and `SHA256SUMS` binds the reports,
 logs, waveforms and production inputs. Earlier directories retain exploratory
 failures and timeouts; they are not substituted for final passing runs.
+
+## Fixed-seed refinement, 11 October 2026
+
+The first Quartus candidate, `2b30553e4a43`, failed the pinned experimental
+certification profile: setup was 0.281 ns, hold was 0.197 ns, and the ALM delta
+was 257. The limits are 0.350 ns, 0.200 ns and 224 ALMs. CDC, payload delay,
+combined MTBF and zero TNS passed. Two omitted terminator `busy` ports also
+changed the connectivity-warning inventory. This candidate was not deployed.
+
+The first refinement selects each line offset before addition. It removes two
+wide adders from the address calculation without changing command eligibility,
+held descriptors, acceptance accounting or drain release. Write operands remain
+sliced before addition; reads still add all 32 bits before slicing. A
+combinational SAT comparison of the extracted old and new VHDL assignments
+proves identical read and write addresses for every operand and line selection
+at the deployed widths. RAM1 and RAM2 explicitly leave the unused ownership
+output open; vbuf retains its functional ownership connection.
+
+The full scaler proxy falls from 4,925 to 4,923 generic cells, with 1,191 register
+cells and 13 memories unchanged. The isolated address logic falls from 866 to
+465 technology-mapped cells. It adds four one-bit muxes and raises the maximum
+line-select fanout from 28 to 32. These host counts establish the deletion;
+they do not predict fitted timing or area. Evidence is under
+`build/refinement-1/`. The fixed seed, profile, constraints, fitter settings and
+certification thresholds remain unchanged.
+
+The refinement passes all 92 complete-scaler cases, all 19 boundary simulations,
+the 64-step connected boundary proof and both witnesses, request and completion
+induction, all completion/liveness witnesses, observer checks and integration
+simulations. Each independent removal of a write-accounting predicate still
+fails. `build/refinement-1/host-summary.json` and `SHA256SUMS` bind 562 evidence
+files, including an applied-source equality check for a final patch-context
+normalization. Device state was untouched throughout these host checks.

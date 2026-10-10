@@ -427,7 +427,7 @@ diff --git a/sys/ascal.vhd b/sys/ascal.vhd
  			avl_write_i<='0';
  
  			avl_write_sr<=(avl_write_sr OR avl_write_pulse) AND NOT avl_write_clr;
-@@ -1735,26 +2033,29 @@
+@@ -1735,26 +2033,28 @@
  			--------------------------------------------
  			CASE avl_state IS
  				WHEN sIDLE =>
@@ -438,6 +438,8 @@ diff --git a/sys/ascal.vhd b/sys/ascal.vhd
 -							avl_rad<=0;
 -						ELSE
 -							avl_rad<=BLEN;
+-						END IF;
+-						IF avl_wline='0' THEN
 +					IF avl_return_drain='0' AND avl_boundary_busy='0' THEN
 +						IF avl_write_sr='1' THEN
 +							avl_state<=sWRITE;
@@ -448,27 +450,22 @@ diff --git a/sys/ascal.vhd b/sys/ascal.vhd
 +								avl_rad<=BLEN;
 +							END IF;
 +							IF avl_wline='0' THEN
-+								avl_address<=std_logic_vector(
-+									avl_wadrs(N_AW+NB_LA-1 DOWNTO NB_LA) +
-+									avl_i_offset0(N_AW+NB_LA-1 DOWNTO NB_LA));
++								adr_v:=avl_i_offset0;
 +							ELSE
-+								avl_address<=std_logic_vector(
-+									avl_wadrs(N_AW+NB_LA-1 DOWNTO NB_LA) +
-+									avl_i_offset1(N_AW+NB_LA-1 DOWNTO NB_LA));
++								adr_v:=avl_i_offset1;
 +							END IF;
-+						ELSIF avl_read_sr='1' THEN
-+							avl_state<=sREAD;
-+							avl_read_clr<='1';
- 						END IF;
--						IF avl_wline='0' THEN
--							avl_address<=std_logic_vector(
--								avl_wadrs(N_AW+NB_LA-1 DOWNTO NB_LA) +
+ 							avl_address<=std_logic_vector(
+ 								avl_wadrs(N_AW+NB_LA-1 DOWNTO NB_LA) +
 -								avl_i_offset0(N_AW+NB_LA-1 DOWNTO NB_LA));
 -						ELSE
 -							avl_address<=std_logic_vector(
 -								avl_wadrs(N_AW+NB_LA-1 DOWNTO NB_LA) +
 -								avl_i_offset1(N_AW+NB_LA-1 DOWNTO NB_LA));
--						END IF;
++								adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
++						ELSIF avl_read_sr='1' THEN
++							avl_state<=sREAD;
++							avl_read_clr<='1';
+ 						END IF;
 -					ELSIF avl_read_sr='1' THEN
 -						avl_state<=sREAD;
 -						avl_read_clr<='1';
@@ -476,7 +473,7 @@ diff --git a/sys/ascal.vhd b/sys/ascal.vhd
  					END IF;
  
  				WHEN sWRITE =>
-@@ -1767,15 +2068,17 @@
+@@ -1767,15 +2067,18 @@
  					END IF;
  
  				WHEN sREAD =>
@@ -492,10 +489,11 @@ diff --git a/sys/ascal.vhd b/sys/ascal.vhd
 +					IF avl_read_i='0' AND avl_return_drain='0' AND
 +						avl_boundary_busy='0' THEN
 +						IF avl_rline='0' THEN
-+							adr_v:=avl_radrs + avl_o_offset0;
++							adr_v:=avl_o_offset0;
 +						ELSE
-+							adr_v:=avl_radrs + avl_o_offset1;
++							adr_v:=avl_o_offset1;
 +						END IF;
++						adr_v:=avl_radrs + adr_v;
 +						avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
 +						avl_read_i<='1';
 +					ELSIF avl_read_i='1' AND avl_read_accepted='0' AND
@@ -1021,7 +1019,23 @@ diff --git a/sys/sysmem.sv b/sys/sysmem.sv
  	input          vbuf_clk,
  	input   [27:0] vbuf_address,
  	input    [7:0] vbuf_burstcount,
-@@ -156,7 +158,17 @@
+@@ -66,6 +68,7 @@
+ 
+ f2sdram_safe_terminator #(64, 8) f2sdram_safe_terminator_ram1
+ (
++	.busy                     (),
+ 	.clk                      (ram1_clk),
+ 	.rst_req_sync             (ram1_reset_1),
+ 
+@@ -112,6 +115,7 @@
+ 
+ f2sdram_safe_terminator #(64, 8) f2sdram_safe_terminator_ram2
+ (
++	.busy                     (),
+ 	.clk                      (ram2_clk),
+ 	.rst_req_sync             (ram2_reset_1),
+ 
+@@ -156,7 +160,17 @@
  	vbuf_reset_1 <= vbuf_reset_0;
  end
  
