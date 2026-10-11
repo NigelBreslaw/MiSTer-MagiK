@@ -38,6 +38,7 @@ struct EncodedFrame {
     jpeg: Vec<u8>,
     width: u32,
     height: u32,
+    #[cfg(target_os = "macos")]
     luma: Option<LumaAnalysis>,
 }
 
@@ -105,6 +106,7 @@ pub enum CaptureVisibility {
     Visible,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LumaAnalysis {
     visibility: CaptureVisibility,
@@ -530,6 +532,7 @@ mod tests {
             jpeg: b"\xff\xd8fixture\xff\xd9".to_vec(),
             width: JPEG_WIDTH,
             height: JPEG_HEIGHT,
+            #[cfg(target_os = "macos")]
             luma: None,
         }
     }

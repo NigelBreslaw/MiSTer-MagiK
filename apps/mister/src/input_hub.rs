@@ -300,7 +300,6 @@ impl InputHub {
                 held_after_last: state.held,
                 topology: state.topology.clone(),
                 health: state.health.clone(),
-                ..InputBatch::default()
             },
             publications,
             observation: InputObservation(state.wake_generation),
