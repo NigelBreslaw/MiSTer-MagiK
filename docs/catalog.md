@@ -21,6 +21,19 @@ launch-profile table is eligible; there is no fixed nine-system allow-list.
 System identifiers, display titles, roots, core identities, accepted file
 extensions, archive rules, and launch plans come from production profiles.
 
+Installed device scans use MiSTer Main's game-directory priority for each system:
+USB0 through USB5, then `/media/network`, `/media/fat/cifs`, and `/media/fat`.
+On each storage volume, the legacy `<volume>/<system>` directory takes priority
+over the standard `<volume>/games/<system>` directory. The first directory wins,
+even when empty; shadowed directories are not merged. Cores, catalog artifacts,
+and MagiK metadata remain on the SD card. Host libraries with an explicit custom
+root retain their configured scope.
+
+Fresh builds and incremental refreshes use the same directory resolver. Refresh
+watches cover USB/network namespaces, including absent mounts, and detect a
+change of selected directory when a drive is attached, removed, or gains a
+higher-priority system folder. Launch plans retain the selected absolute path.
+
 Five collections have prepared adapters because their upstream shape is known:
 
 - Arcade combines Update_All metadata with installed MRA, core, and ROM

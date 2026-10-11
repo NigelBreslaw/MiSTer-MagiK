@@ -820,7 +820,15 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
         for launcher_dir in ["_Arcade", "_Games", "_DOS Games", "_Console (autoboot)"] {
             push_scan_target(&mut targets, path.join(launcher_dir));
         }
-        push_profile_game_dirs(&mut targets, &path.join("games"), profiles);
+        for profile in profiles {
+            if profile_has_initial_catalog_candidates(profile) {
+                for dir in &profile.game_dirs {
+                    if !dir.starts_with('_') {
+                        push_scan_target(&mut targets, crate::game_paths::game_dir(path, dir));
+                    }
+                }
+            }
+        }
     }
     dedupe_existing_scan_targets(targets)
 }

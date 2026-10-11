@@ -295,7 +295,7 @@ fn zero_mhz_collection_payload_path(mgl_path: &Path, payload: &str) -> Option<Pa
             .is_some_and(|name| name.eq_ignore_ascii_case("_DOS Games"))
     })?;
     let storage_root = dos_games_root.parent()?;
-    Some(storage_root.join("games/AO486").join(payload))
+    Some(crate::game_paths::game_dir(storage_root, "AO486").join(payload))
 }
 
 pub(crate) fn validate_neon68k_mgl(path: &Path) -> Result<MglInspection, String> {
@@ -419,7 +419,7 @@ pub(crate) fn resolve_neon68k_payload_path(mgl_path: &Path, payload: &str) -> Pa
     }) else {
         return local;
     };
-    let collection_payload = storage_root.join("games/X68000").join(payload);
+    let collection_payload = crate::game_paths::game_dir(storage_root, "X68000").join(payload);
     if collection_payload.is_file() {
         collection_payload
     } else {

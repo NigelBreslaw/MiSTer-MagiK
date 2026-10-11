@@ -1368,6 +1368,24 @@ fn capture_system_watch_from_specification(
         .filter(|root| root.is_dir())
         .map(|root| root.to_string_lossy().into_owned())
         .collect::<BTreeSet<_>>();
+    let game_namespaces = crate::game_paths::search_roots(storage_root);
+    if generic_observations.is_some_and(|observations| {
+        observations.complete
+            && observations.roots.iter().any(|root| {
+                let root = Path::new(root);
+                game_namespaces
+                    .iter()
+                    .any(|namespace| root.parent() == Some(namespace.as_path()))
+                    && root
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| crate::game_paths::game_dir(storage_root, name) != root)
+            })
+    }) {
+        return Err(format!(
+            "selected game directories changed after scan: {system_id}"
+        ));
+    }
     let reused_generic_observations = generic_observations
         .is_some_and(|observations| observations.complete && observations.roots == expected_roots);
     if let Some(observations) = generic_observations.filter(|_| reused_generic_observations) {
@@ -1588,14 +1606,40 @@ pub fn plan_fast_refresh_classified(
         .iter()
         .map(|system| system.system_id.as_str().to_string())
         .collect::<Vec<_>>();
-    let discovered_system_ids = if discovery_changed {
-        let discovered =
-            crate::fast_catalog_sources::discover_independent_system_ids(storage_root)?;
-        systems.extend(discovered.iter().cloned());
-        Some(discovered.into_iter().collect::<BTreeSet<_>>())
+    let discovered_profiles = if discovery_changed {
+        Some(
+            crate::launch_profiles::ProfileSet::try_for_roots(&[storage_root
+                .display()
+                .to_string()])?
+            .into_profiles(),
+        )
     } else {
         None
     };
+    let discovered_system_ids = discovered_profiles.as_ref().map(|profiles| {
+        let discovered = crate::fast_catalog_sources::discover_independent_system_ids_from_profiles(
+            storage_root,
+            profiles,
+        );
+        systems.extend(discovered.iter().cloned());
+        discovered.into_iter().collect::<BTreeSet<_>>()
+    });
+    let mut selected_roots = BTreeMap::new();
+    if let Some(profiles) = &discovered_profiles {
+        for system_id in discovered_system_ids.as_ref().into_iter().flatten() {
+            let specification =
+                watch_specification_from_profiles(storage_root, system_id, profiles)?;
+            selected_roots.insert(
+                system_id.clone(),
+                specification
+                    .scan_roots
+                    .iter()
+                    .chain(&specification.anchors)
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
     let build_check = |system_id: &str| {
         let system_started = std::time::Instant::now();
         let mut check = FastSystemSourceCheck {
@@ -1615,7 +1659,15 @@ pub fn plan_fast_refresh_classified(
         {
             check.reason = "system is no longer present in discovery".to_string();
         } else if let Some(watch) = watch_indices.get(system_id) {
-            check_watch_index(watch, &metadata_cache, &mut check);
+            if selected_roots
+                .get(system_id)
+                .is_some_and(|roots| roots != &watch.roots)
+            {
+                check.status = FastSourceCheckStatus::Changed;
+                check.reason = "selected game directories changed".to_string();
+            } else {
+                check_watch_index(watch, &metadata_cache, &mut check);
+            }
         } else if let Some(error) = watch_errors.get(system_id) {
             check.reason = format!("watch index unavailable: {error}");
         } else if references.contains_key(system_id) {
@@ -2210,14 +2262,15 @@ fn build_watch_metadata_cache<'a>(
 }
 
 fn discovery_anchor_paths(storage_root: &Path) -> Vec<PathBuf> {
-    vec![
-        storage_root.join("games"),
+    let mut paths = crate::game_paths::search_roots(storage_root);
+    paths.extend([
         storage_root.join("_Console"),
         storage_root.join("_Arcade"),
         storage_root.join("_DOS Games"),
         storage_root.join("_Computer"),
         storage_root.join("_LLAPI"),
-    ]
+    ]);
+    paths
 }
 
 fn capture_discovery_watch(storage_root: &Path) -> Result<FastRefreshDiscoveryWatch, String> {
@@ -2275,20 +2328,16 @@ fn watch_specification_from_profiles(
     system_id: &str,
     profiles: &[crate::launch_profiles::LaunchProfile],
 ) -> Result<WatchSpecification, String> {
-    let games = storage_root.join("games");
+    let games = |name: &str| crate::game_paths::game_dir(storage_root, name);
     let mut scan_roots = match system_id {
-        "amiga" => vec![games.join("Amiga")],
-        "arcade" => vec![
-            storage_root.join("_Arcade"),
-            games.join("mame"),
-            games.join("hbmame"),
-        ],
-        "c64" => vec![games.join("C64")],
-        "dos" => vec![storage_root.join("_DOS Games"), games.join("AO486")],
+        "amiga" => vec![games("Amiga")],
+        "arcade" => vec![storage_root.join("_Arcade"), games("mame"), games("hbmame")],
+        "c64" => vec![games("C64")],
+        "dos" => vec![storage_root.join("_DOS Games"), games("AO486")],
         "x68000" => vec![
             storage_root.join("_Computer/_X68000 Games"),
             storage_root.join("_Computer/X68000 Games"),
-            games.join("X68000"),
+            games("X68000"),
         ],
         _ => Vec::new(),
     };
@@ -2296,12 +2345,7 @@ fn watch_specification_from_profiles(
         .iter()
         .filter(|profile| profile.system_id == system_id)
     {
-        scan_roots.extend(
-            profile
-                .game_dirs
-                .iter()
-                .map(|game_dir| games.join(game_dir)),
-        );
+        scan_roots.extend(profile.game_dirs.iter().map(|game_dir| games(game_dir)));
     }
     scan_roots.sort();
     scan_roots.dedup();
@@ -4134,5 +4178,130 @@ mod tests {
         assert!(!phase.contains(&forbidden_thread));
         assert!(!phase.contains(&forbidden_channel));
         assert!(!phase.contains(&forbidden_worker));
+    }
+
+    #[test]
+    fn usb_refresh_switches_existing_systems_and_preserves_unaffected_shards() {
+        let fixture = crate::test_support::unique_temp_dir("usb-refresh-priority");
+        let storage = fixture.join("media/fat");
+        let catalog = fixture.join("catalog");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        for core in ["SNES", "NES"] {
+            fs::write(storage.join(format!("_Console/{core}.rbf")), b"core").unwrap();
+        }
+        for (dir, file) in [("SNES", "SD.sfc"), ("NES", "Unaffected.nes")] {
+            let path = storage.join("games").join(dir).join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"rom").unwrap();
+        }
+        build_fresh_catalog(&storage, &catalog).unwrap();
+        let unchanged =
+            execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert_eq!(unchanged.unchanged, 2);
+        let stale_plan =
+            plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        let usb = fixture.join("media/usb0/games/SNES");
+        fs::create_dir_all(&usb).unwrap();
+        fs::write(usb.join("USB.sfc"), b"rom").unwrap();
+        let attached = execute_planned_fast_refresh(
+            &storage,
+            &catalog,
+            FastCatalogRefreshRequest::Update,
+            stale_plan,
+        )
+        .unwrap();
+        assert!(attached.plan.discovery_changed);
+        assert!(
+            attached
+                .system_reports
+                .iter()
+                .any(|system| system.system_id == "snes"
+                    && system.outcome == FastCatalogSystemOutcome::Updated)
+        );
+        assert!(
+            attached
+                .system_reports
+                .iter()
+                .any(|system| system.system_id == "nes"
+                    && system.outcome == FastCatalogSystemOutcome::Unchanged)
+        );
+        let watch = capture_system_watch(&storage, "snes").unwrap();
+        assert_eq!(watch.roots, [usb.to_string_lossy().into_owned()]);
+        let snapshot = crate::fast_catalog_sources::build_independent_fast_snapshot(&storage)
+            .unwrap()
+            .0;
+        let snes = snapshot
+            .systems
+            .iter()
+            .find(|system| system.system_id == "snes")
+            .unwrap();
+        assert_eq!(
+            snes.games[0].launch_ref,
+            usb.join("USB.sfc").to_string_lossy()
+        );
+        let unchanged =
+            execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert_eq!(unchanged.unchanged, 2);
+        fs::remove_dir_all(fixture.join("media/usb0")).unwrap();
+        let detached =
+            execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert!(
+            detached
+                .system_reports
+                .iter()
+                .any(|system| system.system_id == "snes"
+                    && system.outcome == FastCatalogSystemOutcome::Updated)
+        );
+        let snapshot = crate::fast_catalog_sources::build_independent_fast_snapshot(&storage)
+            .unwrap()
+            .0;
+        let snes = snapshot
+            .systems
+            .iter()
+            .find(|system| system.system_id == "snes")
+            .unwrap();
+        assert_eq!(
+            snes.games[0].launch_ref,
+            storage.join("games/SNES/SD.sfc").to_string_lossy()
+        );
+        // A newly attached, previously absent system is discovered too.
+        fs::write(storage.join("_Console/GBA.rbf"), b"core").unwrap();
+        let gba = fixture.join("media/usb5/games/GBA");
+        fs::create_dir_all(&gba).unwrap();
+        fs::write(gba.join("Sample.gba"), b"rom").unwrap();
+        let added =
+            execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert!(
+            added
+                .system_reports
+                .iter()
+                .any(|system| system.system_id == "gba"
+                    && system.outcome == FastCatalogSystemOutcome::Updated)
+        );
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn usb_selection_change_during_scan_is_not_published_as_current() {
+        let fixture = crate::test_support::unique_temp_dir("usb-refresh-scan-race");
+        let storage = fixture.join("media/fat");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        fs::write(storage.join("_Console/SNES.rbf"), b"core").unwrap();
+        fs::create_dir_all(storage.join("games/SNES")).unwrap();
+        fs::write(storage.join("games/SNES/SD.sfc"), b"rom").unwrap();
+        let scanned =
+            crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
+                &storage, "snes",
+            )
+            .unwrap()
+            .unwrap();
+        let usb = fixture.join("media/usb0/games/SNES");
+        fs::create_dir_all(&usb).unwrap();
+        fs::write(usb.join("USB.sfc"), b"rom").unwrap();
+        let error =
+            capture_system_watch_with_observations(&storage, "snes", scanned.observations.as_ref())
+                .unwrap_err();
+        assert!(error.contains("selected game directories changed after scan"));
+        fs::remove_dir_all(fixture).unwrap();
     }
 }

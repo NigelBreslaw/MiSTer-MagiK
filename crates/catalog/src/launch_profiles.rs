@@ -578,13 +578,11 @@ impl CatalogScanPlan {
     #[cfg(feature = "builder")]
     pub(crate) fn header_for_known_game_dir(
         &self,
-        storage_root: &Path,
         game_dir: &str,
     ) -> Option<&catalog_discovery::GameDirHeader> {
-        let expected = storage_root.join("games").join(game_dir);
         self.all_game_dir_headers
             .iter()
-            .find(|header| header.confirmed_directory && header.path == expected)
+            .find(|header| header.confirmed_directory && header.name == game_dir)
     }
 
     pub(crate) fn base_profiles(&self) -> &[LaunchProfile] {

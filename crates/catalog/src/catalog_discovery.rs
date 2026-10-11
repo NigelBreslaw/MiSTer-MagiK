@@ -376,6 +376,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
 ) -> Vec<GameDirHeader> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
+    let legacy_names = legacy_game_dir_names(roots);
     for game_root in game_roots(roots) {
         let Ok(read_dir) = std::fs::read_dir(&game_root) else {
             continue;
@@ -386,13 +387,16 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if should_ignore_game_dir(name) {
+            if should_ignore_game_dir(name)
+                || (!path_name_eq(&game_root, "games")
+                    && !legacy_names.contains(&name.to_ascii_lowercase()))
+            {
                 continue;
             }
             if entry
                 .file_type()
                 .ok()
-                .is_some_and(|file_type| file_type.is_symlink())
+                .is_some_and(|file_type| !file_type.is_dir())
             {
                 continue;
             }
@@ -405,7 +409,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
             if excluded_names.contains(&name.to_ascii_lowercase()) {
                 continue;
             }
-            let key = path.display().to_string().to_ascii_lowercase();
+            let key = game_header_key(roots, name, &path);
             if seen.insert(key) {
                 entries.push(GameDirHeader {
                     name: name.to_string(),
@@ -428,6 +432,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
 ) -> Result<Vec<GameDirHeader>, String> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
+    let legacy_names = legacy_game_dir_names(roots);
     for game_root in game_roots(roots) {
         let root_started = Instant::now();
         let mut entries_examined = 0_u64;
@@ -450,7 +455,10 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             };
-            if should_ignore_game_dir(name) {
+            if should_ignore_game_dir(name)
+                || (!path_name_eq(&game_root, "games")
+                    && !legacy_names.contains(&name.to_ascii_lowercase()))
+            {
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
@@ -461,7 +469,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             file_type_us =
                 file_type_us.saturating_add(file_type_started.elapsed().as_micros() as u64);
             file_type_count = file_type_count.saturating_add(1);
-            if file_type.is_symlink() {
+            if file_type.is_symlink() || file_type.is_file() {
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
@@ -469,7 +477,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
-            let key = path.display().to_string().to_ascii_lowercase();
+            let key = game_header_key(roots, name, &path);
             if seen.insert(key) {
                 let readdir_kind = if file_type.is_dir() {
                     Some(true)
@@ -569,17 +577,46 @@ pub(crate) fn game_roots(roots: &[String]) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
     for root in roots {
         let path = Path::new(root);
-        let games = if path_name_eq(path, "games") {
-            path.to_path_buf()
-        } else {
-            path.join("games")
-        };
-        let key = games.display().to_string().to_ascii_lowercase();
-        if seen.insert(key) {
-            out.push(games);
+        for games in crate::game_paths::search_roots(path) {
+            let key = games.display().to_string().to_ascii_lowercase();
+            if seen.insert(key) {
+                out.push(games);
+            }
         }
     }
     out
+}
+
+fn game_header_key(roots: &[String], name: &str, path: &Path) -> String {
+    if roots.iter().any(|root| {
+        Path::new(root)
+            .file_name()
+            .is_some_and(|name| name == "fat")
+    }) {
+        name.to_ascii_lowercase()
+    } else {
+        path.display().to_string().to_ascii_lowercase()
+    }
+}
+
+fn legacy_game_dir_names(roots: &[String]) -> BTreeSet<String> {
+    if !roots.iter().any(|root| {
+        Path::new(root)
+            .file_name()
+            .is_some_and(|name| name == "fat")
+    }) {
+        return BTreeSet::new();
+    }
+    launch_profiles::builtin_profiles()
+        .into_iter()
+        .flat_map(|profile| profile.game_dirs)
+        .chain(
+            installed_cores_for_roots(roots)
+                .into_iter()
+                .map(|core| core.core_id),
+        )
+        .map(|name| name.to_ascii_lowercase())
+        .collect()
 }
 
 pub(crate) fn core_search_roots(roots: &[String]) -> Vec<PathBuf> {
@@ -951,8 +988,8 @@ mod tests {
 
         let plan =
             crate::launch_profiles::CatalogScanPlan::try_for_roots(&roots).expect("checked plan");
-        assert!(plan.header_for_known_game_dir(&root, "NES").is_some());
-        assert!(plan.header_for_known_game_dir(&root, "nes").is_none());
+        assert!(plan.header_for_known_game_dir("NES").is_some());
+        assert!(plan.header_for_known_game_dir("nes").is_none());
 
         let _ = std::fs::remove_dir_all(root);
     }
