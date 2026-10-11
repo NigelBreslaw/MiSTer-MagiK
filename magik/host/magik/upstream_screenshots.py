@@ -317,7 +317,7 @@ def source_rows(source, database, downloads):
     return rows, tree_error
 
 
-def pack_keys(data, pack):
+def pack_keys(data, pack, entries=None):
     index = pack["index"]
     if len(data) != index["bytes"] or digest(data) != index["sha256"]:
         raise ValueError("published screenshot index checksum/size mismatch")
@@ -375,9 +375,33 @@ def pack_keys(data, pack):
         if asset_key in keys:
             raise ValueError("duplicate screenshot asset key")
         keys.add(asset_key)
+        if entries is not None:
+            entries[asset_key] = (width, height, stride, raw, flag, compressed, start)
     if offset != len(data):
         raise ValueError("trailing screenshot index data")
     return keys
+
+
+def pack_family_inventory(entries, parents):
+    families = {}
+    for key, payload in entries.items():
+        families.setdefault(family_key(key, parents), {})[key] = payload
+    aliases = {}
+    redundant = []
+    for family, members in sorted(families.items()):
+        canonical = family if family in members else min(members)
+        aliases.update({key: canonical for key in sorted(members) if key != canonical})
+        images = len(set(members.values()))
+        if images > 1:
+            redundant.append(
+                {"family": family, "keys": sorted(members), "extra_images": images - 1}
+            )
+    return {
+        "image_families": len(families),
+        "family_aliases": aliases,
+        "redundant_family_images": sum(row["extra_images"] for row in redundant),
+        "redundant_families": redundant,
+    }
 
 
 def attribute(text, name):
@@ -385,7 +409,7 @@ def attribute(text, name):
     return html.unescape(match[2]) if match else ""
 
 
-def parent_map(data):
+def parent_map(data, excluded=None):
     if data.startswith(b"PK"):
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             files = [
@@ -397,12 +421,23 @@ def parent_map(data):
                 raise ValueError("MAME ZIP must contain one bounded listxml document")
             data = archive.read(files[0])
     parents = {}
+    name = ""
     # Decode only machine attributes, not the hundreds of MiB of ROM metadata.
-    for match in re.finditer(rb"<machine\s+([^>]+)>", data):
+    for match in re.finditer(rb"<machine\s+([^>]+)>|<softwarelist\b", data):
+        if match[1] is None:
+            if excluded is not None and name:
+                excluded.add(name)
+            continue
         attrs = match[1].decode("utf-8")
         name = attribute(attrs, "name")
         if name:
             parents[name] = attribute(attrs, "cloneof")
+            if excluded is not None and (
+                attribute(attrs, "isbios") == "yes"
+                or attribute(attrs, "isdevice") == "yes"
+                or attribute(attrs, "runnable") == "no"
+            ):
+                excluded.add(name)
     if not parents:
         raise ValueError("MAME listxml has no machines")
     return parents
@@ -512,6 +547,13 @@ def hbmame_parents(arguments, downloads, root):
 
 
 def inspect_mra(data):
+    uncommented = re.sub(rb"<!--.*?-->", b"", data, flags=re.S)
+    archives = set()
+    for match in re.finditer(rb"<rom\b([^>]*)>", uncommented, re.S | re.I):
+        for archive in attribute(match[1].decode("utf-8"), "zip").split("|"):
+            key = normalize_setname(PurePosixPath(archive.strip()).name)
+            if key:
+                archives.add(key)
     # Extract header text only. Do not resolve external XML entities or execute anything.
     # Large inline ROM patches are irrelevant to identity. Skip comments while
     # locating the first real ROM element, then decode only the header.
@@ -533,12 +575,63 @@ def inspect_mra(data):
             else ""
         )
 
-    setname = field("setname").lower()
-    if setname.endswith(".zip"):
-        setname = setname[:-4]
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", setname):
-        setname = ""
-    return field("name"), setname
+    return {
+        "title": field("name"),
+        "setname": normalize_setname(field("setname")),
+        "parent": normalize_setname(field("parent")),
+        "rom_setnames": sorted(archives),
+    }
+
+
+def normalize_setname(value):
+    value = value.strip().lower().removesuffix(".zip")
+    return value if re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", value) else ""
+
+
+def reviewed_families(root):
+    path = root / "crates/catalog/data/arcade-screenshot-families.tsv"
+    data = path.read_bytes()
+    links = {}
+    for row in csv.reader(io.StringIO(data.decode()), delimiter="\t"):
+        if not row or row[0].startswith("#"):
+            continue
+        if len(row) != 3 or not all(
+            normalize_setname(key) == key and key for key in row[:2]
+        ):
+            raise ValueError("invalid reviewed screenshot family")
+        key, family, evidence = row
+        if key in links or key == family or urlparse(evidence).scheme != "https":
+            raise ValueError(
+                "duplicate, self-referencing or unverified screenshot family"
+            )
+        links[key] = family
+    return links, {"source": str(path.relative_to(root)), "sha256": digest(data)}
+
+
+def mra_family(mra, parents, reviewed):
+    key = mra["setname"]
+    if not key:
+        return "", "missing_setname", []
+    if key in reviewed:
+        return family_key(reviewed[key], parents), "reviewed", []
+    if key in parents:
+        return family_key(key, parents), "machine_metadata", []
+    parent = mra.get("parent", "")
+    if parent != key and parent in parents:
+        return family_key(parent, parents), "mra_parent", []
+    families = sorted(
+        {
+            family_key(name, parents)
+            for name in mra.get("rom_setnames", [])
+            if name in parents
+        }
+    )
+    if len(families) == 1:
+        return families[0], "rom_family", []
+    # Embedded games have an explicit identity and no external ROM family.
+    if not mra.get("rom_setnames"):
+        return key, "embedded_identity", []
+    return "", "family_unresolved", families
 
 
 def family_key(key, parents):
@@ -551,23 +644,35 @@ def family_key(key, parents):
     return key
 
 
-def game_rows(mras, parents, keys):
+def game_rows(mras, parents, keys, reviewed=None, non_games=None):
+    non_games = non_games or {}
+    reviewed = reviewed or {}
+    parents = {**parents, **reviewed}
+    available = {}
+    for key in sorted(keys):
+        available.setdefault(family_key(key, parents), key)
     groups = {}
     for mra in mras:
         key = mra["setname"]
-        identity = family_key(key, parents)
-        matched = identity if identity in keys else ""
-        group_id = identity or "unresolved:" + mra["hash"]
+        identity, resolution, candidates = mra_family(mra, parents, reviewed)
+        is_game = key not in non_games
+        if not is_game:
+            identity, resolution = non_games[key], "system_metadata"
+        matched = identity if identity in keys else available.get(identity, "")
+        if not is_game:
+            group_id, status = "non-game:" + identity, "not_game"
+        elif identity:
+            group_id, status = identity, "covered" if matched else "missing"
+        elif key:
+            group_id, status = "family-unresolved:" + key, "family_unresolved"
+        else:
+            group_id, status = "unresolved:" + mra["hash"], "identity_unresolved"
         game = groups.setdefault(
             group_id,
             {
                 "identity": group_id,
                 "screenshot_key": identity,
-                "status": "covered"
-                if matched
-                else "missing"
-                if key
-                else "identity_unresolved",
+                "status": status,
                 "matched_key": matched,
                 "titles": set(),
                 "setnames": set(),
@@ -576,7 +681,7 @@ def game_rows(mras, parents, keys):
                 "mras": [],
             },
         )
-        if matched:
+        if matched and is_game:
             game.update(status="covered", matched_key=matched)
         game["titles"].add(mra["title"])
         game["setnames"].add(key)
@@ -584,8 +689,21 @@ def game_rows(mras, parents, keys):
         game["sources"].add(mra["source"])
         game["mras"].append(
             {
-                name: mra[name]
-                for name in ("source", "path", "url", "channel", "hash", "hash_kind")
+                "setname": key,
+                "family": identity,
+                "resolution": resolution,
+                "family_candidates": candidates,
+                **{
+                    name: mra[name]
+                    for name in (
+                        "source",
+                        "path",
+                        "url",
+                        "channel",
+                        "hash",
+                        "hash_kind",
+                    )
+                },
             }
         )
     for game in groups.values():
@@ -631,10 +749,14 @@ def write_reports(output, report, baseline):
         else {}
     )
     for game in games:
-        game["new_game"] = bool(baseline) and game["identity"] not in before
+        game["new_game"] = (
+            bool(baseline)
+            and game["status"] != "not_game"
+            and game["identity"] not in before
+        )
         game["new_gap"] = (
             bool(baseline)
-            and game["status"] != "covered"
+            and game["status"] not in ("covered", "not_game")
             and before.get(game["identity"], "covered") == "covered"
         )
     report["summary"] = dict(Counter(game["status"] for game in games))
@@ -670,7 +792,10 @@ def write_reports(output, report, baseline):
     ]
     for filename, selected in (
         ("all-games.tsv", rows),
-        ("missing.tsv", [row for row in rows if row["status"] != "covered"]),
+        (
+            "missing.tsv",
+            [row for row in rows if row["status"] not in ("covered", "not_game")],
+        ),
     ):
         with (output / filename).open("w", newline="") as stream:
             writer = csv.DictWriter(stream, columns, delimiter="\t")
@@ -685,16 +810,54 @@ def write_reports(output, report, baseline):
         "",
         f"Coverage: **{'complete' if report['complete'] else 'PARTIAL — see source errors below'}**.",
         "",
-        "Counts group MAME/HBMAME clones under their parent screenshot identity. A group can appear in several channels.",
+        (
+            f"Pack storage: {report['pack'].get('image_families', report['pack']['entries'])} image families, "
+            f"{len(report['pack'].get('family_aliases', {}))} compatibility aliases, "
+            f"{report['pack'].get('redundant_family_images', 0)} redundant family images."
+        ),
+        "",
+        "Counts represent screenshot families, using machine metadata, reviewed links, declared MRA parents and unambiguous ROM families. A group can appear in several channels.",
         "",
     ]
     lines += markdown_table(
         ["Status", "Games"],
         (
             (status, report["summary"].get(status, 0))
-            for status in ("covered", "missing", "identity_unresolved")
+            for status in (
+                "covered",
+                "missing",
+                "family_unresolved",
+                "identity_unresolved",
+                "not_game",
+            )
         ),
     )
+    link_columns = (
+        "setname",
+        "family",
+        "matched_key",
+        "status",
+        "resolution",
+        "family_candidates",
+        "source",
+        "path",
+        "url",
+    )
+    with (output / "family-links.tsv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, link_columns, delimiter="\t")
+        writer.writeheader()
+        for game in games:
+            for mra in game["mras"]:
+                writer.writerow(
+                    {
+                        **{
+                            field: table_value(mra.get(field, ""))
+                            for field in link_columns
+                        },
+                        "matched_key": game["matched_key"],
+                        "status": game["status"],
+                    }
+                )
     sections = (
         (
             "Missing beta and alpha screenshots",
@@ -708,6 +871,14 @@ def write_reports(output, report, baseline):
         (
             "All missing screenshots",
             [game for game in games if game["status"] == "missing"],
+        ),
+        (
+            "Unresolved family links",
+            [game for game in games if game["status"] == "family_unresolved"],
+        ),
+        (
+            "Systems and BIOS entries (not game screenshot requests)",
+            [game for game in games if game["status"] == "not_game"],
         ),
         (
             "Unresolved screenshot identities",
@@ -803,12 +974,12 @@ def inspect_records(records, downloads, workers):
         for number, task in enumerate(as_completed(tasks), 1):
             rows = tasks[task]
             try:
-                title, setname = task.result()
+                metadata = task.result()
                 inspected.extend(
                     {
                         **row,
-                        "title": title or PurePosixPath(row["path"]).stem,
-                        "setname": setname,
+                        **metadata,
+                        "title": metadata["title"] or PurePosixPath(row["path"]).stem,
                     }
                     for row in rows
                 )
@@ -856,6 +1027,7 @@ def run(arguments, root):
         raise ValueError("manifest must describe one indexed Arcade 320x320 pack")
     pack = packs[0]
     assets_root = urljoin(arguments.manifest_url, "/")
+    entries = {}
     keys = pack_keys(
         downloads.fetch(
             urljoin(assets_root, pack["index"]["object"]),
@@ -863,6 +1035,7 @@ def run(arguments, root):
             limit=8 * 1024 * 1024,
         ),
         pack,
+        entries,
     )
     if arguments.mame_listxml:
         mame_data = arguments.mame_listxml.read_bytes()
@@ -876,9 +1049,17 @@ def run(arguments, root):
             raise ValueError("latest MAME release has no unique listxml asset")
         mame_source = assets[0]["browser_download_url"]
         mame_data = downloads.fetch(mame_source, immutable=True)
-    mame_parents = parent_map(mame_data)
+    excluded = set()
+    mame_parents = parent_map(mame_data, excluded)
     hb_parents, hb_provenance = hbmame_parents(arguments, downloads, root)
-    parents = {**hb_parents, **mame_parents}
+    all_parents = {**hb_parents, **mame_parents}
+    non_games = {key: family_key(key, all_parents) for key in excluded}
+    parents = {
+        key: parent for key, parent in all_parents.items() if key not in excluded
+    }
+    reviewed, family_provenance = reviewed_families(root)
+    if any(family not in parents for family in reviewed.values()):
+        raise ValueError("reviewed screenshot family absent from machine metadata")
     print(
         f"Discovered {len(sources)} core/distribution feeds; pack {pack['version']}: {len(keys)} keys.",
         flush=True,
@@ -899,13 +1080,15 @@ def run(arguments, root):
         "pack": {
             **pack,
             "entries": len(keys),
+            **pack_family_inventory(entries, {**all_parents, **reviewed}),
             "manifest_url": arguments.manifest_url,
             "manifest_sha256": digest(manifest_data),
         },
         "hbmame": hb_provenance,
+        "reviewed_families": family_provenance,
         "sources": sorted(source_reports, key=lambda source: source["id"]),
         "errors": sorted(errors),
-        "games": game_rows(inspected, parents, keys),
+        "games": game_rows(inspected, parents, keys, reviewed, non_games),
     }
     write_reports(output, report, baseline)
     print(json.dumps(report["summary"], indent=2))

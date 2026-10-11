@@ -863,23 +863,54 @@ fn scan_arcade_candidates(
     }
     let requests = games
         .iter()
-        .filter(|candidate| candidate.family_id.is_empty() && !candidate.identity_id.is_empty())
-        .map(|candidate| (candidate.identity_id.clone(), candidate.namespace.clone()))
-        .collect::<Vec<_>>();
+        .filter(|candidate| candidate.family_id.is_empty())
+        .flat_map(|candidate| {
+            [
+                &candidate.family_id,
+                &candidate.identity_id,
+                &candidate.parent_id,
+                &candidate.game.preview_asset_key,
+            ]
+            .into_iter()
+            .filter(|identity| !identity.is_empty())
+            .map(|identity| (identity.clone(), candidate.namespace.clone()))
+        });
     let resolved = resolver.resolve_many(requests)?;
     for candidate in &mut games {
-        if candidate.family_id.is_empty() {
-            if let Some(Some(machine)) =
-                resolved.get(&(candidate.identity_id.clone(), candidate.namespace.clone()))
-            {
-                candidate.family_id = machine.family.clone();
+        let reviewed = crate::machine_family::reviewed_screenshot_family(&candidate.identity_id)
+            .or_else(|| {
+                crate::machine_family::reviewed_screenshot_family(&candidate.game.preview_asset_key)
+            });
+        let family = reviewed.map(str::to_owned).or_else(|| {
+            // Indexed metadata already carries a reviewed family; keep its fast path.
+            if !candidate.family_id.is_empty() {
+                return None;
             }
-            if candidate.family_id.is_empty() {
-                candidate.family_id = candidate.parent_id.clone();
+            [
+                &candidate.family_id,
+                &candidate.identity_id,
+                &candidate.parent_id,
+                &candidate.game.preview_asset_key,
+            ]
+            .into_iter()
+            .find_map(|identity| {
+                resolved
+                    .get(&(identity.clone(), candidate.namespace.clone()))
+                    .and_then(|machine| machine.as_ref())
+                    .map(|machine| machine.family.clone())
+            })
+        });
+        if let Some(family) = family {
+            candidate.family_id = family.clone();
+            if !candidate.game.preview_asset_key.is_empty() {
+                candidate.game.preview_asset_key = family;
             }
-            if candidate.family_id.is_empty() {
-                candidate.family_id = candidate.identity_id.clone();
-            }
+        } else if candidate.family_id.is_empty() {
+            candidate.family_id = if candidate.parent_id.is_empty() {
+                candidate.identity_id.clone()
+            } else {
+                candidate.parent_id.clone()
+            };
         }
     }
     resolver.finish_log("arcade");
@@ -2619,6 +2650,42 @@ mod tests {
         assert_eq!(scan.games.len(), 1);
         assert_eq!(scan.variants.len(), 3);
         assert_eq!(report.family_resolved, 4);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn custom_arcade_variants_reuse_reviewed_and_archive_parent_screenshots() {
+        let root = crate::test_support::unique_temp_dir("arcade-custom-screenshot-families");
+        fs::create_dir_all(root.join("_Arcade/cores")).unwrap();
+        fs::create_dir_all(root.join("games/mame")).unwrap();
+        fs::write(root.join("_Arcade/cores/TestCore_20261011.rbf"), b"core").unwrap();
+        for setname in ["sf2cre", "progear", "arkanoidj"] {
+            fs::write(root.join(format!("games/mame/{setname}.zip")), b"rom").unwrap();
+        }
+        write_compact_arcade_metadata(
+            &root,
+            &[("arkanoid", None), ("arkanoidj", Some("arkanoid"))],
+            &[],
+        );
+        for (name, setname, archive) in [
+            ("Reviewed", "sf2cre", "sf2cre"),
+            ("Custom", "unknown_training_key", "arkanoidj"),
+            ("Underscore", "progear_1", "progear"),
+        ] {
+            fs::write(root.join(format!("_Arcade/{name}.mra")), format!(
+                "<misterromdescription><name>{name}</name><setname>{setname}</setname><rbf>TestCore</rbf><rom zip=\"{archive}.zip\"><part>00</part></rom></misterromdescription>"
+            )).unwrap();
+        }
+        let mut report = FastSourceSystemReport::default();
+        let scan = scan_arcade(&root, &mut report).unwrap();
+        let keys = scan
+            .games
+            .iter()
+            .map(|game| (game.title.as_str(), game.preview_asset_key.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(keys.get("Reviewed"), Some(&"sf2ce"));
+        assert_eq!(keys.get("Custom"), Some(&"arkanoid"));
+        assert_eq!(keys.get("Underscore"), Some(&"progear"));
         let _ = fs::remove_dir_all(root);
     }
 

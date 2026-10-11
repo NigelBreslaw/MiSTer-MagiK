@@ -134,7 +134,12 @@ def test_equal_titles_do_not_merge_distinct_games_and_blank_keys_remain_unresolv
 
 def test_xml_comments_entities_and_blank_setname_are_not_guessed():
     data = b"<misterromdescription><!--<setname>fake</setname>--><name><![CDATA[A &amp; B]]></name><setname> </setname><rom><setname>fake2</setname></rom></misterromdescription>"
-    assert audit.inspect_mra(data) == ("A & B", "")
+    assert audit.inspect_mra(data) == {
+        "title": "A & B",
+        "setname": "",
+        "parent": "",
+        "rom_setnames": [],
+    }
 
 
 def test_source_tree_recovers_omitted_alternatives_and_preserves_unclassified_channel():
@@ -251,6 +256,9 @@ def test_end_to_end_reports_channels_missing_keys_failures_and_baseline(
         mame_listxml=xml,
         workers=2,
     )
+    families = tmp_path / "crates/catalog/data/arcade-screenshot-families.tsv"
+    families.parent.mkdir(parents=True)
+    families.write_text("#setname\tfamily\tevidence_url\n")
     assert audit.run(args, tmp_path) == int(incomplete)
     report = json.loads((tmp_path / "audit.json").read_text())
     assert report["summary"]["covered"] == 1
@@ -320,12 +328,14 @@ def test_host_metadata_failure_is_reported_without_device_dispatch(monkeypatch, 
     assert "invalid parent metadata" in capsys.readouterr().err
 
 
-def test_clone_only_screenshot_does_not_hide_a_missing_family_image():
+def test_clone_only_screenshot_covers_its_family_with_an_explicit_link():
     rows = [record("Clone", "clone"), record("Parent", "parent")]
     games = audit.game_rows(rows, {"clone": "parent", "parent": ""}, {"clone"})
     assert len(games) == 1
     assert games[0]["screenshot_key"] == "parent"
-    assert games[0]["status"] == "missing"
+    assert games[0]["status"] == "covered"
+    assert games[0]["matched_key"] == "clone"
+    assert all(mra["family"] == "parent" for mra in games[0]["mras"])
 
 
 def test_mutable_downloads_do_not_create_duplicate_url_cache_files(
@@ -372,7 +382,12 @@ def test_mra_header_ignores_comment_rom_tokens_and_inline_patch_bytes():
         b"<misterromdescription><!--<rom>fake</rom>--><name>Actual</name><setname>actual</setname><rom>"
         + b"\xff" * 1000
     )
-    assert audit.inspect_mra(data) == ("Actual", "actual")
+    assert audit.inspect_mra(data) == {
+        "title": "Actual",
+        "setname": "actual",
+        "parent": "",
+        "rom_setnames": [],
+    }
 
 
 def test_mame_parent_attributes_decode_entities_from_xml_and_zip():
@@ -421,3 +436,123 @@ def test_concurrent_api_requests_share_response_or_failure(
     else:
         fresh.api("shared/tree")
     assert len(calls) == 2
+
+
+def test_custom_mras_link_to_declared_parents_and_rom_families_without_bios():
+    rows = [
+        {**record("Hack", "hack"), "parent": "parent", "rom_setnames": ["collection"]},
+        {**record("Training", "training"), "rom_setnames": ["clone"]},
+    ]
+    games = audit.game_rows(
+        rows, {"parent": "", "clone": "parent", "collection": ""}, {"parent"}
+    )
+    assert len(games) == 1
+    assert games[0]["status"] == "covered"
+    assert {mra["resolution"] for mra in games[0]["mras"]} == {
+        "mra_parent",
+        "rom_family",
+    }
+    assert {mra["setname"] for mra in games[0]["mras"]} == {"hack", "training"}
+
+
+def test_rom_attributes_accept_single_quotes_paths_and_ignore_comments():
+    data = b"<misterromdescription><name>Hack</name><setname>hack</setname><parent>parent</parent><!--<rom zip='fake.zip'>--><rom index='0' zip='/hbmame/clone.zip|parent.zip'/></misterromdescription>"
+    assert audit.inspect_mra(data) == {
+        "title": "Hack",
+        "setname": "hack",
+        "parent": "parent",
+        "rom_setnames": ["clone", "parent"],
+    }
+
+
+def test_bios_devices_and_non_runnable_archives_do_not_supply_a_game_family():
+    excluded = set()
+    parents = audit.parent_map(
+        b'<mame><machine name="game"></machine><machine name="bios" isbios="yes"></machine><machine name="device" isdevice="yes"></machine><machine name="hidden" runnable="no"></machine></mame>',
+        excluded,
+    )
+    assert excluded == {"bios", "device", "hidden"}
+    parents = {key: parent for key, parent in parents.items() if key not in excluded}
+    games = audit.game_rows(
+        [{**record("Hack", "hack"), "rom_setnames": ["game", "bios", "device"]}],
+        parents,
+        {"game"},
+    )
+    assert games[0]["matched_key"] == "game"
+
+
+def test_ambiguous_or_unknown_rom_families_need_links_instead_of_new_images():
+    rows = [
+        {**record("Unknown", "unknown"), "rom_setnames": ["future"]},
+        {**record("Ambiguous", "ambiguous"), "rom_setnames": ["one", "two"]},
+    ]
+    games = audit.game_rows(rows, {"one": "", "two": ""}, set())
+    assert all(game["status"] == "family_unresolved" for game in games)
+    assert all(not game["screenshot_key"] for game in games)
+    assert next(game for game in games if game["setnames"] == ["ambiguous"])["mras"][0][
+        "family_candidates"
+    ] == ["one", "two"]
+
+
+def test_reviewed_links_override_unknown_custom_archives():
+    games = audit.game_rows(
+        [{**record("Custom", "custom"), "rom_setnames": ["custom"]}],
+        {"parent": ""},
+        {"parent"},
+        {"custom": "parent"},
+    )
+    assert games[0]["matched_key"] == "parent"
+    assert games[0]["mras"][0]["resolution"] == "reviewed"
+
+
+def test_platform_and_bios_mras_are_separate_from_game_image_requests():
+    excluded = set()
+    parents = audit.parent_map(
+        b'<mame><machine name="platform"><softwarelist name="games"/></machine><machine name="bios" isbios="yes"></machine><machine name="game"></machine></mame>',
+        excluded,
+    )
+    assert excluded == {"platform", "bios"}
+    assert set(parents) == {"platform", "bios", "game"}
+    games = audit.game_rows(
+        [
+            record("Platform", "platform"),
+            record("BIOS", "bios"),
+            record("Game", "game"),
+        ],
+        {"game": ""},
+        set(),
+        non_games={key: key for key in excluded},
+    )
+    assert [game["status"] for game in games].count("not_game") == 2
+    assert [game["status"] for game in games].count("missing") == 1
+
+
+def test_reviewed_family_file_is_shared_validated_and_has_provenance():
+    from pathlib import Path
+
+    links, provenance = audit.reviewed_families(Path(__file__).resolve().parents[3])
+    assert links["sf2cre"] == "sf2ce"
+    assert links["twinbeeb"] == "twinbee"
+    assert len(provenance["sha256"]) == 64
+    assert not set(links.values()) & set(links)
+
+
+def test_pack_family_inventory_distinguishes_aliases_from_redundant_images():
+    payload = (320, 224, 640, 143360, 0, 100, 200)
+    parents = {"clone": "parent"}
+    result = audit.pack_family_inventory({"parent": payload, "clone": payload}, parents)
+    assert result["image_families"] == 1
+    assert result["family_aliases"] == {"clone": "parent"}
+    assert result["redundant_family_images"] == 0
+    result = audit.pack_family_inventory(
+        {"parent": payload, "clone": (*payload[:-1], 300)}, parents
+    )
+    assert result["redundant_family_images"] == 1
+    assert result["redundant_families"][0]["keys"] == ["clone", "parent"]
+
+
+def test_verified_index_exposes_payload_identity_for_family_storage_audit():
+    data, pack = index_fixture()
+    entries = {}
+    assert audit.pack_keys(data, pack, entries) == {"parent"}
+    assert entries == {"parent": (1, 1, 2, 2, 1, 2, 0)}

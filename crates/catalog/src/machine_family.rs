@@ -222,6 +222,22 @@ fn runtime_row(
         })
 }
 
+/// Reviewed custom identities not yet present in the published MAME/HBMAME tables.
+pub(crate) fn reviewed_screenshot_family(identity: &str) -> Option<&'static str> {
+    static FAMILIES: std::sync::LazyLock<BTreeMap<String, &'static str>> =
+        std::sync::LazyLock::new(|| {
+            include_str!("../data/arcade-screenshot-families.tsv")
+                .lines()
+                .filter(|line| !line.starts_with('#'))
+                .filter_map(|line| {
+                    let mut fields = line.split('\t');
+                    Some((normalize(fields.next()?), fields.next()?))
+                })
+                .collect()
+        });
+    FAMILIES.get(&normalize(identity)).copied()
+}
+
 fn normalize(value: &str) -> String {
     let value = library_db::normalize_id(value);
     if value == "unknown" {
