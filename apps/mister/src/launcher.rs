@@ -12318,6 +12318,54 @@ mod tests {
     }
 
     #[test]
+    fn top_level_favourites_restore_reads_current_catalog_and_handles_removal() {
+        let mut catalog = multi_system_catalog();
+        let first = catalog.games[0].mra_path.to_string();
+        let second = catalog.games[1].mra_path.to_string();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.set_user_game_refs(&catalog, [first.clone(), second.clone()], Vec::new());
+        nav.selected = 4;
+        nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
+        let state = nav.navigation_transition_state();
+
+        // Restore without rebuilding the list: catalog metadata must remain authoritative.
+        let game = &mut Arc::make_mut(&mut catalog.games)[0];
+        game.title = "Updated title (USA revision 2)".into();
+        game.preview_archive_path = "updated-preview.zip".into();
+        game.preview_asset_key = "updated-preview".into();
+        nav.go_root();
+        nav.restore_navigation_transition_state(state);
+        let rows = nav.active_arcade_game_view(&catalog, "");
+        assert_eq!(
+            rows.get(0).unwrap().title.as_ref(),
+            "Updated title (USA revision 2)"
+        );
+        assert_eq!(
+            rows.get(0).unwrap().preview_archive_path.as_ref(),
+            "updated-preview.zip"
+        );
+        assert_eq!(
+            rows.get(0).unwrap().preview_asset_key.as_ref(),
+            "updated-preview"
+        );
+
+        nav.reconcile_favourite_state(&catalog, &first, false);
+        assert_eq!(nav.active_collection_id(), None);
+        assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Favourites);
+        assert_eq!(nav.favourite_count(), 1);
+        assert_eq!(nav.active_arcade_game_count(&catalog, ""), 1);
+        assert_eq!(
+            nav.active_arcade_game_view(&catalog, "")
+                .get(0)
+                .unwrap()
+                .mra_path
+                .as_ref(),
+            second
+        );
+    }
+
+    #[test]
     fn root_favourites_card_opens_favourites_across_systems() {
         let first = "/media/fat/_Arcade/1942.mra";
         let second = "magik-plan:amiga-agony";

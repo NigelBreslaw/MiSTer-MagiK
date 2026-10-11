@@ -579,6 +579,10 @@ fn configure_arcade_list_renderer_geometry(
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
+    renderer.set_top_level_favourites(
+        nav.arcade_user_list_mode() == launcher::ArcadeUserListMode::Favourites
+            && nav.active_collection_id().is_none(),
+    );
     let (geometry, visible_height) = arcade_list_layout(nav, ui);
     renderer.set_geometry_for_visible_height(geometry, visible_height);
     renderer.set_favourite_launch_refs_if_changed(
@@ -3677,6 +3681,38 @@ mod tests {
                 slint_ui::launcher::ArcadeLoadState::Ready
             );
         }
+    }
+
+    #[test]
+    fn top_level_favourite_renderer_mode_does_not_apply_to_system_lists() {
+        let catalog = crate::test_support::arcade_catalog(
+            vec![crate::test_support::arcade_game("1942 (USA)").build()],
+            vec![crate::test_support::arcade_system("arcade", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.set_arcade_user_list_mode(&catalog, launcher::ArcadeUserListMode::Favourites);
+        let ui = UiDisplay::for_framebuffer(960, 540);
+        let mut renderer = ArcadeListRenderer::new();
+        configure_arcade_list_renderer_geometry(&mut renderer, &nav, &ui);
+        let games = crate::arcade_catalog::ArcadeGameView::contiguous(&catalog.games);
+        renderer.draw(games, 0, 0.0, false).unwrap();
+        let mut target = UiFrameTarget::cached(frame_target_geometry(&ui));
+        renderer.compose_layer_to_cached(&mut target, true);
+        let top_level_pixels = target.cached_frame_view().pixels().to_vec();
+
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_system(&catalog, "arcade"));
+        nav.set_arcade_user_list_mode(&catalog, launcher::ArcadeUserListMode::Favourites);
+        configure_arcade_list_renderer_geometry(&mut renderer, &nav, &ui);
+        renderer.draw(games, 0, 0.0, false).unwrap();
+        renderer.compose_layer_to_cached(&mut target, true);
+        let system_pixels = target.cached_frame_view().pixels().to_vec();
+        assert_ne!(top_level_pixels, system_pixels);
+        let mut reference = ArcadeListRenderer::new();
+        configure_arcade_list_renderer_geometry(&mut reference, &nav, &ui);
+        reference.draw(games, 0, 0.0, false).unwrap();
+        reference.compose_layer_to_cached(&mut target, true);
+        assert_eq!(system_pixels, target.cached_frame_view().pixels());
     }
 
     #[test]
