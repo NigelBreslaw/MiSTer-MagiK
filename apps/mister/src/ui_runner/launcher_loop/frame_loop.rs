@@ -5085,11 +5085,16 @@ impl<'a> FrameLoop<'a> {
         // Changed or removed Slint foreground pixels and transition release
         // require a clean backdrop before the foreground and list are composed.
         let force_crt_backdrop_repaint = full_screen_transition_release_raster_rendered;
+        // Slint is captured once; native destination layers may finish later.
+        let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
+            || (self.out.director.chart.owner() == Some(FullScreenTransitionOwner::Navigation)
+                && self.out.director.chart.capture_issued());
         let write_crt_backdrop = !navigation_capture_source_carrier_rendered
             && !full_screen_transition_policy_before_render.snapshot_locked
             && (full_screen_transition_policy_before_render.automatic_slint_raster
                 || full_screen_transition_policy_before_render.force_live_raster
-                || full_screen_controlled_capture_rendered)
+                || (project.composition_decision.prepare_navigation_destination
+                    && controlled_destination_raster_ready))
             && (!self.out.director.navigation.is_active()
                 || project.composition_decision.prepare_navigation_destination);
         let list_bounds = self
@@ -5190,10 +5195,7 @@ impl<'a> FrameLoop<'a> {
                 let _profile = mister_magik_framebuffer_scenes::launcher_profile::span(
                     "transition.destination-layers",
                 );
-                let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
-                    || (self.out.director.chart.owner()
-                        == Some(FullScreenTransitionOwner::Navigation)
-                        && self.out.director.chart.capture_issued());
+
                 let destination_raster_ready =
                     project.composition_decision.prepare_navigation_destination
                         && controlled_destination_raster_ready;

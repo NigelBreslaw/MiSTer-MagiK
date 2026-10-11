@@ -1888,6 +1888,20 @@ mod foreground_tests {
                     actual, reference,
                     "partial glyph removal or redraw left stale pixels"
                 );
+                if !visible {
+                    let rotation = match rotation {
+                        RenderingRotation::NoRotation => OutputRotation::None,
+                        RenderingRotation::Rotate90 => OutputRotation::Clockwise90,
+                        _ => OutputRotation::CounterClockwise90,
+                    };
+                    let output =
+                        Rgb565OutputLayout::new(w as usize, h as usize, 640, rotation).unwrap();
+                    let glyph = output.physical_offset(50, h as usize - 30);
+                    assert_eq!(
+                        actual[glyph], backdrop[glyph],
+                        "removed glyph must expose the backdrop"
+                    );
+                }
                 // Overlapping translucent damage must not blend twice.
                 let mut overlapping = DirtyRectList::from_one(DirtyRect {
                     x0: 0,

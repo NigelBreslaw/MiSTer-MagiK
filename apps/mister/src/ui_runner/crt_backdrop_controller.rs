@@ -196,6 +196,8 @@ impl CrtBackdropController {
         let identity = self.prepared_identity(source, layout);
         self.cache.iter().any(|entry| entry.identity == identity)
             && self.was_eligible
+            && self.foreground.matches(self.width(), self.height())
+            && !self.needs_full_repaint
             && !self.state.is_transitioning()
     }
 
@@ -843,6 +845,22 @@ mod tests {
         let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
         let mut controller = CrtBackdropController::for_display(&display).unwrap();
         let mut destination = vec![Rgb565Pixel(0xf81f); controller.width() * controller.height()];
+        let source = BackdropSource {
+            key: "ready-before-present".into(),
+            epoch: 1,
+            words: Arc::from(vec![0xffff_u16; 4]),
+            source_width: 2,
+            source_height: 2,
+            stride_pixels: 2,
+        };
+        let len = controller.width() * controller.physical_height();
+        controller.cache.push_back(PreparedEntry {
+            identity: controller.prepared_identity(&source, layout),
+            pixels: Arc::from(vec![Rgb565Pixel(0x1234); len]),
+            row_repeats: Arc::from(vec![false; controller.physical_height()]),
+            bytes: len * 2 + controller.physical_height(),
+            prepare_us: 0,
+        });
         let snapshot = destination.clone();
         let empty = DirtyRectList::new();
         for writes in [true, false] {
@@ -851,16 +869,17 @@ mod tests {
                 true,
                 writes,
                 &empty,
-                false,
+                true,
                 0,
                 None,
-                None,
+                Some(source.clone()),
                 Duration::ZERO,
                 &mut destination,
                 layout,
             );
             assert_eq!(frame.copied_pixels, 0);
             assert_eq!(destination, snapshot);
+            assert!(!controller.source_ready(&source, layout));
         }
         controller.foreground = crate::crt_backdrop::CrtForeground::transparent(
             controller.width(),
@@ -871,30 +890,32 @@ mod tests {
             true,
             false,
             &empty,
-            false,
+            true,
             1,
             None,
-            None,
+            Some(source.clone()),
             Duration::from_millis(16),
             &mut destination,
             layout,
         );
         assert_eq!(owned.copied_pixels, 0);
         assert_eq!(destination, snapshot);
+        assert!(!controller.source_ready(&source, layout));
         let release = controller.compose(
             true,
             false,
             true,
             &empty,
-            false,
+            true,
             1,
             None,
-            None,
+            Some(source.clone()),
             Duration::from_millis(32),
             &mut destination,
             layout,
         );
         assert!(release.full_damage);
         assert_eq!(destination, controller.pixels());
+        assert!(controller.source_ready(&source, layout));
     }
 }
