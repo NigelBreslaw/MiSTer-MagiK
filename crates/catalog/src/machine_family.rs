@@ -48,6 +48,7 @@ impl MachineFamilyResolver {
     ///
     /// A Dev MAME database and a stable HBMAME database are intentionally not
     /// mixed: both databases come from the selected root.
+    #[cfg(any(test, feature = "builder"))]
     pub(crate) fn for_storage_root(storage_root: &Path) -> Result<Self, String> {
         let roots = [
             storage_root.join("mister-magik-dev"),
@@ -163,6 +164,7 @@ impl MachineFamilyResolver {
         true
     }
 
+    #[cfg(feature = "builder")]
     pub(crate) fn finish_log(&self, system: &str) {
         crate::catalog_logln!(
             "fast_catalog_machine_family_tsv\tsystem={system}\trequested={}\tcache_hits={}\tmame_matches={}\thbmame_matches={}\tunresolved={}",
@@ -180,46 +182,149 @@ fn runtime_row(
     identity: &str,
     namespace: Option<&RomNamespace>,
 ) -> Option<ResolvedMachine> {
-    let preferred_hbmame = namespace == Some(&RomNamespace::Hbmame);
-    let preferred_mame = if preferred_hbmame {
-        shard.machine(true, identity)
-    } else {
-        shard.machine(false, identity)
-    };
-    preferred_mame
-        .map(|machine| ResolvedMachine {
+    let preferred = namespace == Some(&RomNamespace::Hbmame);
+    for hbmame in [preferred, !preferred] {
+        let Some(machine) = shard.machine(hbmame, identity) else {
+            continue;
+        };
+        let mut family = machine;
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(parent) = family
+            .parent_setname
+            .as_deref()
+            .filter(|key| !key.is_empty())
+        {
+            if !seen.insert(family.setname.as_str()) {
+                return None;
+            }
+            let Some(next) = shard.machine(hbmame, parent) else {
+                break;
+            };
+            family = next;
+        }
+        return Some(ResolvedMachine {
             identity: normalize(&machine.setname),
-            family: machine
+            family: family
                 .parent_setname
                 .as_deref()
+                .filter(|parent| !parent.is_empty() && shard.machine(hbmame, parent).is_none())
                 .map(normalize)
-                .filter(|parent| !parent.is_empty())
-                .unwrap_or_else(|| normalize(&machine.setname)),
-            source: if preferred_hbmame {
+                .unwrap_or_else(|| normalize(&family.setname)),
+            source: if hbmame {
                 MachineSource::Hbmame
             } else {
                 MachineSource::Mame
             },
-        })
-        .or_else(|| {
-            let fallback_hbmame = !preferred_hbmame;
-            shard
-                .machine(fallback_hbmame, identity)
-                .map(|machine| ResolvedMachine {
-                    identity: normalize(&machine.setname),
-                    family: machine
-                        .parent_setname
-                        .as_deref()
-                        .map(normalize)
-                        .filter(|parent| !parent.is_empty())
-                        .unwrap_or_else(|| normalize(&machine.setname)),
-                    source: if fallback_hbmame {
-                        MachineSource::Hbmame
-                    } else {
-                        MachineSource::Mame
-                    },
-                })
-        })
+        });
+    }
+    None
+}
+
+fn parse_reviewed_families(data: &str) -> Result<BTreeMap<String, &str>, String> {
+    let mut families = BTreeMap::new();
+    let valid_key = |key: &str| {
+        !key.is_empty()
+            && key.as_bytes()[0].is_ascii_alphanumeric()
+            && key != "unknown"
+            && !key.ends_with(".zip")
+            && key.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+            })
+    };
+    for (index, line) in data.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 3 || !valid_key(fields[0]) || !valid_key(fields[1]) {
+            return Err(format!(
+                "invalid reviewed screenshot family row {}",
+                index + 1
+            ));
+        }
+        let [key, family, evidence] = [fields[0], fields[1], fields[2]];
+        let host = evidence
+            .strip_prefix("https://")
+            .and_then(|url| url.split('/').next());
+        if normalize(key) == normalize(family)
+            || host.is_none_or(str::is_empty)
+            || evidence.chars().any(char::is_whitespace)
+            || families.insert(normalize(key), family).is_some()
+        {
+            return Err(format!(
+                "duplicate, self-referencing or unverified screenshot family row {}",
+                index + 1
+            ));
+        }
+    }
+    if families
+        .values()
+        .any(|family| families.contains_key(&normalize(family)))
+    {
+        return Err("reviewed screenshot families must point directly to parents".into());
+    }
+    Ok(families)
+}
+
+/// Reviewed custom identities; invalid shared data must fail catalog construction.
+pub(crate) fn reviewed_screenshot_family(identity: &str) -> Result<Option<&'static str>, String> {
+    static FAMILIES: std::sync::LazyLock<Result<BTreeMap<String, &'static str>, String>> =
+        std::sync::LazyLock::new(|| {
+            parse_reviewed_families(include_str!("../data/arcade-screenshot-families.tsv"))
+        });
+    FAMILIES
+        .as_ref()
+        .map(|families| families.get(&normalize(identity)).copied())
+        .map_err(Clone::clone)
+}
+
+impl MachineFamilyResolver {
+    pub(crate) fn for_metadata_path(path: &Path) -> Self {
+        Self {
+            runtime_metadata: MetadataStore::open(path).ok(),
+            ..Self::default()
+        }
+    }
+
+    /// Canonical families and available representatives are separate from game identity.
+    pub(crate) fn screenshot_families(
+        &mut self,
+        keys: impl IntoIterator<Item = String>,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let keys = keys.into_iter().collect::<Vec<_>>();
+        let mut targets = BTreeMap::new();
+        for key in &keys {
+            targets.insert(
+                key.clone(),
+                reviewed_screenshot_family(key)?.unwrap_or(key).to_string(),
+            );
+        }
+        let resolved = self.resolve_many(targets.values().map(|key| (key.clone(), None)))?;
+        Ok(targets
+            .into_iter()
+            .map(|(key, target)| {
+                let target = normalize(&target);
+                let family = resolved
+                    .get(&(target.clone(), None))
+                    .and_then(Option::as_ref)
+                    .map(|machine| machine.family.clone())
+                    .unwrap_or(target);
+                (key, family)
+            })
+            .collect())
+    }
+}
+
+pub(crate) fn available_family_screenshots(
+    families: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut available = BTreeMap::new();
+    for (key, family) in families {
+        if normalize(key) == *family || !available.contains_key(family) {
+            available.insert(family.clone(), key.clone());
+        }
+    }
+    available
 }
 
 fn normalize(value: &str) -> String {
@@ -238,6 +343,28 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn reviewed_family_rows_are_strict_and_shared_table_is_valid() {
+        assert_eq!(
+            reviewed_screenshot_family("dfeveronnd").unwrap(),
+            Some("feversos")
+        );
+        for data in [
+            "key\tparent",
+            "Key\tparent\thttps://example.test/mra",
+            "key\tkey\thttps://example.test/mra",
+            "key\tparent\thttp://example.test/mra",
+            "key\tparent\thttps:///mra",
+            "key\tparent\thttps://example.test/mra\textra",
+            "key\tparent\thttps://example.test/a\nkey\tother\thttps://example.test/b",
+            "custom_key\tparent\thttps://example.test/a\ncustom-key\tother\thttps://example.test/b",
+            "key\tcustom_key\thttps://example.test/a\ncustom-key\tparent\thttps://example.test/b",
+            "unknown\tparent\thttps://example.test/a",
+        ] {
+            assert!(parse_reviewed_families(data).is_err(), "{data}");
+        }
+    }
 
     fn fixture() -> (std::path::PathBuf, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!(
