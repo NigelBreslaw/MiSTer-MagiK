@@ -211,6 +211,7 @@ def _open_settings_card(application):
         time.sleep(1)  # Allow the carousel's spring to settle before retrying.
     else:
         raise AssertionError("Settings card was not selectable within 12 attempts")
+    _wait(lambda: _menu_ready(application), "Settings card did not settle")
     activated_at = time.monotonic()
     _press_key(application, "\n")  # Slint Key.Return
     return activated_at
@@ -688,13 +689,12 @@ def set_screen_orientation(application, orientation, sleep=time.sleep):
 
     The orientation combo lists Normal, Monitor right (clockwise) and Monitor
     left (counterclockwise); the confirmation dialog defaults to Revert, so
-    Keep is one step down.
+    Keep is one step right.
     """
     if orientation not in SCREEN_ORIENTATIONS:
         raise ValueError(f"orientation must be one of {sorted(SCREEN_ORIENTATIONS)}")
     _open_settings_card(application)
-    _wait(lambda: _settings_open(application), "Settings did not open")
-    sleep(2)
+    _wait(lambda: _settings_ready(application), "Settings did not settle", timeout=15)
     _focus_label(application, "Screen orientation", "\uf701", 8)
     _press_key(application, "\n")
     sleep(1)
@@ -710,7 +710,7 @@ def set_screen_orientation(application, orientation, sleep=time.sleep):
     # before the countdown reverts it. Choosing the current one shows no
     # dialog, and a key then would change the setting below instead.
     if any(label.startswith("Revert") for label in _selected_labels(application)):
-        _press_key(application, "\uf701")
+        _press_key(application, "\uf703")
         sleep(0.5)
         _press_key(application, "\n")
         sleep(3)

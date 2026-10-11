@@ -104,6 +104,17 @@ pub fn start_navigation_transition(
         physical,
     } = *source;
     let portrait = layout.is_portrait();
+    if portrait && physical {
+        return runtime
+            .begin(TransitionStart::portrait_page(
+                NavigationTransitionRoute::from_super_scaler_edge(edge),
+                direction,
+                layout.output_layout(),
+                pixels,
+                now_us,
+            ))
+            .unwrap_or(false);
+    }
     if edge == NavigationTransitionEdge::SystemPanel {
         // The system hub/list slide has no portrait form.
         return !portrait
@@ -142,16 +153,6 @@ pub fn start_navigation_transition(
             pixels,
             crate::launcher_presentation::system_device_rgb565(kind),
             crt_backdrop,
-            now_us,
-        ))
-    } else if portrait && physical {
-        runtime.begin(TransitionStart::super_scaler_physical(
-            edge,
-            direction,
-            navigation_geometry_to_composition(layout, geometry),
-            layout.composition_w(),
-            layout.composition_h(),
-            pixels,
             now_us,
         ))
     } else {
@@ -202,6 +203,21 @@ pub(super) fn begin_settings_transition(
         composed,
         now_us,
     } = *inputs;
+    if orientation != ScreenOrientation::Normal {
+        use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout};
+        let rotation = match orientation {
+            ScreenOrientation::MonitorClockwise => OutputRotation::CounterClockwise90,
+            ScreenOrientation::MonitorCounterclockwise => OutputRotation::Clockwise90,
+            ScreenOrientation::Normal => unreachable!(),
+        };
+        let output = Rgb565OutputLayout::new(render_h, render_w, render_w, rotation)
+            .expect("portrait Settings uses a valid physical framebuffer");
+        return runtime
+            .begin(TransitionStart::portrait_page(
+                route, direction, output, composed, now_us,
+            ))
+            .unwrap_or(false);
+    }
     let settled_cards = cards.filter(|cards| !cards.is_animating());
     let zoom = route == NavigationTransitionRoute::HomeToSettings
         && settled_cards.is_some()
@@ -237,43 +253,6 @@ pub(super) fn begin_settings_transition(
         )
     };
     runtime.begin(start).unwrap_or(false)
-}
-
-pub(super) fn navigation_geometry_to_composition(
-    layout: UiLayoutGeometry,
-    mut geometry: NavigationTransitionGeometry,
-) -> NavigationTransitionGeometry {
-    fn map_rect(
-        layout: UiLayoutGeometry,
-        rect: NavigationTransitionRect,
-    ) -> NavigationTransitionRect {
-        if rect.width == 0 || rect.height == 0 {
-            return rect;
-        }
-        let mapped = layout.logical_rect_to_composition(DirtyRect {
-            x0: rect.x as usize,
-            y0: rect.y as usize,
-            x1: rect.right() as usize,
-            y1: rect.bottom() as usize,
-        });
-        NavigationTransitionRect {
-            x: mapped.x0.min(u16::MAX as usize) as u16,
-            y: mapped.y0.min(u16::MAX as usize) as u16,
-            width: mapped.width().min(u16::MAX as usize) as u16,
-            height: mapped.rows().min(u32::from(u16::MAX)) as u16,
-        }
-    }
-
-    geometry.source_card = map_rect(layout, geometry.source_card);
-    geometry.source_label = map_rect(layout, geometry.source_label);
-    geometry.source_detail = map_rect(layout, geometry.source_detail);
-    geometry.destination_title = map_rect(layout, geometry.destination_title);
-    geometry.destination_detail = map_rect(layout, geometry.destination_detail);
-    geometry.destination_list = map_rect(layout, geometry.destination_list);
-    geometry.destination_selected_row = map_rect(layout, geometry.destination_selected_row);
-    geometry.destination_preview = map_rect(layout, geometry.destination_preview);
-    geometry.destination_footer = map_rect(layout, geometry.destination_footer);
-    geometry
 }
 
 #[cfg(test)]
@@ -574,10 +553,10 @@ mod tests {
     }
 
     #[test]
-    fn the_system_panel_slide_starts_in_landscape_and_never_in_portrait() {
+    fn the_system_panel_slide_starts_in_landscape_and_portrait() {
         for (orientation, starts) in [
             (ScreenOrientation::Normal, true),
-            (ScreenOrientation::MonitorClockwise, false),
+            (ScreenOrientation::MonitorClockwise, true),
         ] {
             let fixture = Fixture::new(orientation);
             let nav = home_nav();
@@ -836,27 +815,160 @@ mod tests {
     }
 
     #[test]
-    fn portrait_navigation_geometry_uses_physical_rectangles() {
-        let display = UiDisplay::for_framebuffer(4, 3);
-        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::MonitorClockwise);
-        let logical_rect = NavigationTransitionRect {
-            x: 0,
-            y: 0,
-            width: 2,
-            height: 1,
+    fn portrait_navigation_frames_equal_rotated_complete_page_motion() {
+        use crate::ui_display::UiDisplayPlan;
+        use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedPixel;
+        use mister_magik_framebuffer_scenes::navigation::{
+            NavigationTransitionBuffers, render_settings_page_transition_into,
         };
-        let geometry = NavigationTransitionGeometry {
-            source_card: logical_rect,
-            destination_preview: logical_rect,
-            ..NavigationTransitionGeometry::default()
-        };
-
-        let mapped = navigation_geometry_to_composition(layout, geometry);
-
-        assert_eq!(mapped.source_card, mapped.destination_preview);
-        assert_eq!(mapped.source_card.x, 0);
-        assert_eq!(mapped.source_card.y, 1);
-        assert_eq!(mapped.source_card.width, 1);
-        assert_eq!(mapped.source_card.height, 2);
+        for display in [
+            UiDisplay::for_framebuffer(960, 540),
+            UiDisplay::for_plan(
+                UiDisplayPlan::from_mister_ini_text(
+                    "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+                )
+                .unwrap(),
+            ),
+            UiDisplay::for_plan(
+                UiDisplayPlan::from_mister_ini_text(
+                    "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=0\n",
+                )
+                .unwrap(),
+            ),
+        ] {
+            for orientation in [
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::MonitorCounterclockwise,
+            ] {
+                let layout = UiLayoutGeometry::for_display(&display, orientation);
+                let output = layout.output_layout();
+                let (w, h) = (layout.logical_w(), layout.logical_h());
+                let source = (0..w * h)
+                    .map(|i| SharedPixel((i as u16).wrapping_mul(13)))
+                    .collect::<Vec<_>>();
+                let destination = (0..w * h)
+                    .map(|i| SharedPixel((i as u16).wrapping_mul(29)))
+                    .collect::<Vec<_>>();
+                let rotate = |logical: &[SharedPixel]| {
+                    let mut physical = vec![Rgb565Pixel(0); output.len()];
+                    for y in 0..h {
+                        for x in 0..w {
+                            physical[output.physical_offset(x, y)] =
+                                Rgb565Pixel(logical[y * w + x].0);
+                        }
+                    }
+                    physical
+                };
+                let physical_source = rotate(&source);
+                let physical_destination = rotate(&destination);
+                let nav = home_nav();
+                let metrics = CrtUiMetrics::for_display(&display);
+                let crt = display.output_route().is_crt();
+                let mut cards = active_cards(if crt {
+                    LauncherScene::crt(w, h)
+                } else {
+                    LauncherScene::new(w, h)
+                });
+                for direction in [
+                    NavigationTransitionDirection::Forward,
+                    NavigationTransitionDirection::Reverse,
+                ] {
+                    for route in [
+                        NavigationTransitionRoute::HomeToArcade,
+                        NavigationTransitionRoute::HomeToConsoles,
+                        NavigationTransitionRoute::ConsolesToSystem,
+                        NavigationTransitionRoute::SystemPanel,
+                        NavigationTransitionRoute::HomeToSettings,
+                        NavigationTransitionRoute::SettingsToAbout,
+                        NavigationTransitionRoute::AboutToLicenses,
+                        NavigationTransitionRoute::LicensesToLicenseText,
+                        NavigationTransitionRoute::NestedToHome,
+                    ] {
+                        let mut runtime = NavigationTransitionRuntime::new(w, h, true);
+                        let edge = match route {
+                            NavigationTransitionRoute::HomeToArcade => {
+                                Some(NavigationTransitionEdge::HomeToArcade)
+                            }
+                            NavigationTransitionRoute::HomeToConsoles => {
+                                Some(NavigationTransitionEdge::HomeToConsoles)
+                            }
+                            NavigationTransitionRoute::ConsolesToSystem => {
+                                Some(NavigationTransitionEdge::ConsolesToSystem)
+                            }
+                            NavigationTransitionRoute::SystemPanel => {
+                                Some(NavigationTransitionEdge::SystemPanel)
+                            }
+                            _ => None,
+                        };
+                        let started = if let Some(edge) = edge {
+                            begin_navigation_transition(
+                                &mut runtime,
+                                Some(&mut cards),
+                                &physical_source,
+                                &TransitionInputs {
+                                    edge,
+                                    direction,
+                                    nav: &nav,
+                                    collection_id: None,
+                                    layout,
+                                    crt_layout: crt,
+                                    crt_metrics: &metrics,
+                                    crt_backdrop: &[],
+                                    now_us: 0,
+                                },
+                                || None,
+                            )
+                        } else {
+                            begin_settings_transition(
+                                &mut runtime,
+                                Some(&mut cards),
+                                &SettingsInputs {
+                                    route,
+                                    direction,
+                                    orientation,
+                                    render_w: layout.composition_w(),
+                                    render_h: layout.composition_h(),
+                                    reduce_motion: false,
+                                    crt_layout: crt,
+                                    composed: &physical_source,
+                                    now_us: 0,
+                                },
+                            )
+                        };
+                        assert!(started, "{route:?} {orientation:?} did not start");
+                        assert!(
+                            runtime.render().unwrap() == physical_source,
+                            "{route:?} {orientation:?} used an unrotated source"
+                        );
+                        runtime
+                            .capture_destination(&physical_destination, 1)
+                            .unwrap();
+                        let duration = runtime.request().unwrap().duration_us;
+                        let mut reference = NavigationTransitionBuffers::new(w, h);
+                        reference.capture_source(&source).unwrap();
+                        reference.capture_destination(&destination).unwrap();
+                        for part in 0..=4 {
+                            runtime.tick(1 + duration * part / 4);
+                            let frame = runtime.frame();
+                            let mut logical_frame = vec![SharedPixel(0); w * h];
+                            render_settings_page_transition_into(
+                                &reference,
+                                NavigationTransitionRequest::settings_page(direction),
+                                frame,
+                                &mut logical_frame,
+                            )
+                            .unwrap();
+                            let expected = rotate(&logical_frame);
+                            let actual = runtime.render().unwrap();
+                            assert!(
+                                actual == expected,
+                                "{route:?} {direction:?} {orientation:?} {w}x{h} phase {part}: mixed portrait/landscape pixels; first mismatch {:?}",
+                                actual.iter().zip(&expected).position(|(a, b)| a != b)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

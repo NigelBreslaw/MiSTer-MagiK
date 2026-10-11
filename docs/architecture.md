@@ -253,6 +253,10 @@ conversion:
   and navigation snapshots, effects, and destination overlays use physical
   geometry throughout portrait playback. RGB565 scanout remains physically
   landscape for Main and the FPGA latch.
+- Portrait full-screen navigation slides complete, already-rotated snapshots.
+  Its travel axis comes from the output rotation. Landscape card/cog artwork
+  and label-morph renderers do not redraw individual items during portrait
+  playback, and live list overlays cannot overwrite the transition's frame.
 - CRT presentation preserves all 640 horizontal pixels. Only 240p converts the
   vertical axis, using centred nearest-row sampling from 480 to 240 rows.
   Dirty source rectangles map to exact destination bands there; 288p, 480p,

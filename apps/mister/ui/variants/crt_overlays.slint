@@ -199,6 +199,10 @@ component CompactDialogButton inherits Rectangle {
 component CrtInlineConfirmButton inherits Rectangle {
     in property <string> label;
     in property <bool> focused;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
 
     height: CrtPageMetrics.len-y(13);
     background: root.focused ? #302455 : #171223;

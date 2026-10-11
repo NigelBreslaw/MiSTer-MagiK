@@ -5726,7 +5726,11 @@ impl<'a> FrameLoop<'a> {
         } else if crt_backdrop_work_trace.active || crt_backdrop_full_damage.is_some() {
             self.out.crt_arcade_overlay.invalidate();
         }
-        let cached_arcade_rect = if project.crt_backdrop_eligible && !self.ui.nav.is_system_hub() {
+        // A refreshed backdrop must not reintroduce the live list after a
+        // full-screen transition has rendered its owned frame.
+        let cached_arcade_rect = if !project.composition_decision.allow_arcade_list_blit {
+            None
+        } else if project.crt_backdrop_eligible && !self.ui.nav.is_system_hub() {
             arcade_list_rect
                 .or_else(|| {
                     crt_backdrop_full_damage

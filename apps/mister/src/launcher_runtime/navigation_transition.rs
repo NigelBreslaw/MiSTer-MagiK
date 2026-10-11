@@ -1103,12 +1103,16 @@ mod tests {
         use super::super::transition_spec::TransitionStart;
         let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
         let wrong_size = vec![Rgb565Pixel(0); 5];
-        let result = runtime.begin(TransitionStart::super_scaler_physical(
-            NavigationTransitionEdge::HomeToConsoles,
+        let result = runtime.begin(TransitionStart::portrait_page(
+            NavigationTransitionRoute::HomeToConsoles,
             NavigationTransitionDirection::Forward,
-            NavigationTransitionGeometry::default(),
-            12,
-            16,
+            mister_magik_framebuffer_scenes::Rgb565OutputLayout::new(
+                16,
+                12,
+                12,
+                mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+            )
+            .unwrap(),
             &wrong_size,
             0,
         ));
@@ -1818,17 +1822,21 @@ mod tests {
     }
 
     #[test]
-    fn physical_super_scaler_restores_logical_buffer_geometry() {
+    fn portrait_page_restores_logical_buffer_geometry() {
         let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 12 * 16];
         let destination = vec![Rgb565Pixel(0x2222); 12 * 16];
         runtime
-            .begin(TransitionStart::super_scaler_physical(
-                NavigationTransitionEdge::HomeToConsoles,
+            .begin(TransitionStart::portrait_page(
+                NavigationTransitionRoute::HomeToConsoles,
                 NavigationTransitionDirection::Forward,
-                NavigationTransitionGeometry::default(),
-                12,
-                16,
+                mister_magik_framebuffer_scenes::Rgb565OutputLayout::new(
+                    16,
+                    12,
+                    12,
+                    mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+                )
+                .unwrap(),
                 &source,
                 0,
             ))
@@ -1839,7 +1847,7 @@ mod tests {
             (12, 16)
         );
         runtime.capture_destination(&destination, 1).unwrap();
-        runtime.tick(NavigationTransitionEdge::HomeToConsoles.duration_us() + 1);
+        runtime.tick(runtime.request().unwrap().duration_us + 1);
         assert!(runtime.complete().is_some());
         assert!(!runtime.settings_physical_space());
         assert_eq!(
