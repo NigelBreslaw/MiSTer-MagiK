@@ -4,12 +4,10 @@
 //! Stable, catalog-derived hierarchy used by the launcher home screen.
 
 use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, MENU_ARCADE_SYSTEM_ID, PlatformKind};
-#[cfg(test)]
-use mister_magik_catalog::catalog_classify::system_definitions;
 use mister_magik_catalog::catalog_classify::{
-    LauncherSection, normalize_system_id, system_definition,
+    LauncherSection, normalize_system_id, system_definition, system_definitions,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub const ROOT_MENU_ID: &str = "menu:root";
@@ -113,14 +111,14 @@ pub struct LauncherTaxonomy {
 
 impl LauncherTaxonomy {
     pub fn from_catalog(catalog: &ArcadeCatalog) -> Self {
-        TaxonomyBuilder::new(catalog, None).build()
+        Self::from_catalog_with_discovered_systems(catalog, &[])
     }
 
-    pub fn from_catalog_with_shells(
+    pub fn from_catalog_with_discovered_systems(
         catalog: &ArcadeCatalog,
-        visible_zero_systems: &std::collections::HashSet<String>,
+        discovered_systems: &[String],
     ) -> Self {
-        TaxonomyBuilder::new(catalog, Some(visible_zero_systems)).build()
+        TaxonomyBuilder::new(catalog, discovered_systems).build()
     }
 
     pub fn token(&self) -> LauncherTaxonomyToken {
@@ -253,20 +251,17 @@ struct ClassifiedSystem {
 
 struct TaxonomyBuilder<'a> {
     catalog: &'a ArcadeCatalog,
-    visible_zero_systems: Option<&'a std::collections::HashSet<String>>,
+    discovered_systems: &'a [String],
     taxonomy: LauncherTaxonomy,
     buckets: HashMap<Bucket, Vec<ClassifiedSystem>>,
     snk_systems: Vec<ClassifiedSystem>,
 }
 
 impl<'a> TaxonomyBuilder<'a> {
-    fn new(
-        catalog: &'a ArcadeCatalog,
-        visible_zero_systems: Option<&'a std::collections::HashSet<String>>,
-    ) -> Self {
+    fn new(catalog: &'a ArcadeCatalog, discovered_systems: &'a [String]) -> Self {
         Self {
             catalog,
-            visible_zero_systems,
+            discovered_systems,
             taxonomy: LauncherTaxonomy {
                 token: LauncherTaxonomyToken::from_catalog(catalog),
                 ..LauncherTaxonomy::default()
@@ -287,16 +282,52 @@ impl<'a> TaxonomyBuilder<'a> {
     }
 
     fn classify_catalog_systems(&mut self) {
-        for system in &self.catalog.systems {
+        let catalog = self.catalog;
+        let mut present = catalog
+            .systems
+            .iter()
+            .map(|system| {
+                system_definition(&system.id)
+                    .map(|definition| definition.id.clone())
+                    .unwrap_or_else(|| normalize_system_id(&system.id))
+            })
+            .collect::<HashSet<_>>();
+        let definitions = match system_definitions() {
+            Ok(definitions) => definitions,
+            Err(error) => {
+                self.taxonomy.diagnostics.push(format!(
+                    "launcher taxonomy: canonical system definitions unavailable: {error}"
+                ));
+                &[]
+            }
+        };
+        let mut systems = catalog.systems.clone();
+        for definition in definitions {
+            if definition.platform_kind != PlatformKind::Unknown
+                && present.insert(definition.id.clone())
+            {
+                systems.push(GameSystemEntry {
+                    id: definition.id.clone(),
+                    title: definition.title.clone(),
+                    count: 0,
+                });
+            }
+        }
+        for discovered_id in self.discovered_systems {
+            let id = system_definition(discovered_id)
+                .map(|definition| definition.id.clone())
+                .unwrap_or_else(|| normalize_system_id(discovered_id));
+            if !id.is_empty() && id != "launcher" && present.insert(id.clone()) {
+                systems.push(GameSystemEntry {
+                    title: id.to_ascii_uppercase(),
+                    id,
+                    count: 0,
+                });
+            }
+        }
+        for system in systems {
             let id = normalize_system_id(&system.id);
             let count = system.count.max(self.catalog.system_game_count(&system.id));
-            if count == 0
-                && !self
-                    .visible_zero_systems
-                    .is_some_and(|systems| systems.contains(&id))
-            {
-                continue;
-            }
             let kind = self.catalog.platform_kind(&system.id);
             let (bucket, rank) = classify(&id, kind);
             if bucket == Bucket::ArcadeAggregate {
@@ -310,8 +341,14 @@ impl<'a> TaxonomyBuilder<'a> {
                 continue;
             }
 
+            if kind == PlatformKind::Unknown && bucket == Bucket::ConsoleOther {
+                self.taxonomy.diagnostics.push(format!(
+                    "launcher taxonomy: unknown platform kind for system {}; classified as Consoles / Other",
+                    system.id
+                ));
+            }
             let classified = ClassifiedSystem {
-                entry: system.clone(),
+                entry: system,
                 count,
                 rank,
             };
@@ -320,12 +357,6 @@ impl<'a> TaxonomyBuilder<'a> {
                 self.snk_systems.push(classified);
             } else {
                 self.buckets.entry(bucket).or_default().push(classified);
-            }
-            if kind == PlatformKind::Unknown && bucket == Bucket::ConsoleOther {
-                self.taxonomy.diagnostics.push(format!(
-                    "launcher taxonomy: unknown platform kind for system {}; classified as Consoles / Other",
-                    system.id
-                ));
             }
         }
     }
@@ -474,9 +505,7 @@ impl<'a> TaxonomyBuilder<'a> {
         ];
 
         for &(bucket, menu_id, title, parent_id) in SPECS {
-            let Some(mut systems) = self.buckets.remove(&bucket) else {
-                continue;
-            };
+            let mut systems = self.buckets.remove(&bucket).unwrap_or_default();
             systems.sort_by(|a, b| {
                 a.rank
                     .cmp(&b.rank)
@@ -638,15 +667,13 @@ impl<'a> TaxonomyBuilder<'a> {
                 .entry(destination.collection_id.clone())
                 .or_insert_with(|| destination.clone());
         }
-        if self.taxonomy.collection(MENU_ARCADE_SYSTEM_ID).is_some() {
-            self.taxonomy.primary_collection_destinations.insert(
-                MENU_ARCADE_SYSTEM_ID.to_string(),
-                LauncherDestination {
-                    menu_path: vec![ROOT_MENU_ID.to_string()],
-                    collection_id: MENU_ARCADE_SYSTEM_ID.to_string(),
-                },
-            );
-        }
+        self.taxonomy.primary_collection_destinations.insert(
+            MENU_ARCADE_SYSTEM_ID.to_string(),
+            LauncherDestination {
+                menu_path: vec![ROOT_MENU_ID.to_string()],
+                collection_id: MENU_ARCADE_SYSTEM_ID.to_string(),
+            },
+        );
     }
 
     fn insert_parent_menu(&mut self, id: &str, title: &str, child_ids: &[&str]) {
@@ -689,7 +716,7 @@ impl<'a> TaxonomyBuilder<'a> {
         parent_id: Option<&str>,
         items: Vec<LauncherMenuItem>,
     ) {
-        if id != ROOT_MENU_ID && items.is_empty() {
+        if items.is_empty() {
             return;
         }
         let count = items.iter().map(|item| item.count).sum();
@@ -869,34 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_catalog_keeps_the_arcade_shell() {
-        let taxonomy = LauncherTaxonomy::from_catalog(&catalog(Vec::new(), Vec::new()));
-        let root = taxonomy.root_menu().expect("root");
-
-        assert_eq!(root.items.len(), 1);
-        assert_eq!(root.items[0].id, MENU_ARCADE_SYSTEM_ID);
-        assert_eq!(root.items[0].count, 0);
-        assert_eq!(
-            taxonomy
-                .collection(MENU_ARCADE_SYSTEM_ID)
-                .expect("Arcade shell")
-                .count,
-            0
-        );
-    }
-
-    #[test]
-    fn non_arcade_empty_groups_are_pruned_recursively() {
-        let taxonomy = LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system("nes", 4)]));
-        let root = taxonomy.root_menu().expect("root");
-        assert_eq!(root.items.len(), 2);
-        assert_eq!(root.items[0].id, MENU_ARCADE_SYSTEM_ID);
-        assert_eq!(root.items[1].id, CONSOLES_MENU_ID);
-        assert!(taxonomy.menu(HANDHELDS_MENU_ID).is_none());
-        assert!(taxonomy.menu(CONSOLES_OTHER_MENU_ID).is_none());
-    }
-
-    #[test]
     fn neogeo_pocket_only_has_handheld_primary_path() {
         let taxonomy =
             LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system("neogeopocket", 3)]));
@@ -949,10 +948,10 @@ mod tests {
             }],
         ));
         let consoles = taxonomy.menu(CONSOLES_MENU_ID).expect("Consoles");
-        assert_eq!(consoles.items.len(), 1);
-        assert_eq!(consoles.items[0].id, "psx");
-        assert_eq!(consoles.items[0].title, "Sony PlayStation");
-        assert_eq!(consoles.items[0].kind, LauncherMenuItemKind::Collection);
+        let playstation = consoles.items.iter().find(|item| item.id == "psx").unwrap();
+        assert_eq!(playstation.title, "Sony PlayStation");
+        assert_eq!(playstation.kind, LauncherMenuItemKind::Collection);
+        assert_eq!(playstation.count, 7);
         assert_eq!(
             taxonomy
                 .primary_destination_for_system("psx")
@@ -978,7 +977,15 @@ mod tests {
                 .iter()
                 .map(|item| item.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["amiga", "amigacd32"]
+            vec![
+                "amiga",
+                "amigacd32",
+                "c64",
+                "c128",
+                "c16",
+                "vic20",
+                "pet2001"
+            ]
         );
         assert_eq!(
             taxonomy
@@ -1003,17 +1010,117 @@ mod tests {
     fn unknown_system_falls_back_to_console_other_with_diagnostic() {
         let taxonomy =
             LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system("mystery-box", 2)]));
-        assert!(taxonomy.menu_contains_item(CONSOLES_MENU_ID, "mystery-box"));
-        assert!(taxonomy.menu(CONSOLES_OTHER_MENU_ID).is_none());
+        assert!(taxonomy.menu_contains_item(CONSOLES_OTHER_MENU_ID, "mystery-box"));
         assert_eq!(taxonomy.diagnostics().len(), 1);
     }
 
     #[test]
+    fn known_system_with_unknown_catalog_kind_remains_diagnostic() {
+        assert!(
+            LauncherTaxonomy::from_catalog(&catalog(Vec::new(), Vec::new()))
+                .diagnostics()
+                .is_empty()
+        );
+        let taxonomy = LauncherTaxonomy::from_catalog(&catalog_with_kind(
+            "colecovision",
+            PlatformKind::Unknown,
+        ));
+        assert!(taxonomy.menu_contains_item(CONSOLES_OTHER_MENU_ID, "colecovision"));
+        assert_eq!(taxonomy.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn missing_classification_groups_preserve_zero_game_collections() {
+        let catalog = catalog(Vec::new(), Vec::new());
+        let mut builder = TaxonomyBuilder::new(&catalog, &[]);
+        let system = ClassifiedSystem {
+            entry: system("custom", 0),
+            count: 0,
+            rank: 0,
+        };
+        builder.add_exact_collection(&system);
+        builder.buckets.insert(Bucket::ConsoleOther, vec![system]);
+        builder.build_exact_collection_menus();
+        builder.build_snk_menu();
+        builder.build_category_menus();
+        builder.build_root_menu();
+        builder.record_collection_destinations();
+        let taxonomy = builder.taxonomy;
+        assert_eq!(taxonomy.root_menu().unwrap().items.len(), 2);
+        assert!(taxonomy.menu_contains_item(CONSOLES_MENU_ID, "custom"));
+        assert_eq!(taxonomy.collection("custom").unwrap().count, 0);
+        assert!(taxonomy.menu(COMPUTERS_MENU_ID).is_none());
+        assert!(taxonomy.menu(HANDHELDS_MENU_ID).is_none());
+        assert!(taxonomy.menu(SNK_NEOGEO_MENU_ID).is_none());
+        let destination = taxonomy.primary_destination_for_system("custom").unwrap();
+        assert!(
+            taxonomy.collection_path_is_valid(&destination.menu_path, &destination.collection_id)
+        );
+    }
+
+    #[test]
+    fn discovered_custom_systems_remain_visible_without_catalog_rows() {
+        let catalog = catalog(
+            Vec::new(),
+            vec![GameSystemEntry {
+                id: "existing-custom".into(),
+                title: "Existing title".into(),
+                count: 0,
+            }],
+        );
+        let taxonomy = LauncherTaxonomy::from_catalog_with_discovered_systems(
+            &catalog,
+            &[
+                "NEW_Custom".into(),
+                "new-custom".into(),
+                "existing-custom".into(),
+                "SNES".into(),
+                "Launcher".into(),
+            ],
+        );
+        assert_eq!(
+            taxonomy.collection("new-custom").unwrap().title,
+            "NEW-CUSTOM"
+        );
+        assert_eq!(
+            taxonomy.collection("existing-custom").unwrap().title,
+            "Existing title"
+        );
+        assert!(taxonomy.collection("launcher").is_none());
+        let other = taxonomy.menu(CONSOLES_OTHER_MENU_ID).unwrap();
+        assert_eq!(
+            other
+                .items
+                .iter()
+                .filter(|item| item.id == "new-custom")
+                .count(),
+            1
+        );
+        assert!(
+            taxonomy
+                .primary_destination_for_system("new-custom")
+                .is_some()
+        );
+        let nintendo = taxonomy.menu(CONSOLES_NINTENDO_MENU_ID).unwrap();
+        assert_eq!(
+            nintendo
+                .items
+                .iter()
+                .filter(|item| item.id == "snes")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn every_canonical_system_has_a_single_taxonomy_driven_path() {
-        for definition in system_definitions().expect("canonical system taxonomy") {
+        let taxonomy = LauncherTaxonomy::from_catalog(&catalog(Vec::new(), Vec::new()));
+        for definition in system_definitions()
+            .expect("canonical system taxonomy")
+            .iter()
+            .filter(|definition| definition.platform_kind != PlatformKind::Unknown)
+        {
             let id = definition.id.as_str();
-            let taxonomy =
-                LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system(id, 1)]));
             let destination = taxonomy
                 .primary_destination_for_system(id)
                 .unwrap_or_else(|| panic!("missing primary destination for {id}"));
@@ -1022,10 +1129,37 @@ mod tests {
                 LauncherSection::SnkNeogeo => {
                     vec![ROOT_MENU_ID, CONSOLES_MENU_ID, SNK_NEOGEO_MENU_ID]
                 }
-                LauncherSection::Consoles => vec![ROOT_MENU_ID, CONSOLES_MENU_ID],
-                LauncherSection::Handhelds => vec![ROOT_MENU_ID, HANDHELDS_MENU_ID],
-                LauncherSection::Computers => vec![ROOT_MENU_ID, COMPUTERS_MENU_ID],
-                LauncherSection::Other => vec![ROOT_MENU_ID, CONSOLES_MENU_ID],
+                LauncherSection::Consoles => match definition.family.as_str() {
+                    "atari" => vec![ROOT_MENU_ID, CONSOLES_MENU_ID, CONSOLES_ATARI_MENU_ID],
+                    "sega" => vec![ROOT_MENU_ID, CONSOLES_MENU_ID, CONSOLES_SEGA_MENU_ID],
+                    "sony" => vec![ROOT_MENU_ID, CONSOLES_MENU_ID],
+                    "nintendo" => vec![ROOT_MENU_ID, CONSOLES_MENU_ID, CONSOLES_NINTENDO_MENU_ID],
+                    "nec" => vec![ROOT_MENU_ID, CONSOLES_MENU_ID, CONSOLES_NEC_MENU_ID],
+                    _ => vec![ROOT_MENU_ID, CONSOLES_MENU_ID, CONSOLES_OTHER_MENU_ID],
+                },
+                LauncherSection::Handhelds => match definition.family.as_str() {
+                    "nintendo" => vec![ROOT_MENU_ID, HANDHELDS_MENU_ID, HANDHELDS_NINTENDO_MENU_ID],
+                    "bandai" => vec![ROOT_MENU_ID, HANDHELDS_MENU_ID, HANDHELDS_BANDAI_MENU_ID],
+                    "other" => vec![ROOT_MENU_ID, HANDHELDS_MENU_ID, HANDHELDS_OTHER_MENU_ID],
+                    _ => vec![ROOT_MENU_ID, HANDHELDS_MENU_ID],
+                },
+                LauncherSection::Computers => {
+                    let vendor = match definition.family.as_str() {
+                        "acorn" => COMPUTERS_ACORN_MENU_ID,
+                        "apple" => COMPUTERS_APPLE_MENU_ID,
+                        "commodore" => COMPUTERS_COMMODORE_MENU_ID,
+                        "atari" => COMPUTERS_ATARI_MENU_ID,
+                        "sinclair" => COMPUTERS_SINCLAIR_MENU_ID,
+                        "tandy" => COMPUTERS_TANDY_MENU_ID,
+                        "dos-pc" => COMPUTERS_DOS_PC_MENU_ID,
+                        "japanese" => COMPUTERS_JAPANESE_MENU_ID,
+                        _ => COMPUTERS_OTHER_MENU_ID,
+                    };
+                    vec![ROOT_MENU_ID, COMPUTERS_MENU_ID, vendor]
+                }
+                LauncherSection::Other => {
+                    vec![ROOT_MENU_ID, CONSOLES_MENU_ID, CONSOLES_OTHER_MENU_ID]
+                }
             };
             assert_eq!(
                 destination.menu_path, expected,
@@ -1063,7 +1197,7 @@ mod tests {
             let destination = taxonomy
                 .primary_destination_for_system(&id)
                 .expect("fallback destination");
-            assert_eq!(destination.menu_path, vec![ROOT_MENU_ID, parent]);
+            assert_eq!(destination.menu_path, vec![ROOT_MENU_ID, parent, _vendor]);
             assert_eq!(
                 taxonomy.diagnostics().len(),
                 usize::from(kind == PlatformKind::Unknown)
@@ -1126,38 +1260,38 @@ mod tests {
         assert_eq!(
             menu_ids(CONSOLES_MENU_ID),
             vec![
-                "atari2600",
-                "sms",
+                CONSOLES_ATARI_MENU_ID,
+                CONSOLES_SEGA_MENU_ID,
                 "psx",
-                "nes",
-                "tgfx16",
+                CONSOLES_NINTENDO_MENU_ID,
+                CONSOLES_NEC_MENU_ID,
                 SNK_NEOGEO_MENU_ID,
-                "colecovision",
+                CONSOLES_OTHER_MENU_ID,
             ]
         );
         assert_eq!(
             menu_ids(HANDHELDS_MENU_ID),
             vec![
-                "gb",
+                HANDHELDS_NINTENDO_MENU_ID,
                 "gamegear",
                 "atarilynx",
                 "neogeopocket",
-                "wonderswan",
-                "supervision",
+                HANDHELDS_BANDAI_MENU_ID,
+                HANDHELDS_OTHER_MENU_ID,
             ]
         );
         assert_eq!(
             menu_ids(COMPUTERS_MENU_ID),
             vec![
-                "acornatom",
-                "apple-ii",
-                "amiga",
-                "atari800",
-                "zx81",
-                "trs-80",
-                "dos",
-                "msx",
-                "amstrad",
+                COMPUTERS_ACORN_MENU_ID,
+                COMPUTERS_APPLE_MENU_ID,
+                COMPUTERS_COMMODORE_MENU_ID,
+                COMPUTERS_ATARI_MENU_ID,
+                COMPUTERS_SINCLAIR_MENU_ID,
+                COMPUTERS_TANDY_MENU_ID,
+                COMPUTERS_DOS_PC_MENU_ID,
+                COMPUTERS_JAPANESE_MENU_ID,
+                COMPUTERS_OTHER_MENU_ID,
             ]
         );
         assert_eq!(taxonomy.collection(MENU_ARCADE_SYSTEM_ID).unwrap().count, 2);

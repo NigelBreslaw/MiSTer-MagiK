@@ -17,7 +17,6 @@ pub const FIXTURE_SCREENSHOT_HEIGHT: usize = 120;
 pub struct UiPreviewFixtures {
     pub catalog: ArcadeCatalog,
     pub screenshots: Vec<FixtureScreenshot>,
-    pub shell_system_ids: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -45,18 +44,12 @@ impl UiPreviewFixtures {
                     .count(),
             })
             .collect::<Vec<_>>();
-        let shell_system_ids = systems
-            .iter()
-            .filter(|system| system.count == 0)
-            .map(|system| system.id.clone())
-            .collect();
         let screenshots = (0..FIXTURE_ARCADE_GAME_COUNT)
             .map(fixture_screenshot)
             .collect();
         Ok(Self {
             catalog: ArcadeCatalog::new(PathBuf::from("/fixture"), games, systems),
             screenshots,
-            shell_system_ids,
         })
     }
 

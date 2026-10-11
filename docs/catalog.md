@@ -68,7 +68,8 @@ Artifacts are written to generation-private paths. Publication writes and
 syncs changed artifacts before atomically replacing the manifest. Unchanged
 systems retain their immutable artifact references. Failed changed systems
 retain their previous published artifacts; a newly discovered system that
-cannot be built is omitted.
+cannot be built has no published artifact. All canonical playable systems stay
+visible in the launcher regardless of installed games or artifact availability.
 
 `mame.sqlite3` and `hbmame.sqlite3` remain CI/private-build source metadata for
 Arcade classification and family knowledge. They are not runtime inputs,

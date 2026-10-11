@@ -521,31 +521,6 @@ fn checked_header_entry_is_rejected(is_dir: Option<bool>) -> bool {
     matches!(is_dir, Some(false))
 }
 
-#[cfg(test)]
-pub(crate) fn game_dir_has_payload_candidate(path: &Path, extensions: &[String]) -> bool {
-    for entry in walkdir::WalkDir::new(path)
-        .follow_links(false)
-        .max_depth(2)
-        .into_iter()
-        .filter_entry(|entry| !should_ignore_path(entry.path()))
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
-        if path_ext_eq(path, "zip")
-            || path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| contains_ignore_ascii_case(extensions, ext))
-        {
-            return true;
-        }
-    }
-    false
-}
-
 pub(crate) fn game_dir_payload_facts_for_header(header: GameDirHeader) -> GameDirFact {
     let (
         has_payload_files,
@@ -827,13 +802,6 @@ fn path_ext_eq(path: &Path, expected: &str) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
-}
-
-#[cfg(test)]
-fn contains_ignore_ascii_case(values: &[String], needle: &str) -> bool {
-    values
-        .iter()
-        .any(|value| value.eq_ignore_ascii_case(needle))
 }
 
 fn should_ignore_hidden_path(path: &Path) -> bool {

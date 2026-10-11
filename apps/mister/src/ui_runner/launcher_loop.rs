@@ -743,15 +743,16 @@ fn set_launcher_present_mode_label(app: &slint_ui::launcher::Launcher, value: &s
         .set_present_mode_label(value);
 }
 
-fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) -> bool {
+fn collection_rows_ready(catalog: &ArcadeCatalog, nav: &LauncherNav, collection_id: &str) -> bool {
     catalog.system_game_count(collection_id) > 0
+        || nav.collection_declared_count(collection_id) == 0
 }
 
 fn empty_collection_invariant_violated(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
     nav.screen == Screen::Arcade
         && active_system(catalog, nav).is_some_and(|system| {
             system.count > 0
-                && !collection_has_resident_rows(catalog, &system.id)
+                && catalog.system_game_count(&system.id) == 0
                 && !nav.catalog_system_hydration_is_loading(&system.id)
                 && !nav.catalog_system_hydration_has_failed(&system.id)
                 && !nav.collection_is_scanning(&system.id)
@@ -767,7 +768,7 @@ fn commit_pending_collection_entry(
     let Some(entry) = pending.as_ref() else {
         return false;
     };
-    if !collection_has_resident_rows(catalog, &entry.collection_id) {
+    if !collection_rows_ready(catalog, nav, &entry.collection_id) {
         return false;
     }
     let entry = pending.take().expect("pending collection entry");
@@ -1602,16 +1603,6 @@ fn begin_cold_collection_entry(
     system_entry: &mut SystemEntryAdoption,
     start: Instant,
 ) -> ColdCollectionEntryStart {
-    // The Arcade shell exists independently of installed games. Do not ask
-    // the shard scheduler to read a file for an unregistered/zero-row library.
-    if collection_id == arcade_catalog::MENU_ARCADE_SYSTEM_ID
-        && nav.collection_declared_count(collection_id) == 0
-    {
-        return ColdCollectionEntryStart {
-            pending: None,
-            bridge_dirty: true,
-        };
-    }
     let hydration_failed = nav.catalog_system_hydration_has_failed(collection_id);
     let already_loading = nav.catalog_system_hydration_is_loading(collection_id);
     let preview_dispatch = (!already_loading).then(|| {
@@ -1735,19 +1726,6 @@ fn startup_intro_catalog_worker_request(request: CatalogWorkerRequest) -> Catalo
 
 fn catalog_taxonomy_sync_required(catalog_ready: bool, source: CatalogSource) -> bool {
     !(catalog_ready && source == CatalogSource::NavigationProjection)
-}
-
-fn catalog_for_ready_source(
-    nav: &mut LauncherNav,
-    catalog: ArcadeCatalog,
-    source: CatalogSource,
-) -> ArcadeCatalog {
-    if source == CatalogSource::ShardedRegistry {
-        nav.catalog_build_finished(&catalog);
-        catalog
-    } else {
-        nav.catalog_with_build_shells(catalog)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2283,18 +2261,22 @@ fn catalog_build_media_gate(
     }
 }
 
-fn apply_catalog_system_scanning_presentation(
+fn sync_catalog_status_presentation(
     nav: &mut LauncherNav,
-    catalog: &mut ArcadeCatalog,
-    system_id: &str,
+    catalog: &ArcadeCatalog,
+    catalog_version: &mut usize,
+    full_bridge_dirty: &mut bool,
+    startup_intro_catalog_status_pending: &mut bool,
     defer_bridge_ui: bool,
-) -> bool {
-    nav.catalog_system_scanning(system_id);
+) {
     if defer_bridge_ui {
-        return false;
+        *startup_intro_catalog_status_pending = true;
+    } else {
+        *startup_intro_catalog_status_pending = false;
+        nav.sync_launcher_taxonomy(catalog);
+        *catalog_version = (*catalog_version).wrapping_add(1);
+        *full_bridge_dirty = true;
     }
-    *catalog = catalog.with_system_placeholder(system_id);
-    true
 }
 
 fn retain_startup_intro_catalog_ui_intent(
@@ -2322,7 +2304,7 @@ struct CatalogDomain<'a> {
     lifecycle_effects: &'a mut LifecycleEffects,
     full_bridge_dirty: &'a mut bool,
     startup_intro_catalog_ui_replay: &'a mut Option<LauncherWorkerUiIntent>,
-    startup_intro_catalog_shells_pending: &'a mut bool,
+    startup_intro_catalog_status_pending: &'a mut bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2350,7 +2332,7 @@ fn process_catalog_worker_message(
         lifecycle_effects,
         full_bridge_dirty,
         startup_intro_catalog_ui_replay,
-        startup_intro_catalog_shells_pending,
+        startup_intro_catalog_status_pending,
     } = domain;
     prepare_trace.catalog_message_count = prepare_trace.catalog_message_count.saturating_add(1);
     let effects = catalog_session.handle_worker_message(
@@ -2378,7 +2360,7 @@ fn process_catalog_worker_message(
             lifecycle_effects,
             full_bridge_dirty,
             startup_intro_catalog_ui_replay,
-            startup_intro_catalog_shells_pending,
+            startup_intro_catalog_status_pending,
         },
         defer_bridge_ui,
         loop_start,
@@ -2929,7 +2911,7 @@ fn apply_catalog_session_effects(
         lifecycle_effects,
         full_bridge_dirty,
         startup_intro_catalog_ui_replay,
-        startup_intro_catalog_shells_pending,
+        startup_intro_catalog_status_pending,
     } = domain;
     for effect in effects.into_effects() {
         match effect {
@@ -2944,7 +2926,10 @@ fn apply_catalog_session_effects(
                 publication_ack,
             } => {
                 let taxonomy_sync_required = catalog_taxonomy_sync_required(*catalog_ready, source);
-                *catalog = catalog_for_ready_source(nav, ready_catalog, source);
+                if source == CatalogSource::ShardedRegistry {
+                    nav.catalog_build_finished(&ready_catalog);
+                }
+                *catalog = ready_catalog;
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *catalog_ready = true;
                 *return_capsule_active = false;
@@ -3087,49 +3072,40 @@ fn apply_catalog_session_effects(
                 system_ids,
                 all_published_systems,
             } => {
-                // The first-run intro needs only the authoritative Arcade
-                // projection used for its live launcher frame. Rebuilding
-                // navigation shells here clones the resident Arcade rows on
-                // CPU1 once per scan milestone, despite the launcher being
-                // dormant. The final published catalog will install the same
-                // taxonomy authoritatively.
                 nav.catalog_reconciliation_plan(catalog, &system_ids, all_published_systems);
-                if defer_bridge_ui {
-                    *startup_intro_catalog_shells_pending = true;
-                    continue;
-                }
-                *catalog = nav.catalog_with_build_shells(catalog.clone());
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                nav.sync_launcher_taxonomy(catalog);
-                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
-                *full_bridge_dirty = true;
-            }
-            CatalogSessionEffect::CatalogSystemScanning { system_id } => {
-                if !apply_catalog_system_scanning_presentation(
+                sync_catalog_status_presentation(
                     nav,
                     catalog,
-                    &system_id,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
                     defer_bridge_ui,
-                ) {
-                    *startup_intro_catalog_shells_pending = true;
-                    continue;
-                }
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                nav.sync_launcher_taxonomy(catalog);
-                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
-                *full_bridge_dirty = true;
+                );
+            }
+            CatalogSessionEffect::CatalogSystemScanning { system_id } => {
+                nav.catalog_system_scanning(&system_id);
+                sync_catalog_status_presentation(
+                    nav,
+                    catalog,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
+                    defer_bridge_ui,
+                );
             }
             CatalogSessionEffect::CatalogSystemPrepared {
                 system_id,
                 generation,
             } => {
                 nav.catalog_system_prepared(&system_id);
-                if defer_bridge_ui {
-                    *startup_intro_catalog_shells_pending = true;
-                } else {
-                    *catalog_version = (*catalog_version).wrapping_add(1);
-                    *full_bridge_dirty = true;
-                }
+                sync_catalog_status_presentation(
+                    nav,
+                    catalog,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
+                    defer_bridge_ui,
+                );
                 print_startup_event(
                     start,
                     "catalog_system_prepared",
@@ -3153,11 +3129,14 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::CatalogSystemUpdateFailed { system_id } => {
                 nav.catalog_system_update_failed(&system_id);
-                *catalog = catalog.with_system_placeholder(&system_id);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                nav.sync_launcher_taxonomy(catalog);
-                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
-                *full_bridge_dirty = true;
+                sync_catalog_status_presentation(
+                    nav,
+                    catalog,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
+                    defer_bridge_ui,
+                );
             }
             CatalogSessionEffect::CatalogSystemHydrationFailed { system_id } => {
                 nav.catalog_system_hydration_failed(&system_id);
@@ -3206,7 +3185,6 @@ fn apply_catalog_session_effects(
                 );
             }
             CatalogSessionEffect::CatalogBuildFinished => {
-                *catalog = catalog.without_empty_system_placeholders();
                 nav.catalog_build_finished(catalog);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
@@ -5046,6 +5024,89 @@ mod tests {
     }
 
     #[test]
+    fn startup_intro_batches_scan_status_before_live_launcher_frame() {
+        let catalog = catalog_for_media_systems(&["arcade"]);
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let mut version = 7;
+        let mut dirty = false;
+        let mut pending = false;
+        nav.catalog_reconciliation_plan(&catalog, &["custom-system".to_string()], false);
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        nav.catalog_system_scanning("custom-system");
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        nav.catalog_system_prepared("custom-system");
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        nav.catalog_system_update_failed("custom-system");
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        assert_eq!(
+            version, 7,
+            "status must not restart catalog consumers during the intro"
+        );
+        assert!(!dirty);
+        assert!(pending);
+        assert_eq!(
+            startup_intro_launcher_ui_plan(true, StartupRevealState::RevealLauncher, false),
+            StartupIntroLauncherUiPlan::PrepareLiveFrame
+        );
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            false,
+        );
+        assert_eq!(version, 8);
+        assert!(dirty);
+        assert!(!pending);
+        assert!(nav.open_system(&catalog, "custom-system"));
+        assert!(nav.catalog_system_update_has_failed("custom-system"));
+        nav.catalog_reconciliation_plan(&catalog, &["custom-system".to_string()], false);
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            false,
+        );
+        assert_eq!(
+            version, 9,
+            "interactive changes invalidate presentation immediately"
+        );
+        assert!(!nav.catalog_system_update_has_failed("custom-system"));
+    }
+
+    #[test]
     fn startup_intro_waits_for_full_refresh_or_the_hard_deadline() {
         assert!(!startup_catalog_ready_for_reveal(true, true, false));
         assert!(startup_catalog_ready_for_reveal(true, true, true));
@@ -5557,65 +5618,6 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_registry_reconciles_discovery_shells_before_taxonomy_sync() {
-        let mut nav = LauncherNav::new();
-        nav.catalog_system_discovered("snes");
-        nav.catalog_system_discovered("3do");
-        let authoritative = catalog_for_media_systems(&["snes"]);
-
-        let catalog =
-            catalog_for_ready_source(&mut nav, authoritative, CatalogSource::ShardedRegistry);
-        nav.sync_launcher_taxonomy(&catalog);
-
-        assert!(catalog.systems.iter().any(|system| system.id == "snes"));
-        assert!(catalog.systems.iter().all(|system| system.id != "3do"));
-        assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
-        assert!(
-            nav.current_menu_items()
-                .iter()
-                .any(|item| item.id == "snes")
-        );
-        assert!(nav.current_menu_items().iter().all(|item| item.id != "3do"));
-    }
-
-    #[test]
-    fn progressive_catalog_retains_discovery_shells_until_registry_publish() {
-        let mut nav = LauncherNav::new();
-        nav.catalog_system_discovered("snes");
-        let bootstrap = catalog_for_media_systems(&["arcade"]);
-
-        let catalog =
-            catalog_for_ready_source(&mut nav, bootstrap, CatalogSource::NavigationProjection);
-
-        assert!(catalog.systems.iter().any(|system| system.id == "snes"));
-    }
-
-    #[test]
-    fn intro_deferred_scanning_replays_one_system_shell_after_handoff() {
-        let mut nav = LauncherNav::new();
-        let mut catalog = catalog_for_media_systems(&["arcade"]);
-
-        assert!(!apply_catalog_system_scanning_presentation(
-            &mut nav,
-            &mut catalog,
-            "snes",
-            true,
-        ));
-        assert!(catalog.systems.iter().all(|system| system.id != "snes"));
-
-        catalog = nav.catalog_with_build_shells(catalog);
-        nav.sync_launcher_taxonomy(&catalog);
-
-        assert!(catalog.systems.iter().any(|system| system.id == "snes"));
-        assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
-        assert!(
-            nav.current_menu_items()
-                .iter()
-                .any(|item| item.id == "snes")
-        );
-    }
-
-    #[test]
     fn intro_catalog_ui_replay_retains_the_latest_presentation() {
         let mut replay = None;
 
@@ -5752,7 +5754,12 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         nav.sync_launcher_taxonomy(&registry);
-        assert!(nav.open_menu("menu:consoles"));
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "snes")
+            .unwrap();
         nav.scroll_x = 1;
         let before = LauncherProjectionKey::from_nav(&nav);
         let event = nav
@@ -5773,6 +5780,8 @@ mod tests {
             source: nav.home_view_state(),
             open_game_list_directly: false,
         });
+        // Scrolling can advance while hydration is pending without changing the intent.
+        nav.scroll_x += 1;
         assert!(before != LauncherProjectionKey::from_nav(&nav));
         assert!(!cancel_pending_collection_entry_for_navigation(
             &mut pending,

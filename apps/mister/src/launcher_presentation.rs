@@ -1772,7 +1772,7 @@ mod tests {
             active_games_load_state(&catalog, &nav),
             ArcadeLoadState::Failed
         );
-        nav.catalog_system_update_ready("arcade");
+        nav.catalog_build_finished(&catalog);
         assert_eq!(
             active_games_load_state(&catalog, &nav),
             ArcadeLoadState::Empty

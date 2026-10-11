@@ -115,7 +115,6 @@ pub struct ArcadeCatalog {
     filter_options_by_system: Arc<HashMap<String, ArcadeSystemFilterOptions>>,
     preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
     launch_plans_by_ref: Arc<HashMap<Arc<str>, StructuredLaunchPlan>>,
-    projection_stats_by_system: Arc<HashMap<String, SystemProjectionStats>>,
     search_keys: Arc<Vec<ArcadeSearchKey>>,
     autocomplete: Arc<ArcadeAutocompleteIndex>,
     lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
@@ -1041,7 +1040,6 @@ impl ArcadeCatalog {
             filter_options_by_system: Arc::new(indexes.filter_options_by_system),
             preview_games_by_system: Arc::new(indexes.preview_games_by_system),
             launch_plans_by_ref: Arc::new(indexes.launch_plans_by_ref),
-            projection_stats_by_system: Arc::new(HashMap::new()),
             search_keys: Arc::new(indexes.search_keys),
             autocomplete: Arc::new(indexes.autocomplete),
             lazy_text_indexes: Arc::new(OnceLock::new()),
@@ -1288,52 +1286,6 @@ impl ArcadeCatalog {
             system.count = collection.len();
         }
         Arc::make_mut(&mut catalog.system_collections).insert(collection_id, collection);
-        catalog
-    }
-
-    /// Adds a zero-game system shell so progressive launcher taxonomy can
-    /// publish the real destination before its shard is ready.
-    pub fn with_system_placeholder(&self, system_id: &str) -> Self {
-        if self.systems.iter().any(|system| system.id == system_id) {
-            return self.clone();
-        }
-        let mut catalog = self.clone();
-        catalog.systems.push(GameSystemEntry {
-            id: system_id.to_string(),
-            title: crate::catalog_classify::system_definition(system_id)
-                .map(|definition| definition.title.clone())
-                .unwrap_or_else(|| system_id.to_ascii_uppercase()),
-            count: 0,
-        });
-        sort_systems_by_title(&mut catalog.systems);
-        Arc::make_mut(&mut catalog.platform_kinds).insert(
-            system_id.to_string(),
-            crate::catalog_classify::platform_kind_for_system(system_id),
-        );
-        catalog
-    }
-
-    /// Removes zero-game system shells after an authoritative catalog replaces
-    /// the progressive discovery view.
-    pub fn without_empty_system_placeholders(&self) -> Self {
-        let mut catalog = self.clone();
-        catalog
-            .systems
-            .retain(|system| system.count > 0 || self.system_game_count(&system.id) > 0);
-        if catalog.systems.len() == self.systems.len() {
-            return self.clone();
-        }
-        let retained_system_ids = catalog
-            .systems
-            .iter()
-            .map(|system| system.id.as_str())
-            .collect::<HashSet<_>>();
-        Arc::make_mut(&mut catalog.platform_kinds)
-            .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
-        Arc::make_mut(&mut catalog.projection_stats_by_system)
-            .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
-        Arc::make_mut(&mut catalog.system_collections)
-            .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
         catalog
     }
 
@@ -2714,7 +2666,6 @@ pub fn systems_from_games(games: &[ArcadeGameEntry]) -> Vec<GameSystemEntry> {
     }
     let mut systems: Vec<GameSystemEntry> = counts
         .into_iter()
-        .filter(|(_, count)| *count > 0)
         .map(|(id, count)| GameSystemEntry {
             title: system_title(&id),
             id,
@@ -3592,115 +3543,6 @@ mod tests {
             LaunchTarget::Structured(_)
         ));
         assert_eq!(hydrated.search_source_system_ids("c64"), vec!["c64"]);
-    }
-
-    #[test]
-    fn empty_placeholder_cleanup_preserves_registered_and_resident_systems() {
-        let resident_game = ArcadeGameEntry {
-            title: "1942".into(),
-            mra_path: "/media/fat/_Arcade/1942.mra".into(),
-            preview_archive_path: "".into(),
-            preview_asset_key: "".into(),
-            has_preview: false,
-            system_id: "arcade".into(),
-            year: None,
-            manufacturer: "".into(),
-            category: "".into(),
-            players: None,
-            control: "".into(),
-            is_new: false,
-        };
-        let mut catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
-            PathBuf::from("/fixture"),
-            vec![resident_game],
-            vec![
-                GameSystemEntry {
-                    id: "arcade".into(),
-                    title: "Arcade".into(),
-                    count: 0,
-                },
-                GameSystemEntry {
-                    id: "snes".into(),
-                    title: "SNES".into(),
-                    count: 4,
-                },
-                GameSystemEntry {
-                    id: "apple-iigs".into(),
-                    title: "APPLE-IIGS".into(),
-                    count: 0,
-                },
-            ],
-            Vec::new(),
-            HashMap::from([
-                ("arcade".to_string(), PlatformKind::Arcade),
-                ("snes".to_string(), PlatformKind::Console),
-                ("apple-iigs".to_string(), PlatformKind::Unknown),
-            ]),
-        );
-        catalog.projection_stats_by_system = Arc::new(HashMap::from([
-            (
-                "arcade".to_string(),
-                SystemProjectionStats {
-                    source_games: 1,
-                    visible_families: 1,
-                    collapsed_variants: 0,
-                },
-            ),
-            (
-                "apple-iigs".to_string(),
-                SystemProjectionStats {
-                    source_games: 0,
-                    visible_families: 0,
-                    collapsed_variants: 0,
-                },
-            ),
-        ]));
-
-        let cleaned = catalog.without_empty_system_placeholders();
-
-        assert_eq!(
-            cleaned
-                .systems
-                .iter()
-                .map(|system| system.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["arcade", "snes"]
-        );
-        assert_eq!(cleaned.system_game_count("arcade"), 1);
-        assert_eq!(cleaned.system_game_count("snes"), 0);
-        assert_eq!(cleaned.platform_kind("arcade"), PlatformKind::Arcade);
-        assert_eq!(cleaned.platform_kind("snes"), PlatformKind::Console);
-        assert!(!cleaned.platform_kinds.contains_key("apple-iigs"));
-        assert!(cleaned.projection_stats_by_system.contains_key("arcade"));
-        assert!(
-            !cleaned
-                .projection_stats_by_system
-                .contains_key("apple-iigs")
-        );
-    }
-
-    #[test]
-    fn adding_a_placeholder_shares_existing_catalog_indexes() {
-        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
-            PathBuf::from("/fixture"),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        );
-
-        let with_placeholder = catalog.with_system_placeholder("snes");
-
-        assert!(Arc::ptr_eq(&catalog.games, &with_placeholder.games));
-        assert!(Arc::ptr_eq(
-            &catalog.games_by_system,
-            &with_placeholder.games_by_system
-        ));
-        assert!(Arc::ptr_eq(
-            &catalog.games_by_filter,
-            &with_placeholder.games_by_filter
-        ));
-        assert_eq!(with_placeholder.systems.len(), 1);
-        assert_eq!(with_placeholder.systems[0].id, "snes");
     }
 
     #[cfg(feature = "builder")]
