@@ -222,6 +222,9 @@ mod macos {
         } else {
             options.scenario
         });
+        if options.settings_page_transition_demo {
+            application.configure_settings_page_transition_demo();
+        }
         if let Some(edge) = options.navigation_transition_demo {
             application.configure_navigation_transition_demo(edge)?;
         }
@@ -246,8 +249,6 @@ mod macos {
                 demo_origin_frame = Some(application.frame_target.cached_565().to_vec());
                 if options.panel_transition_demo {
                     application.enqueue_launcher_action(LogicalAction::Select, true);
-                } else if options.settings_page_transition_demo {
-                    application.enqueue_launcher_action(LogicalAction::Home, true);
                 } else {
                     application.enqueue_launcher_action(LogicalAction::Activate, true);
                 }
@@ -716,7 +717,11 @@ mod macos {
                 download_media_configured: download_media && !headless,
                 download_media: download_media && !headless,
                 arcade_layer: ArcadeVisualLayer::new(frame_width, frame_height),
-                crt_backdrop: CrtBackdropState::for_display(&display),
+                crt_backdrop: if display_profile.is_crt() && orientation.is_portrait() {
+                    Some(CrtBackdropState::new(frame_width, frame_height))
+                } else {
+                    CrtBackdropState::for_display(&display)
+                },
                 crt_foreground: CrtForeground::default(),
                 crt_backdrop_target_key: None,
                 preview_transition: PreviewTransitionController::default(),
@@ -1170,6 +1175,13 @@ mod macos {
             self.input_router = InputRouter::new(preview_input_focus(&self.launcher_nav, false));
         }
 
+        fn configure_settings_page_transition_demo(&mut self) {
+            self.select_scenario(Scenario::Settings);
+            // About is the final Settings row, as in the interactive preview.
+            self.launcher_nav.settings_selected = 7;
+            self.sync_launcher_navigation();
+        }
+
         fn configure_navigation_transition_demo(
             &mut self,
             edge: NavigationTransitionEdge,
@@ -1421,12 +1433,21 @@ mod macos {
                         settings_page_transition(source_screen, self.launcher_nav.screen)
                     && self
                         .navigation_transition
-                        .begin(TransitionStart::settings_page(
-                            route,
-                            direction,
-                            self.frame_target.cached_565(),
-                            now_us,
-                        ))
+                        .begin(if self.orientation != ScreenOrientation::Normal {
+                            TransitionStart::portrait_page_logical(
+                                route,
+                                direction,
+                                self.frame_target.cached_565(),
+                                now_us,
+                            )
+                        } else {
+                            TransitionStart::settings_page(
+                                route,
+                                direction,
+                                self.frame_target.cached_565(),
+                                now_us,
+                            )
+                        })
                         .unwrap_or(false)
                 {
                     self.pending_navigation_event = Some(LauncherEvent {
@@ -1775,25 +1796,50 @@ mod macos {
                     self.scenario,
                     Scenario::Arcade | Scenario::ArcadeCrossfade | Scenario::SystemHub
                 )
-                && !SlintOverlayOcclusion::read(
-                    &self.launcher,
-                    self.launcher.global::<SetupView>().get_phase() != ViewSetupPhase::None,
-                )
-                .any();
+                && mister_magik_fb::crt_backdrop::crt_backdrop_content_allowed(
+                    self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready,
+                    self.launcher_nav.is_system_hub(),
+                    self.launcher_nav.arcade_filter.drawer_open,
+                    SlintOverlayOcclusion::read(
+                        &self.launcher,
+                        self.launcher.global::<SetupView>().get_phase() != ViewSetupPhase::None,
+                    )
+                    .any()
+                        || self
+                            .launcher_nav
+                            .arcade_search
+                            .is_active(&self.launcher_nav.arcade_filter.active),
+                );
+            let entering_crt_backdrop = crt_backdrop_active
+                && !self.launcher.global::<MisterUi>().get_custom_crt_backdrop();
             self.launcher
                 .global::<MisterUi>()
                 .set_custom_crt_backdrop(crt_backdrop_active);
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
-            self.slint_window.draw_if_needed(|renderer| {
+            let full_foreground = crt_backdrop_active
+                && (entering_crt_backdrop
+                    || !self
+                        .crt_foreground
+                        .matches(self.frame_width, self.frame_height));
+            let mut raster = |renderer: &slint::platform::software_renderer::SoftwareRenderer| {
                 if crt_backdrop_active {
-                    let display = self.display_profile.display();
                     self.crt_foreground
-                        .render(renderer, display.render_w(), display.render_h());
+                        .render(renderer, self.frame_width, self.frame_height);
                 } else {
                     self.frame_target.render(renderer);
                 }
-            });
+            };
+            if full_foreground {
+                self.slint_window
+                    .draw_full_frame_preserving_cache_if_needed(
+                        self.frame_width,
+                        self.frame_height,
+                        &mut raster,
+                    );
+            } else {
+                self.slint_window.draw_if_needed(&mut raster);
+            }
             if self.scenario.uses_launcher_navigation() && self.launcher_nav.screen == Screen::Home
             {
                 let display = self.display_profile.display();
@@ -1844,15 +1890,12 @@ mod macos {
                         | Scenario::ArcadeCrossfade
                         | Scenario::SystemHub
                 )
+                && !self.launcher_nav.arcade_filter.drawer_open
                 && (self.launcher_nav.is_system_hub()
                     || self.launcher.global::<ArcadeView>().get_load_state()
                         == ArcadeLoadState::Ready)
             {
-                let low_resolution_backdrop = self.crt_backdrop.is_some()
-                    && matches!(
-                        self.scenario,
-                        Scenario::Arcade | Scenario::ArcadeCrossfade | Scenario::SystemHub
-                    );
+                let low_resolution_backdrop = crt_backdrop_active;
                 if low_resolution_backdrop {
                     self.sync_crt_backdrop_target(self.navigation_transition.is_active());
                     if let Some(backdrop) = self.crt_backdrop.as_mut() {
@@ -1873,9 +1916,9 @@ mod macos {
                     })
                     .unwrap_or_else(mister_magik_fb::arcade_catalog::ArcadeGameView::empty);
                 if !self.launcher_nav.is_system_hub() {
-                    if let Some(backdrop) = self.crt_backdrop.as_ref().filter(|_| {
-                        matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade)
-                    }) {
+                    if let Some(backdrop) =
+                        self.crt_backdrop.as_ref().filter(|_| crt_backdrop_active)
+                    {
                         let layout = UiLayoutGeometry::for_display(
                             &self.display_profile.display(),
                             self.orientation,
@@ -1883,7 +1926,13 @@ mod macos {
                         self.arcade_layer.compose_over_backdrop(
                             &mut self.frame_target,
                             backdrop.pixels(),
-                            layout.output_layout(),
+                            mister_magik_framebuffer_scenes::Rgb565OutputLayout::new(
+                                layout.logical_w(),
+                                layout.logical_h(),
+                                layout.logical_w(),
+                                mister_magik_framebuffer_scenes::OutputRotation::None,
+                            )
+                            .expect("preview logical output"),
                             games,
                             self.launcher_nav.arcade.selected,
                             self.launcher_nav.arcade.visual_index,
@@ -2127,15 +2176,13 @@ mod macos {
                 return;
             }
             let now = self.fixed_time.get();
-            let display = self.display_profile.display();
-            let layout = UiLayoutGeometry::for_display(&display, self.orientation);
             let Some(backdrop) = self.crt_backdrop.as_mut() else {
                 return;
             };
             if let Some(screenshot) = screenshot {
-                backdrop.retarget_for_layout(Some(fixture_preview_frame(screenshot)), now, layout);
+                backdrop.retarget(Some(fixture_preview_frame(screenshot)), now);
             } else {
-                backdrop.retarget_for_layout(None, now, layout);
+                backdrop.retarget(None, now);
             }
             if settle {
                 let _ = backdrop.compose(now + CRT_BACKDROP_FADE_DURATION);
@@ -5702,6 +5749,46 @@ mod macos {
             ));
             assert_eq!(nav.active_collection_id(), Some(collection_id.as_str()));
             assert_eq!(nav.screen, Screen::Arcade);
+        }
+
+        #[test]
+        fn portrait_settings_preview_starts_and_finishes_a_complete_page_slide() {
+            for profile in [DisplayProfile::CrtNative240p, DisplayProfile::Hdmi] {
+                for orientation in [
+                    ScreenOrientation::MonitorClockwise,
+                    ScreenOrientation::MonitorCounterclockwise,
+                ] {
+                    std::thread::spawn(move || {
+                        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+                        let time = Rc::new(Cell::new(Duration::ZERO));
+                        slint::platform::set_platform(Box::new(IsolatedTestPlatform(
+                            MisterPlatform::new(window.clone(), time.clone())))).unwrap();
+                        let launcher = Launcher::new().unwrap();
+                        configure_display_profile(&launcher.global::<MisterUi>(), profile, orientation);
+                        initialize_bridge(&launcher, profile); launcher.show().unwrap();
+                        let mut application = PreviewApplication::new(launcher, window, time,
+                            Scenario::Home, RefreshRate::Hz60, true, PreviewContent::Fixtures,
+                            false, false, profile, orientation, ColdStartMode::Skip, true).unwrap();
+                        application.configure_settings_page_transition_demo();
+                        for _ in 0..36 { application.compose_frame(); }
+                        application.enqueue_launcher_action(LogicalAction::Activate, true);
+                        application.compose_frame();
+                        application.enqueue_launcher_action(LogicalAction::Activate, false);
+                        assert!(application.navigation_transition.is_active());
+                        assert_eq!(application.navigation_transition.route(), Some(
+                            mister_magik_fb::launcher_runtime::navigation_transition::NavigationTransitionRoute::SettingsToAbout));
+                        assert!(!application.navigation_transition.settings_physical_space());
+                        let mut moving = false;
+                        for _ in 0..60 {
+                            application.compose_frame();
+                            moving |= application.navigation_transition.frame().progress_q16 > 0;
+                        }
+                        assert!(moving);
+                        assert!(!application.navigation_transition.is_active());
+                        assert_eq!(application.launcher_nav.screen, Screen::About);
+                    }).join().unwrap();
+                }
+            }
         }
 
         fn run_home_velocity(refresh_hz: u32) -> (usize, i32) {

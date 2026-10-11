@@ -186,6 +186,26 @@ impl<'a> TransitionStart<'a> {
         }
     }
 
+    /// Complete portrait page motion before the preview rotates its logical raster.
+    pub fn portrait_page_logical(
+        route: NavigationTransitionRoute,
+        direction: NavigationTransitionDirection,
+        source: &'a [Rgb565Pixel],
+        now_us: u64,
+    ) -> Self {
+        let mut request = NavigationTransitionRequest::settings_page(direction);
+        request.duration_us = NATIVE_SETTINGS_PAGE_US;
+        Self {
+            request,
+            route,
+            space: RasterSpace::Logical,
+            start: StartPolicy::AfterDestination,
+            assets: TransitionAssets::None,
+            source,
+            now_us,
+        }
+    }
+
     /// A Settings-family page slide in the logical raster. `route` must be a
     /// Settings page route, which `settings_page_transition` guarantees.
     pub fn settings_page(

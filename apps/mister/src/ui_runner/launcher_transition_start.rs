@@ -105,29 +105,25 @@ pub fn start_navigation_transition(
         physical,
     } = *source;
     let portrait = layout.is_portrait();
-    if portrait && physical {
+    if portrait {
+        let route = NavigationTransitionRoute::from_super_scaler_edge(edge);
+        let start = if physical {
+            TransitionStart::portrait_page(route, direction, layout.output_layout(), pixels, now_us)
+        } else {
+            TransitionStart::portrait_page_logical(route, direction, pixels, now_us)
+        };
+        return runtime.begin(start).unwrap_or(false);
+    }
+    if edge == NavigationTransitionEdge::SystemPanel {
         return runtime
-            .begin(TransitionStart::portrait_page(
-                NavigationTransitionRoute::from_super_scaler_edge(edge),
-                direction,
-                layout.output_layout(),
+            .begin(TransitionStart::system_panel(
+                crt_layout,
+                nav.is_system_hub(),
                 pixels,
+                crt_backdrop,
                 now_us,
             ))
             .unwrap_or(false);
-    }
-    if edge == NavigationTransitionEdge::SystemPanel {
-        // The system hub/list slide has no portrait form.
-        return !portrait
-            && runtime
-                .begin(TransitionStart::system_panel(
-                    crt_layout,
-                    nav.is_system_hub(),
-                    pixels,
-                    crt_backdrop,
-                    now_us,
-                ))
-                .unwrap_or(false);
     }
     let card_home_rect = card_home_rect.filter(|_| is_card_edge(edge) && !portrait);
     let geometry = navigation_geometry(
@@ -923,6 +919,52 @@ mod tests {
                                 },
                             )
                         };
+                        let logical_source =
+                            source.iter().map(|p| Rgb565Pixel(p.0)).collect::<Vec<_>>();
+                        let logical_destination = destination
+                            .iter()
+                            .map(|p| Rgb565Pixel(p.0))
+                            .collect::<Vec<_>>();
+                        let mut preview = NavigationTransitionRuntime::new(w, h, true);
+                        let preview_started = if let Some(edge) = edge {
+                            start_navigation_transition(
+                                &mut preview,
+                                &TransitionInputs {
+                                    edge,
+                                    direction,
+                                    nav: &nav,
+                                    collection_id: None,
+                                    layout,
+                                    crt_layout: crt,
+                                    crt_metrics: &metrics,
+                                    crt_backdrop: &[],
+                                    now_us: 0,
+                                },
+                                &TransitionSource {
+                                    pixels: &logical_source,
+                                    card_home_rect: None,
+                                    physical: false,
+                                },
+                                || None,
+                            )
+                        } else {
+                            preview
+                                .begin(TransitionStart::portrait_page_logical(
+                                    route,
+                                    direction,
+                                    &logical_source,
+                                    0,
+                                ))
+                                .unwrap()
+                        };
+                        assert!(preview_started, "preview {route:?} did not start");
+                        assert_eq!(
+                            preview.request().unwrap().renderer_label(),
+                            runtime.request().unwrap().renderer_label()
+                        );
+                        preview
+                            .capture_destination(&logical_destination, 1)
+                            .unwrap();
                         assert!(started, "{route:?} {orientation:?} did not start");
                         assert!(
                             runtime.render().unwrap() == physical_source,
@@ -937,6 +979,18 @@ mod tests {
                         reference.capture_destination(&destination).unwrap();
                         for part in 0..=4 {
                             runtime.tick(1 + duration * part / 4);
+                            preview.tick(1 + duration * part / 4);
+                            let logical_preview = preview
+                                .render()
+                                .unwrap()
+                                .iter()
+                                .map(|p| SharedPixel(p.0))
+                                .collect::<Vec<_>>();
+                            assert_eq!(
+                                rotate(&logical_preview),
+                                runtime.render().unwrap(),
+                                "preview differs from device: {route:?} {direction:?} {orientation:?} phase {part}"
+                            );
                             let frame = runtime.frame();
                             let mut logical_frame = vec![SharedPixel(0); w * h];
                             render_settings_page_transition_into(

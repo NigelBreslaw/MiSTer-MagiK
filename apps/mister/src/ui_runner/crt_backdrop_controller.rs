@@ -130,6 +130,7 @@ struct PreparedEntry {
 pub(super) struct CrtBackdropFrame {
     pub(super) trace: CrtBackdropWorkTrace,
     pub(super) full_damage: bool,
+    pub(super) copied_pixels: u32,
 }
 
 pub(super) struct CrtBackdropController {
@@ -147,6 +148,7 @@ pub(super) struct CrtBackdropController {
     prepared_revision: u64,
     was_eligible: bool,
     active_layout: Option<BackdropLayoutIdentity>,
+    needs_full_repaint: bool,
 }
 
 impl CrtBackdropController {
@@ -166,6 +168,7 @@ impl CrtBackdropController {
             prepared_revision: 0,
             was_eligible: false,
             active_layout: None,
+            needs_full_repaint: true,
         })
     }
 
@@ -318,6 +321,8 @@ impl CrtBackdropController {
         &mut self,
         eligible: bool,
         force_full_repaint: bool,
+        write_frame: bool,
+        slint_damage: &crate::framebuffer::target::DirtyRectList,
         instant_transition: bool,
         selected: usize,
         transition_id: Option<u64>,
@@ -341,6 +346,7 @@ impl CrtBackdropController {
             self.transition_id = None;
             self.prepared_revision = self.revision;
             self.was_eligible = false;
+            self.needs_full_repaint = true;
             return CrtBackdropFrame::default();
         }
 
@@ -374,8 +380,16 @@ impl CrtBackdropController {
             || layout_changed
             || !self.was_eligible
             || force_full_repaint
+            || self.needs_full_repaint
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
+        // Navigation snapshots own their entire frame. Preparation may continue,
+        // but no live backdrop may erase a source carrier or an animated frame.
+        if !write_frame || !self.foreground.matches(self.width(), self.height()) {
+            self.needs_full_repaint = true;
+            self.was_eligible = true;
+            return frame;
+        }
         if compose_full {
             frame.trace = self.state.compose_into(now, destination);
             self.foreground.compose(destination);
@@ -386,7 +400,13 @@ impl CrtBackdropController {
                     .saturating_mul(self.physical_height())
                     .min(u32::MAX as usize) as u32;
             }
-            frame.full_damage = destination.len() >= self.width().saturating_mul(self.height());
+            frame.full_damage = true;
+            frame.copied_pixels = destination.len().min(u32::MAX as usize) as u32;
+            self.needs_full_repaint = false;
+        } else {
+            frame.copied_pixels =
+                self.foreground
+                    .restore_damage(self.state.pixels(), destination, slint_damage);
         }
         self.was_eligible = true;
         frame
@@ -566,6 +586,11 @@ mod tests {
         let _ = controller.state.compose(settled_at);
         controller.selected = Some(0);
         controller.was_eligible = true;
+        controller.needs_full_repaint = false;
+        controller.foreground = crate::crt_backdrop::CrtForeground::transparent(
+            controller.width(),
+            controller.height(),
+        );
         controller.active_layout = Some(BackdropLayoutIdentity::for_layout(layout));
         controller.prepared_revision = controller.revision;
         let previous_pixels = controller.state.pixels().to_vec();
@@ -583,6 +608,8 @@ mod tests {
         let frame = controller.compose(
             true,
             false,
+            true,
+            &crate::framebuffer::target::DirtyRectList::new(),
             true,
             1,
             Some(9),
@@ -634,12 +661,19 @@ mod tests {
         let _ = controller.state.compose(settled_at);
         controller.selected = Some(0);
         controller.was_eligible = true;
+        controller.needs_full_repaint = false;
+        controller.foreground = crate::crt_backdrop::CrtForeground::transparent(
+            controller.width(),
+            controller.height(),
+        );
 
         let sentinel = Rgb565Pixel(0xf81f);
         let mut destination = vec![sentinel; controller.width() * controller.height()];
         let restored = controller.compose(
             true,
             true,
+            true,
+            &crate::framebuffer::target::DirtyRectList::new(),
             false,
             0,
             None,
@@ -692,9 +726,15 @@ mod tests {
                 let output = layout.output_layout();
                 let mut destination =
                     vec![Rgb565Pixel(0); output.physical_width() * output.physical_height()];
+                controller.foreground = crate::crt_backdrop::CrtForeground::transparent(
+                    controller.width(),
+                    controller.height(),
+                );
                 let frame = controller.compose(
                     true,
                     false,
+                    true,
+                    &crate::framebuffer::target::DirtyRectList::new(),
                     false,
                     0,
                     None,
@@ -711,5 +751,150 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn settled_foreground_damage_preserves_list_and_copies_only_damage() {
+        use crate::framebuffer::target::{DirtyRect, DirtyRectList};
+        let display = UiDisplay::for_plan(
+            UiDisplayPlan::from_mister_ini_text(
+                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            )
+            .unwrap(),
+        );
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+        let mut controller = CrtBackdropController::for_display(&display).unwrap();
+        controller.foreground = crate::crt_backdrop::CrtForeground::transparent(
+            controller.width(),
+            controller.height(),
+        );
+        let mut destination = vec![Rgb565Pixel(0); controller.width() * controller.height()];
+        let empty = DirtyRectList::new();
+        let initial = controller.compose(
+            true,
+            false,
+            true,
+            &empty,
+            false,
+            0,
+            None,
+            None,
+            Duration::ZERO,
+            &mut destination,
+            layout,
+        );
+        assert!(initial.full_damage);
+        // Stand in for a retained native list. Header/count changes must not erase it.
+        let list_pixel = controller.width() * (controller.height() / 2) + 100;
+        destination[list_pixel] = Rgb565Pixel(0xffff);
+        let damage = DirtyRectList::from_one(DirtyRect {
+            x0: 10,
+            y0: 4,
+            x1: 34,
+            y1: 12,
+        });
+        for tick in 1..=8 {
+            destination[4 * controller.width() + 10] = Rgb565Pixel(0xffff);
+            let frame = controller.compose(
+                true,
+                false,
+                true,
+                &damage,
+                false,
+                0,
+                None,
+                None,
+                Duration::from_millis(tick * 16),
+                &mut destination,
+                layout,
+            );
+            assert!(!frame.full_damage);
+            assert_eq!(frame.copied_pixels, 24 * 8);
+            assert_eq!(destination[list_pixel], Rgb565Pixel(0xffff));
+            assert_eq!(
+                destination[4 * controller.width() + 10],
+                controller.pixels()[4 * controller.width() + 10]
+            );
+        }
+        let idle = controller.compose(
+            true,
+            false,
+            true,
+            &empty,
+            false,
+            0,
+            None,
+            None,
+            Duration::from_millis(160),
+            &mut destination,
+            layout,
+        );
+        assert_eq!(idle.copied_pixels, 0);
+    }
+
+    #[test]
+    fn snapshot_ownership_and_unseeded_foreground_never_expose_a_live_backdrop() {
+        use crate::framebuffer::target::DirtyRectList;
+        let display = UiDisplay::for_plan(
+            UiDisplayPlan::from_mister_ini_text(
+                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            )
+            .unwrap(),
+        );
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+        let mut controller = CrtBackdropController::for_display(&display).unwrap();
+        let mut destination = vec![Rgb565Pixel(0xf81f); controller.width() * controller.height()];
+        let snapshot = destination.clone();
+        let empty = DirtyRectList::new();
+        for writes in [true, false] {
+            let frame = controller.compose(
+                true,
+                true,
+                writes,
+                &empty,
+                false,
+                0,
+                None,
+                None,
+                Duration::ZERO,
+                &mut destination,
+                layout,
+            );
+            assert_eq!(frame.copied_pixels, 0);
+            assert_eq!(destination, snapshot);
+        }
+        controller.foreground = crate::crt_backdrop::CrtForeground::transparent(
+            controller.width(),
+            controller.height(),
+        );
+        let owned = controller.compose(
+            true,
+            true,
+            false,
+            &empty,
+            false,
+            1,
+            None,
+            None,
+            Duration::from_millis(16),
+            &mut destination,
+            layout,
+        );
+        assert_eq!(owned.copied_pixels, 0);
+        assert_eq!(destination, snapshot);
+        let release = controller.compose(
+            true,
+            false,
+            true,
+            &empty,
+            false,
+            1,
+            None,
+            None,
+            Duration::from_millis(32),
+            &mut destination,
+            layout,
+        );
+        assert!(release.full_damage);
+        assert_eq!(destination, controller.pixels());
     }
 }

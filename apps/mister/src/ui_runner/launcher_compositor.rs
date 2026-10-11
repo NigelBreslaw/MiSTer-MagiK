@@ -211,60 +211,33 @@ impl<'a> LayerTarget<'a> {
         region
     }
 
-    pub(super) fn render_slint_base(
-        &mut self,
+    fn rasterize_slint(
         window: &MisterSoftwareWindow,
-    ) -> (Option<DirtyRect>, DirtyRectList) {
-        let mut slint_dirty = None;
-        let mut slint_damage = DirtyRectList::new();
-        window.draw_if_needed(|renderer| {
+        layout: UiLayoutGeometry,
+        full: bool,
+        mut render: impl FnMut(
+            &slint::platform::software_renderer::SoftwareRenderer,
+        ) -> slint::platform::software_renderer::PhysicalRegion,
+    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
+        let mut dirty = None;
+        let mut damage = DirtyRectList::new();
+        let mut raster = |renderer: &slint::platform::software_renderer::SoftwareRenderer| {
             #[cfg(feature = "tooling")]
             let _slint =
                 mister_magik_framebuffer_scenes::launcher_profile::span("frame.slint-raster");
-            let region = self.render_slint_pixels(renderer);
-            slint_dirty = dirty_rect(
-                &region,
-                self.layout.composition_w(),
-                self.layout.composition_h(),
-            );
-            slint_damage = dirty_rects(
-                &region,
-                self.layout.composition_w(),
-                self.layout.composition_h(),
-            );
-        });
-        (slint_dirty, slint_damage)
-    }
-
-    pub(super) fn render_crt_foreground(
-        &mut self,
-        window: &MisterSoftwareWindow,
-        foreground: &mut crate::crt_backdrop::CrtForeground,
-        full: bool,
-    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
-        let mut damage = DirtyRectList::new();
-        let mut dirty = None;
-        let mut raster = |renderer: &slint::platform::software_renderer::SoftwareRenderer| {
-            let region = foreground.render(
-                renderer,
-                self.layout.composition_w(),
-                self.layout.composition_h(),
-            );
-            dirty = dirty_rect(
-                &region,
-                self.layout.composition_w(),
-                self.layout.composition_h(),
-            );
-            damage = dirty_rects(
-                &region,
-                self.layout.composition_w(),
-                self.layout.composition_h(),
-            );
+            #[cfg(feature = "tooling")]
+            let _full = full.then(|| {
+                mister_magik_framebuffer_scenes::launcher_profile::span("frame.slint-full-raster")
+            });
+            let region = render(renderer);
+            dirty = dirty_rect(&region, layout.composition_w(), layout.composition_h());
+            damage = dirty_rects(&region, layout.composition_w(), layout.composition_h());
         };
         let rendered = if full {
+            window.request_redraw();
             window.draw_full_frame_preserving_cache_if_needed(
-                self.layout.logical_w(),
-                self.layout.logical_h(),
+                layout.logical_w(),
+                layout.logical_h(),
                 &mut raster,
             )
         } else {
@@ -273,37 +246,36 @@ impl<'a> LayerTarget<'a> {
         (dirty, damage, rendered)
     }
 
+    pub(super) fn render_slint_base(
+        &mut self,
+        window: &MisterSoftwareWindow,
+    ) -> (Option<DirtyRect>, DirtyRectList) {
+        let (dirty, damage, _) = Self::rasterize_slint(window, self.layout, false, |renderer| {
+            self.render_slint_pixels(renderer)
+        });
+        (dirty, damage)
+    }
+
+    pub(super) fn render_crt_foreground(
+        &mut self,
+        window: &MisterSoftwareWindow,
+        foreground: &mut crate::crt_backdrop::CrtForeground,
+        full: bool,
+    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
+        let layout = self.layout;
+        let full = full || !foreground.matches(layout.composition_w(), layout.composition_h());
+        Self::rasterize_slint(window, layout, full, |renderer| {
+            foreground.render(renderer, layout.composition_w(), layout.composition_h())
+        })
+    }
+
     pub(super) fn render_slint_full(
         &mut self,
         window: &MisterSoftwareWindow,
     ) -> (Option<DirtyRect>, DirtyRectList, bool) {
-        let mut slint_dirty = None;
-        let mut slint_damage = DirtyRectList::new();
-        let rendered = window.draw_full_frame_preserving_cache_if_needed(
-            self.layout.logical_w(),
-            self.layout.logical_h(),
-            |renderer| {
-                #[cfg(feature = "tooling")]
-                let _slint =
-                    mister_magik_framebuffer_scenes::launcher_profile::span("frame.slint-raster");
-                #[cfg(feature = "tooling")]
-                let _full = mister_magik_framebuffer_scenes::launcher_profile::span(
-                    "frame.slint-full-raster",
-                );
-                let region = self.render_slint_pixels(renderer);
-                slint_dirty = dirty_rect(
-                    &region,
-                    self.layout.composition_w(),
-                    self.layout.composition_h(),
-                );
-                slint_damage = dirty_rects(
-                    &region,
-                    self.layout.composition_w(),
-                    self.layout.composition_h(),
-                );
-            },
-        );
-        (slint_dirty, slint_damage, rendered)
+        Self::rasterize_slint(window, self.layout, true, |renderer| {
+            self.render_slint_pixels(renderer)
+        })
     }
 
     pub(super) fn render_custom_home(
@@ -2209,5 +2181,67 @@ mod tests {
                 assert_eq!(target.cached_565()[index], expected);
             }
         }
+    }
+    #[test]
+    fn crt_status_drawer_search_and_reentry_present_the_current_slint_frame() {
+        std::thread::spawn(|| {
+            use crate::crt_backdrop::{CrtForeground, crt_backdrop_content_allowed};
+            use slint_ui::launcher::{ArcadeLoadState, ArcadeSearchMode, ArcadeView, LauncherScreen,
+                MisterUi, NavigationView, SystemPageMode};
+            let window = install_isolated_test_platform();
+            let app = slint_ui::launcher::Launcher::new().unwrap();
+            let display = UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
+                mister_magik_core::display::DisplayGeometry::new(640, 240),
+                crate::ui_display::ResolvedOutputRoute::Crt240p60, "crt-status",
+                crate::ui_display::UiFramebufferSizePolicy::Auto,
+                mister_magik_core::display::Crt240Composition::Native240));
+            let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+            super::super::ui_frame_target::configure_window_layout(&layout, &window);
+            let ui = app.global::<MisterUi>();
+            ui.set_crt_layout(true); ui.set_window_width(640); ui.set_window_height(240);
+            let content = layout.content_rect();
+            ui.set_crt_content_x(content.x as i32); ui.set_crt_content_y(content.y as i32);
+            ui.set_crt_content_width(content.width as i32); ui.set_crt_content_height(content.height as i32);
+            let nav = app.global::<NavigationView>();
+            nav.set_screen(LauncherScreen::Arcade); nav.set_system_page_mode(SystemPageMode::List);
+            let arcade = app.global::<ArcadeView>(); arcade.set_collection_title("ARCADE".into());
+            app.show().unwrap();
+            let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(640, 240));
+            let mut layer = LayerTarget::new_oriented(&mut target, layout);
+            let mut foreground = CrtForeground::default();
+            let mut was_active = false;
+            for (state, drawer, search) in [
+                (ArcadeLoadState::Ready, false, false),
+                (ArcadeLoadState::Loading, false, false),
+                (ArcadeLoadState::Empty, false, false),
+                (ArcadeLoadState::Failed, false, false),
+                (ArcadeLoadState::Ready, false, false),
+                (ArcadeLoadState::Ready, true, false),
+                (ArcadeLoadState::Ready, false, true),
+                (ArcadeLoadState::Ready, false, false),
+            ] {
+                arcade.set_load_state(state); arcade.set_drawer_open(drawer);
+                arcade.set_search_mode(if search { ArcadeSearchMode::Active } else { ArcadeSearchMode::Inactive });
+                let active = crt_backdrop_content_allowed(state == ArcadeLoadState::Ready, false, drawer, search);
+                ui.set_custom_crt_backdrop(active);
+                if active {
+                    // A first eligible frame may arrive with redraw_pending clear.
+                    window.draw_if_needed(|_| {});
+                    let (_, damage, rendered) = layer.render_crt_foreground(&window, &mut foreground, !was_active);
+                    assert!(rendered); assert!(!damage.is_empty()); assert!(foreground.matches(640, 240));
+                    layer.presentation_pixels_mut().fill(Rgb565Pixel(0xf81f));
+                    foreground.compose(layer.presentation_pixels_mut());
+                } else {
+                    window.request_redraw(); layer.render_slint_base(&window);
+                    let actual = layer.presentation_frame_view().pixels().to_vec();
+                    // Compare the incremental status frame with a fresh full raster.
+                    layer.render_slint_full(&window);
+                    assert_eq!(actual, layer.presentation_frame_view().pixels(),
+                        "status/drawer/search retained a stale Ready backdrop: {state:?} {drawer} {search}");
+                    assert!(actual.iter().any(|p| p.0 != 0xf81f));
+                }
+                was_active = active;
+            }
+        }).join().unwrap();
     }
 }

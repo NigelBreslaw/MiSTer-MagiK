@@ -4,8 +4,6 @@
 //! Host-neutral RGB565 composition for CRT screenshot backdrops.
 
 use crate::preview_transition::blend_rgb565_bucket;
-#[cfg(feature = "ui-preview")]
-use crate::ui_display::UiLayoutGeometry;
 use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use mister_magik_core::display::CRT_COMPOSITION_H;
@@ -24,16 +22,37 @@ pub struct CrtForeground {
     width: usize,
 }
 
+/// The native list and transparent Slint foreground must use the same policy.
+/// Status pages, drawers, search and overlays retain an opaque Slint background.
+pub fn crt_backdrop_content_allowed(ready: bool, hub: bool, drawer: bool, blocked: bool) -> bool {
+    (ready || hub) && !drawer && !blocked
+}
+
 impl CrtForeground {
+    pub fn matches(&self, width: usize, height: usize) -> bool {
+        self.width == width && width != 0 && self.pixels.len() == width * height
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transparent(width: usize, height: usize) -> Self {
+        Self {
+            pixels: vec![Default::default(); width * height],
+            spans: vec![Vec::new(); height],
+            width,
+        }
+    }
+
     pub fn render(
         &mut self,
         renderer: &slint::platform::software_renderer::SoftwareRenderer,
         width: usize,
         height: usize,
     ) -> slint::platform::software_renderer::PhysicalRegion {
-        self.width = width;
-        self.pixels.resize(width * height, Default::default());
-        self.spans.resize_with(height, Vec::new);
+        if !self.matches(width, height) {
+            self.pixels = vec![Default::default(); width * height];
+            self.spans = vec![Vec::new(); height];
+            self.width = width;
+        }
         let region = renderer.render(&mut self.pixels, width);
         for (origin, size) in region.iter() {
             for y in origin.y as usize..(origin.y as usize + size.height as usize).min(height) {
@@ -57,11 +76,48 @@ impl CrtForeground {
         region
     }
 
+    /// Restore and blend only damaged foreground pixels. Restoring each rectangle
+    /// before blending also makes overlapping damage safe for translucent pixels.
+    pub fn restore_damage(
+        &self,
+        backdrop: &[Rgb565Pixel],
+        destination: &mut [Rgb565Pixel],
+        damage: &crate::framebuffer::target::DirtyRectList,
+    ) -> u32 {
+        use slint::platform::software_renderer::TargetPixel;
+        assert!(self.width != 0 && destination.len() == self.pixels.len());
+        assert_eq!(backdrop.len(), destination.len());
+        let mut copied = 0_usize;
+        for rect in damage.iter() {
+            let x0 = rect.x0.min(self.width);
+            let x1 = rect.x1.min(self.width);
+            for y in rect.y0.min(self.spans.len())..rect.y1.min(self.spans.len()) {
+                let row = y * self.width;
+                destination[row + x0..row + x1].copy_from_slice(&backdrop[row + x0..row + x1]);
+                copied += x1 - x0;
+                for &(start, end) in &self.spans[y] {
+                    let start = start.max(x0);
+                    let end = end.min(x1);
+                    if start < end {
+                        for (pixel, overlay) in destination[row + start..row + end]
+                            .iter_mut()
+                            .zip(&self.pixels[row + start..row + end])
+                        {
+                            pixel.blend(*overlay);
+                        }
+                    }
+                }
+            }
+        }
+        copied.min(u32::MAX as usize) as u32
+    }
+
     pub fn compose(&self, destination: &mut [Rgb565Pixel]) {
         use slint::platform::software_renderer::TargetPixel;
-        if destination.len() != self.pixels.len() {
-            return;
-        }
+        assert!(
+            self.width != 0 && destination.len() == self.pixels.len(),
+            "CRT foreground must be rendered at the destination size before composition"
+        );
         for (y, spans) in self.spans.iter().enumerate() {
             for &(start, end) in spans {
                 let range = y * self.width + start..y * self.width + end;
@@ -315,69 +371,6 @@ impl CrtBackdropState {
             self.snap_to_target();
             return;
         }
-        self.transition_started = (self.source != self.target.as_ref()).then_some(now);
-        if self.transition_started.is_none() {
-            self.retarget.copy_from_slice(&self.target);
-            self.retarget_row_repeats
-                .copy_from_slice(&self.target_row_repeats);
-            self.retarget_is_plain = self.target_is_plain();
-            self.expand_to_logical();
-        }
-    }
-
-    #[cfg(feature = "ui-preview")]
-    pub fn retarget_for_layout(
-        &mut self,
-        frame: Option<PreviewFrame<'_>>,
-        now: Duration,
-        layout: UiLayoutGeometry,
-    ) {
-        if layout.output_layout().rotation() == OutputRotation::None {
-            self.retarget(frame, now);
-            return;
-        }
-        self.resolve_current(now);
-        self.source.copy_from_slice(&self.retarget);
-        self.source_row_repeats
-            .copy_from_slice(&self.retarget_row_repeats);
-        let prepare_start = Instant::now();
-        let mut x_map = Vec::new();
-        let mut y_map = Vec::new();
-        let prepared = frame.and_then(|frame| {
-            let PreviewPixels::Rgb565 {
-                pixels,
-                stride_pixels,
-            } = frame.pixels
-            else {
-                return None;
-            };
-            prepare_dimmed_rgb565_target_for_output_with_maps(
-                pixels,
-                frame.source_width,
-                frame.source_height,
-                stride_pixels,
-                layout.output_layout(),
-                self.reference_height,
-                &mut x_map,
-                &mut y_map,
-            )
-        });
-        (self.target, self.target_row_repeats) = prepared.map_or_else(
-            || {
-                (
-                    std::sync::Arc::clone(&self.plain_target),
-                    std::sync::Arc::clone(&self.plain_target_row_repeats),
-                )
-            },
-            |(pixels, row_repeats)| {
-                (
-                    std::sync::Arc::from(pixels),
-                    std::sync::Arc::from(row_repeats),
-                )
-            },
-        );
-        self.pending_prepare_us = duration_us(prepare_start.elapsed());
-        self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
         self.transition_started = (self.source != self.target.as_ref()).then_some(now);
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
@@ -1847,6 +1840,69 @@ mod foreground_tests {
                         "alpha must not accumulate across screens"
                     );
                 }
+            }
+        }
+    }
+    #[test]
+    fn partial_foreground_restore_matches_full_composition_including_overlapping_alpha() {
+        use crate::framebuffer::target::{DirtyRect, DirtyRectList, dirty_rects};
+        for rotation in [
+            RenderingRotation::NoRotation,
+            RenderingRotation::Rotate90,
+            RenderingRotation::Rotate270,
+        ] {
+            let window = crate::visual_platform::install_isolated_test_platform();
+            let app = ForegroundProbe::new().unwrap();
+            let (w, h) = if rotation == RenderingRotation::NoRotation {
+                (640, 240)
+            } else {
+                (240, 640)
+            };
+            window.set_rendering_rotation(rotation);
+            app.set_w(w);
+            app.set_h(h);
+            app.set_glyph_x(50);
+            app.set_glyph_y(h - 30);
+            window.set_size(slint::PhysicalSize::new(w as u32, h as u32));
+            app.show().unwrap();
+            let mut foreground = CrtForeground::default();
+            let backdrop = vec![Rgb565Pixel(0x1234); 640 * 240];
+            window.draw_full_frame_preserving_cache_if_needed(w as usize, h as usize, |renderer| {
+                foreground.render(renderer, 640, 240);
+            });
+            let mut actual = backdrop.clone();
+            foreground.compose(&mut actual);
+            for visible in [false, true, false, true] {
+                app.set_glyph_visible(visible);
+                window.request_redraw();
+                let mut damage = DirtyRectList::new();
+                window.draw_if_needed(|renderer| {
+                    damage = dirty_rects(&foreground.render(renderer, 640, 240), 640, 240);
+                });
+                assert!(!damage.is_empty());
+                let copied = foreground.restore_damage(&backdrop, &mut actual, &damage);
+                assert!(copied < (640 * 240) as u32);
+                let mut reference = backdrop.clone();
+                foreground.compose(&mut reference);
+                assert_eq!(
+                    actual, reference,
+                    "partial glyph removal or redraw left stale pixels"
+                );
+                // Overlapping translucent damage must not blend twice.
+                let mut overlapping = DirtyRectList::from_one(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 100,
+                    y1: 100,
+                });
+                overlapping.push(DirtyRect {
+                    x0: 5,
+                    y0: 5,
+                    x1: 90,
+                    y1: 90,
+                });
+                foreground.restore_damage(&backdrop, &mut actual, &overlapping);
+                assert_eq!(actual, reference);
             }
         }
     }
