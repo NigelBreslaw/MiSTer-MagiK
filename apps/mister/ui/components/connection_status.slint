@@ -29,6 +29,7 @@ export component LauncherConnectionStatus inherits Rectangle {
     width: ConnectionStatusGeometry.width;
     height: ConnectionStatusGeometry.height;
     background: transparent;
+    clip: true;
 
     if NavigationView.usb-connected : Rectangle {
         x: 0px;

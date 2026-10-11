@@ -1127,6 +1127,7 @@ mod tests {
                 ui.set_window_width(width as i32);
                 ui.set_window_height(height as i32);
                 ui.set_crt_layout(crt);
+                ui.set_custom_home_base(true);
                 ui.set_screen_orientation(if height > width {
                     slint_ui::launcher::ScreenOrientation::MonitorClockwise
                 } else {
@@ -1141,18 +1142,20 @@ mod tests {
                     });
                 }
                 let nav = app.global::<NavigationView>();
-                nav.set_screen(LauncherScreen::Settings);
+                nav.set_screen(LauncherScreen::Home);
                 nav.set_clock_text("12:34".into());
                 app.show().unwrap();
                 let display = UiDisplay::for_framebuffer(width, height);
                 let mut target =
                     UiFrameTarget::cached(FramebufferTargetGeometry::new(width, height));
-                let background = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0); width * height];
+                let background = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0x39e7); width * height];
                 let mut render = || {
                     // Native Home composes Slint through render_by_line, which
                     // skips Path elements even when buffer rendering supports them.
                     LayerTarget::new(&mut target, &display)
-                        .render_custom_home(&window, &background, false, None);
+                        .render_custom_home(&window, &background, false, Some(DirtyRect {
+                            x0: 16, y0: 80, x1: width - 16, y1: height - 16,
+                        }));
                     target.cached_565().to_vec()
                 };
                 let offline = render();
@@ -1160,6 +1163,7 @@ mod tests {
                 let online = render();
                 nav.set_usb_connected(true);
                 let usb = render();
+                assert_eq!(render(), usb, "native card damage erased status {width}x{height}");
                 nav.set_usb_connected(false);
                 assert_eq!(render(), online, "USB removal {width}x{height}");
                 nav.set_internet_connected(false);
@@ -1189,6 +1193,18 @@ mod tests {
                 let gap = if crt { 6 * sx } else { 8 };
                 let status_height = if crt { 12 * sy } else { 15 };
                 let globe_left = clock_x - gap - globe_width;
+                if !crt {
+                    for x in globe_left - gap - badge_width..globe_left - gap {
+                        assert_eq!(usb[top * width + x].0, 0xef5a, "USB border missing at {x},{top}");
+                    }
+                    for (index, pixel) in usb.iter().enumerate() {
+                        let (x, y) = (index % width, index / width);
+                        if !((globe_left - gap - badge_width..clock_x - gap).contains(&x)
+                            && (top..top + status_height).contains(&y)) {
+                            assert_eq!(pixel.0, background[index].0, "status erased native background at {x},{y}");
+                        }
+                    }
+                }
                 for (before, after, x0, x1) in [
                     (&offline, &online, globe_left, clock_x - gap),
                     (&online, &usb, globe_left - gap - badge_width, globe_left - gap),
