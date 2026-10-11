@@ -8,9 +8,10 @@
 use super::launcher_card_home::LauncherCardHomeSession;
 use super::launcher_loop::card_pixels_as_slint;
 use super::*;
-use crate::ui_display::{CrtUiMetrics, ScreenOrientation, UiLayoutGeometry};
+use crate::ui_display::{CrtUiMetrics, UiLayoutGeometry};
 use mister_magik_framebuffer_scenes::device_card::RevealImage;
 use mister_magik_framebuffer_scenes::settings_cog;
+use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout};
 
 /// Everything a reveal needs to begin, besides the runtime and the card session.
 pub struct TransitionInputs<'a> {
@@ -128,18 +129,18 @@ pub fn start_navigation_transition(
                 ))
                 .unwrap_or(false);
     }
-    let card_edge = is_card_edge(edge) && !portrait;
+    let card_home_rect = card_home_rect.filter(|_| is_card_edge(edge) && !portrait);
     let geometry = navigation_geometry(
         nav,
         &NavigationDisplay {
             frame_width: layout.logical_w(),
             frame_height: layout.logical_h(),
             crt: crt_layout.then(|| crt_navigation_layout(layout.content_rect(), crt_metrics)),
-            card_home_rect: card_home_rect.filter(|_| card_edge),
+            card_home_rect,
         },
         edge,
     );
-    let started = if card_edge && card_home_rect.is_some() {
+    let started = if card_home_rect.is_some() {
         let kind = match collection_id {
             Some(id) => nav.device_kind_for_collection(id),
             None => nav.device_kind(),
@@ -173,10 +174,8 @@ pub fn start_navigation_transition(
 pub(super) struct SettingsInputs<'a> {
     pub route: NavigationTransitionRoute,
     pub direction: NavigationTransitionDirection,
-    pub orientation: ScreenOrientation,
-    /// The physical output raster.
-    pub render_w: usize,
-    pub render_h: usize,
+    /// The output layout shared by the compositor and transition snapshots.
+    pub output: Rgb565OutputLayout,
     pub reduce_motion: bool,
     pub crt_layout: bool,
     /// The composed cache: the visible frame whenever card-home is not.
@@ -194,29 +193,20 @@ pub(super) fn begin_settings_transition(
     let SettingsInputs {
         route,
         direction,
-        orientation,
-        render_w,
-        render_h,
+        output,
         reduce_motion,
         crt_layout,
         composed,
         now_us,
     } = *inputs;
-    if orientation != ScreenOrientation::Normal {
-        use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout};
-        let rotation = match orientation {
-            ScreenOrientation::MonitorClockwise => OutputRotation::CounterClockwise90,
-            ScreenOrientation::MonitorCounterclockwise => OutputRotation::Clockwise90,
-            ScreenOrientation::Normal => unreachable!(),
-        };
-        let output = Rgb565OutputLayout::new(render_h, render_w, render_w, rotation)
-            .expect("portrait Settings uses a valid physical framebuffer");
+    if output.rotation() != OutputRotation::None {
         return runtime
             .begin(TransitionStart::portrait_page(
                 route, direction, output, composed, now_us,
             ))
             .unwrap_or(false);
     }
+    let (render_w, render_h) = (output.physical_width(), output.physical_height());
     let settled_cards = cards.filter(|cards| !cards.is_animating());
     let zoom = route == NavigationTransitionRoute::HomeToSettings
         && settled_cards.is_some()
@@ -291,6 +281,22 @@ mod tests {
         arcade_catalog(
             vec![arcade_game("Metal Slug").build()],
             vec![arcade_system("arcade", 1)],
+        )
+    }
+
+    fn native_crt_display(height: u16) -> UiDisplay {
+        UiDisplay::for_plan(
+            crate::ui_display::UiDisplayPlan::from_geometry_with_route_and_composition(
+                mister_magik_core::display::DisplayGeometry::new(640, height),
+                match height {
+                    240 => crate::ui_display::ResolvedOutputRoute::Crt240p60,
+                    288 => crate::ui_display::ResolvedOutputRoute::Crt288p50,
+                    _ => panic!("unsupported CRT test raster"),
+                },
+                "native-crt-transition",
+                crate::ui_display::UiFramebufferSizePolicy::Auto,
+                mister_magik_core::display::Crt240Composition::Native240,
+            ),
         )
     }
 
@@ -590,9 +596,7 @@ mod tests {
         SettingsInputs {
             route,
             direction,
-            orientation: ScreenOrientation::Normal,
-            render_w: 960,
-            render_h: 540,
+            output: fixture.layout.output_layout(),
             reduce_motion,
             crt_layout: false,
             composed: &fixture.composed,
@@ -625,13 +629,7 @@ mod tests {
 
     #[test]
     fn crt_transitions_capture_composed_chrome_instead_of_the_bare_cards() {
-        use crate::ui_display::UiDisplayPlan;
-        let display = UiDisplay::for_plan(
-            UiDisplayPlan::from_mister_ini_text(
-                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
-            )
-            .unwrap(),
-        );
+        let display = native_crt_display(240);
         let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
         let metrics = CrtUiMetrics::for_display(&display);
         let mut cards = active_cards(LauncherScene::crt(640, 240));
@@ -676,9 +674,7 @@ mod tests {
             &SettingsInputs {
                 route: NavigationTransitionRoute::HomeToSettings,
                 direction: NavigationTransitionDirection::Forward,
-                orientation: ScreenOrientation::Normal,
-                render_w: 640,
-                render_h: 240,
+                output: layout.output_layout(),
                 reduce_motion: false,
                 crt_layout: true,
                 composed: &composed,
@@ -752,24 +748,27 @@ mod tests {
             ),
             Some(&mut cards),
         );
+        let unsupported_pixels = vec![COMPOSED; 800 * 600];
         let unsupported = SettingsInputs {
-            render_w: 800,
-            render_h: 600,
+            output: Rgb565OutputLayout::new(800, 600, 800, OutputRotation::None).unwrap(),
+            composed: &unsupported_pixels,
             ..settings_inputs(&fixture, route, direction, false)
         };
-        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
-        let _ = begin_settings_transition(&mut runtime, Some(&mut cards), &unsupported);
-        assert_ne!(
-            runtime
-                .request()
-                .map(NavigationTransitionRequest::renderer_label),
-            Some("settings-cog"),
-            "unsupported raster"
+        let mut runtime = NavigationTransitionRuntime::new(800, 600, true);
+        assert!(begin_settings_transition(
+            &mut runtime,
+            Some(&mut cards),
+            &unsupported
+        ));
+        assert_eq!(
+            runtime.request().unwrap().renderer_label(),
+            "settings-page",
+            "unsupported raster must still start its page slide"
         );
     }
 
     #[test]
-    fn the_settings_zoom_waits_for_a_settled_card_and_supports_native_portrait_rasters() {
+    fn the_settings_zoom_waits_for_a_settled_card_and_supports_native_crt_rasters() {
         let fixture = Fixture::new(ScreenOrientation::Normal);
         let scene = LauncherScene::new(960, 540);
         let route = NavigationTransitionRoute::HomeToSettings;
@@ -795,48 +794,37 @@ mod tests {
             "settings-page"
         );
 
-        // A native portrait CRT raster supports the zoom.
-        let mut settled = active_cards(LauncherScene::crt(240, 640));
-        let composed = vec![COMPOSED; 240 * 640];
-        let portrait = SettingsInputs {
-            render_w: 240,
-            render_h: 640,
+        // A native landscape CRT raster supports the zoom; rotated outputs
+        // use the page slide covered by the portrait motion matrix below.
+        let layout =
+            UiLayoutGeometry::for_display(&native_crt_display(240), ScreenOrientation::Normal);
+        let mut settled = active_cards(LauncherScene::crt(640, 240));
+        let composed = vec![COMPOSED; layout.output_layout().len()];
+        let native = SettingsInputs {
+            output: layout.output_layout(),
             crt_layout: true,
             composed: &composed,
             ..settings_inputs(&fixture, route, direction, false)
         };
-        let mut runtime = NavigationTransitionRuntime::new(240, 640, true);
+        let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
         assert!(begin_settings_transition(
             &mut runtime,
             Some(&mut settled),
-            &portrait
+            &native
         ));
         assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
     }
 
     #[test]
     fn portrait_navigation_frames_equal_rotated_complete_page_motion() {
-        use crate::ui_display::UiDisplayPlan;
         use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedPixel;
         use mister_magik_framebuffer_scenes::navigation::{
             NavigationTransitionBuffers, render_settings_page_transition_into,
         };
         for display in [
             UiDisplay::for_framebuffer(960, 540),
-            UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
-                mister_magik_core::display::DisplayGeometry::new(640, 240),
-                crate::ui_display::ResolvedOutputRoute::Crt240p60,
-                "portrait-transition",
-                crate::ui_display::UiFramebufferSizePolicy::Auto,
-                mister_magik_core::display::Crt240Composition::Native240,
-            )),
-            UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
-                mister_magik_core::display::DisplayGeometry::new(640, 288),
-                crate::ui_display::ResolvedOutputRoute::Crt288p50,
-                "portrait-transition",
-                crate::ui_display::UiFramebufferSizePolicy::Auto,
-                mister_magik_core::display::Crt240Composition::Native240,
-            )),
+            native_crt_display(240),
+            native_crt_display(288),
         ] {
             for orientation in [
                 ScreenOrientation::MonitorClockwise,
@@ -927,9 +915,7 @@ mod tests {
                                 &SettingsInputs {
                                     route,
                                     direction,
-                                    orientation,
-                                    render_w: layout.composition_w(),
-                                    render_h: layout.composition_h(),
+                                    output: layout.output_layout(),
                                     reduce_motion: false,
                                     crt_layout: crt,
                                     composed: &physical_source,

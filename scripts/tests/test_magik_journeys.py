@@ -45,6 +45,7 @@ def test_setting_restores_original_after_capture_failure(
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_focus_label", lambda *_: None)
     monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(actions, "_menu_ready", lambda _: True)
     monkeypatch.setattr(actions, "_selected_labels", lambda _: ["Settings"])
     monkeypatch.setattr(
         actions,
@@ -119,7 +120,7 @@ def test_orientation_change_only_keeps_when_the_dialog_is_up(
     # anyway would land on the next setting (Reduce motion) and change it.
     keys = []
     monkeypatch.setattr(actions, "_open_settings_card", lambda _: None)
-    monkeypatch.setattr(actions, "_settings_open", lambda _: True)
+    monkeypatch.setattr(actions, "_settings_ready", lambda _: True)
     monkeypatch.setattr(actions, "_focus_label", lambda *_: None)
     monkeypatch.setattr(actions, "_press_key", lambda _, key: keys.append(key))
     monkeypatch.setattr(
@@ -130,9 +131,9 @@ def test_orientation_change_only_keeps_when_the_dialog_is_up(
         ),
     )
     actions.set_screen_orientation(object(), "normal", sleep=lambda _: None)
-    # open the combo, to the top (3 ups), choose, [keep: down + enter], home
+    # open the combo, to the top (3 ups), choose, [keep: right + enter], home
     expected = ["\n", "", "", "", "\n"]
-    expected += ["", "\n"] if dialog else []
+    expected += ["\uf703", "\n"] if dialog else []
     assert keys == [*expected, ""]
 
 

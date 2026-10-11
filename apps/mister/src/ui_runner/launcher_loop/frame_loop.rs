@@ -2296,9 +2296,7 @@ impl<'a> FrameLoop<'a> {
                                     &SettingsInputs {
                                         route,
                                         direction,
-                                        orientation: self.ui.nav.settings.screen_orientation,
-                                        render_w: self.env.ui.render_w(),
-                                        render_h: self.env.ui.render_h(),
+                                        output: self.out.layout.output_layout(),
                                         reduce_motion: self.ui.nav.settings.reduce_motion,
                                         crt_layout: self.out.crt_layout,
                                         composed: self.env.target.cached_565(),
