@@ -525,6 +525,18 @@ fn should_defer_or_preserve_selected_preview(
     defer_selected_preview || (navigation_transition_active && source_was_arcade)
 }
 
+// Occlusion hides HDMI's independent preview layer. CRT still needs the retained
+// screenshot behind its destination foreground while a navigation snapshot owns
+// scanout; disabling it makes hub/list destination preparation time out.
+fn crt_backdrop_allowed(
+    route: PreviewRoute,
+    wants_arcade_list: bool,
+    system_hub: bool,
+    drawer_open: bool,
+) -> bool {
+    route != PreviewRoute::Unavailable && (wants_arcade_list || system_hub) && !drawer_open
+}
+
 fn preview_work_allowed(
     background_work_allowed: bool,
     system_entry_in_progress: bool,
@@ -4685,6 +4697,22 @@ mod tests {
         ));
         assert!(should_defer_or_preserve_selected_preview(
             true, false, false,
+        ));
+    }
+
+    #[test]
+    fn arcade_snapshot_occlusion_keeps_crt_destination_composition_available() {
+        for route in [PreviewRoute::Eligible, PreviewRoute::Occluded] {
+            assert!(crt_backdrop_allowed(route, true, false, false));
+            assert!(crt_backdrop_allowed(route, false, true, false));
+            assert!(!crt_backdrop_allowed(route, false, false, false));
+            assert!(!crt_backdrop_allowed(route, true, false, true));
+        }
+        assert!(!crt_backdrop_allowed(
+            PreviewRoute::Unavailable,
+            true,
+            false,
+            false
         ));
     }
 

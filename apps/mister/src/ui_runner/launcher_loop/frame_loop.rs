@@ -3451,9 +3451,12 @@ impl<'a> FrameLoop<'a> {
         };
         self.lib.preview.set_route(presentation_route);
         let crt_backdrop_eligible = self.ui.preview_route.allows_crt_backdrop()
-            && presentation_route == PreviewRoute::Eligible
-            && (wants_arcade_list || self.ui.nav.is_system_hub())
-            && !self.ui.nav.arcade_filter.drawer_open;
+            && crt_backdrop_allowed(
+                presentation_route,
+                wants_arcade_list,
+                self.ui.nav.is_system_hub(),
+                self.ui.nav.arcade_filter.drawer_open,
+            );
         self.env
             .app
             .global::<slint_ui::launcher::MisterUi>()
