@@ -671,7 +671,7 @@ mod tests {
 
         let sentinel = Rgb565Pixel(0xf81f);
         let mut destination = vec![sentinel; controller.width() * controller.height()];
-        let [header, footer] = product_chrome_rects(content, metrics);
+        let [header, footer] = product_chrome_rects(layout, metrics);
         let header_text_index = header.1 * controller.width() + header.0;
         let header_background_index = header_text_index + 1;
         let footer_text_index = footer.1 * controller.width() + footer.0;

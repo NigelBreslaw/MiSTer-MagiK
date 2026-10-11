@@ -158,6 +158,15 @@ pub fn arcade_rows_from_persisted_shard(
     )
 }
 
+pub fn collection_with_preview_availability(
+    system_id: &str,
+    games: &[SystemGame],
+    platform_kind: arcade_catalog::PlatformKind,
+) -> arcade_catalog::SystemCollection {
+    let (rows, launch_plans) = arcade_rows_from_persisted_shard(system_id, games);
+    arcade_catalog::SystemCollection::new(system_id, rows, launch_plans, platform_kind)
+}
+
 struct ProjectedGame<'a> {
     title: &'a str,
     launch_ref: &'a str,

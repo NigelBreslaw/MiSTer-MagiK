@@ -1505,13 +1505,13 @@ fn preview_archive_paths_from_values<'a>(
     }
     if let Some(path) = get("MISTER_NEOGEO_PREVIEW_ARCHIVE").filter(|path| !path.is_empty()) {
         paths.push(path.to_owned());
-    } else if auto_enabled && let Some(path) = auto_archive_path_for_system(&root, "neogeo") {
+    } else if auto_enabled && let Some(path) = installed_preview_archive_path(&root, "neogeo") {
         paths.push(path);
     }
     for (system, name) in console_preview_archive_env_names() {
         if let Some(path) = get(name).filter(|path| !path.is_empty()) {
             paths.push(path.to_owned());
-        } else if auto_enabled && let Some(path) = auto_archive_path_for_system(&root, system) {
+        } else if auto_enabled && let Some(path) = installed_preview_archive_path(&root, system) {
             paths.push(path);
         }
     }
@@ -1995,7 +1995,7 @@ fn default_preview_archive_root() -> PathBuf {
 }
 
 fn auto_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> Option<String> {
-    let archive = auto_archive_path_for_system(root, "arcade")
+    let archive = installed_preview_archive_path(root, "arcade")
         .unwrap_or_else(|| default_preview_archive_path_in_root(root, resize));
     Path::new(&archive).exists().then_some(archive)
 }
@@ -2013,7 +2013,7 @@ fn neogeo_preview_archive_path_from_env() -> Option<String> {
 
 fn auto_neogeo_archive_path() -> Option<String> {
     let root = default_preview_archive_root();
-    auto_archive_path_for_system(&root, "neogeo")
+    installed_preview_archive_path(&root, "neogeo")
 }
 
 fn console_preview_archive_paths_from_env() -> Vec<String> {
@@ -2065,7 +2065,9 @@ fn console_preview_archive_paths_from_env() -> Vec<String> {
 fn auto_console_archive_paths() -> Vec<String> {
     supported_screenshot_pack_ids()
         .filter(|system| !matches!(*system, "arcade" | "neogeo"))
-        .filter_map(|system| auto_archive_path_for_system(&default_preview_archive_root(), system))
+        .filter_map(|system| {
+            installed_preview_archive_path(&default_preview_archive_root(), system)
+        })
         .collect()
 }
 
@@ -2097,7 +2099,8 @@ fn resolved_preview_archive_path_cache() -> &'static Mutex<HashMap<String, Strin
     PATHS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn auto_archive_path_for_system(root: &Path, system: &str) -> Option<String> {
+/// Resolve an already installed screenshot pack without consulting the network.
+pub fn installed_preview_archive_path(root: &Path, system: &str) -> Option<String> {
     preferred_archive_path_for_system(root, system).or_else(|| {
         let legacy = legacy_archive_path_for_system(root, system);
         Path::new(&legacy).exists().then_some(legacy)
