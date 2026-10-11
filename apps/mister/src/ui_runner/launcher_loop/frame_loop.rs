@@ -5205,7 +5205,11 @@ impl<'a> FrameLoop<'a> {
                         && !self.lib.preview.terminal_empty()
                         && self.lib.preview.trace_cache_state() == "exact"
                         && self.lib.preview.raw_frame_status() == PreviewRawFrameStatus::Ready;
-                    let preview_surface_ready = if preview_exact {
+                    // CRT already has its full-frame backdrop and Slint foreground.
+                    // HDMI's preview aperture must never be inserted into that page.
+                    let preview_surface_ready = if self.out.crt_layout {
+                        true
+                    } else if preview_exact {
                         if self.out.director.navigation.settings_physical_space() {
                             let (ready, publication) = layer_target.compose_exact_preview_physical(
                                 &self.lib.preview,
@@ -5253,6 +5257,9 @@ impl<'a> FrameLoop<'a> {
                     {
                         #[cfg(feature = "tooling")]
                         let list_started = measure_destination.then(Instant::now);
+                        self.out
+                            .arcade_list_renderer
+                            .set_crt_portrait_rows(self.out.layout.is_portrait());
                         configure_arcade_list_renderer_geometry(
                             &mut self.out.arcade_list_renderer,
                             &self.ui.nav,
@@ -5267,7 +5274,24 @@ impl<'a> FrameLoop<'a> {
                         #[cfg(feature = "tooling")]
                         let list_draw_done = measure_destination.then(Instant::now);
                         if let Some(update) = list_update {
-                            if self.out.director.navigation.settings_physical_space() {
+                            if self.out.crt_layout {
+                                let backdrop = self
+                                    .out
+                                    .crt_backdrop
+                                    .as_ref()
+                                    .expect("CRT destination backdrop");
+                                layer_target.compose_arcade_list_over_backdrop(
+                                    &mut self.out.arcade_list_renderer,
+                                    backdrop.pixels(),
+                                    update,
+                                    backdrop.backdrop_revision(),
+                                    self.lib.catalog_version as u64,
+                                    false,
+                                    !backdrop.is_transitioning(),
+                                    true,
+                                    &mut self.out.crt_arcade_overlay,
+                                );
+                            } else if self.out.director.navigation.settings_physical_space() {
                                 let _ = layer_target.reclaim_arcade_publication(
                                     &mut self.out.arcade_list_renderer,
                                     &mut self.out.launcher_arcade_publication,
@@ -5327,12 +5351,6 @@ impl<'a> FrameLoop<'a> {
                 if destination_layers_ready
                     && self.out.crt_layout
                     && self.ui.nav.screen == Screen::Arcade
-                    && self
-                        .out
-                        .director
-                        .navigation
-                        .request()
-                        .is_some_and(|r| r.is_device_card())
                     && let Some(source) = self.lib.preview.selected_backdrop_source()
                 {
                     destination_layers_ready =

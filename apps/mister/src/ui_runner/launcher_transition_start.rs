@@ -823,18 +823,20 @@ mod tests {
         };
         for display in [
             UiDisplay::for_framebuffer(960, 540),
-            UiDisplay::for_plan(
-                UiDisplayPlan::from_mister_ini_text(
-                    "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
-                )
-                .unwrap(),
-            ),
-            UiDisplay::for_plan(
-                UiDisplayPlan::from_mister_ini_text(
-                    "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=0\n",
-                )
-                .unwrap(),
-            ),
+            UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
+                mister_magik_core::display::DisplayGeometry::new(640, 240),
+                crate::ui_display::ResolvedOutputRoute::Crt240p60,
+                "portrait-transition",
+                crate::ui_display::UiFramebufferSizePolicy::Auto,
+                mister_magik_core::display::Crt240Composition::Native240,
+            )),
+            UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
+                mister_magik_core::display::DisplayGeometry::new(640, 288),
+                crate::ui_display::ResolvedOutputRoute::Crt288p50,
+                "portrait-transition",
+                crate::ui_display::UiFramebufferSizePolicy::Auto,
+                mister_magik_core::display::Crt240Composition::Native240,
+            )),
         ] {
             for orientation in [
                 ScreenOrientation::MonitorClockwise,

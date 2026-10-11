@@ -1628,6 +1628,140 @@ mod tests {
     }
 
     #[test]
+    fn production_crt_portrait_chrome_uses_native_cell_width() {
+        std::thread::spawn(|| {
+            use crate::crt_backdrop::CrtForeground;
+            use crate::ui_display::UiDisplayPlan;
+            use slint_ui::launcher::{
+                ArcadeView, LauncherLayout, LauncherScreen, LayoutRect, MisterUi, NavigationView,
+                SystemPageMode,
+            };
+            for orientation in [
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::MonitorCounterclockwise,
+            ] {
+                let window = install_isolated_test_platform();
+                let app = slint_ui::launcher::Launcher::new().unwrap();
+                let ui =
+                    UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
+                        mister_magik_core::display::DisplayGeometry::new(640, 240),
+                        crate::ui_display::ResolvedOutputRoute::Crt240p60,
+                        "portrait-chrome",
+                        crate::ui_display::UiFramebufferSizePolicy::Auto,
+                        mister_magik_core::display::Crt240Composition::Native240,
+                    ));
+                let layout = UiLayoutGeometry::for_display(&ui, orientation);
+                super::super::ui_frame_target::configure_window_layout(&layout, &window);
+                let mister = app.global::<MisterUi>();
+                mister.set_crt_layout(true);
+                mister.set_custom_crt_backdrop(true);
+                mister.set_screen_orientation(match orientation {
+                    ScreenOrientation::MonitorClockwise => {
+                        slint_ui::launcher::ScreenOrientation::MonitorClockwise
+                    }
+                    _ => slint_ui::launcher::ScreenOrientation::MonitorCounterclockwise,
+                });
+                mister.set_window_width(layout.logical_w() as i32);
+                mister.set_window_height(layout.logical_h() as i32);
+                let content = layout.content_rect();
+                mister.set_crt_content_x(content.x as i32);
+                mister.set_crt_content_y(content.y as i32);
+                mister.set_crt_content_width(content.width as i32);
+                mister.set_crt_content_height(content.height as i32);
+                let footer = layout.crt_footer_rect();
+                app.global::<LauncherLayout>().set_crt_footer(LayoutRect {
+                    x: footer.x as i32 - content.x as i32,
+                    y: footer.y as i32 - content.y as i32,
+                    width: footer.width as i32,
+                    height: footer.height as i32,
+                });
+                app.global::<ArcadeView>()
+                    .set_collection_title("ARCADE".into());
+                app.global::<ArcadeView>()
+                    .set_load_state(slint_ui::launcher::ArcadeLoadState::Ready);
+                let nav = app.global::<NavigationView>();
+                nav.set_clock_text("12:34".into());
+                app.show().unwrap();
+                let mut foreground = CrtForeground::default();
+                for (screen, mode) in [
+                    (LauncherScreen::Arcade, SystemPageMode::Hub),
+                    (LauncherScreen::Arcade, SystemPageMode::List),
+                    (LauncherScreen::Settings, SystemPageMode::List),
+                    (LauncherScreen::Arcade, SystemPageMode::Hub),
+                    (LauncherScreen::Arcade, SystemPageMode::List),
+                ] {
+                    nav.set_screen(screen);
+                    nav.set_system_page_mode(mode);
+                    window.request_redraw();
+                    if screen == LauncherScreen::Settings {
+                        let mut rgb = vec![Rgb565Pixel(0); layout.output_layout().len()];
+                        window.draw_full_frame_preserving_cache_if_needed(
+                            layout.logical_w(),
+                            layout.logical_h(),
+                            |r| {
+                                r.render(&mut rgb, layout.composition_w());
+                            },
+                        );
+                        continue;
+                    }
+                    window.draw_if_needed(|r| {
+                        foreground.render(r, layout.composition_w(), layout.composition_h());
+                    });
+                    let mut actual = vec![Rgb565Pixel(0x1234); layout.output_layout().len()];
+                    foreground.compose(&mut actual);
+                    // Native portrait CRT text uses 6x24 cells. The title and clock
+                    // must leave this gap clear; 12x24 glyphs collide here.
+                    let output = layout.output_layout();
+                    let margin_x = (layout.logical_w() * 6 / 100)
+                        .max(content.x)
+                        .max(layout.logical_w() - content.right());
+                    let margin_y = (layout.logical_h() * 5 / 100)
+                        .max(content.y)
+                        .max(layout.logical_h() - content.bottom());
+                    for y in margin_y..margin_y + 24 {
+                        for x in margin_x + "MISTER MAGIK".len() * 6
+                            ..layout.logical_w() - margin_x - 5 * 6
+                        {
+                            assert_eq!(
+                                actual[output.physical_offset(x, y)].0,
+                                0x1234,
+                                "portrait title/clock overlap at {x},{y} in {orientation:?}"
+                            );
+                        }
+                    }
+                    if mode == SystemPageMode::List {
+                        // A PLAY + the 18px gap + B BACK finish at x=104.
+                        // The compact SELECT/Y hints start at x=106 on 240p.
+                        for y in footer.y + 10..footer.y + 34 {
+                            for x in margin_x + 90..layout.logical_w() - margin_x - 120 {
+                                assert_eq!(
+                                    actual[output.physical_offset(x, y)].0,
+                                    0x1234,
+                                    "portrait footer hints overlap at {x},{y}"
+                                );
+                            }
+                        }
+                    }
+                    let mut fresh = CrtForeground::default();
+                    window.request_redraw();
+                    window.draw_full_frame_resetting_cache_if_needed(|r| {
+                        fresh.render(r, layout.composition_w(), layout.composition_h());
+                    });
+                    let mut expected = vec![Rgb565Pixel(0x1234); actual.len()];
+                    fresh.compose(&mut expected);
+                    assert!(
+                        actual == expected,
+                        "{orientation:?} {screen:?} {mode:?}: first mismatch {:?}",
+                        actual.iter().zip(&expected).position(|(a, b)| a != b)
+                    );
+                }
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     fn cold_intro_snapshot_and_idle_handoff_keep_the_real_launcher_cards() {
         std::thread::spawn(|| {
             let window = install_isolated_test_platform();
