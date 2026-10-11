@@ -73,20 +73,25 @@ impl ConnectionStatus {
 }
 
 fn internet_connected() -> bool {
-    Command::new("curl")
-        .args([
-            "--head",
-            "--fail",
-            "--silent",
-            "--location",
-            "--connect-timeout",
-            "2",
-            "--max-time",
-            "4",
-            "--output",
-            "/dev/null",
-            "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
-        ])
+    let mut command = Command::new("curl");
+    command.args([
+        "--head",
+        "--fail",
+        "--silent",
+        "--location",
+        "--connect-timeout",
+        "2",
+        "--max-time",
+        "4",
+        "--output",
+        "/dev/null",
+        "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
+    ]);
+    let ca_bundle = "/etc/ssl/certs/cacert.pem";
+    if std::path::Path::new(ca_bundle).is_file() {
+        command.args(["--cacert", ca_bundle]);
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
