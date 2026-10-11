@@ -29,10 +29,10 @@ impl LauncherConnectionIndicator {
         let heading = fonts.as_ref().map_or(typography.heading, |fonts| {
             fonts.get(super::super::TextRole::Heading)
         });
-        let (clock_left, clock_top) = layout.map_or_else(
-            || super::super::native_clock_origin(),
-            |layout| layout.clock_origin(clock, heading),
-        );
+        let (clock_left, clock_top) = layout
+            .map_or_else(super::super::native_clock_origin, |layout| {
+                layout.clock_origin(clock, heading)
+            });
         let ink_top = clock
             .chars()
             .filter_map(|c| heading.glyph(c))
