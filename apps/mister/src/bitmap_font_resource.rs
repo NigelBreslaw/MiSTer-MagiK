@@ -44,15 +44,6 @@ static JERSEY_25_HUB_48_RESOURCE: &[u8] = &[];
 #[cfg(all(feature = "asset-tools", not(any(test, feature = "ui"))))]
 static JERSEY_25_HUB_64_RESOURCE: &[u8] = &[];
 
-#[cfg(test)]
-static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
-    include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-1x.mmbf");
-#[cfg(test)]
-static TERMINUS_8X14_NORMAL_RESOURCE: &[u8] =
-    include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-2x.mmbf");
-#[cfg(test)]
-static TERMINUS_8X14_BOLD_RESOURCE: &[u8] =
-    include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-bold-2x.mmbf");
 #[cfg(any(not(feature = "asset-tools"), test, feature = "ui"))]
 static SPLEEN_5X8_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-5x8-1x.mmbf");
@@ -1117,21 +1108,6 @@ pub fn generate_jersey_15(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(feature = "asset-tools")]
-pub fn generate_terminus_8x14_normal(source: &str) -> Result<Vec<u8>, String> {
-    generate_bdf_resource(source, "Terminus 8x14", 400, 2, 7.0, 10.0)
-}
-
-#[cfg(feature = "asset-tools")]
-pub fn generate_terminus_8x14_native(source: &str) -> Result<Vec<u8>, String> {
-    generate_bdf_resource(source, "Terminus 8x14", 400, 1, 7.0, 10.0)
-}
-
-#[cfg(feature = "asset-tools")]
-pub fn generate_terminus_8x14_bold(source: &str) -> Result<Vec<u8>, String> {
-    generate_bdf_resource(source, "Terminus 8x14 Bold", 700, 2, 7.0, 10.0)
-}
-
-#[cfg(feature = "asset-tools")]
 pub fn generate_spleen_5x8_native(source: &str) -> Result<Vec<u8>, String> {
     generate_bdf_resource(source, "Spleen 5x8", 400, 1, 5.0, 7.0)
 }
@@ -1165,9 +1141,6 @@ mod tests {
         include_bytes!("../../../private/magik-assets/fonts/bacteria-12/Bacteria 12.ttf");
     const JERSEY_15_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey15-Regular.ttf");
     const JERSEY_25_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey25-Regular.ttf");
-    const TERMINUS_8X14_NORMAL_BDF: &str =
-        include_str!("../assets/fonts/terminus-8x14/ter-u14n.bdf");
-    const TERMINUS_8X14_BOLD_BDF: &str = include_str!("../assets/fonts/terminus-8x14/ter-u14b.bdf");
     const SPLEEN_5X8_BDF: &str = include_str!("../assets/fonts/spleen/spleen-5x8.bdf");
     const SPLEEN_6X12_BDF: &str = include_str!("../assets/fonts/spleen/spleen-6x12.bdf");
 
@@ -1215,28 +1188,6 @@ mod tests {
         assert_eq!(
             generate_resource(JERSEY_15_TTF, JERSEY_15_SPEC).unwrap(),
             JERSEY_15_RESOURCE
-        );
-        assert_eq!(
-            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 1, 7.0, 10.0,)
-                .unwrap(),
-            TERMINUS_8X14_NATIVE_RESOURCE
-        );
-        assert_eq!(
-            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 2, 7.0, 10.0,)
-                .unwrap(),
-            TERMINUS_8X14_NORMAL_RESOURCE
-        );
-        assert_eq!(
-            generate_bdf_resource(
-                TERMINUS_8X14_BOLD_BDF,
-                "Terminus 8x14 Bold",
-                700,
-                2,
-                7.0,
-                10.0,
-            )
-            .unwrap(),
-            TERMINUS_8X14_BOLD_RESOURCE
         );
         assert_eq!(
             generate_bdf_resource(SPLEEN_5X8_BDF, "Spleen 5x8", 400, 1, 5.0, 7.0).unwrap(),
@@ -1336,9 +1287,6 @@ mod tests {
             BACTERIA_12_NATIVE_RESOURCE,
             JERSEY_15_RESOURCE,
             JERSEY_25_RESOURCE,
-            TERMINUS_8X14_NATIVE_RESOURCE,
-            TERMINUS_8X14_NORMAL_RESOURCE,
-            TERMINUS_8X14_BOLD_RESOURCE,
             SPLEEN_5X8_NATIVE_RESOURCE,
             SPLEEN_5X8_DOUBLED_RESOURCE,
             SPLEEN_6X12_NATIVE_RESOURCE,
@@ -1346,49 +1294,6 @@ mod tests {
         ] {
             assert!(decode_resource(resource).unwrap().descent < 0.0);
         }
-    }
-
-    #[test]
-    fn terminus_sources_expand_to_exact_two_by_two_blocks() {
-        for resource in [TERMINUS_8X14_NORMAL_RESOURCE, TERMINUS_8X14_BOLD_RESOURCE] {
-            let font = decode_resource(resource).unwrap();
-            assert_eq!(font.pixel_size, 28);
-            assert_eq!(font.ascent, 24.0);
-            assert_eq!(font.descent, -4.0);
-            let glyph = glyph(&font, 'A');
-            assert_eq!((glyph.width, glyph.height, glyph.x_advance), (16, 28, 1024));
-            let alpha = unpack_glyph(glyph);
-            for y in (0..glyph.height as usize).step_by(2) {
-                for x in (0..glyph.width as usize).step_by(2) {
-                    let value = alpha[y * glyph.width as usize + x];
-                    assert_eq!(alpha[y * glyph.width as usize + x + 1], value);
-                    assert_eq!(alpha[(y + 1) * glyph.width as usize + x], value);
-                    assert_eq!(alpha[(y + 1) * glyph.width as usize + x + 1], value);
-                }
-            }
-        }
-        let normal = decode_resource(TERMINUS_8X14_NORMAL_RESOURCE).unwrap();
-        let bold = decode_resource(TERMINUS_8X14_BOLD_RESOURCE).unwrap();
-        let normal_ink = unpack_glyph(glyph(&normal, 'A'))
-            .into_iter()
-            .filter(|value| *value != 0)
-            .count();
-        let bold_ink = unpack_glyph(glyph(&bold, 'A'))
-            .into_iter()
-            .filter(|value| *value != 0)
-            .count();
-        assert!(bold_ink > normal_ink);
-    }
-
-    #[test]
-    fn terminus_native_resource_preserves_the_eight_by_fourteen_cell() {
-        let font = decode_resource(TERMINUS_8X14_NATIVE_RESOURCE).unwrap();
-        assert_eq!(font.family_name, "Terminus 8x14");
-        assert_eq!(font.pixel_size, 14);
-        assert_eq!(font.ascent, 12.0);
-        assert_eq!(font.descent, -2.0);
-        let glyph = glyph(&font, 'A');
-        assert_eq!((glyph.width, glyph.height, glyph.x_advance), (8, 14, 512));
     }
 
     #[test]

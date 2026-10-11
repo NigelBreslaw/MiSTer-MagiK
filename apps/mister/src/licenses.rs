@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 // Directly shipped third-party assets remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 12] = [
+pub const LICENSE_TITLES: [&str; 11] = [
     "MiSTer MagiK",
     "FFmpeg",
     "Slint",
@@ -14,16 +14,15 @@ pub const LICENSE_TITLES: [&str; 12] = [
     "Commercial Fonts",
     "Jersey",
     "Spleen",
-    "Terminus",
     "Rust standard library",
     "zlib",
     "libpng",
     "Card artwork",
 ];
 
-pub const LICENSE_KINDS: [&str; 12] = [
-    "GPL-3.0", "LGPL-2.1", "GPL-3.0", "OFL-1.1", "LICENSED", "OFL-1.1", "BSD-2", "OFL-1.1", "MIT",
-    "ZLIB", "LIBPNG", "CC / GML",
+pub const LICENSE_KINDS: [&str; 11] = [
+    "GPL-3.0", "LGPL-2.1", "GPL-3.0", "OFL-1.1", "LICENSED", "OFL-1.1", "BSD-2", "MIT", "ZLIB",
+    "LIBPNG", "CC / GML",
 ];
 
 const GPL3: &str = include_str!("../../../LICENSE");
@@ -31,7 +30,6 @@ const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
 const COMMERCIAL_FONTS: &str = include_str!("../licenses/COMMERCIAL-FONTS.txt");
 const JERSEY: &str = include_str!("../licenses/JERSEY.txt");
-const TERMINUS_FONT: &str = include_str!("../licenses/TERMINUS-FONT.txt");
 const SPLEEN: &str = include_str!("../licenses/SPLEEN.txt");
 const RUST_LIBRARIES: &str = include_str!("../licenses/RUST-LIBRARIES.txt");
 const HDMI_LINE_COLUMNS: usize = 105;
@@ -89,9 +87,8 @@ pub fn text(index: usize) -> &'static str {
         4 => COMMERCIAL_FONTS,
         5 => JERSEY,
         6 => SPLEEN,
-        7 => TERMINUS_FONT,
-        8..=10 => RUST_LIBRARIES,
-        11 => include_str!("../licenses/CARD-ARTWORK.txt"),
+        7..=9 => RUST_LIBRARIES,
+        10 => include_str!("../licenses/CARD-ARTWORK.txt"),
         _ => GPL3,
     }
 }
@@ -157,7 +154,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in [0, 1, 2, 3, 5, 7, 8, 9, 10] {
+        for index in [0, 1, 2, 3, 5, 7, 8, 9] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -188,7 +185,6 @@ mod tests {
                 "Commercial Fonts",
                 "Jersey",
                 "Spleen",
-                "Terminus",
                 "Rust standard library",
                 "zlib",
                 "libpng",
@@ -200,9 +196,10 @@ mod tests {
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
         assert!(COMMERCIAL_FONTS.contains("commercial licences"));
         assert!(JERSEY.contains("SIL OPEN FONT LICENSE"));
-        assert!(TERMINUS_FONT.contains("Reserved Font Name \"Terminus Font\""));
         assert!(SPLEEN.contains("Redistribution and use in source and binary forms"));
         assert!(RUST_LIBRARIES.contains("zlib License"));
+        assert_eq!(text(7), RUST_LIBRARIES);
+        assert_eq!(text(10), include_str!("../licenses/CARD-ARTWORK.txt"));
     }
 
     #[test]

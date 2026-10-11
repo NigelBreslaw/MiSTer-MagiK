@@ -111,7 +111,7 @@ addEventListener('resize',fit); fit();
 
 const LICENSES=[['MiSTer MagiK','GPL-3.0'],['FFmpeg','LGPL-2.1'],['Slint','GPL-3.0'],['Press Start 2P','OFL-1.1'],
   ['Commercial fonts','LICENSED'],['Jersey 25','OFL-1.1'],['Jersey 15','OFL-1.1'],['Spleen','BSD-2'],
-  ['Terminus','OFL-1.1'],['Rust standard library','MIT'],['zlib','ZLIB'],['libpng','LIBPNG']];
+  ['Rust standard library','MIT'],['zlib','ZLIB'],['libpng','LIBPNG']];
 const list=document.getElementById('lic-list');
 LICENSES.slice(0,10).forEach(([name,kind],i)=>{
   const e=document.createElement('div'); e.className='row'+(i===0?' focus':'')+(i===9?' last':'');

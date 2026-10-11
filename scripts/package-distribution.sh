@@ -382,7 +382,6 @@ cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/license
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/PRESS-START-2P-OFL-1.1.txt"
 cp "$ROOT/apps/mister/licenses/CARD-ARTWORK.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/CARD-ARTWORK.txt"
 cp "$ROOT/apps/mister/licenses/COMMERCIAL-FONTS.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/COMMERCIAL-FONTS.txt"
-cp "$ROOT/apps/mister/licenses/TERMINUS-FONT.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/TERMINUS-FONT-OFL-1.1.txt"
 cp "$ROOT/apps/mister/licenses/SPLEEN.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/SPLEEN-BSD-2-Clause.txt"
 cp "$ROOT/crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt" \
   "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
@@ -410,7 +409,7 @@ portion remains under its upstream GPL-3.0 terms.
 
 The launcher includes Slint under its GPL-3.0-only option, the normal runtime
 Rust dependency closure, statically linked FFmpeg libraries under LGPL-2.1-or-later,
-the Press Start 2P, Jersey 25, and Terminus fonts under SIL OFL-1.1, Spleen under
+the Press Start 2P and Jersey fonts under SIL OFL-1.1, Spleen under
 BSD-2-Clause, commercially licensed
 Yesterday 10, Xerxes 10, Nocive 15, and Bacteria 12 bitmap glyphs, and the Arcade Cabinet particle model
 by Lluc Guardiolaa under CC-BY-NC-4.0. Complete notices and attribution are in

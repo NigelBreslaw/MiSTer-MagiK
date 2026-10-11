@@ -6140,7 +6140,7 @@ mod tests {
     }
 
     #[test]
-    fn crt240_baseline_restores_yesterday_titles_and_terminus_metadata() {
+    fn crt240_baseline_restores_yesterday_titles_and_spleen_metadata() {
         let display = crt_240_display();
         let renderer =
             ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);

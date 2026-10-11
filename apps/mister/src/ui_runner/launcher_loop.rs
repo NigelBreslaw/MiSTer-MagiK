@@ -309,12 +309,11 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
                 "press-start-2p",
                 "commercial-fonts",
                 "jersey-25",
-                "jersey-15",
                 "spleen",
-                "terminus-font",
                 "rust-standard-library",
                 "zlib",
                 "libpng",
+                "card-artwork",
             ]
             .get(nav.licenses_selected)
             .copied()
@@ -4071,6 +4070,19 @@ mod tests {
         assert_eq!(
             nav_selection_feedback_target(&nav),
             Some(SelectionFeedbackTarget::new("licenses", "slint"))
+        );
+        nav.licenses_selected = 7;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new(
+                "licenses",
+                "rust-standard-library"
+            ))
+        );
+        nav.licenses_selected = 10;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("licenses", "card-artwork"))
         );
         nav.screen = Screen::Arcade;
         nav.system_page_mode = launcher::SystemPageMode::List;
