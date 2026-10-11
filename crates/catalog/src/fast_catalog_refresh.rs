@@ -561,8 +561,7 @@ pub fn build_fresh_catalog_with_presentation_progress(
         &discovery_watch,
         &states,
     )?;
-    stage_committed_refresh_state(catalog_root, &mut pending, &refresh)?;
-    crate::fast_five_catalog::commit_prepared_snapshot(catalog_root, &pending, limits)?;
+    commit_refresh_snapshot(catalog_root, &mut pending, &refresh, limits)?;
     let build_elapsed_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
     let build_info = FastCatalogBuildInfo::new(
         publication.generation,
@@ -1011,10 +1010,11 @@ fn refresh_manifest_slot(catalog_root: &Path, generation: u64) -> &'static str {
     }
 }
 
-fn stage_committed_refresh_state(
+fn commit_refresh_snapshot(
     catalog_root: &Path,
     catalog: &mut crate::shard_registry::CatalogManifest,
     refresh: &FastRefreshManifest,
+    limits: crate::shard_registry::RegistryLimits,
 ) -> Result<(), String> {
     let root = refresh_state_root(catalog_root);
     fs::create_dir_all(root.join("commits"))
@@ -1030,10 +1030,9 @@ fn stage_committed_refresh_state(
             .to_path_buf(),
         hash: sha256_hex(&bytes),
     });
-    read_refresh_manifest_for_catalog(catalog_root, catalog)?;
     #[cfg(test)]
     publication_barrier("before_catalog_commit", catalog_root);
-    Ok(())
+    crate::fast_five_catalog::commit_prepared_snapshot(catalog_root, catalog, limits)
 }
 
 fn next_refresh_generation(catalog_root: &Path) -> Result<u64, String> {
@@ -2191,10 +2190,10 @@ fn execute_planned_fast_refresh_with(
             &updated_states,
             &removed_system_ids,
         )?;
-        stage_committed_refresh_state(catalog_root, pending, &refresh)?;
-        crate::fast_five_catalog::commit_prepared_snapshot(
+        commit_refresh_snapshot(
             catalog_root,
             pending,
+            &refresh,
             crate::shard_registry::production_registry_limits(),
         )?;
         refresh.generation

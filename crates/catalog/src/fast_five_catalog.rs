@@ -750,15 +750,7 @@ pub(crate) fn publish_snapshot_with_profile_held(
     artifact_profile: FastFiveArtifactProfile,
     _lease: &crate::catalog_lease::CatalogMutationLease,
 ) -> Result<FastFivePublishReport, String> {
-    publish_snapshot_selection(
-        storage_root,
-        snapshot,
-        limits,
-        artifact_profile,
-        None,
-        None,
-        |_, _| {},
-    )
+    publish_snapshot_selection(storage_root, snapshot, limits, artifact_profile, None)
 }
 
 #[cfg(feature = "builder")]
@@ -796,8 +788,6 @@ pub(crate) fn publish_changed_snapshot_with_profile_held(
         limits,
         artifact_profile,
         Some(changed_system_ids),
-        None,
-        |_, _| {},
     )
 }
 
@@ -808,8 +798,6 @@ fn publish_snapshot_selection(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
     changed_system_ids: Option<&BTreeSet<String>>,
-    prebuilt: Option<&BTreeMap<String, PrebuiltSystemArtifacts>>,
-    progress: impl FnMut(usize, usize),
 ) -> Result<FastFivePublishReport, String> {
     let (manifest, report) = prepare_snapshot_selection(
         storage_root,
@@ -817,8 +805,8 @@ fn publish_snapshot_selection(
         limits,
         artifact_profile,
         changed_system_ids,
-        prebuilt,
-        progress,
+        None,
+        |_, _| {},
     )?;
     if !changed_system_ids.is_some_and(BTreeSet::is_empty) {
         commit_prepared_snapshot(storage_root, &manifest, limits)?;
@@ -942,7 +930,7 @@ fn prepare_snapshot_selection(
                 games: snapshot.game_count(),
                 variants: snapshot.variant_count(),
                 elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
-                registry_fingerprint: registry_fingerprint(storage_root, limits)?,
+                registry_fingerprint: registry_fingerprint_for_manifest(current),
                 copied_bytes: 0,
                 copy_hash_us: 0,
                 system_builds: snapshot

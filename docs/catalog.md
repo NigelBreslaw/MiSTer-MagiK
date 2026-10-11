@@ -41,8 +41,8 @@ of the bounded UI test session.
 
 Catalog publication has one commit point. Fresh builds and incremental refreshes
 first sync immutable game artifacts, watch packs, and a refresh manifest. The
-catalog registry then atomically activates their shared generation by storing
-that refresh manifest's path and checksum. A failed or interrupted build before
+catalog registry then atomically activates the matching catalog and refresh state
+by storing that refresh manifest's path and checksum. A failed or interrupted build before
 activation leaves the previous catalog and refresh state selected. Retrying
 cleans orphan game artifacts and uses a new refresh generation; legacy two-slot
 refresh state remains readable until the first complete transaction commits.
