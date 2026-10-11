@@ -33,6 +33,7 @@ pub mod runtime_state;
 pub mod runtime_status;
 #[cfg(feature = "app-runtime")]
 pub mod settings;
+pub mod usb_storage;
 pub mod vt;
 
 #[cfg(test)]

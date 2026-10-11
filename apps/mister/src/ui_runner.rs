@@ -191,6 +191,7 @@ mod phase_profile;
 pub use launcher_transition_start::{
     TransitionInputs, TransitionSource, start_navigation_transition,
 };
+mod connection_status;
 mod launcher_worker_intents;
 mod preview_compositor;
 mod raw565_preview_renderer;
@@ -221,6 +222,7 @@ use launcher_compositor::*;
 use launcher_display_session::*;
 use launcher_frame_accounting::*;
 
+use connection_status::ConnectionStatus;
 use launcher_present::*;
 use launcher_scheduler::*;
 use launcher_screensaver::LauncherScreensaverLoader;

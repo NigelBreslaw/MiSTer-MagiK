@@ -1,0 +1,103 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterUi } from "../mister_window.slint";
+import { NavigationView } from "../api.slint";
+import { CrtPageMetrics } from "crt_page_chrome.slint";
+
+export global ConnectionStatusGeometry {
+    out property <int> sx: MisterUi.crt-layout ? CrtPageMetrics.sx : 2;
+    out property <int> sy: MisterUi.crt-layout ? CrtPageMetrics.sy : 2;
+    out property <length> width: (NavigationView.usb-connected ? 28 : 12) * sx * 1px;
+    out property <length> clock-left: MisterUi.crt-layout
+        ? (MisterUi.window-width - CrtPageMetrics.margin-x - 30 * sx) * 1px
+        : MisterUi.portrait-layout ? (MisterUi.window-width - Math.floor(MisterUi.window-width * 6 / 100) - 45) * 1px : 875px;
+    out property <length> left: clock-left - 6 * sx * 1px - width;
+    out property <length> top: MisterUi.crt-layout ? CrtPageMetrics.margin-y * 1px
+        : MisterUi.portrait-layout ? Math.floor(MisterUi.window-height * 5 / 100) * 1px - 4px : 18px;
+}
+
+export component ConnectionIcons inherits Rectangle {
+    in property <bool> internet-connected;
+    in property <bool> usb-connected;
+    in property <int> scale-x: 2;
+    in property <int> scale-y: 2;
+    width: (root.usb-connected ? 28 : 12) * root.scale-x * 1px;
+    height: 12 * root.scale-y * 1px;
+    background: transparent;
+
+    // Whole logical pixels remain crisp on native CRT rasters and HDMI.
+    if root.usb-connected : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 12 * root.scale-x * 1px;
+        height: parent.height;
+        background: transparent;
+        accessible-role: image;
+        accessible-label: "USB storage connected";
+        for pixel in [
+            { x: 5, y: 0, w: 2, h: 1 },
+            { x: 4, y: 1, w: 4, h: 1 },
+            { x: 5, y: 2, w: 2, h: 7 },
+            { x: 4, y: 9, w: 4, h: 3 },
+            { x: 0, y: 3, w: 3, h: 3 },
+            { x: 1, y: 6, w: 1, h: 1 },
+            { x: 2, y: 7, w: 3, h: 1 },
+            { x: 9, y: 2, w: 3, h: 3 },
+            { x: 10, y: 5, w: 1, h: 1 },
+            { x: 7, y: 6, w: 3, h: 1 }
+        ] : Rectangle {
+            x: pixel.x * root.scale-x * 1px;
+            y: pixel.y * root.scale-y * 1px;
+            width: pixel.w * root.scale-x * 1px;
+            height: pixel.h * root.scale-y * 1px;
+            background: #eae8d1;
+        }
+    }
+    Rectangle {
+        x: parent.width - self.width;
+        width: 12 * root.scale-x * 1px;
+        height: parent.height;
+        background: transparent;
+        accessible-role: image;
+        accessible-label: "Internet";
+        accessible-description: root.internet-connected ? "Connected" : "Offline";
+        for pixel in [
+            { x: 4, y: 0, w: 4, h: 1 },
+            { x: 2, y: 1, w: 2, h: 1 },
+            { x: 8, y: 1, w: 2, h: 1 },
+            { x: 1, y: 2, w: 1, h: 2 },
+            { x: 10, y: 2, w: 1, h: 2 },
+            { x: 0, y: 4, w: 1, h: 4 },
+            { x: 11, y: 4, w: 1, h: 4 },
+            { x: 1, y: 8, w: 1, h: 2 },
+            { x: 10, y: 8, w: 1, h: 2 },
+            { x: 2, y: 10, w: 2, h: 1 },
+            { x: 8, y: 10, w: 2, h: 1 },
+            { x: 4, y: 11, w: 4, h: 1 },
+            { x: 4, y: 1, w: 1, h: 3 },
+            { x: 7, y: 1, w: 1, h: 3 },
+            { x: 3, y: 4, w: 1, h: 4 },
+            { x: 8, y: 4, w: 1, h: 4 },
+            { x: 4, y: 8, w: 1, h: 3 },
+            { x: 7, y: 8, w: 1, h: 3 },
+            { x: 1, y: 4, w: 10, h: 1 },
+            { x: 1, y: 7, w: 10, h: 1 }
+        ] : Rectangle {
+            x: pixel.x * root.scale-x * 1px;
+            y: pixel.y * root.scale-y * 1px;
+            width: pixel.w * root.scale-x * 1px;
+            height: pixel.h * root.scale-y * 1px;
+            background: root.internet-connected ? #eae8d1 : #57615e;
+        }
+    }
+}
+
+export component LauncherConnectionStatus inherits ConnectionIcons {
+    x: ConnectionStatusGeometry.left;
+    y: ConnectionStatusGeometry.top;
+    scale-x: ConnectionStatusGeometry.sx;
+    scale-y: ConnectionStatusGeometry.sy;
+    internet-connected: NavigationView.internet-connected;
+    usb-connected: NavigationView.usb-connected;
+}

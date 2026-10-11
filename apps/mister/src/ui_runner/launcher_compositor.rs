@@ -1106,6 +1106,130 @@ mod tests {
         .unwrap();
     }
 
+    #[test]
+    fn connection_status_changes_stay_beside_clock_and_clear_on_removal() {
+        std::thread::spawn(|| {
+            use slint_ui::launcher::{Launcher, LauncherScreen, MisterUi, NavigationView};
+            for (width, height, crt) in [
+                (960usize, 540usize, false),
+                (540, 960, false),
+                (320, 240, true),
+                (640, 240, true),
+                (640, 288, true),
+                (240, 640, true),
+                (288, 640, true),
+                (640, 480, true),
+                (480, 640, true),
+            ] {
+                let window = install_isolated_test_platform();
+                let app = Launcher::new().unwrap();
+                let ui = app.global::<MisterUi>();
+                ui.set_window_width(width as i32);
+                ui.set_window_height(height as i32);
+                ui.set_crt_layout(crt);
+                ui.set_screen_orientation(if height > width {
+                    slint_ui::launcher::ScreenOrientation::MonitorClockwise
+                } else {
+                    slint_ui::launcher::ScreenOrientation::Normal
+                });
+                window.set_size(PhysicalSize::new(width as u32, height as u32));
+                if crt {
+                    let sy = if width.min(height) >= 400 || height >= 640 && width <= 288 { 2 } else { 1 };
+                    app.global::<slint_ui::launcher::LauncherLayout>().set_crt_footer(slint_ui::launcher::LayoutRect {
+                        x: 0, y: (height - (height * 5 / 100).max(6 * sy) - 16 * sy) as i32,
+                        width: width as i32, height: (16 * sy) as i32,
+                    });
+                }
+                let nav = app.global::<NavigationView>();
+                nav.set_screen(LauncherScreen::Settings);
+                nav.set_clock_text("12:34".into());
+                app.show().unwrap();
+                let display = UiDisplay::for_framebuffer(width, height);
+                let mut target =
+                    UiFrameTarget::cached(FramebufferTargetGeometry::new(width, height));
+                let mut render = || {
+                    window.request_redraw();
+                    LayerTarget::new(&mut target, &display).render_slint_full(&window);
+                    target.cached_565().to_vec()
+                };
+                let offline = render();
+                nav.set_internet_connected(true);
+                let online = render();
+                nav.set_usb_connected(true);
+                let usb = render();
+                nav.set_usb_connected(false);
+                assert_eq!(render(), online, "USB removal {width}x{height}");
+                nav.set_internet_connected(false);
+                assert_eq!(render(), offline, "internet loss {width}x{height}");
+                let sx = if !crt || width.min(height) >= 400 || width >= 640 && height <= 288 { 2 } else { 1 };
+                let sy = if !crt || width.min(height) >= 400 || height >= 640 && width <= 288 {
+                    2
+                } else {
+                    1
+                };
+                let clock_x = if crt {
+                    width - (width * 6 / 100).max(8 * sx) - 30 * sx
+                } else if height > width {
+                    width - width * 6 / 100 - 45
+                } else {
+                    875
+                };
+                let top = if crt {
+                    (height * 5 / 100).max(6 * sy)
+                } else if height > width {
+                    height * 5 / 100 - 4
+                } else {
+                    18
+                };
+                // Optional review artifacts contain actual Slint software-renderer pixels.
+                if let Some(directory) = std::env::var_os("MISTER_STATUS_ICON_CAPTURE_ROOT") {
+                    use std::io::Write;
+                    let directory = PathBuf::from(directory);
+                    std::fs::create_dir_all(&directory).unwrap();
+                    for (name, pixels) in [("offline", &offline), ("online-usb", &usb)] {
+                        let mut file = std::io::BufWriter::new(std::fs::File::create(
+                            directory.join(format!("{width}x{height}-{name}.ppm")),
+                        )
+                        .unwrap());
+                        write!(file, "P6\n{width} {height}\n255\n").unwrap();
+                        for pixel in pixels {
+                            let value = pixel.0;
+                            let r = (value >> 11) as u8;
+                            let g = ((value >> 5) & 63) as u8;
+                            let b = (value & 31) as u8;
+                            file.write_all(&[
+                                (r << 3) | (r >> 2),
+                                (g << 2) | (g >> 4),
+                                (b << 3) | (b >> 2),
+                            ])
+                            .unwrap();
+                        }
+                    }
+                }
+                for (before, after, x0, x1) in [
+                    (&offline, &online, clock_x - 18 * sx, clock_x - 6 * sx),
+                    (&online, &usb, clock_x - 34 * sx, clock_x - 22 * sx),
+                ] {
+                    let mut changed = 0;
+                    for (index, (a, b)) in before.iter().zip(after.iter()).enumerate() {
+                        if a != b {
+                            changed += 1;
+                            let (x, y) = (index % width, index / width);
+                            assert!(
+                                x >= x0 && x < x1 && y >= top && y < top + 12 * sy,
+                                "status covered other content at {x},{y} for {width}x{height}, expected x={x0}..{x1}, top={top}, sy={sy}"
+                            );
+                        }
+                    }
+                    assert!(changed > 0, "status invisible for {width}x{height}");
+                }
+
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
     // Background activity pills are Slint content composed before the Rust
     // Arcade list and preview layers, so they must stay in the header band:
     // on screen, clear of the title and clock, and outside both layer rects.
@@ -1793,7 +1917,7 @@ mod tests {
                     let mut actual = vec![Rgb565Pixel(0x1234); layout.output_layout().len()];
                     foreground.compose(&mut actual);
                     // Native portrait CRT text uses 6x24 cells. The title and clock
-                    // must leave this gap clear; 12x24 glyphs collide here.
+                    // must leave the gap before the status icons clear; 12x24 glyphs collide here.
                     let output = layout.output_layout();
                     let margin_x = (layout.logical_w() * 6 / 100)
                         .max(content.x)
@@ -1803,7 +1927,7 @@ mod tests {
                         .max(layout.logical_h() - content.bottom());
                     for y in margin_y..margin_y + 24 {
                         for x in margin_x + "MISTER MAGIK".len() * 6
-                            ..layout.logical_w() - margin_x - 5 * 6
+                            ..layout.logical_w() - margin_x - (5 * 6 + 18)
                         {
                             assert_eq!(
                                 actual[output.physical_offset(x, y)].0,
@@ -1879,10 +2003,23 @@ mod tests {
                 .iter()
                 .map(|pixel| Rgb565Pixel(pixel.0))
                 .collect::<Vec<_>>();
-            assert!(
-                layer.presentation_frame_view().pixels() == expected,
-                "cold-start morph source must contain the native launcher"
-            );
+            for (index, (actual, native)) in layer
+                .presentation_frame_view()
+                .pixels()
+                .iter()
+                .zip(&expected)
+                .enumerate()
+            {
+                let (x, y) = (index % 960, index / 960);
+                if !(839..863).contains(&x) || !(18..42).contains(&y) {
+                    assert_eq!(
+                        actual, native,
+                        "cold-start source lost native cards at {x},{y}"
+                    );
+                }
+            }
+            // The morph target includes the shared Slint header status overlay.
+            let expected = layer.presentation_frame_view().pixels().to_vec();
             let mut intro = crate::launcher_runtime::startup_intro::StartupIntroPlayback::new(&ui)
                 .expect("production intro");
             intro

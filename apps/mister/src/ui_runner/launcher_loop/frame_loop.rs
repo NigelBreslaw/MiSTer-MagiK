@@ -53,6 +53,7 @@ pub(super) struct Library {
     pub(super) card_level: crate::launcher_home::CardLevelSnapshot,
     pub(super) card_prefetch_key: (String, usize),
     pub(super) update_check: UpdateCheck,
+    pub(super) connection_status: ConnectionStatus,
     pub(super) memory_guard: crate::memory_pressure::MemoryPressureGuard,
     pub(super) catalog_contention_quiet_previews: bool,
     pub(super) catalog_idle_candidate_since: Option<Instant>,
@@ -1224,6 +1225,12 @@ impl<'a> FrameLoop<'a> {
         let clock_update_us = clock_update_start
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
+        if background_work_allowed && let Some(state) = self.lib.connection_status.poll() {
+            let navigation = self.env.app.global::<slint_ui::launcher::NavigationView>();
+            navigation.set_internet_connected(state.internet);
+            navigation.set_usb_connected(state.usb);
+            light_bridge_dirty = true;
+        }
         if background_work_allowed
             && let Some(available) = self.lib.update_check.try_recv()
             && available

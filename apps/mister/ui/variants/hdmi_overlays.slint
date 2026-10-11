@@ -5,6 +5,7 @@
 // headings, Xerxes caps for detail, and the violet Settings accent. Floating
 // panels match the Settings pickers (1px frame, 2px accent cap).
 
+import { ConnectionStatusGeometry } from "../components/connection_status.slint";
 import { Nocive15 } from "../components/nocive_15.slint";
 import { Xerxes10 } from "../components/xerxes_10.slint";
 import {
@@ -216,7 +217,7 @@ export component HeaderActivity inherits Rectangle {
     property <bool> both: root.media-progress-shown && root.background-scan-shown;
     // The title ends near x=152 in both orientations.
     property <length> title-clearance: 168px;
-    property <length> right-edge: root.portrait ? MisterUi.window-width * 1px - 104px : 857px;
+    property <length> right-edge: ConnectionStatusGeometry.left - 8px;
     property <length> available: root.right-edge - root.title-clearance - (root.both ? 8px : 0px);
     property <length> media-width: !root.media-progress-shown ? 0px
         : !root.both ? Math.min(media.natural-width, root.available)
