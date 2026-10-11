@@ -3972,10 +3972,6 @@ fn selected_aperture_pixel_with_gradient(
     }
 }
 
-fn is_arcade_row_background_pixel(pixel: Rgb565Pixel) -> bool {
-    is_arcade_row_background_pixel_with_style(pixel, ArcadeListStyle::hdmi())
-}
-
 fn is_arcade_row_background_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> bool {
     matches!(
         pixel,
@@ -6375,13 +6371,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    fn rgb565_luma(pixel: Rgb565Pixel) -> u32 {
-        let value = pixel.0 as u32;
-        let r = ((value >> 11) & 0x1f) << 3;
-        let g = ((value >> 5) & 0x3f) << 2;
-        let b = (value & 0x1f) << 3;
-        r * 30 + g * 59 + b * 11
     }
 }

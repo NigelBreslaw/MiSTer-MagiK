@@ -805,10 +805,6 @@ pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) ->
     }
 }
 
-pub fn forward_progress_q16_at_elapsed(total_us: u64, elapsed_us: u64) -> u16 {
-    forward_progress_q16_at_elapsed_with_cover(total_us, elapsed_us, SUPER_SCALER_COVER_PROGRESS)
-}
-
 pub fn forward_progress_q16_at_elapsed_with_cover(
     total_us: u64,
     elapsed_us: u64,
@@ -944,10 +940,6 @@ impl NavigationTransitionBuffers {
     pub fn capture_panel_backdrop(&mut self, pixels: &[Rgb565Pixel]) {
         self.panel_backdrop.clear();
         self.panel_backdrop.extend_from_slice(pixels);
-    }
-
-    pub fn working_mut(&mut self) -> &mut [Rgb565Pixel] {
-        self.working.as_mut_slice()
     }
 
     pub fn working(&self) -> &[Rgb565Pixel] {
