@@ -1142,6 +1142,7 @@ mod tests {
                     });
                 }
                 let nav = app.global::<NavigationView>();
+                nav.set_internet_icon(super::super::connection_status::internet_icon());
                 nav.set_screen(LauncherScreen::Home);
                 nav.set_clock_text("12:34".into());
                 app.show().unwrap();
@@ -1151,7 +1152,7 @@ mod tests {
                 let background = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0x39e7); width * height];
                 let mut render = || {
                     // Native Home composes Slint through render_by_line, which
-                    // skips Path elements even when buffer rendering supports them.
+                    // exercises the production image-mask composition path.
                     LayerTarget::new(&mut target, &display)
                         .render_custom_home(&window, &background, false, Some(DirtyRect {
                             x0: 16, y0: 80, x1: width - 16, y1: height - 16,
@@ -1974,6 +1975,8 @@ mod tests {
             let app = slint_ui::launcher::Launcher::new().expect("production launcher");
             app.global::<slint_ui::launcher::MisterUi>()
                 .set_custom_home_base(true);
+            app.global::<slint_ui::launcher::NavigationView>()
+                .set_internet_icon(super::super::connection_status::internet_icon());
             let ui = UiDisplay::for_framebuffer(960, 540);
             window.set_size(PhysicalSize::new(960, 540));
             app.show().expect("show production launcher");

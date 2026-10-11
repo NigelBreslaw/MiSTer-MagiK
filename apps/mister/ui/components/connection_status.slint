@@ -29,7 +29,6 @@ export component LauncherConnectionStatus inherits Rectangle {
     width: ConnectionStatusGeometry.width;
     height: ConnectionStatusGeometry.height;
     background: transparent;
-    clip: true;
 
     if NavigationView.usb-connected : Rectangle {
         x: 0px;
@@ -63,29 +62,12 @@ export component LauncherConnectionStatus inherits Rectangle {
         accessible-role: image;
         accessible-label: "Internet";
         accessible-description: NavigationView.internet-connected ? "Connected" : "Offline";
-        property <color> ink: NavigationView.internet-connected ? #eae8d1 : #57615e;
-        property <length> line: MisterUi.crt-layout ? 1px : 1.2px;
-        Rectangle {
+        Image {
             width: 100%; height: 100%;
-            border-radius: self.height / 2;
-            border-width: parent.line;
-            border-color: parent.ink;
-            background: transparent;
-        }
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            width: parent.width * 0.4;
-            height: parent.height;
-            border-radius: self.width / 2;
-            border-width: parent.line;
-            border-color: parent.ink;
-            background: transparent;
-        }
-        Rectangle {
-            x: 0px;
-            y: (parent.height - self.height) / 2;
-            width: 100%; height: parent.line;
-            background: parent.ink;
+            source: NavigationView.internet-icon;
+            colorize: NavigationView.internet-connected ? #eae8d1 : #57615e;
+            image-fit: fill;
+            image-rendering: smooth;
         }
     }
 }
