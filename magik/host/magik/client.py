@@ -222,9 +222,7 @@ class NativeAgent:
             operation,
             fields,
             attempts=1,
-            timeout=timeout
-            if timeout is not None
-            else budgets.get(operation, 90),
+            timeout=timeout if timeout is not None else budgets.get(operation, 90),
         )
         if response.operation == "error":
             raise AgentError.from_fields(response.fields)
