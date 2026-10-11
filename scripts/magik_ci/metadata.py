@@ -7,8 +7,6 @@ import json
 import subprocess
 from pathlib import Path
 
-from .common import github_output
-
 
 def platform_candidates(artifacts: Path, name: str) -> list[dict[str, object]]:
     payload = json.loads(artifacts.read_text(encoding="utf-8"))
@@ -87,8 +85,3 @@ def host_assurance(paths: list[str]) -> None:
             cwd=root,
             check=True,
         )
-
-
-def write_plan(path: Path | None, value: dict[str, object]) -> None:
-    github_output(path, value)
-    print(json.dumps(value, sort_keys=True))

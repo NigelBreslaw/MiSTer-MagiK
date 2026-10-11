@@ -146,35 +146,6 @@ class SshBootstrap:
         finally:
             client.close()
 
-    def recent_agent_log(self) -> str:
-        """Read only the fixed service log for failed-start diagnostics."""
-        client = None
-        try:
-            import paramiko
-
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(
-                self.host,
-                username=self.username,
-                password=self.password,
-                timeout=10,
-                banner_timeout=10,
-                auth_timeout=10,
-            )
-            _, stdout, _ = client.exec_command(
-                f"tail -n 80 {self.state_root}/agent.log 2>/dev/null || true",
-                timeout=10,
-            )
-            return stdout.read().decode(errors="replace")
-        except Exception as error:
-            raise BootstrapError(
-                f"agent log retrieval failed: {type(error).__name__}"
-            ) from error
-        finally:
-            if client is not None:
-                client.close()
-
     def _read_or_create_token(self, client: object) -> str:
         token_path = f"{self.install_root}/token"
         _, stdout, _ = client.exec_command(

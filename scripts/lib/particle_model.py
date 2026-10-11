@@ -469,17 +469,6 @@ def _load_glb(
     return vertices, triangles, colors, texture_coordinates, textures
 
 
-def load_glb(
-    path: Path,
-) -> tuple[
-    list[tuple[float, float, float]],
-    list[Triangle],
-    dict[str, tuple[float, float, float]],
-]:
-    vertices, triangles, colors, _, _ = _load_glb(path, False)
-    return vertices, triangles, colors
-
-
 def transform_and_normalize(
     vertices: list[tuple[float, float, float]], up_axis: str, front_axis: str
 ) -> list[tuple[float, float, float]]:

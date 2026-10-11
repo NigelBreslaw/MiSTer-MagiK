@@ -40,13 +40,6 @@ impl<C> DisplayClockController<C> {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn replace(&mut self, adapter: &mut impl DisplayClockAdapter<Clock = C>) {
-        let replacement = Self::start(adapter);
-        self.active = replacement.active;
-        self.source = replacement.source;
-    }
-
     pub(crate) fn source(&self) -> DisplayClockSource {
         self.source
     }
@@ -169,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn replacing_and_dropping_controller_stop_each_clock_once() {
+    fn consumed_clock_stops_only_when_the_clock_is_dropped() {
         let stops = Rc::new(Cell::new(0));
         let mut adapter = FakeDisplayAdapter {
             native_available: true,
@@ -177,12 +170,12 @@ mod tests {
             timer_starts: 0,
             stops: Rc::clone(&stops),
         };
-        let mut controller = DisplayClockController::start(&mut adapter);
-        controller.replace(&mut adapter);
-        assert_eq!(stops.get(), 1);
+        let controller = DisplayClockController::start(&mut adapter);
+        let clock = controller.into_clock();
+        assert_eq!(stops.get(), 0);
 
-        drop(controller);
-        assert_eq!(stops.get(), 2);
+        drop(clock);
+        assert_eq!(stops.get(), 1);
     }
 
     #[test]

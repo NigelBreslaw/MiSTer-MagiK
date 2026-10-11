@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 from pathlib import Path
+
+from .common import sha256_file
 
 TARGET = "armv7-unknown-linux-gnueabihf"
 COMMANDS = {
@@ -58,14 +59,6 @@ def _environment(
     return environment
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _git(repository: Path, *arguments: str) -> str:
     return subprocess.check_output(
         ["git", "-C", str(repository), *arguments], text=True
@@ -109,7 +102,7 @@ def _write_build_identity(
     )
     receipt = (
         "build_receipt_tsv"
-        f"\tbinary_sha256={_sha256(artifact)}"
+        f"\tbinary_sha256={sha256_file(artifact)}"
         f"\tprofile={profile}"
         f"\tfeatures={features}"
         f"\tui_scope={ui_scope}"
@@ -118,8 +111,8 @@ def _write_build_identity(
         f"\tsource_commit={source_revision}"
         f"\tsource_dirty={source_dirty}"
         f"\tcache_identity={cache_identity}"
-        f"\tlock_sha256={_sha256(lockfile)}"
-        f"\ttoolchain_sha256={_sha256(toolchain)}\n"
+        f"\tlock_sha256={sha256_file(lockfile)}"
+        f"\ttoolchain_sha256={sha256_file(toolchain)}\n"
     )
     receipt_path = Path(f"{artifact}.build-receipt.tsv")
     receipt_tmp = receipt_path.with_name(f"{receipt_path.name}.tmp")

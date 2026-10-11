@@ -305,11 +305,6 @@ impl PadPool {
         }
     }
 
-    /// First connected pad that has not completed setup (`setup_complete`).
-    pub fn index_needing_setup(&self) -> Option<usize> {
-        self.pads.iter().position(|p| self.db.needs_setup(&p.info))
-    }
-
     pub fn device_needing_setup(&self) -> Option<DeviceInstanceId> {
         self.pads
             .iter()
@@ -341,33 +336,6 @@ impl PadPool {
             Some(pad) => &pad.state,
             None => no_pad_state(),
         }
-    }
-
-    pub fn navigation_state_at(&self, idx: usize) -> PadState {
-        let mut state = self.state_at(idx).clone();
-        for keyboard in self
-            .keyboards
-            .iter()
-            .filter(|keyboard| !keyboard.is_main_proxy)
-        {
-            keyboard.merge_into(&mut state);
-        }
-        state.rebuild_pressed_now();
-        state
-    }
-
-    #[cfg(test)]
-    pub fn navigation_state_for_device(&self, device: &DeviceInstanceId) -> Option<PadState> {
-        let mut state = self.state_for_device(device)?.clone();
-        for keyboard in self
-            .keyboards
-            .iter()
-            .filter(|keyboard| !keyboard.is_main_proxy)
-        {
-            keyboard.merge_into(&mut state);
-        }
-        state.rebuild_pressed_now();
-        Some(state)
     }
 
     /// Save a new default registry entry for a pad (does not mark setup complete).
@@ -706,25 +674,6 @@ impl PadPool {
         };
         pool.rebuild_merged_state();
         pool
-    }
-
-    #[cfg(test)]
-    pub fn set_test_keyboard_state(&mut self, state: PadState) {
-        self.keyboards = vec![KeyboardReader {
-            file: File::open("/dev/null").expect("open /dev/null"),
-            path: "test-keyboard".into(),
-            is_main_proxy: false,
-            state: KeyboardState {
-                up: state.dpad_up,
-                down: state.dpad_down,
-                left: state.dpad_left,
-                right: state.dpad_right,
-                a: state.btn_a,
-                b: state.btn_b,
-                ..KeyboardState::default()
-            },
-        }];
-        self.rebuild_merged_state();
     }
 }
 

@@ -880,13 +880,6 @@ fn run_reset_delete_screenshot_packs(args: &[String]) {
     }
 }
 
-#[cfg(test)]
-fn usable_library_database_exists(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.len() > 0)
-        .unwrap_or(false)
-}
-
 fn create_lock_file(path: &Path, pid: u32) -> std::io::Result<()> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     writeln!(file, "{pid}")?;
@@ -914,15 +907,6 @@ fn process_cmdline_parts(pid: u32) -> Option<Vec<String>> {
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
     )
-}
-
-#[cfg(test)]
-fn should_defer_parent_boot_library_refresh(
-    parent_boot: bool,
-    database_exists: bool,
-    force_foreground: bool,
-) -> bool {
-    parent_boot && !database_exists && !force_foreground
 }
 
 #[cfg(test)]
@@ -1440,16 +1424,6 @@ mod tests {
     }
 
     #[test]
-    fn parent_boot_missing_database_defers_library_refresh_to_launcher_ui() {
-        assert!(should_defer_parent_boot_library_refresh(true, false, false));
-        assert!(!should_defer_parent_boot_library_refresh(true, true, false));
-        assert!(!should_defer_parent_boot_library_refresh(
-            false, false, false
-        ));
-        assert!(!should_defer_parent_boot_library_refresh(true, false, true));
-    }
-
-    #[test]
     fn destructive_library_purge_requires_exact_confirmation() {
         let args = |tail: &[&str]| {
             ["mister-magik-fb", "purge-library-data"]
@@ -1478,19 +1452,6 @@ mod tests {
                 PurgeLibraryDataInvocation::Invalid
             );
         }
-    }
-
-    #[test]
-    fn zero_byte_library_database_is_not_usable_for_parent_boot_deferral() {
-        let root = unique_temp_path("zero-byte-library-db");
-        fs::create_dir_all(&root).expect("create temp dir");
-        let db = root.join("library.sqlite3");
-        fs::write(&db, b"").expect("write empty db");
-
-        assert!(!usable_library_database_exists(&db));
-        fs::write(&db, b"not empty").expect("write nonempty db");
-        assert!(usable_library_database_exists(&db));
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

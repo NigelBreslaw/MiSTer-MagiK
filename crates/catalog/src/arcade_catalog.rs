@@ -10,7 +10,9 @@ pub use crate::catalog_classify::PlatformKind;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+#[cfg(all(test, feature = "builder"))]
+use std::collections::BTreeSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -1669,47 +1671,6 @@ impl ArcadeCatalog {
                     .map(|option| ArcadeFilter::Control(option.label.clone()))
             }
         }
-    }
-
-    pub fn filter_option_count_detail(&self, system_id: &str) -> String {
-        format!(
-            "collection={} games={} categories={} decades={} manufacturers={} players={} controls={}",
-            system_id,
-            self.system_game_count(system_id),
-            self.category_option_count(system_id),
-            self.decade_option_count(system_id),
-            self.manufacturer_option_count(system_id),
-            self.player_option_count(system_id),
-            self.control_option_count(system_id)
-        )
-    }
-
-    pub fn filter_option_mismatches(&self, other: &Self) -> Vec<String> {
-        let collection_ids = self
-            .systems
-            .iter()
-            .map(|system| system.id.as_str())
-            .chain(other.systems.iter().map(|system| system.id.as_str()))
-            .chain([MENU_ARCADE_SYSTEM_ID])
-            .collect::<BTreeSet<_>>();
-        collection_ids
-            .into_iter()
-            .filter(|system_id| {
-                self.system_game_count(system_id) != other.system_game_count(system_id)
-                    || self.decade_options(system_id) != other.decade_options(system_id)
-                    || self.manufacturer_options(system_id) != other.manufacturer_options(system_id)
-                    || self.player_options(system_id) != other.player_options(system_id)
-                    || self.control_options(system_id) != other.control_options(system_id)
-            })
-            .map(|system_id| {
-                format!(
-                    "{} expected=({}) actual=({})",
-                    system_id,
-                    self.filter_option_count_detail(system_id),
-                    other.filter_option_count_detail(system_id)
-                )
-            })
-            .collect()
     }
 
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {

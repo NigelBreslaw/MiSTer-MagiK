@@ -84,21 +84,6 @@ fn cleanup_fast_five_staging_root(root: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(root)
         .map_err(|error| format!("clean staging {}: {error}", root.display()))
 }
-#[cfg(feature = "builder")]
-const FAST_FIVE_BINARY_MAGIC: &[u8; 8] = b"MGK5SNAP";
-#[cfg(feature = "builder")]
-const FAST_FIVE_BINARY_VERSION: u32 = 2;
-#[cfg(feature = "builder")]
-const FAST_FIVE_BINARY_HEADER_BYTES: usize = 64;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum FastFiveSnapshotEncoding {
-    Json,
-    Postcard,
-    PostcardLz4,
-    PostcardMmap,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FastFiveSnapshot {
@@ -389,104 +374,6 @@ fn has_language_annotation(title: &str) -> bool {
                     | "dutch"
             )
         })
-}
-
-#[cfg(feature = "builder")]
-pub fn encode_snapshot(
-    snapshot: &FastFiveSnapshot,
-    encoding: FastFiveSnapshotEncoding,
-) -> Result<Vec<u8>, String> {
-    snapshot.validate()?;
-    if encoding == FastFiveSnapshotEncoding::Json {
-        return serde_json::to_vec(snapshot)
-            .map_err(|error| format!("encode snapshot JSON: {error}"));
-    }
-    let payload = postcard::to_allocvec(snapshot)
-        .map_err(|error| format!("encode snapshot postcard: {error}"))?;
-    let stored = if encoding == FastFiveSnapshotEncoding::PostcardLz4 {
-        lz4_flex::compress_prepend_size(&payload)
-    } else {
-        payload.clone()
-    };
-    let stored_len = u64::try_from(stored.len()).map_err(|_| "snapshot is too large")?;
-    let payload_len = u64::try_from(payload.len()).map_err(|_| "snapshot is too large")?;
-    let mut digest = Sha256::new();
-    digest.update(&payload);
-    let mut output = Vec::with_capacity(FAST_FIVE_BINARY_HEADER_BYTES + stored.len());
-    output.extend_from_slice(FAST_FIVE_BINARY_MAGIC);
-    output.extend_from_slice(&FAST_FIVE_BINARY_VERSION.to_le_bytes());
-    output.extend_from_slice(
-        &u32::from(encoding == FastFiveSnapshotEncoding::PostcardLz4).to_le_bytes(),
-    );
-    output.extend_from_slice(&stored_len.to_le_bytes());
-    output.extend_from_slice(&payload_len.to_le_bytes());
-    output.extend_from_slice(&digest.finalize());
-    debug_assert_eq!(output.len(), FAST_FIVE_BINARY_HEADER_BYTES);
-    output.extend_from_slice(&stored);
-    Ok(output)
-}
-
-#[cfg(feature = "builder")]
-pub fn decode_snapshot(
-    bytes: &[u8],
-    encoding: FastFiveSnapshotEncoding,
-) -> Result<FastFiveSnapshot, String> {
-    if encoding == FastFiveSnapshotEncoding::Json {
-        let snapshot = serde_json::from_slice::<FastFiveSnapshot>(bytes)
-            .map_err(|error| format!("decode snapshot JSON: {error}"))?;
-        snapshot.validate()?;
-        return Ok(snapshot);
-    }
-    let header = bytes
-        .get(..FAST_FIVE_BINARY_HEADER_BYTES)
-        .ok_or("fast-five binary snapshot header is truncated")?;
-    if &header[..8] != FAST_FIVE_BINARY_MAGIC {
-        return Err("fast-five binary snapshot magic is invalid".to_string());
-    }
-    if u32::from_le_bytes(header[8..12].try_into().expect("fixed snapshot version"))
-        != FAST_FIVE_BINARY_VERSION
-    {
-        return Err("fast-five binary snapshot version is unsupported".to_string());
-    }
-    let compressed = u32::from_le_bytes(header[12..16].try_into().expect("fixed flags")) == 1;
-    if compressed != (encoding == FastFiveSnapshotEncoding::PostcardLz4) {
-        return Err("fast-five binary snapshot encoding does not match its header".to_string());
-    }
-    let stored_len = usize::try_from(u64::from_le_bytes(
-        header[16..24].try_into().expect("fixed stored length"),
-    ))
-    .map_err(|_| "fast-five binary snapshot stored length is too large")?;
-    let payload_len = usize::try_from(u64::from_le_bytes(
-        header[24..32].try_into().expect("fixed payload length"),
-    ))
-    .map_err(|_| "fast-five binary snapshot payload length is too large")?;
-    let stored = bytes
-        .get(FAST_FIVE_BINARY_HEADER_BYTES..)
-        .ok_or("fast-five binary snapshot payload is truncated")?;
-    if stored.len() != stored_len {
-        return Err("fast-five binary snapshot stored length is inconsistent".to_string());
-    }
-    let decoded;
-    let payload = if compressed {
-        decoded = lz4_flex::decompress_size_prepended(stored)
-            .map_err(|error| format!("decompress snapshot postcard: {error}"))?;
-        decoded.as_slice()
-    } else {
-        stored
-    };
-    if payload.len() != payload_len {
-        return Err("fast-five binary snapshot payload length is inconsistent".to_string());
-    }
-    let mut digest = Sha256::new();
-    digest.update(payload);
-    let actual: [u8; 32] = digest.finalize().into();
-    if actual != header[32..64] {
-        return Err("fast-five binary snapshot checksum differs".to_string());
-    }
-    let snapshot = postcard::from_bytes::<FastFiveSnapshot>(payload)
-        .map_err(|error| format!("decode snapshot postcard: {error}"))?;
-    snapshot.validate()?;
-    Ok(snapshot)
 }
 
 pub fn registry_fingerprint(storage_root: &Path, limits: RegistryLimits) -> Result<String, String> {
@@ -1843,19 +1730,6 @@ mod builder_tests {
                 .contains("unexpected empty variant payload table")
         );
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn binary_snapshot_encodings_round_trip() {
-        let snapshot = empty_snapshot();
-        for encoding in [
-            FastFiveSnapshotEncoding::Postcard,
-            FastFiveSnapshotEncoding::PostcardLz4,
-            FastFiveSnapshotEncoding::PostcardMmap,
-        ] {
-            let encoded = encode_snapshot(&snapshot, encoding).unwrap();
-            assert_eq!(decode_snapshot(&encoded, encoding).unwrap(), snapshot);
-        }
     }
 
     #[test]

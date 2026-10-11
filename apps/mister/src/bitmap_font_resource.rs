@@ -44,21 +44,15 @@ static JERSEY_25_HUB_48_RESOURCE: &[u8] = &[];
 #[cfg(all(feature = "asset-tools", not(any(test, feature = "ui"))))]
 static JERSEY_25_HUB_64_RESOURCE: &[u8] = &[];
 
-#[cfg(any(not(feature = "asset-tools"), test, feature = "ui"))]
+#[cfg(test)]
 static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-1x.mmbf");
-#[cfg(all(feature = "asset-tools", not(any(test, feature = "ui"))))]
-static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] = &[];
-#[cfg(any(not(feature = "asset-tools"), test, feature = "ui"))]
+#[cfg(test)]
 static TERMINUS_8X14_NORMAL_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-2x.mmbf");
-#[cfg(all(feature = "asset-tools", not(any(test, feature = "ui"))))]
-static TERMINUS_8X14_NORMAL_RESOURCE: &[u8] = &[];
-#[cfg(any(not(feature = "asset-tools"), test, feature = "ui"))]
+#[cfg(test)]
 static TERMINUS_8X14_BOLD_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-bold-2x.mmbf");
-#[cfg(all(feature = "asset-tools", not(any(test, feature = "ui"))))]
-static TERMINUS_8X14_BOLD_RESOURCE: &[u8] = &[];
 #[cfg(any(not(feature = "asset-tools"), test, feature = "ui"))]
 static SPLEEN_5X8_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-5x8-1x.mmbf");
@@ -352,18 +346,6 @@ pub fn launcher_bitmap_font(
             )
             .collect(),
     }
-}
-
-pub fn terminus_8x14_normal_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
-    console_bitmap_font(TERMINUS_8X14_NORMAL_RESOURCE)
-}
-
-pub fn terminus_8x14_native_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
-    console_bitmap_font(TERMINUS_8X14_NATIVE_RESOURCE)
-}
-
-pub fn terminus_8x14_bold_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
-    console_bitmap_font(TERMINUS_8X14_BOLD_RESOURCE)
 }
 
 pub fn spleen_6x12_native_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {

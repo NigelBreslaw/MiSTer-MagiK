@@ -3,7 +3,7 @@ from __future__ import annotations
 import socket
 
 import pytest
-from magik.compatibility import AgentStatus, needs_install
+from magik.compatibility import AgentStatus
 from magik.protocol import (
     Envelope,
     ProtocolError,
@@ -53,8 +53,8 @@ def test_capabilities_not_build_identity_select_agent() -> None:
             "future": True,
         }
     )
-    assert not needs_install(older, {"status", "upload"})
-    assert needs_install(older, {"frames"})
+    assert older.supports({"status", "upload"})
+    assert not older.supports({"frames"})
 
 
 def test_total_deadline_expires_even_when_peer_keeps_sending(monkeypatch):

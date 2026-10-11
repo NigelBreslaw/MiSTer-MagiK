@@ -26,7 +26,3 @@ class AgentStatus:
 
     def supports(self, required: Iterable[str]) -> bool:
         return set(required).issubset(self.capabilities)
-
-
-def needs_install(status: AgentStatus | None, required: Iterable[str]) -> bool:
-    return status is None or not status.supports(required)

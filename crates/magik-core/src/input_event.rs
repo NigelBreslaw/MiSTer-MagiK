@@ -79,22 +79,6 @@ pub struct DeviceInstanceId {
     pub generation: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum RawControl {
-    Button(u16),
-    Axis(u16),
-    Key(u16),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RawControlEvent {
-    pub device: DeviceInstanceId,
-    pub captured_at_us: u64,
-    pub control: RawControl,
-    pub value: i32,
-    pub phase: InputPhase,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InputEvent {
     pub source: InputSourceId,
@@ -206,7 +190,6 @@ pub struct InputBatch {
     pub first_sequence: Option<u64>,
     pub last_sequence: Option<u64>,
     pub events: Vec<InputEvent>,
-    pub raw_events: Vec<RawControlEvent>,
     pub held_after_last: HeldState,
     pub topology: InputTopology,
     pub health: InputHealth,
