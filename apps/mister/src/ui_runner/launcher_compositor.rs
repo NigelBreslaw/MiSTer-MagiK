@@ -1161,8 +1161,8 @@ mod tests {
                 assert_eq!(render(), online, "USB removal {width}x{height}");
                 nav.set_internet_connected(false);
                 assert_eq!(render(), offline, "internet loss {width}x{height}");
-                let sx = if !crt || width.min(height) >= 400 || width >= 640 && height <= 288 { 2 } else { 1 };
-                let sy = if !crt || width.min(height) >= 400 || height >= 640 && width <= 288 {
+                let sx = if crt && (width.min(height) >= 400 || width >= 640 && height <= 288) { 2 } else { 1 };
+                let sy = if crt && (width.min(height) >= 400 || height >= 640 && width <= 288) {
                     2
                 } else {
                     1
@@ -1177,13 +1177,18 @@ mod tests {
                 let top = if crt {
                     (height * 5 / 100).max(6 * sy)
                 } else if height > width {
-                    height * 5 / 100 - 4
+                    height * 5 / 100 + 4
                 } else {
-                    18
+                    26
                 };
+                let globe_width = if crt { 12 * sx } else { 15 };
+                let badge_width = if crt { 24 * sx } else { 32 };
+                let gap = if crt { 6 * sx } else { 8 };
+                let status_height = if crt { 12 * sy } else { 15 };
+                let globe_left = clock_x - gap - globe_width;
                 for (before, after, x0, x1) in [
-                    (&offline, &online, clock_x - 18 * sx, clock_x - 6 * sx),
-                    (&online, &usb, clock_x - 34 * sx, clock_x - 22 * sx),
+                    (&offline, &online, globe_left, clock_x - gap),
+                    (&online, &usb, globe_left - gap - badge_width, globe_left - gap),
                 ] {
                     let mut changed = 0;
                     for (index, (a, b)) in before.iter().zip(after.iter()).enumerate() {
@@ -1191,7 +1196,7 @@ mod tests {
                             changed += 1;
                             let (x, y) = (index % width, index / width);
                             assert!(
-                                x >= x0 && x < x1 && y >= top && y < top + 12 * sy,
+                                x >= x0 && x < x1 && y >= top && y < top + status_height,
                                 "status covered other content at {x},{y} for {width}x{height}, expected x={x0}..{x1}, top={top}, sy={sy}"
                             );
                         }
@@ -1986,7 +1991,7 @@ mod tests {
                 .enumerate()
             {
                 let (x, y) = (index % 960, index / 960);
-                if !(839..863).contains(&x) || !(18..42).contains(&y) {
+                if !(852..867).contains(&x) || !(26..41).contains(&y) {
                     assert_eq!(
                         actual, native,
                         "cold-start source lost native cards at {x},{y}"
