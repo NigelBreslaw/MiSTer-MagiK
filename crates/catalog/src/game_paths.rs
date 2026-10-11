@@ -28,11 +28,16 @@ pub(crate) fn search_roots(storage_root: &Path) -> Vec<PathBuf> {
 }
 
 pub fn game_dir(storage_root: &Path, name: &str) -> PathBuf {
-    search_roots(storage_root)
+    let roots = search_roots(storage_root);
+    let fallback = roots
+        .last()
+        .expect("game search roots are nonempty")
+        .join(name);
+    roots
         .into_iter()
         .map(|root| root.join(name))
         .find(|path| path.is_dir())
-        .unwrap_or_else(|| storage_root.join("games").join(name))
+        .unwrap_or(fallback)
 }
 
 #[cfg(test)]
@@ -77,6 +82,10 @@ mod tests {
         assert_eq!(game_dir(&fat, "NES"), usb_nes);
         assert_eq!(game_dir(&fat, "SNES"), sd_snes);
         assert_eq!(search_roots(&fixture), [fixture.join("games")]);
+        assert_eq!(
+            game_dir(&fixture.join("games"), "Absent"),
+            fixture.join("games/Absent")
+        );
         std::fs::remove_dir_all(fixture).unwrap();
     }
 }
