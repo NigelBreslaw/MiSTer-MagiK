@@ -184,9 +184,8 @@ pub(super) struct SettingsInputs<'a> {
     pub now_us: u64,
 }
 
-/// Begin the Home <-> Settings card zoom, or the page slide for every other
-/// Settings route. The zoom runs in the physical raster for HDMI landscape and
-/// native CRT modes in either orientation; reduce motion keeps the slide.
+/// Portrait slides complete rotated snapshots. Landscape uses the Home <->
+/// Settings cog when available, or the page slide for other Settings routes.
 pub(super) fn begin_settings_transition(
     runtime: &mut NavigationTransitionRuntime,
     cards: Option<&mut LauncherCardHomeSession>,
@@ -243,13 +242,14 @@ pub(super) fn begin_settings_transition(
             now_us,
         )
     } else {
-        let axis = match orientation {
-            ScreenOrientation::Normal => SettingsPageTransitionAxis::Horizontal,
-            ScreenOrientation::MonitorCounterclockwise => SettingsPageTransitionAxis::Vertical,
-            ScreenOrientation::MonitorClockwise => SettingsPageTransitionAxis::VerticalReversed,
-        };
         TransitionStart::settings_page_physical(
-            route, direction, axis, render_w, render_h, composed, now_us,
+            route,
+            direction,
+            SettingsPageTransitionAxis::Horizontal,
+            render_w,
+            render_h,
+            composed,
+            now_us,
         )
     };
     runtime.begin(start).unwrap_or(false)
