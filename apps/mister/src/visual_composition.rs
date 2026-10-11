@@ -153,13 +153,15 @@ pub fn hdmi_preview_rect(frame_width: usize, frame_height: usize) -> DirtyRect {
 
     if frame_height > frame_width {
         let margin = 16.min(frame_width / 4);
-        let y0 = 64.min(frame_height);
-        let height = (frame_height * 38 / 100).min(frame_height.saturating_sub(y0));
+        // PortraitPageChrome ends its heading/section band at 130px. Keep the
+        // existing lower edge (and list position), but never clear that chrome.
+        let y0 = 130.min(frame_height);
+        let y1 = (64 + frame_height * 38 / 100).max(y0).min(frame_height);
         return DirtyRect {
             x0: margin,
             y0,
             x1: frame_width.saturating_sub(margin),
-            y1: y0 + height,
+            y1,
         };
     }
 
