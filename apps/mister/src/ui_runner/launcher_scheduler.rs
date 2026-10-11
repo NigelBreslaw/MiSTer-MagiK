@@ -306,6 +306,7 @@ impl SystemEntryPrepareWorker {
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryPrepare,
                 );
                 let mut warmed_generation = None;
+                let mut preview_resolver = mister_magik_catalog::preview_availability::PreviewIdentityResolver::new();
                 while let Ok(command) = request_rx.recv() {
                     match command {
                         SystemEntryPrepareCommand::Prepare(work) => {
@@ -319,7 +320,7 @@ impl SystemEntryPrepareWorker {
                                 })
                                 .map(|(_, reader)| reader);
                             let message = match reader {
-                                Some(reader) => prepare_system_shard(work.request, reader),
+                                Some(reader) => prepare_system_shard(work.request, reader, &catalog_paths, &mut preview_resolver),
                                 None => CatalogWorkerMessage::SystemShardFailed {
                                     system_id: work.request.system_id,
                                     error: "system-entry NavPack reader is not open for the active generation"
@@ -423,6 +424,8 @@ fn publish_prepared_system_collection(
 fn prepare_system_shard(
     request: SystemShardRequest,
     reader: &mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader,
+    catalog_paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    preview_resolver: &mut mister_magik_catalog::preview_availability::PreviewIdentityResolver,
 ) -> CatalogWorkerMessage {
     let load_started = Instant::now();
     let worker_system_id = request.system_id;
@@ -488,8 +491,37 @@ fn prepare_system_shard(
     })();
     let navpack_open_us = load_started.elapsed().as_micros();
     let message = match result {
-        Ok((collection, game_count, open_timing)) => {
+        Ok((mut collection, game_count, open_timing)) => {
             let prepare_started = Instant::now();
+            // Availability is runtime state, not part of the immutable NavPack.
+            // Reconcile installed media on this worker before the first preview request;
+            // the online updater must not gate local artwork or system entry.
+            if let Some(pack) = mister_magik_catalog::preview_worker::installed_preview_archive_path(
+                catalog_paths.preview_cache_dir(),
+                &artifact_system_id,
+            ) {
+                let system_id =
+                    mister_magik_catalog::catalog_classify::SystemId::parse(&artifact_system_id)
+                        .expect("system id validated while opening the NavPack");
+                match mister_magik_catalog::preview_availability::reconcile_preview_availability_with_resolver(
+                    catalog_paths.sharded_catalog_dir(),
+                    &system_id,
+                    std::path::Path::new(&pack),
+                    mister_magik_catalog::shard_registry::production_registry_limits(),
+                    preview_resolver,
+                ) {
+                    Ok(outcome) => {
+                        collection = crate::launcher_runtime::catalog::collection_with_preview_availability(
+                            &artifact_system_id,
+                            &outcome.games,
+                            base_catalog.platform_kind(&artifact_system_id),
+                        );
+                        crate::ui_logln!("local_screenshot_availability system={} available={} games={}",
+                            artifact_system_id, outcome.available_rows, outcome.games.len());
+                    }
+                    Err(error) => crate::ui_errln!("local screenshot availability: system={artifact_system_id}: {error}"),
+                }
+            }
             let preview_prelude = preview_dispatch.and_then(|dispatch| {
                 let game = collection.game_at(0).filter(|game| {
                     game.has_preview
@@ -1587,6 +1619,157 @@ fn emit_catalog_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_entry_uses_installed_screenshots_without_a_media_worker() {
+        use mister_magik_catalog::device_layout::{
+            CatalogPathOverrides, CatalogPaths, DevicePaths,
+        };
+        use mister_magik_catalog::shard_registry::production_registry_limits;
+        use mister_magik_catalog::system_shard::SystemGame;
+        use std::fs;
+
+        for media in ["missing", "indexed", "corrupt-index"] {
+            let root = std::env::temp_dir().join(format!(
+                "magik-offline-entry-{}-{media}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+            ));
+            let catalog_root = root.join("catalog");
+            let asset_root = root.join("assets");
+            let paths = CatalogPaths::derive(
+                &DevicePaths::current(),
+                CatalogPathOverrides::capture_with(|key| match key {
+                    "MISTER_SHARDED_CATALOG_DIR" => Some(catalog_root.as_path()),
+                    "MISTER_PREVIEW_CACHE_DIR" => Some(asset_root.as_path()),
+                    _ => None,
+                }),
+            );
+            fs::create_dir_all(paths.sharded_catalog_dir()).unwrap();
+            fs::create_dir_all(paths.preview_cache_dir()).unwrap();
+            let limits = production_registry_limits();
+            let games = [SystemGame {
+                stable_key: "1943".into(),
+                title: "1943".into(),
+                launch_ref: "/_Arcade/1943.mra".into(),
+                preview_asset_key: "1943".into(),
+                has_preview: false,
+                ..Default::default()
+            }];
+            let relative = "systems/arcade/1.navpack";
+            let navpack_path = paths.sharded_catalog_dir().join(relative);
+            fs::create_dir_all(navpack_path.parent().unwrap()).unwrap();
+            let sqlite_path = navpack_path.with_extension("sqlite3");
+            mister_magik_catalog::system_shard::write_system_shard(
+                &sqlite_path,
+                &navpack_path.with_extension("nav.lz4b"),
+                &mister_magik_catalog::system_shard::SystemShardData {
+                    system_id: mister_magik_catalog::catalog_classify::SystemId::parse("arcade")
+                        .unwrap(),
+                    generation: 1,
+                    projection_stats: None,
+                    games: games.to_vec(),
+                },
+                limits.shard,
+            )
+            .unwrap();
+            let navpack = fs::read(&navpack_path).unwrap();
+            let sqlite = fs::read(&sqlite_path).unwrap();
+            let hash = |bytes: &[u8]| {
+                format!(
+                    "{:016x}",
+                    bytes
+                        .iter()
+                        .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash
+                            ^ u64::from(*byte))
+                        .wrapping_mul(0x0000_0100_0000_01b3),)
+                )
+            };
+            let manifest = serde_json::json!({
+                "schema_version": mister_magik_catalog::sharded_catalog::MANIFEST_SCHEMA_VERSION,
+                "format": mister_magik_catalog::catalog_format::CatalogFormatDescriptor::current(),
+                "generation": 1,
+                "systems": [{
+                    "system_id": "arcade", "display_title": "Arcade", "section": "Arcade",
+                    "family": "Arcade", "order": 0, "producers": ["arcade-root"],
+                    "active": {"generation": 1, "games": 1,
+                        "sqlite_path": "systems/arcade/1.sqlite3", "sqlite_bytes": sqlite.len(), "sqlite_hash": hash(&sqlite),
+                        "navpack": {
+                        "path": relative, "bytes": navpack.len(), "hash": hash(&navpack)
+                    }}, "previous": null
+                }]
+            });
+            let registry = paths.sharded_catalog_dir().join("registry");
+            fs::create_dir_all(&registry).unwrap();
+            fs::write(
+                registry.join("manifest-a.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            if media != "missing" {
+                let pack = paths
+                    .preview_cache_dir()
+                    .join("arcade-screenshots-320x320.mmlz4b");
+                fs::write(&pack, vec![0_u8; 320 * 320 * 2]).unwrap();
+                let mut index = b"MMIDX02\0".to_vec();
+                index.extend_from_slice(&(320_u64 * 320 * 2).to_le_bytes());
+                index.extend_from_slice(&[b'0'; 64]);
+                index.extend_from_slice(&1_u32.to_le_bytes());
+                let name = b"1943.rgb565";
+                index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+                for value in [320_u32, 320, 640, 320 * 320 * 2] {
+                    index.extend_from_slice(&value.to_le_bytes());
+                }
+                index.push(1);
+                index.extend_from_slice(&(320_u32 * 320 * 2).to_le_bytes());
+                index.extend_from_slice(&0_u64.to_le_bytes());
+                index.extend_from_slice(name);
+                if media == "corrupt-index" {
+                    index.truncate(4);
+                }
+                fs::write(
+                    mister_magik_catalog::preview_worker::preview_archive_sidecar_path_for_archive(
+                        &pack,
+                    ),
+                    index,
+                )
+                .unwrap();
+            }
+            let reader = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+                paths.sharded_catalog_dir(),
+                limits,
+            )
+            .unwrap();
+            let mut resolver =
+                mister_magik_catalog::preview_availability::PreviewIdentityResolver::new();
+            // No updater, HTTP client, or manifest is started: this is the actual entry path.
+            let result = prepare_system_shard(
+                SystemShardRequest {
+                    system_id: "menu:arcade".into(),
+                    reason: "open",
+                    requested_at: Instant::now(),
+                    base_catalog: empty_arcade_catalog("/tmp"),
+                    base_catalog_version: 1,
+                    preview: None,
+                },
+                &reader,
+                &paths,
+                &mut resolver,
+            );
+            let CatalogWorkerMessage::SystemShardReady { catalog, .. } = result else {
+                panic!("local media must not prevent system entry");
+            };
+            for alias in ["arcade", "menu:arcade"] {
+                let game = catalog.system_game_at(alias, 0).unwrap();
+                assert_eq!(game.title.as_ref(), "1943");
+                assert_eq!(game.has_preview, media == "indexed", "{media} {alias}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn versioned_cache_reuses_and_invalidates_values() {

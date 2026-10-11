@@ -5,9 +5,7 @@
 
 use crate::arcade_list_renderer::CrtArcadeLayout;
 use crate::preview_transition::blend_rgb565_bucket;
-use crate::ui_display::{
-    CrtContentRect, CrtUiMetrics, ResolvedOutputRoute, UiDisplay, UiLayoutGeometry,
-};
+use crate::ui_display::{CrtUiMetrics, ResolvedOutputRoute, UiDisplay, UiLayoutGeometry};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use mister_magik_core::display::CRT_COMPOSITION_H;
 use mister_magik_framebuffer_scenes::{
@@ -398,21 +396,6 @@ impl CrtBackdropState {
     /// Compose the fixed production CRT backdrop directly into a frame while
     /// preserving only Arcade header and footer text pixels. Their transparent
     /// containers therefore reveal the screenshot beneath them.
-    pub fn compose_product_into(
-        &mut self,
-        now: Duration,
-        destination: &mut [Rgb565Pixel],
-        content: CrtContentRect,
-        metrics: CrtUiMetrics,
-    ) -> CrtBackdropWorkTrace {
-        let protected = product_chrome_rects(content, metrics);
-        let trace = self.compose_to(now, destination, &protected, CRT_PRODUCT_TEXT_COLORS, 1);
-        if !trace.active {
-            self.expand_to_logical();
-        }
-        trace
-    }
-
     pub fn compose_product_into_layout(
         &mut self,
         now: Duration,
@@ -421,19 +404,20 @@ impl CrtBackdropState {
         arcade: CrtArcadeLayout,
         metrics: CrtUiMetrics,
     ) -> CrtBackdropWorkTrace {
-        if layout.output_layout().rotation() == OutputRotation::None {
-            return self.compose_product_into(now, destination, layout.content_rect(), metrics);
-        }
         let output = layout.output_layout();
-        let protected = [arcade.header, arcade.footer].map(|rect| {
-            let physical = output.logical_rect_to_physical(Rgb565Rect {
-                x0: rect.x,
-                y0: rect.y,
-                x1: rect.right(),
-                y1: rect.bottom(),
-            });
-            (physical.x0, physical.y0, physical.x1, physical.y1)
-        });
+        let protected = if output.rotation() == OutputRotation::None {
+            product_chrome_rects(layout, metrics)
+        } else {
+            [arcade.header, arcade.footer].map(|rect| {
+                let physical = output.logical_rect_to_physical(Rgb565Rect {
+                    x0: rect.x,
+                    y0: rect.y,
+                    x1: rect.right(),
+                    y1: rect.bottom(),
+                });
+                (physical.x0, physical.y0, physical.x1, physical.y1)
+            })
+        };
         let trace = self.compose_to(now, destination, &protected, CRT_PRODUCT_TEXT_COLORS, 1);
         if !trace.active {
             self.expand_to_logical();
@@ -452,7 +436,7 @@ impl CrtBackdropState {
         highlight: (usize, Rgb565Pixel),
     ) -> CrtBackdropWorkTrace {
         let content = layout.content_rect();
-        let [header, footer] = product_chrome_rects(content, metrics);
+        let [header, footer] = product_chrome_rects(layout, metrics);
         let hub = (
             content.x,
             content.y + metrics.header_height.max(1) as usize,
@@ -1508,9 +1492,10 @@ fn duration_us(duration: Duration) -> u64 {
 }
 
 pub fn product_chrome_rects(
-    content: CrtContentRect,
+    layout: UiLayoutGeometry,
     metrics: CrtUiMetrics,
 ) -> [(usize, usize, usize, usize); 2] {
+    let content = layout.content_rect();
     let grid_y = metrics.grid_y.max(1) as usize;
     let header = (
         content.x,
@@ -1518,13 +1503,11 @@ pub fn product_chrome_rects(
         content.x + content.width,
         content.y + metrics.header_height.max(1) as usize + grid_y * 8,
     );
-    let footer = (
-        header.0,
-        content.y + content.height - metrics.footer_height.max(1) as usize - grid_y * 2,
-        header.2,
-        content.y + content.height - grid_y * 2,
-    );
-    [header, footer]
+    let footer = layout.crt_footer_rect();
+    [
+        header,
+        (footer.x, footer.y, footer.right(), footer.bottom()),
+    ]
 }
 
 #[cfg(test)]
@@ -1534,6 +1517,51 @@ mod tests {
     use crate::ui_display::{ScreenOrientation, UiLayoutGeometry};
     use crate::ui_display::{UiDisplayPlan, UiFramebufferSizePolicy};
     use mister_magik_core::display::{Crt240Composition, DisplayGeometry};
+
+    #[test]
+    fn native_240p_footer_survives_plain_and_screenshot_backdrops() {
+        let display = UiDisplay::for_plan(
+            crate::ui_display::UiDisplayPlan::from_geometry_with_route_and_composition(
+                DisplayGeometry::new(640, 240),
+                ResolvedOutputRoute::Crt240p60,
+                "test-footer",
+                crate::ui_display::UiFramebufferSizePolicy::Auto,
+                Crt240Composition::Native240,
+            ),
+        );
+        let layout =
+            UiLayoutGeometry::for_display(&display, crate::settings::ScreenOrientation::Normal);
+        let metrics = CrtUiMetrics::for_display(&display);
+        let arcade = CrtArcadeLayout::for_layout(layout, metrics, false);
+        assert_eq!((arcade.footer.y, arcade.footer.bottom()), (208, 228));
+        for screenshot in [false, true] {
+            let mut state = CrtBackdropState::for_display(&display).unwrap();
+            let source = vec![Rgb565Pixel(0xffff); 320 * 240];
+            if screenshot {
+                state.retarget(Some(frame(&source, 320, 240)), Duration::ZERO);
+            }
+            let cream = rgb565_from_rgb888(0xee, 0xe8, 0xd5);
+            let mut pixels = vec![CRT_BACKDROP_BACKGROUND; 640 * 240];
+            // Slint's 12-row text cell starts five rows below the shared footer rule.
+            for y in arcade.footer.y + 5..arcade.footer.y + 17 {
+                pixels[y * 640 + 38] = cream;
+            }
+            state.compose_product_into_layout(
+                CRT_BACKDROP_FADE_DURATION,
+                &mut pixels,
+                layout,
+                arcade,
+                metrics,
+            );
+            for y in 213..225 {
+                assert_eq!(
+                    pixels[y * 640 + 38],
+                    cream,
+                    "row {y}, screenshot={screenshot}"
+                );
+            }
+        }
+    }
 
     fn frame<'a>(pixels: &'a [Rgb565Pixel], width: usize, height: usize) -> PreviewFrame<'a> {
         PreviewFrame {
@@ -2144,10 +2172,13 @@ mod tests {
             let mut destination =
                 vec![CRT_BACKDROP_BACKGROUND; display.render_w() * display.render_h()];
 
-            let trace = backdrop.compose_product_into(
+            let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+            let arcade = CrtArcadeLayout::for_layout(layout, metrics, false);
+            let trace = backdrop.compose_product_into_layout(
                 CRT_BACKDROP_FADE_DURATION,
                 &mut destination,
-                display.content_rect(),
+                layout,
+                arcade,
                 metrics,
             );
 

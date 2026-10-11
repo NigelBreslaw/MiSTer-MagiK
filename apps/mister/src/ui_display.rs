@@ -352,6 +352,35 @@ impl UiLayoutGeometry {
         self.content_rect
     }
 
+    /// The page footer projected into Slint and preserved by native composition.
+    pub fn crt_footer_rect(self) -> CrtContentRect {
+        let content = self.content_rect;
+        let narrow = self.logical_w.min(self.logical_h);
+        let scale_y = if narrow <= 288 && self.logical_w.max(self.logical_h) >= 640 {
+            if self.logical_w > self.logical_h {
+                1
+            } else {
+                2
+            }
+        } else if narrow >= 400 {
+            2
+        } else {
+            1
+        };
+        let safe_y = content
+            .y
+            .max(self.logical_h.saturating_sub(content.bottom()));
+        let margin_y = (self.logical_h * 5 / 100).max(6 * scale_y).max(safe_y);
+        let bottom = self.logical_h.saturating_sub(margin_y);
+        let height = (20 * scale_y).min(bottom.saturating_sub(content.y));
+        CrtContentRect {
+            x: content.x,
+            y: bottom - height,
+            width: content.width,
+            height,
+        }
+    }
+
     pub const fn output_layout(self) -> Rgb565OutputLayout {
         self.output_layout
     }

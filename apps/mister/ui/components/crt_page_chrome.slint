@@ -7,7 +7,7 @@
 // component offsets everything by the content origin.
 
 import { MisterUi } from "../mister_window.slint";
-import { NavigationView } from "../api.slint";
+import { LauncherLayout, NavigationView } from "../api.slint";
 import { PageTheme } from "page_chrome.slint";
 import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 import { Spleen6x12Wide } from "spleen_6x12_wide.slint";
@@ -24,7 +24,7 @@ export global CrtPageMetrics {
     out property <int> margin-x: Math.max(Math.floor(w * 6 / 100), 8 * sx, safe-x);
     out property <int> margin-y: Math.max(Math.floor(h * 5 / 100), 6 * sy, safe-y);
     out property <int> header-bottom: margin-y + 18 * sy;
-    out property <int> footer-rule: h - (margin-y + 20 * sy);
+    out property <int> footer-rule: MisterUi.crt-content-y + LauncherLayout.crt-footer.y;
     // Window pixel to page-local length.
     pure public function px-x(value: int) -> length { return (value - MisterUi.crt-content-x) * 1px; }
     pure public function px-y(value: int) -> length { return (value - MisterUi.crt-content-y) * 1px; }

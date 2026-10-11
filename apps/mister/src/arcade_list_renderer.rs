@@ -316,6 +316,7 @@ impl CrtArcadeLayout {
         let grid_y = metrics.grid_y.max(1) as usize;
         let header_height = (metrics.header_height.max(1) as usize).min(content.height);
         let footer_height = (metrics.footer_height.max(1) as usize).min(content.height);
+        let footer = layout.crt_footer_rect();
 
         if layout.is_portrait() {
             let header = CrtContentRect {
@@ -323,12 +324,6 @@ impl CrtArcadeLayout {
                 y: content.y,
                 width: content.width,
                 height: header_height,
-            };
-            let footer = CrtContentRect {
-                x: content.x,
-                y: content.bottom().saturating_sub(footer_height),
-                width: content.width,
-                height: footer_height,
             };
             let title_clearance = (crt_arcade_row_height(metrics.game_row_height, true).max(1)
                 as usize)
@@ -383,14 +378,6 @@ impl CrtArcadeLayout {
             y: content.y.saturating_add(grid_y * 2),
             width: content.width.saturating_sub(margin_x * 2),
             height: header_height,
-        };
-        let footer = CrtContentRect {
-            x: header.x,
-            y: content
-                .bottom()
-                .saturating_sub(footer_height.saturating_add(grid_y * 2)),
-            width: header.width,
-            height: footer_height,
         };
         let geometry = ArcadeListGeometry::crt_for_content(content, metrics, search);
         let list = CrtContentRect {
@@ -4115,16 +4102,16 @@ mod tests {
                     x: 12,
                     y: 180,
                     width: 216,
-                    height: 404
+                    height: 384
                 }
             );
             assert_eq!(
                 normal.footer,
                 CrtContentRect {
                     x: 12,
-                    y: 588,
+                    y: 568,
                     width: 216,
-                    height: 20
+                    height: 40
                 }
             );
             assert_eq!(normal.search_keyboard, None);
@@ -4136,7 +4123,7 @@ mod tests {
                     x: 12,
                     y: 180,
                     width: 86,
-                    height: 404,
+                    height: 384,
                 })
             );
             assert_eq!(
@@ -4145,7 +4132,7 @@ mod tests {
                     x: 106,
                     y: 180,
                     width: 122,
-                    height: 404
+                    height: 384
                 }
             );
         }
@@ -4188,16 +4175,16 @@ mod tests {
                     x: expected_x,
                     y: 207,
                     width: 253,
-                    height: 372,
+                    height: 356,
                 }
             );
             assert_eq!(
                 normal.footer,
                 CrtContentRect {
                     x: expected_x,
-                    y: 584,
+                    y: 568,
                     width: 253,
-                    height: 24,
+                    height: 40,
                 }
             );
 
@@ -4208,7 +4195,7 @@ mod tests {
                     x: expected_x,
                     y: 207,
                     width: 101,
-                    height: 372,
+                    height: 356,
                 })
             );
             assert_eq!(
@@ -4217,14 +4204,14 @@ mod tests {
                     x: expected_x + 109,
                     y: 207,
                     width: 144,
-                    height: 372,
+                    height: 356,
                 }
             );
         }
     }
 
     #[test]
-    fn landscape_arcade_layout_preserves_existing_geometry() {
+    fn landscape_arcade_layout_preserves_list_and_shares_page_footer() {
         let display = native_crt_240_display();
         let metrics = CrtUiMetrics::for_display(&display);
         let ui_layout =
@@ -4250,9 +4237,9 @@ mod tests {
             assert_eq!(
                 layout.footer,
                 CrtContentRect {
-                    x: 48,
-                    y: 200,
-                    width: 544,
+                    x: 32,
+                    y: 208,
+                    width: 576,
                     height: 20
                 }
             );
