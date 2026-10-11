@@ -359,9 +359,7 @@ def dispatch(arguments, run) -> int:
         )
         return 2
     try:
-        agent, status = connect_agent(
-            run, STATUS_CAPABILITIES | {"legacy-process-status"}
-        )
+        agent, status = connect_agent(run, STATUS_CAPABILITIES)
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "status", "outcome": "failed", "error": str(error)})
         print(
@@ -374,7 +372,6 @@ def dispatch(arguments, run) -> int:
     )
     print(
         f"identity={status.identity} running={status.fields.get('running', False)} "
-        f"legacy_agent_running={status.fields.get('legacy_agent_running', 'unknown')} "
         f"capabilities={','.join(sorted(status.capabilities))}"
     )
     return 0
