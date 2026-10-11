@@ -21,7 +21,7 @@ pub fn start_requested_probe() {
     std::thread::Builder::new()
         .name("catalog-equivalence".to_owned())
         .spawn(move || {
-            if let Err(error) = run_child_process()
+            if let Err(error) = run_child_process(&directory)
                 && let Err(persist_error) = persist(&directory, Err(error))
             {
                 crate::ui_errln!("catalog_equivalence report failed: {persist_error}");
@@ -30,10 +30,17 @@ pub fn start_requested_probe() {
         .expect("start explicitly requested catalog equivalence supervisor");
 }
 
-fn run_child_process() -> Result<(), String> {
+fn run_child_process(directory: &Path) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut command = std::process::Command::new(executable);
     command.arg(CHILD_COMMAND);
+    // Preserve phase timings from the isolated builder without truncating
+    // them into the launcher's bounded diagnostics log.
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let log =
+        std::fs::File::create(directory.join("catalog.log")).map_err(|error| error.to_string())?;
+    command.stderr(log.try_clone().map_err(|error| error.to_string())?);
+    command.stdout(log);
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
@@ -97,6 +104,10 @@ fn run(destination: &Path) -> Result<serde_json::Value, String> {
             destination.display()
         ));
     }
+    // The child inherits the launcher's CPU1 affinity. Match the production
+    // background catalog worker before measuring any build work.
+    use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+    let worker = apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
     let build = fast_catalog_refresh::build_fresh_catalog(Path::new("/media/fat"), destination)?;
     let inspection = catalog_acceptance::inspect_catalog(destination)?;
     let manifest = shard_registry::read_latest_manifest(
@@ -130,6 +141,11 @@ fn run(destination: &Path) -> Result<serde_json::Value, String> {
         "ok":true,
         "artifact_sha256":std::env::var("MISTER_MAGIK2_ARTIFACT_SHA256").unwrap_or_default(),
         "destination":destination,
+        "worker":{
+            "allowed_cpus":worker.allowed_cpus,
+            "nice":worker.actual_nice,
+            "affinity_status":worker.affinity_status,
+        },
         "systems":systems,
         "inspection":inspection,
         "build":build,

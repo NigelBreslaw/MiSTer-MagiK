@@ -878,19 +878,20 @@ fn fts_match_query(query: &str) -> String {
 }
 
 pub(crate) fn normalize_search_text(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                ' '
+    let mut normalized = String::with_capacity(value.len());
+    let mut separator = false;
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            if separator && !normalized.is_empty() {
+                normalized.push(' ');
             }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+            normalized.push(byte.to_ascii_lowercase() as char);
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    normalized
 }
 
 #[cfg(feature = "builder")]
@@ -955,9 +956,15 @@ fn add_normalized_word(
         AutocompleteSource::Metadata => (4, 2),
         AutocompleteSource::Path => (1, 1),
     };
-    let stats = words.entry(normalized.to_string()).or_default();
-    stats.score += score;
-    stats.source_rank = stats.source_rank.max(source_rank);
+    if let Some(stats) = words.get_mut(normalized) {
+        stats.score += score;
+        stats.source_rank = stats.source_rank.max(source_rank);
+    } else {
+        words.insert(
+            normalized.to_owned(),
+            AutocompleteStats { source_rank, score },
+        );
+    }
 }
 
 #[cfg(feature = "builder")]
@@ -1029,6 +1036,36 @@ mod tests {
     use crate::{catalog_classify::SystemId, system_shard::SystemLaunchPlan};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn normalization_preserves_ascii_words_and_collapses_other_characters() {
+        for (input, expected) in [
+            ("", ""),
+            ("  --\t\n", ""),
+            ("Pac-Man 2", "pac man 2"),
+            ("Pokémon—RED/Blue.zip", "pok mon red blue zip"),
+            ("ＡＢＣ foo\0BAR 123", "foo bar 123"),
+            ("---Asteroids!!!", "asteroids"),
+        ] {
+            assert_eq!(normalize_search_text(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_autocomplete_words_keep_cumulative_score_and_best_rank() {
+        let mut words = std::collections::HashMap::new();
+        add_normalized_word(&mut words, "street", AutocompleteSource::Path);
+        add_normalized_word(&mut words, "street", AutocompleteSource::Title);
+        add_normalized_word(&mut words, "street", AutocompleteSource::Metadata);
+        assert_eq!(words.len(), 1);
+        assert_eq!(
+            words["street"],
+            AutocompleteStats {
+                score: 10,
+                source_rank: 2
+            }
+        );
+    }
 
     #[test]
     fn fts_search_uses_prefixes_compact_titles_and_metadata() {
