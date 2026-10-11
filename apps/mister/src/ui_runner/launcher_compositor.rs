@@ -1181,31 +1181,6 @@ mod tests {
                 } else {
                     18
                 };
-                // Optional review artifacts contain actual Slint software-renderer pixels.
-                if let Some(directory) = std::env::var_os("MISTER_STATUS_ICON_CAPTURE_ROOT") {
-                    use std::io::Write;
-                    let directory = PathBuf::from(directory);
-                    std::fs::create_dir_all(&directory).unwrap();
-                    for (name, pixels) in [("offline", &offline), ("online-usb", &usb)] {
-                        let mut file = std::io::BufWriter::new(std::fs::File::create(
-                            directory.join(format!("{width}x{height}-{name}.ppm")),
-                        )
-                        .unwrap());
-                        write!(file, "P6\n{width} {height}\n255\n").unwrap();
-                        for pixel in pixels {
-                            let value = pixel.0;
-                            let r = (value >> 11) as u8;
-                            let g = ((value >> 5) & 63) as u8;
-                            let b = (value & 31) as u8;
-                            file.write_all(&[
-                                (r << 3) | (r >> 2),
-                                (g << 2) | (g >> 4),
-                                (b << 3) | (b >> 2),
-                            ])
-                            .unwrap();
-                        }
-                    }
-                }
                 for (before, after, x0, x1) in [
                     (&offline, &online, clock_x - 18 * sx, clock_x - 6 * sx),
                     (&online, &usb, clock_x - 34 * sx, clock_x - 22 * sx),

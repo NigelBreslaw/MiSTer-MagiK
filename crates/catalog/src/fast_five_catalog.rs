@@ -761,34 +761,6 @@ pub(crate) fn publish_snapshot_with_profile_held(
     )
 }
 
-#[cfg(all(test, feature = "builder"))]
-pub(crate) fn publish_snapshot_with_profile_held_and_progress_and_prebuilt(
-    storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
-    limits: RegistryLimits,
-    artifact_profile: FastFiveArtifactProfile,
-    _lease: &crate::catalog_lease::CatalogMutationLease,
-    prebuilt: &BTreeMap<String, PrebuiltSystemArtifacts>,
-    progress: impl FnMut(usize, usize),
-) -> Result<FastFivePublishReport, String> {
-    snapshot.validate()?;
-    if snapshot.systems.iter().any(|system| {
-        !(system.games.is_empty() && system.variants.is_empty())
-            && !prebuilt.contains_key(&system.system_id)
-    }) {
-        return Err("serial prebuilt publication is missing a system artifact pair".to_string());
-    }
-    publish_snapshot_selection(
-        storage_root,
-        snapshot,
-        limits,
-        artifact_profile,
-        None,
-        Some(prebuilt),
-        progress,
-    )
-}
-
 #[cfg(feature = "builder")]
 pub fn publish_changed_snapshot_with_profile(
     storage_root: &Path,
@@ -1702,16 +1674,17 @@ mod builder_tests {
             );
         }
         let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().unwrap();
-        publish_snapshot_with_profile_held_and_progress_and_prebuilt(
+        let (pending, _) = prepare_snapshot_for_refresh(
             &root,
             &snapshot,
+            None,
             limits,
             FastFiveArtifactProfile::SearchOnly,
-            &lease,
-            &prebuilt,
+            Some(&prebuilt),
             |_, _| {},
         )
         .unwrap();
+        commit_prepared_snapshot(&root, &pending, limits).unwrap();
         assert_eq!(
             verify_snapshot_artifacts(&root, &snapshot, limits)
                 .unwrap()
@@ -1736,13 +1709,13 @@ mod builder_tests {
                 .as_nanos()
         ));
         let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().unwrap();
-        let error = publish_snapshot_with_profile_held_and_progress_and_prebuilt(
+        let error = prepare_snapshot_for_refresh(
             &root,
             &populated_snapshot(),
+            None,
             crate::shard_registry::production_registry_limits(),
             FastFiveArtifactProfile::SearchOnly,
-            &lease,
-            &BTreeMap::new(),
+            Some(&BTreeMap::new()),
             |_, _| {},
         )
         .expect_err("fresh prebuilt publication must not fall back to inline builds");
