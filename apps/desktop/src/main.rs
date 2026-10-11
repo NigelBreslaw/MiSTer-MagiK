@@ -177,9 +177,7 @@ fn start_framebuffer_display_clock(
         Box::new(callback) as Box<dyn FnMut(FramebufferDisplayClockTick)>
     ));
     let mut adapter = Adapter { window, callback };
-    let controller = platform_lifecycle::DisplayClockController::start(&mut adapter);
-    let _source = controller.source();
-    controller.into_clock()
+    platform_lifecycle::start_display_clock(&mut adapter)
 }
 
 #[derive(Clone, Debug)]

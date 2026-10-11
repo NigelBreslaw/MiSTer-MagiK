@@ -909,45 +909,6 @@ fn process_cmdline_parts(pid: u32) -> Option<Vec<String>> {
     )
 }
 
-#[cfg(test)]
-fn catalog_filter_inspection_tsv(
-    source: &str,
-    collection_id: &str,
-    catalog: &mister_magik_catalog::arcade_catalog::ArcadeCatalog,
-) -> String {
-    let output_collection_id = sanitize_tsv_field(collection_id);
-    let mut out = format!(
-        "catalog_filter_summary_tsv\tsource={}\tcollection={}\tgames={}\tcategories={}\tdecades={}\tmanufacturers={}\tplayers={}\tcontrols={}\n",
-        source,
-        output_collection_id,
-        catalog.system_game_count(collection_id),
-        catalog.category_option_count(collection_id),
-        catalog.decade_option_count(collection_id),
-        catalog.manufacturer_option_count(collection_id),
-        catalog.player_option_count(collection_id),
-        catalog.control_option_count(collection_id)
-    );
-    for (dimension, options) in [
-        ("category", catalog.category_options(collection_id)),
-        ("decade", catalog.decade_options(collection_id)),
-        ("manufacturer", catalog.manufacturer_options(collection_id)),
-        ("players", catalog.player_options(collection_id)),
-        ("control", catalog.control_options(collection_id)),
-    ] {
-        for option in options {
-            out.push_str(&format!(
-                "catalog_filter_option_tsv\tsource={}\tcollection={}\tdimension={}\tlabel={}\tgames={}\n",
-                source,
-                output_collection_id,
-                dimension,
-                sanitize_tsv_field(&option.label),
-                option.count
-            ));
-        }
-    }
-    out
-}
-
 fn sanitize_tsv_field(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
 }
@@ -1452,44 +1413,6 @@ mod tests {
                 PurgeLibraryDataInvocation::Invalid
             );
         }
-    }
-
-    #[test]
-    fn catalog_filter_inspection_reports_production_option_counts() {
-        use mister_magik_catalog::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
-
-        let games = ["Shooter", "Maze"]
-            .into_iter()
-            .enumerate()
-            .map(|(index, control)| ArcadeGameEntry {
-                title: format!("Game {index}").into(),
-                mra_path: format!("/games/{index}.mra").into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: Some(1980 + index as u16 * 10),
-                manufacturer: ["Capcom", "Sega"][index].into(),
-                category: ["Shooter", "Maze"][index].into(),
-                players: Some((index + 1) as u8),
-                control: control.into(),
-                is_new: false,
-            })
-            .collect();
-        let catalog = ArcadeCatalog::new(PathBuf::from("/games"), games, Vec::new());
-
-        let output = catalog_filter_inspection_tsv("navigation", "arcade", &catalog);
-
-        assert!(output.contains(
-            "catalog_filter_summary_tsv\tsource=navigation\tcollection=arcade\tgames=2\tcategories=2\tdecades=2\tmanufacturers=2\tplayers=2\tcontrols=2"
-        ));
-        assert!(output.contains(
-            "catalog_filter_option_tsv\tsource=navigation\tcollection=arcade\tdimension=category\tlabel=Maze\tgames=1"
-        ));
-        assert!(output.contains(
-            "catalog_filter_option_tsv\tsource=navigation\tcollection=arcade\tdimension=control\tlabel=Maze\tgames=1"
-        ));
-        assert_eq!(sanitize_tsv_field("one\ttwo\nthree"), "one two three");
     }
 
     #[test]

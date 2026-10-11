@@ -724,9 +724,6 @@ impl Raw565PreviewRenderer {
                 pixels,
                 stride_pixels,
             },
-            PreviewRawPixels::Rgb8(rgb) => {
-                mister_magik_fb::visual_composition::PreviewPixels::Rgb8(rgb)
-            }
         };
         mister_magik_fb::visual_composition::compose_preview_frame(
             cached,

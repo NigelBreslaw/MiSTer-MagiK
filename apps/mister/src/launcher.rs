@@ -6292,8 +6292,7 @@ pub fn launch_in_progress() -> bool {
     LAUNCH_STATE.load(Ordering::Acquire) == LAUNCH_SENT
 }
 
-#[allow(dead_code)]
-#[doc(hidden)]
+#[cfg(test)]
 pub fn mark_launch_sent_for_test() {
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
 }

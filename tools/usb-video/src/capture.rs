@@ -38,8 +38,6 @@ struct EncodedFrame {
     jpeg: Vec<u8>,
     width: u32,
     height: u32,
-    #[cfg(target_os = "macos")]
-    luma: Option<LumaAnalysis>,
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -96,20 +94,6 @@ fn validate_movie_observation(
         ));
     }
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureVisibility {
-    Black,
-    SignalLost,
-    Visible,
-}
-
-#[cfg(any(target_os = "macos", test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct LumaAnalysis {
-    visibility: CaptureVisibility,
 }
 
 trait CaptureBackend {
@@ -414,15 +398,12 @@ fn classified(code: &'static str, detail: impl Into<String>) -> AgentError {
 
 #[must_use]
 #[cfg(any(target_os = "macos", test))]
-fn analyze_luma(
-    luma: &[u8],
-    width: usize,
-    height: usize,
-    row_bytes: usize,
-) -> Option<LumaAnalysis> {
-    let required = row_bytes.checked_mul(height)?;
+fn luma_is_visible(luma: &[u8], width: usize, height: usize, row_bytes: usize) -> bool {
+    let Some(required) = row_bytes.checked_mul(height) else {
+        return false;
+    };
     if width == 0 || height == 0 || row_bytes < width || luma.len() < required {
-        return None;
+        return false;
     }
     let mut total = 0_u64;
     let mut samples = 0_u64;
@@ -438,22 +419,12 @@ fn analyze_luma(
         }
     }
     if samples == 0 {
-        return None;
+        return false;
     }
     let mean = u8::try_from(total / samples).unwrap_or(u8::MAX);
-    // An all-zero plane is a missing/invalid camera sample. HDMI video-level
-    // black is normally around luma 16 and is valid evidence worth retaining.
-    if maximum <= 1 {
-        return None;
-    }
-    let visibility = if is_capture_card_signal_loss(luma, width, height, row_bytes) {
-        CaptureVisibility::SignalLost
-    } else if mean > 24 || maximum.saturating_sub(minimum) > 12 {
-        CaptureVisibility::Visible
-    } else {
-        CaptureVisibility::Black
-    };
-    Some(LumaAnalysis { visibility })
+    maximum > 1
+        && !is_capture_card_signal_loss(luma, width, height, row_bytes)
+        && (mean > 24 || maximum.saturating_sub(minimum) > 12)
 }
 
 #[must_use]
@@ -532,8 +503,6 @@ mod tests {
             jpeg: b"\xff\xd8fixture\xff\xd9".to_vec(),
             width: JPEG_WIDTH,
             height: JPEG_HEIGHT,
-            #[cfg(target_os = "macos")]
-            luma: None,
         }
     }
 
@@ -542,26 +511,19 @@ mod tests {
     }
 
     #[test]
-    fn luma_analysis_distinguishes_signal_black_and_visible_content() {
-        assert_eq!(analyze_luma(&vec![0; 64 * 64], 64, 64, 64), None);
-        assert_eq!(analyze_luma(&vec![16; 63 * 64], 64, 64, 64), None);
-        assert_eq!(analyze_luma(&vec![16; 64 * 64], 65, 64, 64), None);
-        assert_eq!(
-            analyze_luma(&vec![16; 64 * 64], 64, 64, 64)
-                .unwrap()
-                .visibility,
-            CaptureVisibility::Black
-        );
+    fn luma_visibility_rejects_invalid_black_and_signal_lost_frames() {
+        assert!(!luma_is_visible(&vec![0; 64 * 64], 64, 64, 64));
+        assert!(!luma_is_visible(&vec![16; 63 * 64], 64, 64, 64));
+        assert!(!luma_is_visible(&vec![16; 64 * 64], 65, 64, 64));
+        assert!(!luma_is_visible(&vec![16; 64 * 64], 64, 64, 64));
+        assert!(!luma_is_visible(&[], 1, 2, usize::MAX));
 
         let mut padded = vec![0; 80 * 64];
         for y in 0..64 {
             padded[y * 80..y * 80 + 64].fill(16);
         }
         padded[32 * 80 + 32] = 48;
-        assert_eq!(
-            analyze_luma(&padded, 64, 64, 80).unwrap().visibility,
-            CaptureVisibility::Visible
-        );
+        assert!(luma_is_visible(&padded, 64, 64, 80));
 
         let bars = [235_u8, 210, 170, 145, 106, 81, 41, 16];
         let mut signal_lost = vec![0; 64 * 64];
@@ -570,18 +532,14 @@ mod tests {
                 signal_lost[y * 64 + x] = bars[x * bars.len() / 64];
             }
         }
-        assert_eq!(
-            analyze_luma(&signal_lost, 64, 64, 64).unwrap().visibility,
-            CaptureVisibility::SignalLost
-        );
+        assert!(!luma_is_visible(&signal_lost, 64, 64, 64));
 
         let mut corrupted = vec![0; 64 * 64];
         for y in 0..64 {
             corrupted[y * 64..(y + 1) * 64].fill(if y % 2 == 0 { 16 } else { 64 });
         }
         corrupted[32 * 64 + 32] = 64;
-        let analysis = analyze_luma(&corrupted, 64, 64, 64).unwrap();
-        assert_eq!(analysis.visibility, CaptureVisibility::Visible);
+        assert!(luma_is_visible(&corrupted, 64, 64, 64));
     }
 
     #[test]

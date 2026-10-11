@@ -549,13 +549,6 @@ impl<'a> PreviewRawFrame<'a> {
         let source_h = self.source_h as usize;
         match self.pixels {
             PreviewRawPixels::Empty => PreviewRawFrameStatus::Empty,
-            PreviewRawPixels::Rgb8(rgb) => {
-                if raw_frame_len_is_valid(rgb.len(), source_w, source_h, 3) {
-                    PreviewRawFrameStatus::Ready
-                } else {
-                    PreviewRawFrameStatus::Invalid
-                }
-            }
             PreviewRawPixels::Rgb565 {
                 pixels,
                 stride_pixels,
@@ -662,24 +655,10 @@ fn preview_transition_mode(turbo_active: bool) -> PreviewTransitionMode {
 #[derive(Clone, Copy)]
 pub enum PreviewRawPixels<'a> {
     Empty,
-    #[allow(dead_code)]
-    Rgb8(&'a [u8]),
     Rgb565 {
         pixels: &'a [Rgb565Pixel],
         stride_pixels: usize,
     },
-}
-
-fn raw_frame_len_is_valid(
-    len: usize,
-    source_w: usize,
-    source_h: usize,
-    bytes_per_pixel: usize,
-) -> bool {
-    source_w
-        .checked_mul(source_h)
-        .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
-        .is_some_and(|needed| len >= needed)
 }
 
 fn raw_frame_stride_len_is_valid(len: usize, stride_pixels: usize, source_h: usize) -> bool {

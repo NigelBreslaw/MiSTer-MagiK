@@ -68,7 +68,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
     <div class="row info" style="top:193px"><span class="lbl h">Game database</span><span class="val m">V40 &nbsp;26 SEP 2026</span><i class="sep"></i></div>
     <div class="row info last" style="top:229px"><span class="lbl h">Kernel</span><span class="val m">6.18.38-MISTER</span><i class="sep"></i></div>
     <div class="group m muted" style="top:283px">LEGAL</div>
-    <div class="row focus last" style="top:303px"><span class="lbl h">Licenses</span><span class="val m">12 &nbsp;<span class="chev">&gt;</span></span><i class="sep"></i></div>
+    <div class="row focus last" style="top:303px"><span class="lbl h">Licenses</span><span class="val m">11 &nbsp;<span class="chev">&gt;</span></span><i class="sep"></i></div>
 
     <div class="a m foot" style="left:30px">A &nbsp;OPEN</div>
     <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
@@ -78,7 +78,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
   <!-- LICENSES -->
   <div class="state" id="licenses">
     <div class="a m muted" style="left:29px;top:101px">ABOUT / LICENSES</div>
-    <div class="a n" style="left:27px;top:132px">12</div>
+    <div class="a n" style="left:27px;top:132px">11</div>
     <div class="a m muted" style="left:29px;top:205px">OPEN SOURCE LICENSES</div>
     <div class="rule" style="left:28px;top:239px;width:213px"></div>
     <div class="credit m" style="top:258px">SOFTWARE, FONTS AND<br>ARTWORK THAT MISTER<br>MAGIK IS BUILT ON</div>
@@ -86,7 +86,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
     <div class="a m foot" style="left:30px">A &nbsp;READ</div>
     <div class="a m foot" style="left:130px">B &nbsp;BACK</div>
     <div class="a m foot" style="left:612px">UP DOWN &nbsp;MOVE</div>
-    <div class="a m muted foot" style="left:822px">1 - 10 &nbsp;OF 12</div>
+    <div class="a m muted foot" style="left:822px">1 - 10 &nbsp;OF 11</div>
   </div>
 
   <!-- LICENCE TEXT -->
@@ -110,8 +110,8 @@ function fit(){const s=Math.min((innerWidth-24)/960,(innerHeight-60)/540,2);stag
 addEventListener('resize',fit); fit();
 
 const LICENSES=[['MiSTer MagiK','GPL-3.0'],['FFmpeg','LGPL-2.1'],['Slint','GPL-3.0'],['Press Start 2P','OFL-1.1'],
-  ['Commercial fonts','LICENSED'],['Jersey 25','OFL-1.1'],['Jersey 15','OFL-1.1'],['Spleen','BSD-2'],
-  ['Rust standard library','MIT'],['zlib','ZLIB'],['libpng','LIBPNG']];
+  ['Commercial Fonts','LICENSED'],['Jersey','OFL-1.1'],['Spleen','BSD-2'],
+  ['Rust standard library','MIT'],['zlib','ZLIB'],['libpng','LIBPNG'],['Card artwork','CC / GML']];
 const list=document.getElementById('lic-list');
 LICENSES.slice(0,10).forEach(([name,kind],i)=>{
   const e=document.createElement('div'); e.className='row'+(i===0?' focus':'')+(i===9?' last':'');

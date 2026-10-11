@@ -92,8 +92,8 @@ window.CRT = (() => {
   ];
   ABOUT.forEach((r, i) => { r.y = LIST_TOP + i * ROW + (r.gap ? GROUP_GAP : 0); });
   const LICENSES = [['MISTER MAGIK', 'GPL-3.0'], ['FFMPEG', 'LGPL-2.1'], ['SLINT', 'GPL-3.0'], ['PRESS START 2P', 'OFL-1.1'],
-    ['COMMERCIAL FONTS', 'LICENSED'], ['JERSEY 25', 'OFL-1.1'], ['JERSEY 15', 'OFL-1.1'], ['SPLEEN', 'BSD-2'],
-    ['RUST STANDARD LIBRARY', 'MIT'], ['ZLIB', 'ZLIB'], ['LIBPNG', 'LIBPNG']];
+    ['COMMERCIAL FONTS', 'LICENSED'], ['JERSEY', 'OFL-1.1'], ['SPLEEN', 'BSD-2'],
+    ['RUST STANDARD LIBRARY', 'MIT'], ['ZLIB', 'ZLIB'], ['LIBPNG', 'LIBPNG'], ['CARD ARTWORK', 'CC / GML']];
   const LIC_PAGE = 9, TEXT_VIEW = 12;
   let TEXT_LINES = [];
 

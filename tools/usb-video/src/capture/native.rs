@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::{
-    CaptureVisibility, EncodedFrame, JPEG_HEIGHT, JPEG_WIDTH, MovieObservation, analyze_luma,
-    classified, validate_movie_observation,
+    EncodedFrame, JPEG_HEIGHT, JPEG_WIDTH, MovieObservation, classified, luma_is_visible,
+    validate_movie_observation,
 };
 use crate::error::{AgentError, AgentResult};
 use block2::RcBlock;
@@ -74,18 +74,13 @@ define_class!(
             sample_buffer: &CMSampleBuffer,
             _connection: &AVCaptureConnection,
         ) {
-            let result = process_sample(sample_buffer);
-            let should_send = match &result {
-                Ok(Some(frame)) => frame
-                    .luma
-                    .is_some_and(|analysis| analysis.visibility == CaptureVisibility::Visible),
-                Ok(None) => false,
-                Err(_) => true,
+            let result = match process_sample(sample_buffer) {
+                Ok(Some(frame)) => Ok(frame),
+                Ok(None) => return,
+                Err(error) => Err(error),
             };
-            if should_send && let Some(sender) = self.ivars().result.lock().unwrap().take() {
-                let _ = sender.send(
-                    result.map(|frame| frame.expect("nonblank sample result must contain a frame")),
-                );
+            if let Some(sender) = self.ivars().result.lock().unwrap().take() {
+                let _ = sender.send(result);
             }
         }
     }
@@ -1087,12 +1082,12 @@ fn process_sample(sample_buffer: &CMSampleBuffer) -> AgentResult<Option<EncodedF
             "USB Video luma plane size overflowed",
         )
     })?;
-    let analysis = if base.is_null() {
-        None
+    let visible = if base.is_null() {
+        false
     } else {
         // SAFETY: AVFoundation owns a locked luma plane of at least row_bytes * height bytes.
         let luma = unsafe { slice::from_raw_parts(base, plane_len) };
-        analyze_luma(luma, width, height, row_bytes)
+        luma_is_visible(luma, width, height, row_bytes)
     };
     let unlock = unsafe { CVPixelBufferUnlockBaseAddress(&pixel_buffer, flags) };
     if unlock != kCVReturnSuccess {
@@ -1101,7 +1096,7 @@ fn process_sample(sample_buffer: &CMSampleBuffer) -> AgentResult<Option<EncodedF
             format!("could not unlock USB Video pixel buffer ({unlock})"),
         ));
     }
-    if analysis.is_none() {
+    if !visible {
         return Ok(None);
     }
 
@@ -1135,6 +1130,5 @@ fn process_sample(sample_buffer: &CMSampleBuffer) -> AgentResult<Option<EncodedF
         jpeg: data.to_vec(),
         width: JPEG_WIDTH,
         height: JPEG_HEIGHT,
-        luma: analysis,
     }))
 }

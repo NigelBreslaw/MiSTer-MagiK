@@ -884,12 +884,6 @@ impl PadReader {
     }
 
     /// Drain pending events; returns true if state changed.
-    #[allow(dead_code)]
-    pub fn poll(&mut self) -> io::Result<bool> {
-        self.poll_with_debug_labels(false)
-    }
-
-    /// Drain pending events; returns true if state changed.
     pub fn poll_with_debug_labels(&mut self, debug_labels: bool) -> io::Result<bool> {
         drain_js_events(&mut self.file, self.profile, &mut self.state, debug_labels)
     }
