@@ -966,7 +966,9 @@ total, while resident rows describe only hydrated memory.
 
 The launcher always shows every playable system in the canonical taxonomy,
 including systems without games or installed media. Catalog entries supply game
-counts and add recognized systems beyond that taxonomy. Source adapters use
+counts and add recognized systems beyond that taxonomy. Scan plans also add
+discovered identities before publication; first-build failures retain their tile
+and failed status even without a published artifact. Source adapters use
 production launch profiles derived from installed cores. Arcade, AmigaVision,
 0MHz DOS, Neon68K, and OneLoad64 receive prepared handling; every other recognized
 system uses the generic profile-backed scanner. The builder does not read retired
@@ -983,7 +985,9 @@ first visible frame. The catalog worker performs independent source discovery,
 publishes per-system artifacts, commits the registry, and then makes the complete
 catalog visible. The interactive launcher does not project partial source rows.
 Progress is based on terminal per-system outcomes and is shown as
-`Updating systems X/N`.
+`Updating systems X/N`. During the first-run intro, scan-status presentation
+changes are batched until the live launcher frame is prepared. Catalog
+publication and shard adoption still take effect immediately.
 
 Changed systems receive new immutable artifacts and unchanged systems retain
 their existing generations. Publication is manifest-last. Per-system failure

@@ -1960,7 +1960,7 @@ fn execute_planned_fast_refresh_with(
                         .as_micros()
                         .try_into()
                         .unwrap_or(u64::MAX),
-                    detail: "no installed launchable source remains".to_string(),
+                    detail: "no installed launch profile remains".to_string(),
                 });
             }
             Err(error) => reports.push(FastCatalogSystemRefreshReport {

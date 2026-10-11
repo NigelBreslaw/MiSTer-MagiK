@@ -2261,6 +2261,24 @@ fn catalog_build_media_gate(
     }
 }
 
+fn sync_catalog_status_presentation(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    catalog_version: &mut usize,
+    full_bridge_dirty: &mut bool,
+    startup_intro_catalog_status_pending: &mut bool,
+    defer_bridge_ui: bool,
+) {
+    if defer_bridge_ui {
+        *startup_intro_catalog_status_pending = true;
+    } else {
+        *startup_intro_catalog_status_pending = false;
+        nav.sync_launcher_taxonomy(catalog);
+        *catalog_version = (*catalog_version).wrapping_add(1);
+        *full_bridge_dirty = true;
+    }
+}
+
 fn retain_startup_intro_catalog_ui_intent(
     replay: &mut Option<LauncherWorkerUiIntent>,
     intent: LauncherWorkerUiIntent,
@@ -2286,6 +2304,7 @@ struct CatalogDomain<'a> {
     lifecycle_effects: &'a mut LifecycleEffects,
     full_bridge_dirty: &'a mut bool,
     startup_intro_catalog_ui_replay: &'a mut Option<LauncherWorkerUiIntent>,
+    startup_intro_catalog_status_pending: &'a mut bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2313,6 +2332,7 @@ fn process_catalog_worker_message(
         lifecycle_effects,
         full_bridge_dirty,
         startup_intro_catalog_ui_replay,
+        startup_intro_catalog_status_pending,
     } = domain;
     prepare_trace.catalog_message_count = prepare_trace.catalog_message_count.saturating_add(1);
     let effects = catalog_session.handle_worker_message(
@@ -2340,6 +2360,7 @@ fn process_catalog_worker_message(
             lifecycle_effects,
             full_bridge_dirty,
             startup_intro_catalog_ui_replay,
+            startup_intro_catalog_status_pending,
         },
         defer_bridge_ui,
         loop_start,
@@ -2890,6 +2911,7 @@ fn apply_catalog_session_effects(
         lifecycle_effects,
         full_bridge_dirty,
         startup_intro_catalog_ui_replay,
+        startup_intro_catalog_status_pending,
     } = domain;
     for effect in effects.into_effects() {
         match effect {
@@ -3051,21 +3073,39 @@ fn apply_catalog_session_effects(
                 all_published_systems,
             } => {
                 nav.catalog_reconciliation_plan(catalog, &system_ids, all_published_systems);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                *full_bridge_dirty = true;
+                sync_catalog_status_presentation(
+                    nav,
+                    catalog,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
+                    defer_bridge_ui,
+                );
             }
             CatalogSessionEffect::CatalogSystemScanning { system_id } => {
                 nav.catalog_system_scanning(&system_id);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                *full_bridge_dirty = true;
+                sync_catalog_status_presentation(
+                    nav,
+                    catalog,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
+                    defer_bridge_ui,
+                );
             }
             CatalogSessionEffect::CatalogSystemPrepared {
                 system_id,
                 generation,
             } => {
                 nav.catalog_system_prepared(&system_id);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                *full_bridge_dirty = true;
+                sync_catalog_status_presentation(
+                    nav,
+                    catalog,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
+                    defer_bridge_ui,
+                );
                 print_startup_event(
                     start,
                     "catalog_system_prepared",
@@ -3089,8 +3129,14 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::CatalogSystemUpdateFailed { system_id } => {
                 nav.catalog_system_update_failed(&system_id);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                *full_bridge_dirty = true;
+                sync_catalog_status_presentation(
+                    nav,
+                    catalog,
+                    catalog_version,
+                    full_bridge_dirty,
+                    startup_intro_catalog_status_pending,
+                    defer_bridge_ui,
+                );
             }
             CatalogSessionEffect::CatalogSystemHydrationFailed { system_id } => {
                 nav.catalog_system_hydration_failed(&system_id);
@@ -4975,6 +5021,89 @@ mod tests {
             startup_intro_launcher_ui_plan(false, StartupRevealState::InputEnabled, true),
             StartupIntroLauncherUiPlan::Interactive
         );
+    }
+
+    #[test]
+    fn startup_intro_batches_scan_status_before_live_launcher_frame() {
+        let catalog = catalog_for_media_systems(&["arcade"]);
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let mut version = 7;
+        let mut dirty = false;
+        let mut pending = false;
+        nav.catalog_reconciliation_plan(&catalog, &["custom-system".to_string()], false);
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        nav.catalog_system_scanning("custom-system");
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        nav.catalog_system_prepared("custom-system");
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        nav.catalog_system_update_failed("custom-system");
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            true,
+        );
+        assert_eq!(
+            version, 7,
+            "status must not restart catalog consumers during the intro"
+        );
+        assert!(!dirty);
+        assert!(pending);
+        assert_eq!(
+            startup_intro_launcher_ui_plan(true, StartupRevealState::RevealLauncher, false),
+            StartupIntroLauncherUiPlan::PrepareLiveFrame
+        );
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            false,
+        );
+        assert_eq!(version, 8);
+        assert!(dirty);
+        assert!(!pending);
+        assert!(nav.open_system(&catalog, "custom-system"));
+        assert!(nav.catalog_system_update_has_failed("custom-system"));
+        nav.catalog_reconciliation_plan(&catalog, &["custom-system".to_string()], false);
+        sync_catalog_status_presentation(
+            &mut nav,
+            &catalog,
+            &mut version,
+            &mut dirty,
+            &mut pending,
+            false,
+        );
+        assert_eq!(
+            version, 9,
+            "interactive changes invalidate presentation immediately"
+        );
+        assert!(!nav.catalog_system_update_has_failed("custom-system"));
     }
 
     #[test]

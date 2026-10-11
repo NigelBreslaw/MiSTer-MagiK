@@ -755,6 +755,7 @@ pub(super) fn build_domains(
     let startup_intro_launcher_frame_ready = false;
     let startup_intro_bridge_dirty_pending = false;
     let startup_intro_catalog_ui_replay = None;
+    let startup_intro_catalog_status_pending = false;
     if startup_intro.is_some()
         && let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
@@ -980,6 +981,7 @@ pub(super) fn build_domains(
             startup_intro_launcher_frame_ready,
             startup_intro_bridge_dirty_pending,
             startup_intro_catalog_ui_replay,
+            startup_intro_catalog_status_pending,
         },
         diag: Diagnostics {
             ui_action_sequence,

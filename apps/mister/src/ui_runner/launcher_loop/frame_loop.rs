@@ -145,6 +145,7 @@ pub(super) struct Effects {
     pub(super) startup_intro_launcher_frame_ready: bool,
     pub(super) startup_intro_bridge_dirty_pending: bool,
     pub(super) startup_intro_catalog_ui_replay: Option<LauncherWorkerUiIntent>,
+    pub(super) startup_intro_catalog_status_pending: bool,
 }
 
 /// Profiling, accounting and tooling.
@@ -221,6 +222,9 @@ macro_rules! catalog_domain {
             lifecycle_effects: &mut $frame.lib.lifecycle_effects,
             full_bridge_dirty: &mut $dirty,
             startup_intro_catalog_ui_replay: &mut $frame.fx.startup_intro_catalog_ui_replay,
+            startup_intro_catalog_status_pending: &mut $frame
+                .fx
+                .startup_intro_catalog_status_pending,
         }
     };
 }
@@ -891,6 +895,18 @@ impl<'a> FrameLoop<'a> {
         let mut full_bridge_dirty =
             std::mem::take(&mut self.ui.navigation_source_bridge_sync_pending)
                 || std::mem::take(&mut self.inp.library_reset_bridge_dirty);
+        if (self.fx.startup_intro.is_none() || startup_intro_needs_live_launcher)
+            && self.fx.startup_intro_catalog_status_pending
+        {
+            sync_catalog_status_presentation(
+                &mut self.ui.nav,
+                &self.lib.catalog,
+                &mut self.lib.catalog_version,
+                &mut full_bridge_dirty,
+                &mut self.fx.startup_intro_catalog_status_pending,
+                false,
+            );
+        }
         // The catalog-side locals, borrowed together for the worker-message handlers.
         if self.fx.startup_intro.is_none() {
             #[cfg(test)]
