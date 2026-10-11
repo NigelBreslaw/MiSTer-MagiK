@@ -1147,9 +1147,12 @@ mod tests {
                 let display = UiDisplay::for_framebuffer(width, height);
                 let mut target =
                     UiFrameTarget::cached(FramebufferTargetGeometry::new(width, height));
+                let background = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0); width * height];
                 let mut render = || {
-                    window.request_redraw();
-                    LayerTarget::new(&mut target, &display).render_slint_full(&window);
+                    // Native Home composes Slint through render_by_line, which
+                    // skips Path elements even when buffer rendering supports them.
+                    LayerTarget::new(&mut target, &display)
+                        .render_custom_home(&window, &background, false, None);
                     target.cached_565().to_vec()
                 };
                 let offline = render();
