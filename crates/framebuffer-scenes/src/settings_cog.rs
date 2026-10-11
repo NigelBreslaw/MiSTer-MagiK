@@ -171,10 +171,6 @@ impl CrtSettingsGeometry {
     pub const fn group_gap(self) -> usize {
         6 * self.sy
     }
-
-    pub const fn axis_scale(self, horizontal: bool) -> usize {
-        if horizontal { self.sx } else { self.sy }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

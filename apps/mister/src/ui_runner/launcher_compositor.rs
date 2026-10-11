@@ -236,6 +236,43 @@ impl<'a> LayerTarget<'a> {
         (slint_dirty, slint_damage)
     }
 
+    pub(super) fn render_crt_foreground(
+        &mut self,
+        window: &MisterSoftwareWindow,
+        foreground: &mut crate::crt_backdrop::CrtForeground,
+        full: bool,
+    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
+        let mut damage = DirtyRectList::new();
+        let mut dirty = None;
+        let mut raster = |renderer: &slint::platform::software_renderer::SoftwareRenderer| {
+            let region = foreground.render(
+                renderer,
+                self.layout.composition_w(),
+                self.layout.composition_h(),
+            );
+            dirty = dirty_rect(
+                &region,
+                self.layout.composition_w(),
+                self.layout.composition_h(),
+            );
+            damage = dirty_rects(
+                &region,
+                self.layout.composition_w(),
+                self.layout.composition_h(),
+            );
+        };
+        let rendered = if full {
+            window.draw_full_frame_preserving_cache_if_needed(
+                self.layout.logical_w(),
+                self.layout.logical_h(),
+                &mut raster,
+            )
+        } else {
+            window.draw_if_needed(&mut raster)
+        };
+        (dirty, damage, rendered)
+    }
+
     pub(super) fn render_slint_full(
         &mut self,
         window: &MisterSoftwareWindow,

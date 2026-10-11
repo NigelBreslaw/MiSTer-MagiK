@@ -4366,6 +4366,174 @@ mod tests {
         assert_eq!(target.cached_565(), expected.cached_565());
     }
 
+    slint::slint! {
+        export component CrtForegroundProbe inherits Window {
+            width: 640px; height: 240px; background: transparent;
+            in property <int> counter;
+            in property <bool> footer-visible: true;
+            Rectangle { x: 38px; y: 12px; width: 100px; height: 12px; background: #eee8d5; }
+            Rectangle { x: (520 + mod(root.counter, 2) * 12) * 1px; y: 40px; width: 6px; height: 12px; background: #eee8d5; }
+            if root.footer-visible : Rectangle {
+                x: 38px; y: 213px; width: 12px; height: 12px; background: #eee8d5;
+            }
+            // Alpha must be blended against each new screenshot, never accumulated.
+            Rectangle { x: 280px; y: 210px; width: 60px; height: 16px; background: #e7695a80; }
+        }
+    }
+
+    fn assert_crt_scroll_sequence_region(region: DirtyRect) {
+        use crate::crt_backdrop::{CRT_BACKDROP_FADE_DURATION, CrtBackdropState, CrtForeground};
+        use crate::visual_composition::{PreviewFrame, PreviewPixels};
+        use slint::ComponentHandle;
+        let window = crate::visual_platform::install_isolated_test_platform();
+        let probe = CrtForegroundProbe::new().unwrap();
+        window.set_size(slint::PhysicalSize::new(640, 240));
+        probe.show().unwrap();
+        let display = native_crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&display);
+        let layout = crate::ui_display::UiLayoutGeometry::for_display(
+            &display,
+            crate::ui_display::ScreenOrientation::Normal,
+        );
+        let geometry = ArcadeListGeometry::crt_for_content(layout.content_rect(), metrics, false);
+        let games = games("arcade", 40);
+        let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
+        renderer.set_geometry_for_render_h(geometry, layout.content_rect().bottom());
+        let mut backdrop = CrtBackdropState::for_display(&display).unwrap();
+        let mut foreground = CrtForeground::default();
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(640, 240));
+        let mut retained = CrtArcadeOverlayState::default();
+        for (step, selected) in [0, 1, 2, 3, 8, 13, 12, 4, 0].into_iter().enumerate() {
+            probe.set_counter(step as i32);
+            probe.set_footer_visible(step % 3 != 1);
+            window.request_redraw();
+            window.draw_if_needed(|r| {
+                foreground.render(r, 640, 240);
+            });
+            let pixels = vec![Rgb565Pixel([0xf800, 0x07e0, 0x001f, 0xef5a][step % 4]); 320 * 240];
+            let now = std::time::Duration::from_secs(step as u64);
+            backdrop.retarget(
+                Some(PreviewFrame {
+                    pixels: PreviewPixels::Rgb565 {
+                        pixels: &pixels,
+                        stride_pixels: 320,
+                    },
+                    source_width: 320,
+                    source_height: 240,
+                    display_width: 320,
+                    display_height: 240,
+                }),
+                now,
+            );
+            for elapsed in [
+                std::time::Duration::ZERO,
+                CRT_BACKDROP_FADE_DURATION / 2,
+                CRT_BACKDROP_FADE_DURATION,
+            ] {
+                backdrop.compose_into(now + elapsed, target.cached_565_mut());
+                foreground.compose(target.cached_565_mut());
+                let update = renderer
+                    .draw(
+                        ArcadeGameView::contiguous(&games),
+                        selected,
+                        selected as f32,
+                        false,
+                    )
+                    .unwrap_or(ArcadeListUpdate::Full(renderer.dirty_rect()));
+                renderer.compose_retained_crt_layer_over_backdrop(
+                    &mut target,
+                    backdrop.pixels(),
+                    layout.output_layout(),
+                    update,
+                    step as u64,
+                    1,
+                    true,
+                    elapsed == CRT_BACKDROP_FADE_DURATION,
+                    true,
+                    &mut retained,
+                );
+                // Independent clean frame and newly built list are the oracle;
+                // reusing the previous completed frame must produce identical pixels.
+                let mut expected = UiFrameTarget::cached(FramebufferTargetGeometry::new(640, 240));
+                backdrop.compose_into(now + elapsed, expected.cached_565_mut());
+                foreground.compose(expected.cached_565_mut());
+                let mut fresh = ArcadeListRenderer::new_for_crt_display(metrics, &display);
+                fresh.set_geometry_for_render_h(geometry, layout.content_rect().bottom());
+                fresh.draw(
+                    ArcadeGameView::contiguous(&games),
+                    selected,
+                    selected as f32,
+                    true,
+                );
+                fresh.compose_layer_over_backdrop_to_oriented_cached_with_state(
+                    &mut expected,
+                    backdrop.pixels(),
+                    layout.output_layout(),
+                    false,
+                    true,
+                );
+                for y in region.y0..region.y1 {
+                    for x in region.x0..region.x1 {
+                        let i = y * 640 + x;
+                        assert_eq!(
+                            target.cached_565()[i],
+                            expected.cached_565()[i],
+                            "step {step}, elapsed {elapsed:?}, ({x},{y})"
+                        );
+                    }
+                }
+                // Background in both old protected bands must follow this frame.
+                for (x, y) in [(200, 20), (200, 215)] {
+                    assert_eq!(
+                        target.cached_565()[y * 640 + x],
+                        backdrop.pixels()[y * 640 + x]
+                    );
+                }
+                if step % 3 != 1 {
+                    for y in 213..225 {
+                        assert_eq!(target.cached_565()[y * 640 + 40], Rgb565Pixel(0xef5a));
+                    }
+                }
+                if step % 3 == 1 {
+                    assert_eq!(
+                        target.cached_565()[220 * 640 + 40],
+                        backdrop.pixels()[220 * 640 + 40]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn crt_240_scrolling_erases_obsolete_game_glyphs() {
+        assert_crt_scroll_sequence_region(DirtyRect {
+            x0: 66,
+            y0: 66,
+            x1: 428,
+            y1: 196,
+        });
+    }
+
+    #[test]
+    fn crt_240_scrolling_refreshes_screenshot_bands() {
+        assert_crt_scroll_sequence_region(DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 640,
+            y1: 92,
+        });
+    }
+
+    #[test]
+    fn crt_240_scrolling_refreshes_footer_background_and_foreground() {
+        assert_crt_scroll_sequence_region(DirtyRect {
+            x0: 0,
+            y0: 208,
+            x1: 640,
+            y1: 240,
+        });
+    }
+
     #[test]
     fn backdrop_composition_restores_every_unselected_viewport_pixel() {
         let display = crt_240_display();

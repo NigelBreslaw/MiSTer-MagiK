@@ -23,7 +23,9 @@ mod macos {
         ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID,
     };
     use mister_magik_fb::arcade_list_renderer::CrtArcadeLayout;
-    use mister_magik_fb::crt_backdrop::{CRT_BACKDROP_FADE_DURATION, CrtBackdropState};
+    use mister_magik_fb::crt_backdrop::{
+        CRT_BACKDROP_FADE_DURATION, CrtBackdropState, CrtForeground,
+    };
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_event::{
         InputEvent, InputPhase, InputSourceId, InputSourceKind, LogicalAction, PressId, SourceEpoch,
@@ -481,6 +483,7 @@ mod macos {
         download_media: bool,
         arcade_layer: ArcadeVisualLayer,
         crt_backdrop: Option<CrtBackdropState>,
+        crt_foreground: CrtForeground,
         crt_backdrop_target_key: Option<Option<String>>,
         preview_transition: PreviewTransitionController<()>,
         preview_compositor: Rgb565PreviewTransitionCompositor,
@@ -714,6 +717,7 @@ mod macos {
                 download_media: download_media && !headless,
                 arcade_layer: ArcadeVisualLayer::new(frame_width, frame_height),
                 crt_backdrop: CrtBackdropState::for_display(&display),
+                crt_foreground: CrtForeground::default(),
                 crt_backdrop_target_key: None,
                 preview_transition: PreviewTransitionController::default(),
                 preview_compositor: Rgb565PreviewTransitionCompositor::new(
@@ -1766,10 +1770,29 @@ mod macos {
                 self.scenario.uses_launcher_navigation()
                     && self.launcher_nav.screen == Screen::Home,
             );
+            let crt_backdrop_active = self.crt_backdrop.is_some()
+                && matches!(
+                    self.scenario,
+                    Scenario::Arcade | Scenario::ArcadeCrossfade | Scenario::SystemHub
+                )
+                && !SlintOverlayOcclusion::read(
+                    &self.launcher,
+                    self.launcher.global::<SetupView>().get_phase() != ViewSetupPhase::None,
+                )
+                .any();
+            self.launcher
+                .global::<MisterUi>()
+                .set_custom_crt_backdrop(crt_backdrop_active);
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
             self.slint_window.draw_if_needed(|renderer| {
-                self.frame_target.render(renderer);
+                if crt_backdrop_active {
+                    let display = self.display_profile.display();
+                    self.crt_foreground
+                        .render(renderer, display.render_w(), display.render_h());
+                } else {
+                    self.frame_target.render(renderer);
+                }
             });
             if self.scenario.uses_launcher_navigation() && self.launcher_nav.screen == Screen::Home
             {
@@ -1832,42 +1855,13 @@ mod macos {
                     );
                 if low_resolution_backdrop {
                     self.sync_crt_backdrop_target(self.navigation_transition.is_active());
-                    let display = self.display_profile.display();
-                    let layout = UiLayoutGeometry::for_display(&display, self.orientation);
-                    let metrics = CrtUiMetrics::for_display(&display);
-                    let arcade_layout = CrtArcadeLayout::for_layout(
-                        layout,
-                        metrics,
-                        self.scenario == Scenario::ArcadeSearch,
-                    );
                     if let Some(backdrop) = self.crt_backdrop.as_mut() {
-                        if self.launcher_nav.is_system_hub() {
-                            let _ = backdrop.compose_system_hub_into_layout(
-                                self.fixed_time.get(),
-                                self.frame_target.cached_565_mut(),
-                                layout,
-                                metrics,
-                                (
-                                    self.launcher_nav.system_hub_selected,
-                                    Rgb565Pixel(
-                                        mister_magik_fb::launcher_presentation::device_reveal_spec(
-                                            self.launcher_nav.device_kind(),
-                                            true,
-                                            true,
-                                        )
-                                        .accent,
-                                    ),
-                                ),
-                            );
-                        } else {
-                            let _ = backdrop.compose_product_into_layout(
-                                self.fixed_time.get(),
-                                self.frame_target.cached_565_mut(),
-                                layout,
-                                arcade_layout,
-                                metrics,
-                            );
-                        }
+                        backdrop.compose_into(
+                            self.fixed_time.get(),
+                            self.frame_target.cached_565_mut(),
+                        );
+                        self.crt_foreground
+                            .compose(self.frame_target.cached_565_mut());
                     }
                 }
                 let games = self

@@ -319,7 +319,6 @@ pub(super) struct ProjectFrame {
     pub(super) status_text: Option<LauncherStatusTextSnapshot>,
     pub(super) status_string_copy_bytes: usize,
     pub(super) arcade_status_only: bool,
-    pub(super) arcade_scroll_active: bool,
     pub(super) arcade_turbo_active: bool,
     pub(super) full_frame_present: bool,
     pub(super) wants_arcade_list: bool,
@@ -2301,6 +2300,7 @@ impl<'a> FrameLoop<'a> {
                                         render_w: self.env.ui.render_w(),
                                         render_h: self.env.ui.render_h(),
                                         reduce_motion: self.ui.nav.settings.reduce_motion,
+                                        crt_layout: self.out.crt_layout,
                                         composed: self.env.target.cached_565(),
                                         now_us: pre_input.animation_us,
                                     },
@@ -3454,6 +3454,10 @@ impl<'a> FrameLoop<'a> {
             && presentation_route == PreviewRoute::Eligible
             && (wants_arcade_list || self.ui.nav.is_system_hub())
             && !self.ui.nav.arcade_filter.drawer_open;
+        self.env
+            .app
+            .global::<slint_ui::launcher::MisterUi>()
+            .set_custom_crt_backdrop(crt_backdrop_eligible);
         let crt_backdrop_was_eligible = self
             .out
             .crt_backdrop
@@ -3945,7 +3949,6 @@ impl<'a> FrameLoop<'a> {
             status_text,
             status_string_copy_bytes,
             arcade_status_only,
-            arcade_scroll_active,
             arcade_turbo_active,
             full_frame_present,
             wants_arcade_list,
@@ -4748,6 +4751,17 @@ impl<'a> FrameLoop<'a> {
                             ((copied.x1 - copied.x0) * (copied.y1 - copied.y0)) as u64;
                     }
                     (dirty, damage, rendered)
+                } else if project.crt_backdrop_eligible {
+                    layer_target.render_crt_foreground(
+                        &self.env.window,
+                        &mut self
+                            .out
+                            .crt_backdrop
+                            .as_mut()
+                            .expect("CRT route owns a backdrop")
+                            .foreground,
+                        $full_slint_raster || !project.crt_backdrop_was_eligible,
+                    )
                 } else if $full_slint_raster {
                     layer_target.render_slint_full(&self.env.window)
                 } else {
@@ -4842,18 +4856,6 @@ impl<'a> FrameLoop<'a> {
             if let Some(generation) = self.out.director.chart.generation() {
                 let _ = self.out.director.chart.retain_redraw(generation);
             }
-            None
-        } else if project.crt_backdrop_eligible
-            && project.crt_backdrop_was_eligible
-            && !project.crt_backdrop_leaving
-            && !project.full_frame_present
-            && (project.arcade_scroll_active || self.lib.preview.raw_transition_frame().is_some())
-        {
-            // During CRT Arcade motion, the custom compositor owns the
-            // changing backdrop, list, and chrome restoration. Keep the
-            // launcher cadence alive without rerasterizing the unchanged
-            // Slint base on every velocity tick.
-            self.env.window.request_redraw();
             None
         } else if project.composition_decision.force_full_slint_raster
             || project.crt_backdrop_leaving
@@ -5082,33 +5084,12 @@ impl<'a> FrameLoop<'a> {
             .raw_transition_frame()
             .as_ref()
             .map(|frame| frame.transition_id);
-        // Releasing a full-screen transition performs one live full Slint
-        // raster. That raster owns the CRT placeholder background, so restore
-        // the settled custom backdrop in the same frame before the list layer.
-        let force_crt_backdrop_repaint = full_screen_transition_release_raster_rendered;
+        // Changed or removed Slint foreground pixels and transition release
+        // require a clean backdrop before the foreground and list are composed.
+        let force_crt_backdrop_repaint =
+            full_screen_transition_release_raster_rendered || !slint_damage.is_empty();
         if let Some(backdrop) = self.out.crt_backdrop.as_mut() {
-            backdrop.set_hub_mode(self.ui.nav.is_system_hub().then(|| {
-                (
-                    self.ui.nav.system_hub_selected,
-                    Rgb565Pixel(
-                        crate::launcher_presentation::device_reveal_spec(
-                            self.ui.nav.device_kind(),
-                            true,
-                            true,
-                        )
-                        .accent,
-                    ),
-                )
-            }));
             let compose_start = Instant::now();
-            let crt_arcade_layout = CrtArcadeLayout::for_layout(
-                self.out.layout,
-                self.out.crt_metrics,
-                self.ui
-                    .nav
-                    .arcade_search
-                    .is_active(&self.ui.nav.arcade_filter.active),
-            );
             let result = backdrop.compose(
                 project.crt_backdrop_eligible,
                 force_crt_backdrop_repaint,
@@ -5121,8 +5102,6 @@ impl<'a> FrameLoop<'a> {
                 self.out.frame_clock.elapsed(),
                 layer_target.presentation_pixels_mut(),
                 self.out.layout,
-                crt_arcade_layout,
-                self.out.crt_metrics,
             );
             crt_backdrop_work_trace = result.trace;
             crt_backdrop_copy_us = compose_start

@@ -4,7 +4,6 @@
 //! Portable RGB565 navigation-transition geometry, buffers, and rasterization.
 
 use crate::Rgb565Pixel;
-use crate::settings_cog::CrtSettingsGeometry;
 use crate::spring_animation::smooth_spring_q16;
 use std::sync::Arc;
 use std::time::Instant;
@@ -1472,31 +1471,16 @@ pub fn render_settings_page_transition_into(
         return Ok(stats);
     }
 
-    if request.settings_style == SettingsPageTransitionStyle::Segmented {
-        if request.settings_axis == SettingsPageTransitionAxis::Horizontal
-            && buffers.width == 960
-            && buffers.height == 540
-        {
-            return render_hdmi_segmented_settings_page(
-                source,
-                destination,
-                request,
-                frame,
-                output,
-            );
-        }
-        if let Some(geometry) = CrtSettingsGeometry::for_dimensions(buffers.width, buffers.height) {
-            return render_crt_segmented_settings_page(
-                source,
-                destination,
-                geometry,
-                request,
-                frame,
-                output,
-            );
-        }
+    if request.settings_style == SettingsPageTransitionStyle::Segmented
+        && request.settings_axis == SettingsPageTransitionAxis::Horizontal
+        && buffers.width == 960
+        && buffers.height == 540
+    {
+        return render_hdmi_segmented_settings_page(source, destination, request, frame, output);
     }
 
+    // CRT pages use complete snapshots. Equal source/destination pixel values
+    // can be overlapping text, so they cannot identify a stationary background.
     let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
     let extent = match request.settings_axis {
         SettingsPageTransitionAxis::Horizontal => buffers.width,
@@ -1530,156 +1514,6 @@ pub fn render_settings_page_transition_into(
     );
     stats.settings_blit_us = elapsed_us(blit_started);
     Ok(stats)
-}
-
-fn render_crt_segmented_settings_page(
-    source: &[Rgb565Pixel],
-    destination: &[Rgb565Pixel],
-    geometry: CrtSettingsGeometry,
-    request: NavigationTransitionRequest,
-    frame: NavigationTransitionFrame,
-    output: &mut [Rgb565Pixel],
-) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
-    let width = geometry.width();
-    let height = geometry.height();
-    if source.len() != width.saturating_mul(height)
-        || destination.len() != source.len()
-        || output.len() != source.len()
-    {
-        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
-    }
-
-    let started = Instant::now();
-    let mut stats = NavigationTransitionRenderStats::default();
-    let body_top = (geometry.header_bottom() + 1).min(height);
-    let body_bottom = geometry.footer_rule().max(body_top);
-    let timeline = segmented_settings_timeline(request, frame);
-
-    // Build the unmoving layer from pixels shared by both pages. The cog,
-    // rules and black field are identical and therefore stay pinned; changed
-    // glyphs and focus art are the only pixels admitted to the moving layers.
-    for (out, (&from, &to)) in output.iter_mut().zip(source.iter().zip(destination)) {
-        *out = if from == to { to } else { Rgb565Pixel(0) };
-    }
-    stats.copied_pixels = output.len() as u64;
-
-    copy_crossfaded_rect(
-        output,
-        source,
-        destination,
-        width,
-        height,
-        NavigationTransitionRect {
-            x: 0,
-            y: 0,
-            width: width as u16,
-            height: body_top as u16,
-        },
-        timeline.header_progress,
-        &mut stats,
-    );
-    copy_crossfaded_rect(
-        output,
-        source,
-        destination,
-        width,
-        height,
-        NavigationTransitionRect {
-            x: 0,
-            y: body_bottom as u16,
-            width: width as u16,
-            height: height.saturating_sub(body_bottom) as u16,
-        },
-        timeline.header_progress,
-        &mut stats,
-    );
-
-    let travel = 12isize
-        * geometry.axis_scale(request.settings_axis == SettingsPageTransitionAxis::Horizontal)
-            as isize;
-    let source_offset =
-        timeline.source_sign * travel * timeline.source_progress as isize / PROGRESS_MAX as isize;
-    copy_changed_pixels_at_offset(
-        output,
-        source,
-        destination,
-        width,
-        height,
-        body_top,
-        body_bottom,
-        source_offset,
-        request.settings_axis,
-        timeline.source_opacity,
-        &mut stats,
-    );
-
-    for_each_segmented_settings_band(
-        frame,
-        body_top,
-        body_bottom,
-        geometry.row_height(),
-        timeline.destination_sign,
-        travel,
-        |top, bottom, offset, progress| {
-            copy_changed_pixels_at_offset(
-                output,
-                destination,
-                source,
-                width,
-                height,
-                top,
-                bottom,
-                offset,
-                request.settings_axis,
-                progress,
-                &mut stats,
-            );
-        },
-    );
-    stats.settings_blit_us = elapsed_us(started);
-    Ok(stats)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn copy_changed_pixels_at_offset(
-    output: &mut [Rgb565Pixel],
-    moving: &[Rgb565Pixel],
-    other: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    top: usize,
-    bottom: usize,
-    offset: isize,
-    axis: SettingsPageTransitionAxis,
-    opacity_q16: u16,
-    stats: &mut NavigationTransitionRenderStats,
-) {
-    if opacity_q16 == 0 {
-        return;
-    }
-    let (offset_x, offset_y) = match axis {
-        SettingsPageTransitionAxis::Horizontal => (offset, 0),
-        SettingsPageTransitionAxis::Vertical => (0, offset),
-        SettingsPageTransitionAxis::VerticalReversed => (0, -offset),
-    };
-    for y in top..bottom {
-        for x in 0..width {
-            let source_index = y * width + x;
-            let pixel = moving[source_index];
-            if pixel == other[source_index] {
-                continue;
-            }
-            let target_x = x as isize + offset_x;
-            let target_y = y as isize + offset_y;
-            if !(0..width as isize).contains(&target_x) || !(0..height as isize).contains(&target_y)
-            {
-                continue;
-            }
-            let target = target_y as usize * width + target_x as usize;
-            output[target] = rgb565_mix(output[target], pixel, opacity_q16);
-            stats.copied_pixels = stats.copied_pixels.saturating_add(1);
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

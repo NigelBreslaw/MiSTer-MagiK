@@ -1893,6 +1893,71 @@ mod tests {
     }
 
     #[test]
+    fn crt_settings_animation_frames_do_not_depend_on_previous_output() {
+        use mister_magik_framebuffer_scenes::navigation::SettingsPageTransitionAxis;
+        let (width, height) = (640, 240);
+        let source = (0..width * height)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(13)))
+            .collect::<Vec<_>>();
+        let destination = (0..width * height)
+            .map(|i| Rgb565Pixel((i as u16).wrapping_mul(29)))
+            .collect::<Vec<_>>();
+        for direction in [
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionDirection::Reverse,
+        ] {
+            for route in [
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionRoute::AboutToLicenses,
+                NavigationTransitionRoute::LicensesToLicenseText,
+            ] {
+                for axis in [
+                    SettingsPageTransitionAxis::Horizontal,
+                    SettingsPageTransitionAxis::Vertical,
+                    SettingsPageTransitionAxis::VerticalReversed,
+                ] {
+                    let mut runtime = NavigationTransitionRuntime::new(width, height, true);
+                    let start = if route == NavigationTransitionRoute::HomeToSettings {
+                        TransitionStart::settings_cog(
+                            direction,
+                            width,
+                            height,
+                            &source,
+                            crate::launcher_presentation::settings_cog_artwork(),
+                            0,
+                        )
+                    } else {
+                        TransitionStart::settings_page_physical(
+                            route, direction, axis, width, height, &source, 0,
+                        )
+                    };
+                    runtime.begin(start).unwrap();
+                    runtime.capture_destination(&destination, 1).unwrap();
+                    let duration = runtime.request().unwrap().duration_us;
+                    for part in 0..=12 {
+                        runtime.tick(1 + duration * part / 12);
+                        let mut previous_a = vec![Rgb565Pixel(0xf81f); width * height];
+                        let mut previous_b = vec![Rgb565Pixel(0x07e0); width * height];
+                        runtime.render_into(&mut previous_a).unwrap();
+                        runtime.render_into(&mut previous_b).unwrap();
+                        assert_eq!(
+                            previous_a, previous_b,
+                            "{route:?} {direction:?} {axis:?} phase {part} retained pixels from an older frame"
+                        );
+                        if part == 0 {
+                            assert_eq!(previous_a, source);
+                        }
+                        if part == 12 {
+                            assert_eq!(previous_a, destination);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn settings_transition_waits_for_destination_before_animation() {
         let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];

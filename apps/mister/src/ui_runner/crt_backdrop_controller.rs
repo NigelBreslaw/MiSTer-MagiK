@@ -3,12 +3,11 @@
 
 //! Launcher-owned CRT backdrop preparation, caching, and frame composition.
 
-use crate::arcade_list_renderer::CrtArcadeLayout;
 use crate::crt_backdrop::{
     BackdropSource, CrtBackdropState, CrtBackdropWorkTrace, PreparedCrtBackdrop,
     prepare_dimmed_rgb565_target_for_output_with_maps,
 };
-use crate::ui_display::{CrtUiMetrics, UiDisplay, UiLayoutGeometry};
+use crate::ui_display::{UiDisplay, UiLayoutGeometry};
 use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::{HashSet, VecDeque};
@@ -134,8 +133,8 @@ pub(super) struct CrtBackdropFrame {
 }
 
 pub(super) struct CrtBackdropController {
+    pub(super) foreground: crate::crt_backdrop::CrtForeground,
     state: CrtBackdropState,
-    hub_mode: Option<(usize, Rgb565Pixel)>,
     worker: PrepareWorker,
     cache: VecDeque<PreparedEntry>,
     cache_bytes: usize,
@@ -153,8 +152,8 @@ pub(super) struct CrtBackdropController {
 impl CrtBackdropController {
     pub(super) fn for_display(display: &UiDisplay) -> Option<Self> {
         Some(Self {
+            foreground: Default::default(),
             state: CrtBackdropState::for_display(display)?,
-            hub_mode: None,
             worker: PrepareWorker::new(),
             cache: VecDeque::new(),
             cache_bytes: 0,
@@ -168,13 +167,6 @@ impl CrtBackdropController {
             was_eligible: false,
             active_layout: None,
         })
-    }
-
-    pub(super) fn set_hub_mode(&mut self, hub: Option<(usize, Rgb565Pixel)>) {
-        if self.hub_mode != hub {
-            self.hub_mode = hub;
-            self.was_eligible = false;
-        }
     }
 
     pub(super) fn width(&self) -> usize {
@@ -333,8 +325,6 @@ impl CrtBackdropController {
         now: Duration,
         destination: &mut [Rgb565Pixel],
         layout: UiLayoutGeometry,
-        arcade_layout: CrtArcadeLayout,
-        metrics: CrtUiMetrics,
     ) -> CrtBackdropFrame {
         if let Some(source) = source.as_ref() {
             self.active_epoch = source.epoch;
@@ -387,23 +377,8 @@ impl CrtBackdropController {
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
-            frame.trace = if let Some(highlight) = self.hub_mode {
-                self.state.compose_system_hub_into_layout(
-                    now,
-                    destination,
-                    layout,
-                    metrics,
-                    highlight,
-                )
-            } else {
-                self.state.compose_product_into_layout(
-                    now,
-                    destination,
-                    layout,
-                    arcade_layout,
-                    metrics,
-                )
-            };
+            frame.trace = self.state.compose_into(now, destination);
+            self.foreground.compose(destination);
             if prepared_changed {
                 frame.trace.prepare_us = self.pending_prepare_us;
                 frame.trace.prepare_pixels = self
@@ -440,10 +415,7 @@ fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crt_backdrop::{
-        CRT_BACKDROP_FADE_DURATION, CRT_PRODUCT_FOOTER_TEXT, CRT_PRODUCT_HEADER_TEXT,
-        product_chrome_rects,
-    };
+    use crate::crt_backdrop::CRT_BACKDROP_FADE_DURATION;
     use crate::ui_display::{ScreenOrientation, UiDisplayPlan, UiLayoutGeometry};
     use crate::visual_composition::{PreviewFrame, PreviewPixels};
 
@@ -569,8 +541,6 @@ mod tests {
             .expect("CRT240 display plan"),
         );
         let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
-        let metrics = CrtUiMetrics::for_display(&display);
-        let arcade_layout = CrtArcadeLayout::for_layout(layout, metrics, false);
         let mut controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
         let (request_tx, request_rx) = sync_channel(PREPARE_QUEUE_CAP);
         let (_result_tx, result_rx) = sync_channel(PREPARE_QUEUE_CAP);
@@ -620,8 +590,6 @@ mod tests {
             settled_at,
             &mut destination,
             layout,
-            arcade_layout,
-            metrics,
         );
 
         assert!(!frame.full_damage);
@@ -638,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn forced_compose_repaints_settled_backdrop_but_preserves_chrome() {
+    fn forced_compose_replaces_every_pixel_of_the_settled_backdrop() {
         let display = UiDisplay::for_plan(
             UiDisplayPlan::from_mister_ini_text(
                 "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
@@ -646,9 +614,7 @@ mod tests {
             .expect("CRT240 display plan"),
         );
         let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
-        let metrics = CrtUiMetrics::for_display(&display);
         let content = layout.content_rect();
-        let arcade_layout = CrtArcadeLayout::for_layout(layout, metrics, false);
         let mut controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
         let source = [Rgb565Pixel(0xffff); 4];
         controller.state.retarget(
@@ -671,12 +637,6 @@ mod tests {
 
         let sentinel = Rgb565Pixel(0xf81f);
         let mut destination = vec![sentinel; controller.width() * controller.height()];
-        let [header, footer] = product_chrome_rects(layout, metrics);
-        let header_text_index = header.1 * controller.width() + header.0;
-        let header_background_index = header_text_index + 1;
-        let footer_text_index = footer.1 * controller.width() + footer.0;
-        destination[header_text_index] = CRT_PRODUCT_HEADER_TEXT;
-        destination[footer_text_index] = CRT_PRODUCT_FOOTER_TEXT;
         let restored = controller.compose(
             true,
             true,
@@ -687,16 +647,12 @@ mod tests {
             settled_at,
             &mut destination,
             layout,
-            arcade_layout,
-            metrics,
         );
 
         let background_index = content.y * controller.width() + content.x;
         assert!(restored.full_damage);
         assert_ne!(destination[background_index], sentinel);
-        assert_eq!(destination[header_background_index], sentinel);
-        assert_eq!(destination[header_text_index], CRT_PRODUCT_HEADER_TEXT);
-        assert_eq!(destination[footer_text_index], CRT_PRODUCT_FOOTER_TEXT);
+        assert_eq!(destination, controller.state.pixels());
     }
 
     /// Orientation changes while a CRT backdrop stays open, as on the Arcade list.
@@ -729,12 +685,10 @@ mod tests {
             let display = UiDisplay::for_plan(
                 UiDisplayPlan::from_mister_ini_text(ini).expect("CRT display plan"),
             );
-            let metrics = CrtUiMetrics::for_display(&display);
             let mut controller =
                 CrtBackdropController::for_display(&display).expect("CRT backdrop");
             for (index, orientation) in walk.into_iter().enumerate() {
                 let layout = UiLayoutGeometry::for_display(&display, orientation);
-                let arcade_layout = CrtArcadeLayout::for_layout(layout, metrics, false);
                 let output = layout.output_layout();
                 let mut destination =
                     vec![Rgb565Pixel(0); output.physical_width() * output.physical_height()];
@@ -748,8 +702,6 @@ mod tests {
                     Duration::from_millis(index as u64 * 16),
                     &mut destination,
                     layout,
-                    arcade_layout,
-                    metrics,
                 );
                 // Every frame here changes orientation, so each must repaint the
                 // whole backdrop rather than keep the previous orientation's pixels.

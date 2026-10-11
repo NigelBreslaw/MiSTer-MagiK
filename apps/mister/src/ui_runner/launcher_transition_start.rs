@@ -41,10 +41,9 @@ pub struct TransitionSource<'a> {
 
 /// Begin the full-screen transition for `inputs.edge`. Returns whether it started.
 ///
-/// The reveal begins from the pixels the user is looking at: the card-home frame
-/// while it owns Home in a landscape raster, otherwise the composed cache.
-/// Portrait transitions run in the physical composition raster, which card-home
-/// does not draw, so they always begin from the composed cache.
+/// HDMI landscape card motion can bypass the cache, so capture its native
+/// frame. CRT and portrait sources use the completed physical frame, including
+/// all chrome, rather than asking the card producer for another scratch frame.
 pub(super) fn begin_navigation_transition(
     runtime: &mut NavigationTransitionRuntime,
     cards: Option<&mut LauncherCardHomeSession>,
@@ -61,6 +60,7 @@ pub(super) fn begin_navigation_transition(
     let pixels: &[Rgb565Pixel] = match cards {
         Some(cards)
             if !portrait
+                && !inputs.crt_layout
                 && card_home_owns_source(inputs.nav.screen, cards.owns_visible_frame()) =>
         {
             card_pixels_as_slint(cards.render())
@@ -177,6 +177,7 @@ pub(super) struct SettingsInputs<'a> {
     pub render_w: usize,
     pub render_h: usize,
     pub reduce_motion: bool,
+    pub crt_layout: bool,
     /// The composed cache: the visible frame whenever card-home is not.
     pub composed: &'a [Rgb565Pixel],
     pub now_us: u64,
@@ -197,6 +198,7 @@ pub(super) fn begin_settings_transition(
         render_w,
         render_h,
         reduce_motion,
+        crt_layout,
         composed,
         now_us,
     } = *inputs;
@@ -207,14 +209,13 @@ pub(super) fn begin_settings_transition(
         && !reduce_motion;
     let start = if zoom {
         let source = match (direction, settled_cards) {
-            // Card motion presents directly into scanout slots, so the generic
-            // cache may still contain a neighbour. Render the settled Settings
-            // card as the exact source.
-            (NavigationTransitionDirection::Forward, Some(cards)) => {
+            // HDMI card motion bypasses the cache. CRT already keeps the
+            // complete displayed frame, including chrome, in the cache.
+            (NavigationTransitionDirection::Forward, Some(cards)) if !crt_layout => {
                 card_pixels_as_slint(cards.render())
             }
-            // Reverse starts from the live Settings page. Home is rendered later
-            // and captured as the destination.
+            // Reverse starts from the live Settings page. Forward CRT starts
+            // from the complete Home frame already maintained in this cache.
             _ => composed,
         };
         TransitionStart::settings_cog(
@@ -614,6 +615,7 @@ mod tests {
             render_w: 960,
             render_h: 540,
             reduce_motion,
+            crt_layout: false,
             composed: &fixture.composed,
             now_us: 0,
         }
@@ -640,6 +642,74 @@ mod tests {
         ));
         assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
         assert!(runtime.render().unwrap() == visible);
+    }
+
+    #[test]
+    fn crt_transitions_capture_composed_chrome_instead_of_the_bare_cards() {
+        use crate::ui_display::UiDisplayPlan;
+        let display = UiDisplay::for_plan(
+            UiDisplayPlan::from_mister_ini_text(
+                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            )
+            .unwrap(),
+        );
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+        let metrics = CrtUiMetrics::for_display(&display);
+        let mut cards = active_cards(LauncherScene::crt(640, 240));
+        let mut composed = card_pixels_as_slint(cards.render()).to_vec();
+        // Completed chrome must survive source-carrier frames during capture,
+        // even when it differs from the card producer's current scratch frame.
+        composed[20 * 640 + 40] = Rgb565Pixel(0xef5a);
+        composed[220 * 640 + 40] = Rgb565Pixel(0xef5a);
+        let nav = home_nav();
+        for edge in [
+            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionEdge::HomeToConsoles,
+        ] {
+            let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
+            let inputs = TransitionInputs {
+                edge,
+                direction: NavigationTransitionDirection::Forward,
+                nav: &nav,
+                collection_id: None,
+                layout,
+                crt_layout: true,
+                crt_metrics: &metrics,
+                crt_backdrop: &[],
+                now_us: 0,
+            };
+            assert!(begin_navigation_transition(
+                &mut runtime,
+                Some(&mut cards),
+                &composed,
+                &inputs,
+                || None
+            ));
+            assert!(
+                runtime.render().unwrap() == composed,
+                "{edge:?} lost the composed CRT chrome"
+            );
+        }
+        let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
+        assert!(begin_settings_transition(
+            &mut runtime,
+            Some(&mut cards),
+            &SettingsInputs {
+                route: NavigationTransitionRoute::HomeToSettings,
+                direction: NavigationTransitionDirection::Forward,
+                orientation: ScreenOrientation::Normal,
+                render_w: 640,
+                render_h: 240,
+                reduce_motion: false,
+                crt_layout: true,
+                composed: &composed,
+                now_us: 0,
+            }
+        ));
+        assert!(
+            runtime.render().unwrap() == composed,
+            "Settings lost the composed CRT chrome"
+        );
     }
 
     #[test]
@@ -752,6 +822,7 @@ mod tests {
         let portrait = SettingsInputs {
             render_w: 240,
             render_h: 640,
+            crt_layout: true,
             composed: &composed,
             ..settings_inputs(&fixture, route, direction, false)
         };
