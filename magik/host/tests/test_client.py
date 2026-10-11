@@ -50,6 +50,22 @@ def test_authentication_error_is_not_retreated_as_bootstrap() -> None:
     thread.join()
 
 
+def test_orientation_allows_native_restoration_budget_without_replaying_mutation(
+    monkeypatch,
+):
+    calls = []
+
+    def unavailable(self, operation, fields, **kwargs):
+        calls.append((operation, fields, kwargs))
+        raise TimeoutError("orientation outcome unknown")
+
+    monkeypatch.setattr(NativeAgent, "_request", unavailable)
+    fields = {"orientation": "normal", "attended": True}
+    with pytest.raises(TimeoutError, match="outcome unknown"):
+        NativeAgent("127.0.0.1", "token").device_operation("orientation-set", fields)
+    assert calls == [("orientation-set", fields, {"attempts": 1, "timeout": 150})]
+
+
 def test_upload_timeout_is_not_automatically_retried(monkeypatch):
     attempts = []
 

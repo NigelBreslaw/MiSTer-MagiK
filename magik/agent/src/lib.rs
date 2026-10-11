@@ -16,6 +16,7 @@ mod main_control;
 mod managed_launcher;
 mod media;
 mod mode;
+mod orientation;
 mod publication;
 mod sd;
 mod service_boot;
@@ -185,6 +186,7 @@ impl Agent {
             "status",
             "device-identity-v1",
             "device-control-v1",
+            "orientation-control-v1",
             "application-install-inspect-v1",
             "application-install-inspect-v2",
             "crash-report-read-v1",

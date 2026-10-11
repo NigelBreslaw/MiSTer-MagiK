@@ -215,13 +215,16 @@ class NativeAgent:
         return response, body
 
     def device_operation(self, operation: str, fields=None, *, timeout=None):
+        # Orientation failure recovery can include two suspend/resume cycles,
+        # each with bounded Main command and readiness waits (120 seconds).
+        budgets = {"media-operation": 2550, "orientation-set": 150}
         response, body = self._request(
             operation,
             fields,
             attempts=1,
             timeout=timeout
             if timeout is not None
-            else (2550 if operation == "media-operation" else 90),
+            else budgets.get(operation, 90),
         )
         if response.operation == "error":
             raise AgentError.from_fields(response.fields)
