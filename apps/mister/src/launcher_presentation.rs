@@ -1390,7 +1390,10 @@ impl LauncherViewPresenters {
     }
 
     pub fn selection_feedback_stamp(&self) -> SelectionFeedbackStamp {
-        self.navigation.projected_selection_feedback.clone()
+        self.navigation
+            .published_selection_feedback
+            .borrow()
+            .clone()
     }
 
     pub fn confirm_selection_feedback(
@@ -1438,12 +1441,11 @@ impl LauncherViewPresenters {
             });
             self.navigation.selection_feedback_callback_installed = true;
         }
-        if *self.navigation.published_selection_feedback.borrow()
-            != self.navigation.projected_selection_feedback
-        {
-            *self.navigation.published_selection_feedback.borrow_mut() =
-                self.navigation.projected_selection_feedback.clone();
-            feedback.set_revision(self.navigation.projected_selection_feedback.revision as i32);
+        let stamp = self.navigation.selection_feedback.stamp();
+        if *self.navigation.published_selection_feedback.borrow() != stamp {
+            let revision = stamp.revision as i32;
+            *self.navigation.published_selection_feedback.borrow_mut() = stamp;
+            feedback.set_revision(revision);
         }
     }
 }

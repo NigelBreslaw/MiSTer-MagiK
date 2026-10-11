@@ -24,7 +24,13 @@ component LicenseRow inherits Rectangle {
             ? SettingsView.focus-highlight-portrait
             : SettingsView.focus-highlight-wide;
     }
-    Nocive15 { x: 12px; y: 7px; text: root.label.to-uppercase(); color: root.focused ? PageTheme.settings-accent : PageTheme.cream; }
+    Nocive15 {
+        x: 12px;
+        y: 7px;
+        text: root.label.to-uppercase();
+        color: root.focused ? PageTheme.settings-accent
+            : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.cream;
+    }
     Xerxes10 {
         x: root.width - 14px - self.preferred-width;
         y: 11px;
