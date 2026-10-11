@@ -456,7 +456,9 @@ pub fn discover_independent_system_ids(storage_root: &Path) -> Result<Vec<String
     Ok(discover_independent_system_ids_from_profiles(&profiles))
 }
 
-pub(crate) fn discover_independent_system_ids_from_profiles(profiles: &[LaunchProfile]) -> Vec<String> {
+pub(crate) fn discover_independent_system_ids_from_profiles(
+    profiles: &[LaunchProfile],
+) -> Vec<String> {
     let mut systems = profiles
         .iter()
         .map(|profile| profile.system_id.clone())

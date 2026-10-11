@@ -1735,7 +1735,8 @@ pub fn plan_fast_refresh_classified(
         None
     };
     let discovered_system_ids = discovered_profiles.as_ref().map(|profiles| {
-        let discovered = crate::fast_catalog_sources::discover_independent_system_ids_from_profiles(profiles);
+        let discovered =
+            crate::fast_catalog_sources::discover_independent_system_ids_from_profiles(profiles);
         systems.extend(discovered.iter().cloned());
         discovered.into_iter().collect::<BTreeSet<_>>()
     });
@@ -4323,9 +4324,16 @@ mod tests {
             fs::write(path, b"rom").unwrap();
         }
         build_fresh_catalog(&storage, &catalog).unwrap();
+        let system_count = crate::shard_registry::read_latest_manifest_lazy(
+            &catalog,
+            crate::shard_registry::production_registry_limits(),
+        )
+        .unwrap()
+        .systems
+        .len();
         let unchanged =
             execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
-        assert_eq!(unchanged.unchanged, 2);
+        assert_eq!(unchanged.unchanged, system_count);
         let stale_plan =
             plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
         let usb = fixture.join("media/usb0/games/SNES");
@@ -4369,7 +4377,7 @@ mod tests {
         );
         let unchanged =
             execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
-        assert_eq!(unchanged.unchanged, 2);
+        assert_eq!(unchanged.unchanged, system_count);
         fs::remove_dir_all(fixture.join("media/usb0")).unwrap();
         let detached =
             execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
@@ -4537,13 +4545,25 @@ mod tests {
             }
             let current =
                 crate::shard_registry::read_latest_manifest_lazy(&catalog, limits).unwrap();
+            let current_snes = current
+                .systems
+                .iter()
+                .find(|system| system.system_id.as_str() == "snes")
+                .unwrap();
             assert_eq!(
-                current.systems[0].active.games,
+                current_snes.active.games,
                 if mode == "metadata-only" { 1 } else { 3 }
             );
             assert!(current.generation > old.generation);
             if mode == "metadata-only" {
-                assert_eq!(current.systems[0].active, old.systems[0].active);
+                assert_eq!(
+                    current_snes.active,
+                    old.systems
+                        .iter()
+                        .find(|system| system.system_id.as_str() == "snes")
+                        .unwrap()
+                        .active
+                );
             }
             crate::catalog_acceptance::inspect_catalog(&catalog).unwrap();
             fs::remove_dir_all(fixture).unwrap();
@@ -4600,7 +4620,13 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                active.systems[0].active.games,
+                active
+                    .systems
+                    .iter()
+                    .find(|system| system.system_id.as_str() == "snes")
+                    .unwrap()
+                    .active
+                    .games,
                 if point == "before_catalog_commit" {
                     1
                 } else {
