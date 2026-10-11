@@ -15,8 +15,8 @@ use crate::launcher_home::CARD_COUNT;
 use crate::launcher_home::CardLevelSnapshot;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
 use mister_magik_framebuffer_scenes::launcher::{
-    CardSlot, LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherFrameRequest, LauncherScene,
-    LauncherTypography, LevelChange, PreparedLauncher,
+    CardSlot, LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LauncherConnectionState,
+    LauncherFrameRequest, LauncherScene, LauncherTypography, LevelChange, PreparedLauncher,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
     BrowseDirection, BrowseFrame, BrowsePhase, CardLevelTransition, SPRING_POSITION_UNITS,
@@ -209,6 +209,7 @@ pub(super) struct LauncherCardHomeSession {
     scene: LauncherScene,
     level: CardLevelSnapshot,
     clock: String,
+    connection_state: Option<LauncherConnectionState>,
     fonts: Arc<LauncherFonts>,
     prepared: VisiblePrepared,
     preparation: HomePreparation,
@@ -275,6 +276,7 @@ impl LauncherCardHomeSession {
             scene,
             level,
             clock: clock.to_owned(),
+            connection_state: None,
             fonts,
             prepared: VisiblePrepared(Some(Box::new(prepared))),
             preparation,
@@ -307,6 +309,21 @@ impl LauncherCardHomeSession {
             measure_preparation: std::env::var_os("MISTER_MAGIK2_STATE_ROOT").is_some(),
             preparation_measurement: None,
         })
+    }
+
+    pub(super) fn set_connection_state(&mut self, state: LauncherConnectionState) {
+        if self.connection_state != Some(state) {
+            self.connection_state = Some(state);
+            self.content_generation = self.content_generation.wrapping_add(1).max(1);
+            self.content_dirty = true;
+        }
+    }
+
+    fn draw_connection_status(&mut self) {
+        if let Some(state) = self.connection_state {
+            self.prepared
+                .render_connection_status(state, self.fonts.typography());
+        }
     }
 
     pub(super) fn set_inactive(&mut self) {
@@ -1045,6 +1062,7 @@ impl LauncherCardHomeSession {
             renderer.retain_bands(retain_bands);
         }
         if self.render_trick() {
+            self.draw_connection_status();
             self.last_rendered = None;
             self.content_dirty = true;
             self.compositor_stale = false;
@@ -1076,6 +1094,7 @@ impl LauncherCardHomeSession {
             }
             self.last_timing = None;
         }
+        self.draw_connection_status();
         self.content_dirty = false;
         self.compositor_stale = false;
         self.prepared.pixels()
@@ -1525,6 +1544,112 @@ impl Drop for LauncherCardHomeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_status_survives_browse_level_fades_and_disconnects_without_touching_clock_or_counts()
+    {
+        for (width, height, crt, sx, sy) in [
+            (960, 540, false, 1, 1),
+            (540, 960, false, 1, 1),
+            (320, 240, true, 1, 1),
+            (640, 240, true, 2, 1),
+            (640, 288, true, 2, 1),
+            (640, 480, true, 2, 2),
+            (240, 320, true, 1, 1),
+            (240, 640, true, 1, 2),
+            (480, 640, true, 2, 2),
+        ] {
+            let scene = if crt {
+                LauncherScene::crt(width, height)
+            } else {
+                LauncherScene::new(width, height)
+            };
+            let root = snapshot();
+            let mut session =
+                LauncherCardHomeSession::new(scene, root.clone(), 0, "07:28").unwrap();
+            session.update(scene, &root, 0, 0.0, "07:28", 0, true, None, None);
+            let untouched = session.render().to_vec();
+            let (clock, top, size, badge, gap) = if crt {
+                (
+                    width - (width * 6 / 100).max(8 * sx) - 30 * sx,
+                    (height * 5 / 100).max(6 * sy),
+                    12,
+                    24,
+                    6,
+                )
+            } else if width < height {
+                (
+                    width - width * 6 / 100 - 45,
+                    height * 5 / 100 + 4,
+                    15,
+                    32,
+                    8,
+                )
+            } else {
+                (875, 26, 15, 32, 8)
+            };
+            let left = clock - (2 * gap + badge + size) * sx;
+            let right = clock - gap * sx;
+            let status_pixels = |pixels: &[Rgb565Pixel]| -> Vec<Rgb565Pixel> {
+                (top..top + size * sy)
+                    .flat_map(|y| pixels[y * width + left..y * width + right].iter().copied())
+                    .collect()
+            };
+            session.set_connection_state(LauncherConnectionState {
+                internet: true,
+                usb: true,
+            });
+            assert!(session.needs_render());
+            let connected = session.render().to_vec();
+            assert_ne!(status_pixels(&connected), status_pixels(&untouched));
+            for (index, (actual, original)) in connected.iter().zip(&untouched).enumerate() {
+                let (x, y) = (index % width, index / width);
+                if x < left || x >= right || y < top || y >= top + size * sy {
+                    assert_eq!(
+                        actual, original,
+                        "status covered native content at {x},{y} on {width}x{height}"
+                    );
+                }
+            }
+            let expected = status_pixels(&connected);
+            for offset in [0.25, 0.5, 0.75, 1.0] {
+                session.update(scene, &root, 1, offset, "07:28", 100, true, None, None);
+                session.render_direct_bands();
+                assert_eq!(status_pixels(session.current_primary_pixels()), expected);
+            }
+            let target = consoles();
+            session.set_aside(
+                target.clone(),
+                Prepared::Built(Box::new(prepare(
+                    scene,
+                    &target,
+                    0,
+                    "07:28",
+                    &session.fonts,
+                ))),
+            );
+            assert!(session.begin_trick(target, 0, 1));
+            for elapsed in [0, 120, LEVEL_TRICK_EDGE_MILLIS, 700, LEVEL_TRICK_MILLIS] {
+                session.now_ms = 100 + u64::from(elapsed);
+                session.advance_trick();
+                assert_eq!(
+                    status_pixels(session.render()),
+                    expected,
+                    "status faded during level change on {width}x{height}"
+                );
+            }
+            session.set_connection_state(LauncherConnectionState::default());
+            let offline = status_pixels(session.render());
+            assert_ne!(offline, expected);
+            for row in offline.chunks_exact(right - left) {
+                assert!(
+                    row[..badge * sx].iter().all(|pixel| pixel.0 == 0),
+                    "removed USB retained pixels"
+                );
+            }
+            assert_eq!(status_pixels(session.render()), offline);
+        }
+    }
 
     #[test]
     fn warm_destination_starts_during_unrelated_work_and_refreshes_only_stale_chrome() {
@@ -2268,6 +2393,11 @@ mod tests {
         let scene = LauncherScene::new(540, 960);
         let level = snapshot();
         let mut session = LauncherCardHomeSession::new(scene, level.clone(), 0, "07:28").unwrap();
+        let status = LauncherConnectionState {
+            internet: true,
+            usb: true,
+        };
+        session.set_connection_state(status);
         let frame = BrowseFrame {
             selected: 0,
             target: 1,
@@ -2301,6 +2431,7 @@ mod tests {
             let output = Rgb565OutputLayout::new(540, 960, 960, rotation).unwrap();
             let mut serial = prepare(scene, &level, 0, "07:28", &session.fonts);
             serial.render_frame(frame);
+            serial.render_connection_status(status, session.fonts.typography());
             let mut expected = vec![Rgb565Pixel(0); output.len()];
             assert!(rotate_rect(
                 output,

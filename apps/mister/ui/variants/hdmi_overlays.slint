@@ -216,7 +216,7 @@ export component HeaderActivity inherits Rectangle {
     property <bool> both: root.media-progress-shown && root.background-scan-shown;
     // The title ends near x=152 in both orientations.
     property <length> title-clearance: 168px;
-    property <length> right-edge: root.portrait ? MisterUi.window-width * 1px - 104px : 857px;
+    property <length> right-edge: root.portrait ? (MisterUi.window-width - Math.floor(MisterUi.window-width * 6 / 100) - 116) * 1px : 804px;
     property <length> available: root.right-edge - root.title-clearance - (root.both ? 8px : 0px);
     property <length> media-width: !root.media-progress-shown ? 0px
         : !root.both ? Math.min(media.natural-width, root.available)

@@ -80,8 +80,15 @@ pub fn cleanup_registry_temporary_files(storage_root: &Path) -> Result<usize, Re
     Ok(removed)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublishedRefreshState {
+    pub path: PathBuf,
+    pub hash: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogManifest {
+    pub refresh_state: Option<PublishedRefreshState>,
     pub format: Option<CatalogFormatDescriptor>,
     pub generation: u64,
     pub systems: Vec<ManifestSystem>,
@@ -153,6 +160,8 @@ pub struct PublishedNavPack {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredManifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh_state: Option<PublishedRefreshState>,
     schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     format: Option<CatalogFormatDescriptor>,
@@ -683,6 +692,40 @@ fn publish_manifest_with_hash_policy(
         }
         _ => return Err(RegistryError::new("publish-manifest", "invalid slot state")),
     };
+    write_manifest_slot(storage_root, manifest, limits, target_relative)
+}
+
+/// Refresh metadata can advance without changing the catalog identity. Replace
+/// only the selected slot, after proving that all catalog contents are identical.
+#[cfg(feature = "builder")]
+pub(crate) fn replace_refresh_state(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+) -> Result<(), RegistryError> {
+    validate_manifest(storage_root, manifest, limits, false, false)?;
+    let (path, current) = read_manifest_slots(storage_root, limits, false)?
+        .into_iter()
+        .max_by_key(|(_, existing)| existing.generation)
+        .ok_or_else(|| RegistryError::new("refresh-state", "no committed catalog"))?;
+    let mut expected = current;
+    expected.refresh_state = manifest.refresh_state.clone();
+    if expected != *manifest {
+        return Err(RegistryError::new(
+            "refresh-state",
+            "catalog changed during metadata refresh",
+        ));
+    }
+    write_manifest_slot(storage_root, manifest, limits, path).map(|_| ())
+}
+
+#[cfg(feature = "builder")]
+fn write_manifest_slot(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+    target_relative: PathBuf,
+) -> Result<PathBuf, RegistryError> {
     let stored = to_stored(manifest);
     let bytes = serde_json::to_vec_pretty(&stored)
         .map_err(|error| RegistryError::with("encode manifest", error))?;
@@ -757,7 +800,7 @@ pub fn manifest_slots_present(storage_root: &Path) -> bool {
         .any(|relative| fs::symlink_metadata(storage_root.join(relative)).is_ok())
 }
 
-fn read_manifest_slots(
+pub(crate) fn read_manifest_slots(
     storage_root: &Path,
     limits: RegistryLimits,
     validate_artifacts: bool,
@@ -792,6 +835,17 @@ fn validate_manifest(
     validate_artifacts: bool,
     verify_hashes: bool,
 ) -> Result<(), RegistryError> {
+    if let Some(refresh) = &manifest.refresh_state
+        && (!safe_relative_path(&refresh.path)
+            || !refresh.path.starts_with("state")
+            || refresh.hash.len() != 64
+            || !refresh.hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "invalid refresh state reference",
+        ));
+    }
     if manifest.systems.len() > limits.max_systems {
         return Err(RegistryError::new(
             "validate-manifest",
@@ -1066,6 +1120,7 @@ fn validate_generation(
 #[cfg(feature = "builder")]
 fn to_stored(manifest: &CatalogManifest) -> StoredManifest {
     StoredManifest {
+        refresh_state: manifest.refresh_state.clone(),
         schema_version: MANIFEST_SCHEMA_VERSION,
         format: manifest.format.clone(),
         generation: manifest.generation,
@@ -1117,6 +1172,7 @@ fn from_stored(stored: StoredManifest) -> Result<CatalogManifest, RegistryError>
         ));
     }
     Ok(CatalogManifest {
+        refresh_state: stored.refresh_state,
         format: stored.format,
         generation: stored.generation,
         systems: stored
@@ -1667,6 +1723,7 @@ mod tests {
     #[test]
     fn stored_manifest_rejects_traversal_paths() {
         let stored = StoredManifest {
+            refresh_state: None,
             schema_version: MANIFEST_SCHEMA_VERSION,
             format: Some(CatalogFormatDescriptor::current()),
             generation: 1,
@@ -1753,6 +1810,7 @@ mod tests {
         previous: Option<PublishedGeneration>,
     ) -> CatalogManifest {
         CatalogManifest {
+            refresh_state: None,
             format: Some(CatalogFormatDescriptor::current()),
             generation,
             systems: vec![ManifestSystem {

@@ -373,9 +373,11 @@ fn append_zip_member_extensions(path: &Path, extensions: &mut BTreeSet<String>) 
 pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
     roots: &[String],
     excluded_names: &BTreeSet<String>,
+    cores: &[InstalledCore],
 ) -> Vec<GameDirHeader> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
+    let legacy_names = legacy_game_dir_names(roots, cores);
     for game_root in game_roots(roots) {
         let Ok(read_dir) = std::fs::read_dir(&game_root) else {
             continue;
@@ -386,26 +388,23 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if should_ignore_game_dir(name) {
+            if should_ignore_game_dir(name)
+                || (!path_name_eq(&game_root, "games")
+                    && !legacy_names.contains(&name.to_ascii_lowercase()))
+            {
                 continue;
             }
             if entry
                 .file_type()
                 .ok()
-                .is_some_and(|file_type| file_type.is_symlink())
+                .is_some_and(|kind| !kind.is_dir() && !(kind.is_symlink() && path.is_dir()))
             {
                 continue;
             }
-            // `/games` is a directory namespace: every visible top-level
-            // entry names a system directory. Treat that layout as the source
-            // contract instead of issuing one synchronous exFAT metadata call
-            // per system (and per hidden AppleDouble sidecar) merely to prove
-            // the entry type. A non-directory header simply yields no facts
-            // when its bounded target scan runs.
             if excluded_names.contains(&name.to_ascii_lowercase()) {
                 continue;
             }
-            let key = path.display().to_string().to_ascii_lowercase();
+            let key = game_header_key(roots, name, &path);
             if seen.insert(key) {
                 entries.push(GameDirHeader {
                     name: name.to_string(),
@@ -425,9 +424,11 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
 pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
     roots: &[String],
     excluded_names: &BTreeSet<String>,
+    cores: &[InstalledCore],
 ) -> Result<Vec<GameDirHeader>, String> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
+    let legacy_names = legacy_game_dir_names(roots, cores);
     for game_root in game_roots(roots) {
         let root_started = Instant::now();
         let mut entries_examined = 0_u64;
@@ -442,7 +443,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             );
             continue;
         };
-        let mut candidates = Vec::new();
+        let mut entries = Vec::new();
         for entry in read_dir {
             entries_examined = entries_examined.saturating_add(1);
             let path = entry.path();
@@ -450,7 +451,10 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             };
-            if should_ignore_game_dir(name) {
+            if should_ignore_game_dir(name)
+                || (!path_name_eq(&game_root, "games")
+                    && !legacy_names.contains(&name.to_ascii_lowercase()))
+            {
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
@@ -461,7 +465,16 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             file_type_us =
                 file_type_us.saturating_add(file_type_started.elapsed().as_micros() as u64);
             file_type_count = file_type_count.saturating_add(1);
-            if file_type.is_symlink() {
+            let is_directory = if file_type.is_symlink() {
+                match std::fs::metadata(&path) {
+                    Ok(metadata) => metadata.is_dir(),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(format!("inspect {}: {error}", path.display())),
+                }
+            } else {
+                file_type.is_dir()
+            };
+            if !is_directory {
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
@@ -469,34 +482,19 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
                 rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
-            let key = path.display().to_string().to_ascii_lowercase();
+            let key = game_header_key(roots, name, &path);
             if seen.insert(key) {
-                let readdir_kind = if file_type.is_dir() {
-                    Some(true)
-                } else if file_type.is_file() {
-                    Some(false)
-                } else {
-                    None
-                };
-                candidates.push((name.to_string(), path, readdir_kind));
+                entries.push(GameDirHeader {
+                    name: name.to_string(),
+                    signature: GameDirSignature::Unavailable,
+                    path,
+                    confirmed_directory: true,
+                });
             } else {
                 rejected_entries = rejected_entries.saturating_add(1);
             }
         }
-        let candidate_count = candidates.len();
-        let mut entries = Vec::new();
-        for (name, path, readdir_kind) in candidates {
-            if checked_header_entry_is_rejected(readdir_kind) {
-                rejected_entries = rejected_entries.saturating_add(1);
-                continue;
-            }
-            entries.push(GameDirHeader {
-                name,
-                signature: GameDirSignature::Unavailable,
-                path,
-                confirmed_directory: readdir_kind == Some(true),
-            });
-        }
+        let candidate_count = entries.len();
         entries.sort_by_key(|entry| entry.name.to_ascii_lowercase());
         crate::catalog_logln!(
             "catalog_game_header_probe_tsv\troot={}\tentries={}\tcandidates={}\taccepted={}\trejected={}\tfile_type_count={}\tfile_type_us={}\tmetadata_probe_count={}\tmetadata_probe_us={}\telapsed_us={}",
@@ -514,11 +512,6 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
         out.extend(entries);
     }
     Ok(out)
-}
-
-#[cfg(feature = "builder")]
-fn checked_header_entry_is_rejected(is_dir: Option<bool>) -> bool {
-    matches!(is_dir, Some(false))
 }
 
 pub(crate) fn game_dir_payload_facts_for_header(header: GameDirHeader) -> GameDirFact {
@@ -569,17 +562,47 @@ pub(crate) fn game_roots(roots: &[String]) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
     for root in roots {
         let path = Path::new(root);
-        let games = if path_name_eq(path, "games") {
-            path.to_path_buf()
-        } else {
-            path.join("games")
-        };
-        let key = games.display().to_string().to_ascii_lowercase();
-        if seen.insert(key) {
-            out.push(games);
+        for games in crate::game_paths::search_roots(path) {
+            let key = games.display().to_string().to_ascii_lowercase();
+            if seen.insert(key) {
+                out.push(games);
+            }
         }
     }
     out
+}
+
+fn game_header_key(roots: &[String], name: &str, path: &Path) -> (String, String) {
+    for root in roots {
+        let root = Path::new(root);
+        if path_name_eq(root, "fat")
+            && crate::game_paths::search_roots(root)
+                .iter()
+                .any(|games| Some(games.as_path()) == path.parent())
+        {
+            return (
+                root.to_string_lossy().to_ascii_lowercase(),
+                name.to_ascii_lowercase(),
+            );
+        }
+    }
+    (path.to_string_lossy().to_ascii_lowercase(), String::new())
+}
+
+fn legacy_game_dir_names(roots: &[String], cores: &[InstalledCore]) -> BTreeSet<String> {
+    if !roots.iter().any(|root| {
+        Path::new(root)
+            .file_name()
+            .is_some_and(|name| name == "fat")
+    }) {
+        return BTreeSet::new();
+    }
+    launch_profiles::builtin_profiles()
+        .into_iter()
+        .flat_map(|profile| profile.game_dirs)
+        .chain(cores.iter().map(|core| core.core_id.clone()))
+        .map(|name| name.to_ascii_lowercase())
+        .collect()
 }
 
 pub(crate) fn core_search_roots(roots: &[String]) -> Vec<PathBuf> {
@@ -884,6 +907,7 @@ mod tests {
         let dirs = top_level_game_dir_headers_for_roots_excluding(
             &[root.display().to_string()],
             &BTreeSet::new(),
+            &[],
         )
         .into_iter()
         .map(game_dir_payload_facts_for_header)
@@ -912,7 +936,7 @@ mod tests {
         std::fs::create_dir_all(root.join("games/NES")).expect("create NES dir");
         let roots = vec![root.display().to_string()];
 
-        let cold = top_level_game_dir_headers_for_roots_excluding(&roots, &BTreeSet::new());
+        let cold = top_level_game_dir_headers_for_roots_excluding(&roots, &BTreeSet::new(), &[]);
 
         assert_eq!(cold.len(), 1);
         assert_eq!(cold[0].signature, GameDirSignature::Unavailable);
@@ -932,7 +956,7 @@ mod tests {
 
         let roots = vec![root.display().to_string()];
         let headers =
-            top_level_game_dir_headers_for_roots_excluding_checked(&roots, &BTreeSet::new())
+            top_level_game_dir_headers_for_roots_excluding_checked(&roots, &BTreeSet::new(), &[])
                 .expect("checked headers");
 
         let nes = headers
@@ -947,27 +971,49 @@ mod tests {
                 .any(|header| header.name == "not-a-directory")
         );
         #[cfg(unix)]
-        assert!(!headers.iter().any(|header| header.name == "NES-link"));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header.name == "NES-link" && header.confirmed_directory)
+        );
 
         let plan =
             crate::launch_profiles::CatalogScanPlan::try_for_roots(&roots).expect("checked plan");
-        assert!(plan.header_for_known_game_dir(&root, "NES").is_some());
-        assert!(plan.header_for_known_game_dir(&root, "nes").is_none());
+        assert!(plan.header_for_known_game_dir("NES").is_some());
+        assert!(plan.header_for_known_game_dir("nes").is_none());
 
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[cfg(feature = "builder")]
     #[test]
-    fn checked_game_dir_header_rejections_include_confirmed_non_directories_only() {
-        assert!(!checked_header_entry_is_rejected(Some(true)));
-        assert!(checked_header_entry_is_rejected(Some(false)));
-        assert!(!checked_header_entry_is_rejected(None));
+    fn separate_library_roots_keep_same_named_system_folders() {
+        let fixture = unique_temp_dir("separate-library-roots");
+        let first = fixture.join("one/media/fat");
+        let second = fixture.join("two/media/fat");
+        for root in [&first, &second] {
+            std::fs::create_dir_all(root.join("games/SNES")).unwrap();
+        }
+        let roots = [
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        ];
+        let headers = top_level_game_dir_headers_for_roots_excluding(&roots, &BTreeSet::new(), &[]);
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0].path, first.join("games/SNES"));
+        assert_eq!(headers[1].path, second.join("games/SNES"));
+        #[cfg(feature = "builder")]
+        assert_eq!(
+            top_level_game_dir_headers_for_roots_excluding_checked(&roots, &BTreeSet::new(), &[])
+                .unwrap()
+                .len(),
+            2
+        );
+        std::fs::remove_dir_all(fixture).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
-    fn top_level_game_dirs_do_not_follow_symlinks() {
+    fn top_level_game_dirs_follow_directory_symlinks() {
         let root = unique_temp_dir("discovery-game-dir-symlink");
         let outside = unique_temp_dir("discovery-game-dir-symlink-target");
         let games = root.join("games");
@@ -979,9 +1025,11 @@ mod tests {
         let dirs = top_level_game_dir_headers_for_roots_excluding(
             &[root.display().to_string()],
             &BTreeSet::new(),
+            &[],
         );
 
-        assert!(dirs.is_empty());
+        assert_eq!(dirs.len(), 1);
+        assert!(game_dir_payload_facts_for_header(dirs[0].clone()).has_payload_files);
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(outside);
     }

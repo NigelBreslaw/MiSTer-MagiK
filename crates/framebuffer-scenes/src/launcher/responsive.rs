@@ -4,6 +4,8 @@
 //! Native-raster launcher layouts. Only artwork is filtered; bitmap labels are
 //! baked at the selected card's exact output dimensions, never screen-scaled.
 use super::*;
+#[path = "connection_status.rs"]
+pub(super) mod connection_status;
 use crate::bitmap_text::BitmapGlyph;
 use std::borrow::Cow;
 
@@ -177,6 +179,13 @@ impl Layout {
         )
     }
 
+    fn clock_origin(&self, clock: &str, heading: &BitmapFont) -> (usize, usize) {
+        (
+            self.width - self.margin_x - heading.measure(clock),
+            self.margin_y,
+        )
+    }
+
     pub fn chrome(&self, pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, fonts: &Fonts<'_>) {
         pixels.fill(Rgb565Pixel(BACKGROUND));
         let heading = fonts.get(TextRole::Heading);
@@ -224,8 +233,8 @@ impl Layout {
         draw(
             pixels,
             heading,
-            right.saturating_sub(heading.measure(data.clock)),
-            self.margin_y,
+            self.clock_origin(data.clock, heading).0,
+            self.clock_origin(data.clock, heading).1,
             data.clock,
             CREAM,
         );

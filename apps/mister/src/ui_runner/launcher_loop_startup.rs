@@ -573,7 +573,10 @@ pub(super) fn build_domains(
         nav.selected,
         &last_clock_text,
     ) {
-        Ok(session) => Some(session),
+        Ok(mut session) => {
+            session.set_connection_state(Default::default());
+            Some(session)
+        }
         Err(error) => {
             crate::ui_errln!("launcher card home initialization failed: {error}");
             None
@@ -593,6 +596,7 @@ pub(super) fn build_domains(
     let menu_item_presentation = bridge_models.menu_item_presentation();
     navigation.set_menu_item_presentation(menu_item_presentation);
     navigation.set_menu_items(menu_items);
+    let connection_status = ConnectionStatus::start();
     let update_check =
         UpdateCheck::start(should_check_for_updates(navigation.get_development_build()));
     print_startup_event(
@@ -898,6 +902,7 @@ pub(super) fn build_domains(
             card_level,
             card_prefetch_key,
             update_check,
+            connection_status,
             memory_guard,
             catalog_contention_quiet_previews,
             catalog_idle_candidate_since,

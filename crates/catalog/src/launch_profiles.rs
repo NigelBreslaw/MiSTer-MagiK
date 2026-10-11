@@ -477,6 +477,7 @@ impl CatalogScanPlan {
             catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
                 roots,
                 &BTreeSet::new(),
+                &installed_cores,
             );
         let game_headers_us = game_headers_started.elapsed().as_micros() as u64;
         crate::library_db::report_library_scan_timing(
@@ -526,6 +527,7 @@ impl CatalogScanPlan {
             catalog_discovery::top_level_game_dir_headers_for_roots_excluding_checked(
                 roots,
                 &BTreeSet::new(),
+                &installed_cores,
             )?;
         let game_headers_us = game_headers_started.elapsed().as_micros() as u64;
         crate::library_db::report_library_scan_timing(
@@ -578,13 +580,11 @@ impl CatalogScanPlan {
     #[cfg(feature = "builder")]
     pub(crate) fn header_for_known_game_dir(
         &self,
-        storage_root: &Path,
         game_dir: &str,
     ) -> Option<&catalog_discovery::GameDirHeader> {
-        let expected = storage_root.join("games").join(game_dir);
         self.all_game_dir_headers
             .iter()
-            .find(|header| header.confirmed_directory && header.path == expected)
+            .find(|header| header.confirmed_directory && header.name == game_dir)
     }
 
     pub(crate) fn base_profiles(&self) -> &[LaunchProfile] {
@@ -832,11 +832,14 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
 #[cfg(test)]
 fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimeProfilePlan> {
     let cores = catalog_discovery::installed_cores_for_roots(roots);
-    let game_dirs =
-        catalog_discovery::top_level_game_dir_headers_for_roots_excluding(roots, &BTreeSet::new())
-            .into_iter()
-            .map(catalog_discovery::game_dir_payload_facts_for_header)
-            .collect::<Vec<_>>();
+    let game_dirs = catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
+        roots,
+        &BTreeSet::new(),
+        &cores,
+    )
+    .into_iter()
+    .map(catalog_discovery::game_dir_payload_facts_for_header)
+    .collect::<Vec<_>>();
     runtime_profile_plans_for_game_dirs_with_cores(&game_dirs, &cores, &BTreeSet::new())
 }
 

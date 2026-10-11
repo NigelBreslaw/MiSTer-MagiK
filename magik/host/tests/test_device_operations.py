@@ -31,6 +31,7 @@ def parser():
         "display status",
         "display set crt-240p60 --attended",
         "catalog inspect",
+        "catalog rebuild --layout dev",
         "catalog cores",
         "catalog metadata-qualification",
         "catalog neogeo-family-audit",
@@ -227,4 +228,26 @@ def test_reboot_timeout_uses_only_native_discovery_and_never_replays(
     assert (
         json.loads((tmp_path / "reboot.json").read_text())["discovery_error"]
         == "offline"
+    )
+
+
+def test_catalog_rebuild_requires_capability_and_runs_once(monkeypatch, tmp_path):
+    agent = Mock()
+    agent._request.return_value = (
+        SimpleNamespace(operation="catalog-result", fields={"exit_code": 0}),
+        b"request_library_rebuild\tdone\n",
+    )
+    connect = Mock(return_value=(agent, None))
+    monkeypatch.setattr("magik.cli.connect_agent", connect)
+    device.run_catalog(
+        parser().parse_args("catalog rebuild --layout dev".split()), tmp_path
+    )
+    connect.assert_called_once_with(
+        tmp_path, {"catalog-operations-v1", "catalog-rebuild-v1"}
+    )
+    agent._request.assert_called_once_with(
+        "catalog-operation",
+        {"action": "rebuild", "layout": "dev"},
+        attempts=1,
+        timeout=130,
     )

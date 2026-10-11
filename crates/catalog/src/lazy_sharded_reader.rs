@@ -368,6 +368,7 @@ mod tests {
         publish_manifest(
             &root,
             &CatalogManifest {
+                refresh_state: None,
                 format: Some(crate::catalog_format::CatalogFormatDescriptor::current()),
                 generation: 2,
                 systems,
@@ -430,6 +431,7 @@ mod tests {
         publish_manifest(
             root,
             &CatalogManifest {
+                refresh_state: None,
                 format: Some(crate::catalog_format::CatalogFormatDescriptor::current()),
                 generation: 1,
                 systems,

@@ -45,8 +45,9 @@ pub fn inspect_catalog(storage: &Path) -> Result<String, String> {
     let limits = crate::shard_registry::production_registry_limits();
     let manifest = crate::shard_registry::read_latest_manifest(storage, limits)
         .map_err(|error| format!("validate catalog manifest: {error}"))?;
-    let fingerprint = crate::fast_five_catalog::registry_fingerprint(storage, limits)?;
-    let refresh = crate::fast_catalog_refresh::read_latest_refresh_manifest(storage)?;
+    let fingerprint = crate::fast_five_catalog::registry_fingerprint_for_manifest(&manifest);
+    let refresh =
+        crate::fast_catalog_refresh::read_refresh_manifest_for_catalog(storage, &manifest)?;
     if refresh.catalog_generation != manifest.generation
         || refresh.catalog_fingerprint != fingerprint
     {

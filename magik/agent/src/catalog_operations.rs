@@ -23,6 +23,9 @@ fn arguments(request: &Envelope) -> Result<(PathBuf, Vec<String>), String> {
         "neogeo-family-audit" => "catalog-neogeo-family-audit",
         "screenshots" => "catalog-screenshot-audit",
         "preview-render" => "preview-render-probe",
+        "rebuild" if fields.get("layout").and_then(|v| v.as_str()) == Some("dev") => {
+            "request-library-rebuild"
+        }
         "purge"
             if fields.get("layout").and_then(|v| v.as_str()) == Some("dev")
                 && fields.get("confirm").and_then(|v| v.as_bool()) == Some(true) =>
@@ -160,9 +163,16 @@ impl Agent {
                 );
             }
         };
-        let purge = request.fields.get("action").and_then(|v| v.as_str()) == Some("purge");
+        let action = request
+            .fields
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let purge = action == "purge";
+        let rebuild = action == "rebuild";
+        let suspend = purge || rebuild;
         let _mutation = self.mutations.lock().expect("mutation state poisoned");
-        if purge {
+        if suspend {
             self.stop_owned_process().map_err(FrameError::Io)?;
             if let Err(error) = crate::main_control::handoff("mister_magik_suspend\n") {
                 let restored = crate::main_control::handoff("mister_magik_resume\n");
@@ -171,7 +181,7 @@ impl Agent {
                     &response(
                         &request.id,
                         "error",
-                        json!({"code":"purge-suspend-failed","detail":format!("{error}; Main restoration: {restored:?}")}),
+                        json!({"code":format!("{action}-suspend-failed"),"detail":format!("{error}; Main restoration: {restored:?}")}),
                     ),
                     &[],
                 );
@@ -191,15 +201,22 @@ impl Agent {
             },
             16 * 1024 * 1024,
         );
-        let restoration = if purge {
+        let restoration = if suspend {
             crate::main_control::handoff("mister_magik_resume\n").err()
         } else {
             None
         };
-        let marker_error = (purge
-            && output.code == Some(0)
-            && !String::from_utf8_lossy(&output.stdout).contains("purge_library_data\tdone\t"))
-        .then(|| "purge completion marker absent".to_owned());
+        let completion_marker = if purge {
+            Some("purge_library_data\tdone\t")
+        } else if rebuild {
+            Some("request_library_rebuild\tdone")
+        } else {
+            None
+        };
+        let marker_error = (output.code == Some(0)
+            && completion_marker
+                .is_some_and(|marker| !String::from_utf8_lossy(&output.stdout).contains(marker)))
+        .then(|| format!("{action} completion marker absent"));
         let error = output.error.or(restoration).or(marker_error);
         let header = response(
             &request.id,
@@ -446,7 +463,20 @@ mod tests {
         let (path, args) = arguments(&request).unwrap();
         assert_eq!(path, PathBuf::from(crate::app_install::APP));
         assert_eq!(args, vec!["catalog-inspect"]);
+        let rebuild = Envelope {
+            fields: json!({"layout":"dev","action":"rebuild"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            ..request.clone()
+        };
+        assert_eq!(
+            arguments(&rebuild).unwrap().1,
+            vec!["request-library-rebuild"]
+        );
         for fields in [
+            json!({"layout":"public","action":"rebuild"}),
+            json!({"layout":"dev","action":"rebuild","command":"shell"}),
             json!({"layout":"../","action":"inspect"}),
             json!({"layout":"dev","action":"shell"}),
             json!({"layout":"dev","action":"screenshots","system":"../x"}),

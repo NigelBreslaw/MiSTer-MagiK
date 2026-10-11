@@ -41,6 +41,7 @@ def add_commands(commands):
     )
     for name in (
         "inspect",
+        "rebuild",
         "metadata-qualification",
         "neogeo-family-audit",
         "screenshots",
@@ -197,7 +198,10 @@ def run_catalog(arguments, run):
         value = getattr(arguments, name, None)
         if value is not None:
             fields[name] = value
-    agent, _ = connect_agent(run, {"catalog-operations-v1"})
+    required = {"catalog-operations-v1"}
+    if arguments.action == "rebuild":
+        required.add("catalog-rebuild-v1")
+    agent, _ = connect_agent(run, required)
     response, body = agent._request(
         "catalog-operation", fields, attempts=1, timeout=130
     )

@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 17;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 18;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 const MAX_DISCOVERY_ENTRIES: usize = 4_000_000;
 const MAX_DISCOVERY_DEPTH: usize = 256;
@@ -456,7 +456,9 @@ pub fn discover_independent_system_ids(storage_root: &Path) -> Result<Vec<String
     Ok(discover_independent_system_ids_from_profiles(&profiles))
 }
 
-fn discover_independent_system_ids_from_profiles(profiles: &[LaunchProfile]) -> Vec<String> {
+pub(crate) fn discover_independent_system_ids_from_profiles(
+    profiles: &[LaunchProfile],
+) -> Vec<String> {
     let mut systems = profiles
         .iter()
         .map(|profile| profile.system_id.clone())
@@ -1056,7 +1058,7 @@ fn arcade_rom_inventory(
     let mut inventory = BTreeSet::new();
     for (namespace, directory) in [("mame", "mame"), ("hbmame", "hbmame")] {
         for root in [
-            storage_root.join("games").join(directory),
+            crate::game_paths::game_dir(storage_root, directory),
             storage_root.join("_Arcade").join(directory),
         ] {
             let Some(entries) = read_dir_entries_checked(&root)? else {
@@ -1117,7 +1119,7 @@ fn scan_amiga(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
 ) -> Result<Vec<SystemGame>, String> {
-    let amiga = storage_root.join("games/Amiga");
+    let amiga = crate::game_paths::game_dir(storage_root, "Amiga");
     let mut metadata_files = Vec::new();
     collect_matching_files(
         &amiga,
@@ -1314,7 +1316,7 @@ fn scan_oneload64_with_observations(
     report: &mut FastSourceSystemReport,
     capture_watch: bool,
 ) -> Result<(Vec<SystemGame>, Option<GenericSourceWatchObservations>), String> {
-    let base = storage_root.join("games/C64");
+    let base = crate::game_paths::game_dir(storage_root, "C64");
     let inventory = inventory_prepared_extension_under_named_roots(&base, "oneload64", "crt")?;
     report.files_visited = report.files_visited.saturating_add(inventory.files_visited);
     let watch = capture_watch.then_some(inventory.watch);

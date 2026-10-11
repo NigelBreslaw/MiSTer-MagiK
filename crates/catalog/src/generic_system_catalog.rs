@@ -16,7 +16,7 @@ use crate::launch_profiles::{
     PayloadDisposition, PayloadRule, ProfileSet,
 };
 use crate::namespace_walk::{
-    self, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
+    self, NamespaceEntryKind, NamespaceRootPolicy, NamespaceSignatureCapture, NamespaceWalkStats,
 };
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
@@ -150,9 +150,10 @@ pub(crate) fn inventory_prepared_extension_under_named_roots(
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.to_ascii_lowercase().contains(&marker)))
     };
-    let namespace = namespace_walk::visit_with_signature_capture(
+    let namespace = namespace_walk::visit_with_root_policy_and_signature_capture(
         root,
         None,
+        NamespaceRootPolicy::FollowSymlink,
         NamespaceSignatureCapture::AllDirectories,
         ignore,
         |entry| {
@@ -429,25 +430,24 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         for game_dir in &profile.game_dirs {
             known_roots_considered = known_roots_considered.saturating_add(1);
             let known_started = Instant::now();
-            let candidate = storage_root.join("games").join(game_dir);
-            let header =
-                if let Some(header) = plan.header_for_known_game_dir(storage_root, game_dir) {
-                    reused_headers = reused_headers.saturating_add(1);
-                    header.clone()
-                } else {
-                    fallback_metadata_calls = fallback_metadata_calls.saturating_add(1);
-                    if !candidate.is_dir() {
-                        known_profile_us = known_profile_us
-                            .saturating_add(known_started.elapsed().as_micros() as u64);
-                        continue;
-                    }
-                    GameDirHeader {
-                        name: game_dir.clone(),
-                        signature: GameDirSignature::from_path(&candidate),
-                        path: candidate,
-                        confirmed_directory: false,
-                    }
-                };
+            let header = if let Some(header) = plan.header_for_known_game_dir(game_dir) {
+                reused_headers = reused_headers.saturating_add(1);
+                header.clone()
+            } else {
+                fallback_metadata_calls = fallback_metadata_calls.saturating_add(1);
+                let candidate = crate::game_paths::game_dir(storage_root, game_dir);
+                if !candidate.is_dir() {
+                    known_profile_us =
+                        known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
+                    continue;
+                }
+                GameDirHeader {
+                    name: game_dir.clone(),
+                    signature: GameDirSignature::from_path(&candidate),
+                    path: candidate,
+                    confirmed_directory: false,
+                }
+            };
             known_roots_found = known_roots_found.saturating_add(1);
             let root_key = header.path.to_string_lossy().to_ascii_lowercase();
             if !visited_roots.insert(root_key) {
@@ -761,9 +761,10 @@ fn collect_generic_namespace_inventory(
     let mut watch_complete = true;
     let mut walked_entries = 0usize;
     let namespace_started = Instant::now();
-    let namespace = namespace_walk::visit_with_signature_capture(
+    let namespace = namespace_walk::visit_with_root_policy_and_signature_capture(
         &header.path,
         max_depth,
+        NamespaceRootPolicy::FollowSymlink,
         NamespaceSignatureCapture::AllDirectories,
         should_ignore_path,
         |entry| {
@@ -1075,7 +1076,7 @@ fn rebuild_generic_system_from_profiles_with_observations(
     let mut visited_roots = BTreeSet::new();
     for profile in profiles {
         for game_dir in &profile.game_dirs {
-            let candidate = storage_root.join("games").join(game_dir);
+            let candidate = crate::game_paths::game_dir(storage_root, game_dir);
             if !candidate.is_dir() {
                 continue;
             }
@@ -1147,9 +1148,10 @@ fn scan_namespace_borrowed(
     } else {
         NamespaceSignatureCapture::None
     };
-    let namespace = namespace_walk::visit_with_signature_capture(
+    let namespace = namespace_walk::visit_with_root_policy_and_signature_capture(
         root,
         None,
+        NamespaceRootPolicy::FollowSymlink,
         signatures,
         should_ignore_path,
         |entry| {
@@ -1758,5 +1760,84 @@ mod incremental_observation_tests {
         entry.path = root.join("manuals");
         capture.record(&entry);
         assert!(!capture.complete);
+    }
+
+    #[test]
+    fn usb_discovery_uses_selected_roots_with_sd_cores_and_absolute_launch_paths() {
+        let fixture = crate::test_support::unique_temp_dir("usb-generic-discovery")
+            .canonicalize()
+            .unwrap();
+        let storage = fixture.join("media/fat");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        for core in ["Gameboy", "GBA", "SMS", "SNES", "NES"] {
+            fs::write(storage.join(format!("_Console/{core}.rbf")), b"core").unwrap();
+        }
+        for (path, bytes) in [
+            ("usb0/games/Gameboy/Tetris.gb", b"rom".as_slice()),
+            ("usb0/games/GBA/Advance Wars.gba", b"rom".as_slice()),
+            ("usb0/games/GBA/boot.rom", b"bios".as_slice()),
+            ("usb0/games/SMS/Sonic.sms", b"rom".as_slice()),
+            ("usb0/games/SNES/USB.sfc", b"rom".as_slice()),
+            ("usb0/games/SNES/._Hidden.sfc", b"metadata".as_slice()),
+            ("usb1/games/SNES/Masked.sfc", b"rom".as_slice()),
+            ("fat/games/SNES/Masked.sfc", b"rom".as_slice()),
+            ("fat/games/NES/SD.nes", b"rom".as_slice()),
+        ] {
+            let path = fixture.join("media").join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let (systems, _) = discover_generic_systems(&storage).unwrap();
+        assert_eq!(
+            systems
+                .iter()
+                .map(|system| system.games.len())
+                .sum::<usize>(),
+            5
+        );
+        let rows = systems
+            .iter()
+            .flat_map(|system| &system.games)
+            .collect::<Vec<_>>();
+        assert!(
+            !rows
+                .iter()
+                .any(|game| game.launch_ref.contains("Masked")
+                    || game.launch_ref.contains("boot.rom"))
+        );
+        for (system_id, expected_path) in [
+            ("gameboy", "usb0/games/Gameboy/Tetris.gb"),
+            ("gba", "usb0/games/GBA/Advance Wars.gba"),
+            ("sms", "usb0/games/SMS/Sonic.sms"),
+            ("snes", "usb0/games/SNES/USB.sfc"),
+            ("nes", "fat/games/NES/SD.nes"),
+        ] {
+            let system = systems
+                .iter()
+                .find(|system| system.system_id == system_id)
+                .unwrap();
+            assert_eq!(system.games.len(), 1);
+            assert_eq!(
+                system.games[0].launch_ref,
+                fixture.join("media").join(expected_path).to_string_lossy()
+            );
+            assert!(
+                system.games[0]
+                    .launch_plan
+                    .as_ref()
+                    .unwrap()
+                    .core_path
+                    .starts_with("_Console/")
+            );
+        }
+        // An empty legacy directory masks the standard folder on the same USB.
+        fs::create_dir_all(fixture.join("media/usb0/SNES")).unwrap();
+        let (systems, _) = discover_generic_systems(&storage).unwrap();
+        assert!(
+            !systems
+                .iter()
+                .any(|system| system.system_id == "snes" && !system.games.is_empty())
+        );
+        fs::remove_dir_all(fixture).unwrap();
     }
 }

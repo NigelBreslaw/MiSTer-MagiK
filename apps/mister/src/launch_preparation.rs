@@ -446,7 +446,7 @@ fn resolve_amigavision_install(roots: &[String]) -> Result<AmigaVisionInstall, S
     for storage_root in
         mister_magik_catalog::prepared_collections::storage_roots_for_library_roots(roots)
     {
-        let amiga_dir = storage_root.join("games/Amiga");
+        let amiga_dir = mister_magik_catalog::resolve_game_directory(&storage_root, "Amiga");
         let games_listing = amiga_dir.join("listings/games.txt");
         let demos_listing = amiga_dir.join("listings/demos.txt");
         let shared_dir = amiga_dir.join("shared");
@@ -1206,5 +1206,36 @@ mod tests {
                 .expect_err("bad utf8")
                 .contains("invalid UTF-8 in launch ref")
         );
+    }
+
+    #[test]
+    fn amigavision_usb_install_uses_sd_launcher_and_usb_payload() {
+        let fixture = unique_temp_dir("amigavision-usb");
+        let storage = fixture.join("media/fat");
+        let mgl = storage.join("_Computer/Amiga.mgl");
+        std::fs::create_dir_all(mgl.parent().unwrap()).unwrap();
+        std::fs::write(&mgl, minimig_mgl("AmigaVision.hdf")).unwrap();
+        for root in [
+            storage.join("games/Amiga"),
+            fixture.join("media/usb0/games/Amiga"),
+        ] {
+            std::fs::create_dir_all(root.join("listings")).unwrap();
+            std::fs::create_dir_all(root.join("shared")).unwrap();
+            std::fs::write(root.join("AmigaVision.hdf"), b"hdf").unwrap();
+            std::fs::write(root.join("listings/games.txt"), b"Game\n").unwrap();
+            std::fs::write(root.join("listings/demos.txt"), b"Demo\n").unwrap();
+        }
+        let installed =
+            resolve_amigavision_install(&[storage.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(installed.mgl_path, mgl);
+        assert_eq!(
+            installed.hdf_path,
+            fixture.join("media/usb0/games/Amiga/AmigaVision.hdf")
+        );
+        assert_eq!(
+            installed.shared_dir,
+            fixture.join("media/usb0/games/Amiga/shared")
+        );
+        std::fs::remove_dir_all(fixture).unwrap();
     }
 }

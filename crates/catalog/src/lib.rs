@@ -28,6 +28,8 @@ pub mod fast_catalog_refresh;
 pub mod fast_catalog_sources;
 pub mod fast_five_catalog;
 pub mod fs_fault;
+mod game_paths;
+pub use game_paths::game_dir as resolve_game_directory;
 #[cfg(feature = "builder")]
 pub mod generic_system_catalog;
 #[cfg(any(test, feature = "io-test-metrics"))]

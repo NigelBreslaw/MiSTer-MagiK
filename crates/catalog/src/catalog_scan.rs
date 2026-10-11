@@ -380,12 +380,13 @@ fn scan_target_candidates_with_facts(
     } else {
         NamespaceSignatureCapture::None
     };
-    let root_policy =
-        if crate::prepared_collections::is_followable_neon68k_launcher_root_symlink(target) {
-            NamespaceRootPolicy::FollowSymlink
-        } else {
-            NamespaceRootPolicy::NoFollow
-        };
+    let root_policy = if game_dir_header.is_some()
+        || crate::prepared_collections::is_followable_neon68k_launcher_root_symlink(target)
+    {
+        NamespaceRootPolicy::FollowSymlink
+    } else {
+        NamespaceRootPolicy::NoFollow
+    };
     let namespace_stats = namespace_walk::visit_with_root_policy_and_signature_capture(
         target,
         None,
@@ -498,9 +499,10 @@ fn scan_runtime_target_candidates(
     let mut shallow_files = Vec::new();
     let mut deep_roots = Vec::new();
 
-    let shallow_namespace_stats = namespace_walk::visit_with_signature_capture(
+    let shallow_namespace_stats = namespace_walk::visit_with_root_policy_and_signature_capture(
         &header.path,
         Some(2),
+        NamespaceRootPolicy::FollowSymlink,
         NamespaceSignatureCapture::TargetAndDepthOneDirectories,
         |path| should_ignore_path(path) || pruned_paths.iter().any(|root| path.starts_with(root)),
         |entry| {
@@ -687,9 +689,10 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
     let mut direct_zip_paths = Vec::new();
     let mut nested_probe_signatures = Vec::new();
     let mut payload_extensions = std::collections::BTreeSet::new();
-    let namespace_stats = namespace_walk::visit_with_signature_capture(
+    let namespace_stats = namespace_walk::visit_with_root_policy_and_signature_capture(
         &header.path,
         Some(2),
+        NamespaceRootPolicy::FollowSymlink,
         NamespaceSignatureCapture::TargetAndDepthOneDirectories,
         should_ignore_path,
         |entry| {
@@ -820,7 +823,7 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
         for launcher_dir in ["_Arcade", "_Games", "_DOS Games", "_Console (autoboot)"] {
             push_scan_target(&mut targets, path.join(launcher_dir));
         }
-        push_profile_game_dirs(&mut targets, &path.join("games"), profiles);
+        push_profile_game_dirs(&mut targets, path, profiles);
     }
     dedupe_existing_scan_targets(targets)
 }
@@ -835,7 +838,7 @@ fn push_prepared_collection_targets(targets: &mut Vec<PathBuf>, configured_root:
 
 fn push_profile_game_dirs(
     targets: &mut Vec<PathBuf>,
-    games_dir: &Path,
+    storage_root: &Path,
     profiles: &[LaunchProfile],
 ) {
     for profile in profiles {
@@ -846,7 +849,7 @@ fn push_profile_game_dirs(
             if dir.starts_with('_') {
                 continue;
             }
-            push_scan_target(targets, games_dir.join(dir));
+            push_scan_target(targets, crate::game_paths::game_dir(storage_root, dir));
         }
     }
 }
