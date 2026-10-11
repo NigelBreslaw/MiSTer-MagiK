@@ -171,10 +171,6 @@ impl CrtSettingsGeometry {
     pub const fn group_gap(self) -> usize {
         6 * self.sy
     }
-
-    pub const fn axis_scale(self, horizontal: bool) -> usize {
-        if horizontal { self.sx } else { self.sy }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -416,9 +412,8 @@ pub fn render_settings_cog_transition_into(
 
 /// Render the same card-to-Settings timeline for a supported physical raster.
 ///
-/// CRT portrait modes are already rotated into physical scanout space here,
-/// so their responsive card and page geometry is derived directly from the
-/// buffer dimensions rather than rotating pixels in the hot path.
+/// Layout derives from buffer dimensions; this renderer does not apply monitor
+/// rotation. Rotated outputs use the complete-snapshot page slide instead.
 #[must_use]
 pub fn render_settings_cog_transition_for_dimensions_into(
     width: usize,

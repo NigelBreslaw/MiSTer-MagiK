@@ -525,6 +525,36 @@ fn should_defer_or_preserve_selected_preview(
     defer_selected_preview || (navigation_transition_active && source_was_arcade)
 }
 
+// Occlusion hides HDMI's independent preview layer. CRT still needs the retained
+// screenshot behind its destination foreground while a navigation snapshot owns
+// scanout; disabling it makes hub/list destination preparation time out.
+fn arcade_preview_route(preserve_source: bool, arcade: bool, blocked: bool) -> PreviewRoute {
+    if blocked {
+        PreviewRoute::Unavailable
+    } else if preserve_source {
+        PreviewRoute::Occluded
+    } else if arcade {
+        PreviewRoute::Eligible
+    } else {
+        PreviewRoute::Unavailable
+    }
+}
+
+fn crt_backdrop_allowed(
+    route: PreviewRoute,
+    wants_arcade_list: bool,
+    system_hub: bool,
+    drawer_open: bool,
+) -> bool {
+    route != PreviewRoute::Unavailable
+        && crate::crt_backdrop::crt_backdrop_content_allowed(
+            wants_arcade_list,
+            system_hub,
+            drawer_open,
+            false,
+        )
+}
+
 fn preview_work_allowed(
     background_work_allowed: bool,
     system_entry_in_progress: bool,
@@ -3672,6 +3702,40 @@ mod tests {
     }
 
     #[test]
+    fn occluded_source_cannot_bypass_a_preview_exclusion() {
+        for preserve in [false, true] {
+            for arcade in [false, true] {
+                assert_eq!(
+                    arcade_preview_route(preserve, arcade, true),
+                    PreviewRoute::Unavailable
+                );
+                assert!(!crt_backdrop_allowed(
+                    arcade_preview_route(preserve, arcade, true),
+                    true,
+                    true,
+                    false
+                ));
+            }
+        }
+        assert_eq!(
+            arcade_preview_route(true, true, false),
+            PreviewRoute::Occluded
+        );
+        assert!(crt_backdrop_allowed(
+            arcade_preview_route(true, true, false),
+            true,
+            false,
+            false
+        ));
+        assert!(!crt_backdrop_allowed(
+            arcade_preview_route(true, true, false),
+            true,
+            false,
+            true
+        ));
+    }
+
+    #[test]
     fn cold_arcade_completion_reaches_games_without_a_pending_navigation_entry() {
         cold_arcade_completion_sequence(false);
     }
@@ -4685,6 +4749,22 @@ mod tests {
         ));
         assert!(should_defer_or_preserve_selected_preview(
             true, false, false,
+        ));
+    }
+
+    #[test]
+    fn arcade_snapshot_occlusion_keeps_crt_destination_composition_available() {
+        for route in [PreviewRoute::Eligible, PreviewRoute::Occluded] {
+            assert!(crt_backdrop_allowed(route, true, false, false));
+            assert!(crt_backdrop_allowed(route, false, true, false));
+            assert!(!crt_backdrop_allowed(route, false, false, false));
+            assert!(!crt_backdrop_allowed(route, true, false, true));
+        }
+        assert!(!crt_backdrop_allowed(
+            PreviewRoute::Unavailable,
+            true,
+            false,
+            false
         ));
     }
 

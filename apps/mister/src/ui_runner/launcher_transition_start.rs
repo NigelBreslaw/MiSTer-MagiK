@@ -8,9 +8,10 @@
 use super::launcher_card_home::LauncherCardHomeSession;
 use super::launcher_loop::card_pixels_as_slint;
 use super::*;
-use crate::ui_display::{CrtUiMetrics, ScreenOrientation, UiLayoutGeometry};
+use crate::ui_display::{CrtUiMetrics, UiLayoutGeometry};
 use mister_magik_framebuffer_scenes::device_card::RevealImage;
 use mister_magik_framebuffer_scenes::settings_cog;
+use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout};
 
 /// Everything a reveal needs to begin, besides the runtime and the card session.
 pub struct TransitionInputs<'a> {
@@ -41,10 +42,9 @@ pub struct TransitionSource<'a> {
 
 /// Begin the full-screen transition for `inputs.edge`. Returns whether it started.
 ///
-/// The reveal begins from the pixels the user is looking at: the card-home frame
-/// while it owns Home in a landscape raster, otherwise the composed cache.
-/// Portrait transitions run in the physical composition raster, which card-home
-/// does not draw, so they always begin from the composed cache.
+/// HDMI landscape card motion can bypass the cache, so capture its native
+/// frame. CRT and portrait sources use the completed physical frame, including
+/// all chrome, rather than asking the card producer for another scratch frame.
 pub(super) fn begin_navigation_transition(
     runtime: &mut NavigationTransitionRuntime,
     cards: Option<&mut LauncherCardHomeSession>,
@@ -61,6 +61,7 @@ pub(super) fn begin_navigation_transition(
     let pixels: &[Rgb565Pixel] = match cards {
         Some(cards)
             if !portrait
+                && !inputs.crt_layout
                 && card_home_owns_source(inputs.nav.screen, cards.owns_visible_frame()) =>
         {
             card_pixels_as_slint(cards.render())
@@ -104,31 +105,38 @@ pub fn start_navigation_transition(
         physical,
     } = *source;
     let portrait = layout.is_portrait();
-    if edge == NavigationTransitionEdge::SystemPanel {
-        // The system hub/list slide has no portrait form.
-        return !portrait
-            && runtime
-                .begin(TransitionStart::system_panel(
-                    crt_layout,
-                    nav.is_system_hub(),
-                    pixels,
-                    crt_backdrop,
-                    now_us,
-                ))
-                .unwrap_or(false);
+    if portrait {
+        let route = NavigationTransitionRoute::from_super_scaler_edge(edge);
+        let start = if physical {
+            TransitionStart::portrait_page(route, direction, layout.output_layout(), pixels, now_us)
+        } else {
+            TransitionStart::portrait_page_logical(route, direction, pixels, now_us)
+        };
+        return runtime.begin(start).unwrap_or(false);
     }
-    let card_edge = is_card_edge(edge) && !portrait;
+    if edge == NavigationTransitionEdge::SystemPanel {
+        return runtime
+            .begin(TransitionStart::system_panel(
+                crt_layout,
+                nav.is_system_hub(),
+                pixels,
+                crt_backdrop,
+                now_us,
+            ))
+            .unwrap_or(false);
+    }
+    let card_home_rect = card_home_rect.filter(|_| is_card_edge(edge) && !portrait);
     let geometry = navigation_geometry(
         nav,
         &NavigationDisplay {
             frame_width: layout.logical_w(),
             frame_height: layout.logical_h(),
             crt: crt_layout.then(|| crt_navigation_layout(layout.content_rect(), crt_metrics)),
-            card_home_rect: card_home_rect.filter(|_| card_edge),
+            card_home_rect,
         },
         edge,
     );
-    let started = if card_edge && card_home_rect.is_some() {
+    let started = if card_home_rect.is_some() {
         let kind = match collection_id {
             Some(id) => nav.device_kind_for_collection(id),
             None => nav.device_kind(),
@@ -142,16 +150,6 @@ pub fn start_navigation_transition(
             pixels,
             crate::launcher_presentation::system_device_rgb565(kind),
             crt_backdrop,
-            now_us,
-        ))
-    } else if portrait && physical {
-        runtime.begin(TransitionStart::super_scaler_physical(
-            edge,
-            direction,
-            navigation_geometry_to_composition(layout, geometry),
-            layout.composition_w(),
-            layout.composition_h(),
-            pixels,
             now_us,
         ))
     } else {
@@ -172,19 +170,17 @@ pub fn start_navigation_transition(
 pub(super) struct SettingsInputs<'a> {
     pub route: NavigationTransitionRoute,
     pub direction: NavigationTransitionDirection,
-    pub orientation: ScreenOrientation,
-    /// The physical output raster.
-    pub render_w: usize,
-    pub render_h: usize,
+    /// The output layout shared by the compositor and transition snapshots.
+    pub output: Rgb565OutputLayout,
     pub reduce_motion: bool,
+    pub crt_layout: bool,
     /// The composed cache: the visible frame whenever card-home is not.
     pub composed: &'a [Rgb565Pixel],
     pub now_us: u64,
 }
 
-/// Begin the Home <-> Settings card zoom, or the page slide for every other
-/// Settings route. The zoom runs in the physical raster for HDMI landscape and
-/// native CRT modes in either orientation; reduce motion keeps the slide.
+/// Portrait slides complete rotated snapshots. Landscape uses the Home <->
+/// Settings cog when available, or the page slide for other Settings routes.
 pub(super) fn begin_settings_transition(
     runtime: &mut NavigationTransitionRuntime,
     cards: Option<&mut LauncherCardHomeSession>,
@@ -193,13 +189,20 @@ pub(super) fn begin_settings_transition(
     let SettingsInputs {
         route,
         direction,
-        orientation,
-        render_w,
-        render_h,
+        output,
         reduce_motion,
+        crt_layout,
         composed,
         now_us,
     } = *inputs;
+    if output.rotation() != OutputRotation::None {
+        return runtime
+            .begin(TransitionStart::portrait_page(
+                route, direction, output, composed, now_us,
+            ))
+            .unwrap_or(false);
+    }
+    let (render_w, render_h) = (output.physical_width(), output.physical_height());
     let settled_cards = cards.filter(|cards| !cards.is_animating());
     let zoom = route == NavigationTransitionRoute::HomeToSettings
         && settled_cards.is_some()
@@ -207,14 +210,13 @@ pub(super) fn begin_settings_transition(
         && !reduce_motion;
     let start = if zoom {
         let source = match (direction, settled_cards) {
-            // Card motion presents directly into scanout slots, so the generic
-            // cache may still contain a neighbour. Render the settled Settings
-            // card as the exact source.
-            (NavigationTransitionDirection::Forward, Some(cards)) => {
+            // HDMI card motion bypasses the cache. CRT already keeps the
+            // complete displayed frame, including chrome, in the cache.
+            (NavigationTransitionDirection::Forward, Some(cards)) if !crt_layout => {
                 card_pixels_as_slint(cards.render())
             }
-            // Reverse starts from the live Settings page. Home is rendered later
-            // and captured as the destination.
+            // Reverse starts from the live Settings page. Forward CRT starts
+            // from the complete Home frame already maintained in this cache.
             _ => composed,
         };
         TransitionStart::settings_cog(
@@ -226,53 +228,17 @@ pub(super) fn begin_settings_transition(
             now_us,
         )
     } else {
-        let axis = match orientation {
-            ScreenOrientation::Normal => SettingsPageTransitionAxis::Horizontal,
-            ScreenOrientation::MonitorCounterclockwise => SettingsPageTransitionAxis::Vertical,
-            ScreenOrientation::MonitorClockwise => SettingsPageTransitionAxis::VerticalReversed,
-        };
         TransitionStart::settings_page_physical(
-            route, direction, axis, render_w, render_h, composed, now_us,
+            route,
+            direction,
+            SettingsPageTransitionAxis::Horizontal,
+            render_w,
+            render_h,
+            composed,
+            now_us,
         )
     };
     runtime.begin(start).unwrap_or(false)
-}
-
-pub(super) fn navigation_geometry_to_composition(
-    layout: UiLayoutGeometry,
-    mut geometry: NavigationTransitionGeometry,
-) -> NavigationTransitionGeometry {
-    fn map_rect(
-        layout: UiLayoutGeometry,
-        rect: NavigationTransitionRect,
-    ) -> NavigationTransitionRect {
-        if rect.width == 0 || rect.height == 0 {
-            return rect;
-        }
-        let mapped = layout.logical_rect_to_composition(DirtyRect {
-            x0: rect.x as usize,
-            y0: rect.y as usize,
-            x1: rect.right() as usize,
-            y1: rect.bottom() as usize,
-        });
-        NavigationTransitionRect {
-            x: mapped.x0.min(u16::MAX as usize) as u16,
-            y: mapped.y0.min(u16::MAX as usize) as u16,
-            width: mapped.width().min(u16::MAX as usize) as u16,
-            height: mapped.rows().min(u32::from(u16::MAX)) as u16,
-        }
-    }
-
-    geometry.source_card = map_rect(layout, geometry.source_card);
-    geometry.source_label = map_rect(layout, geometry.source_label);
-    geometry.source_detail = map_rect(layout, geometry.source_detail);
-    geometry.destination_title = map_rect(layout, geometry.destination_title);
-    geometry.destination_detail = map_rect(layout, geometry.destination_detail);
-    geometry.destination_list = map_rect(layout, geometry.destination_list);
-    geometry.destination_selected_row = map_rect(layout, geometry.destination_selected_row);
-    geometry.destination_preview = map_rect(layout, geometry.destination_preview);
-    geometry.destination_footer = map_rect(layout, geometry.destination_footer);
-    geometry
 }
 
 #[cfg(test)]
@@ -311,6 +277,22 @@ mod tests {
         arcade_catalog(
             vec![arcade_game("Metal Slug").build()],
             vec![arcade_system("arcade", 1)],
+        )
+    }
+
+    fn native_crt_display(height: u16) -> UiDisplay {
+        UiDisplay::for_plan(
+            crate::ui_display::UiDisplayPlan::from_geometry_with_route_and_composition(
+                mister_magik_core::display::DisplayGeometry::new(640, height),
+                match height {
+                    240 => crate::ui_display::ResolvedOutputRoute::Crt240p60,
+                    288 => crate::ui_display::ResolvedOutputRoute::Crt288p50,
+                    _ => panic!("unsupported CRT test raster"),
+                },
+                "native-crt-transition",
+                crate::ui_display::UiFramebufferSizePolicy::Auto,
+                mister_magik_core::display::Crt240Composition::Native240,
+            ),
         )
     }
 
@@ -573,10 +555,10 @@ mod tests {
     }
 
     #[test]
-    fn the_system_panel_slide_starts_in_landscape_and_never_in_portrait() {
+    fn the_system_panel_slide_starts_in_landscape_and_portrait() {
         for (orientation, starts) in [
             (ScreenOrientation::Normal, true),
-            (ScreenOrientation::MonitorClockwise, false),
+            (ScreenOrientation::MonitorClockwise, true),
         ] {
             let fixture = Fixture::new(orientation);
             let nav = home_nav();
@@ -610,10 +592,9 @@ mod tests {
         SettingsInputs {
             route,
             direction,
-            orientation: ScreenOrientation::Normal,
-            render_w: 960,
-            render_h: 540,
+            output: fixture.layout.output_layout(),
             reduce_motion,
+            crt_layout: false,
             composed: &fixture.composed,
             now_us: 0,
         }
@@ -640,6 +621,66 @@ mod tests {
         ));
         assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
         assert!(runtime.render().unwrap() == visible);
+    }
+
+    #[test]
+    fn crt_transitions_capture_composed_chrome_instead_of_the_bare_cards() {
+        let display = native_crt_display(240);
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+        let metrics = CrtUiMetrics::for_display(&display);
+        let mut cards = active_cards(LauncherScene::crt(640, 240));
+        let mut composed = card_pixels_as_slint(cards.render()).to_vec();
+        // Completed chrome must survive source-carrier frames during capture,
+        // even when it differs from the card producer's current scratch frame.
+        composed[20 * 640 + 40] = Rgb565Pixel(0xef5a);
+        composed[220 * 640 + 40] = Rgb565Pixel(0xef5a);
+        let nav = home_nav();
+        for edge in [
+            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionEdge::HomeToConsoles,
+        ] {
+            let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
+            let inputs = TransitionInputs {
+                edge,
+                direction: NavigationTransitionDirection::Forward,
+                nav: &nav,
+                collection_id: None,
+                layout,
+                crt_layout: true,
+                crt_metrics: &metrics,
+                crt_backdrop: &[],
+                now_us: 0,
+            };
+            assert!(begin_navigation_transition(
+                &mut runtime,
+                Some(&mut cards),
+                &composed,
+                &inputs,
+                || None
+            ));
+            assert!(
+                runtime.render().unwrap() == composed,
+                "{edge:?} lost the composed CRT chrome"
+            );
+        }
+        let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
+        assert!(begin_settings_transition(
+            &mut runtime,
+            Some(&mut cards),
+            &SettingsInputs {
+                route: NavigationTransitionRoute::HomeToSettings,
+                direction: NavigationTransitionDirection::Forward,
+                output: layout.output_layout(),
+                reduce_motion: false,
+                crt_layout: true,
+                composed: &composed,
+                now_us: 0,
+            }
+        ));
+        assert!(
+            runtime.render().unwrap() == composed,
+            "Settings lost the composed CRT chrome"
+        );
     }
 
     #[test]
@@ -703,24 +744,27 @@ mod tests {
             ),
             Some(&mut cards),
         );
+        let unsupported_pixels = vec![COMPOSED; 800 * 600];
         let unsupported = SettingsInputs {
-            render_w: 800,
-            render_h: 600,
+            output: Rgb565OutputLayout::new(800, 600, 800, OutputRotation::None).unwrap(),
+            composed: &unsupported_pixels,
             ..settings_inputs(&fixture, route, direction, false)
         };
-        let mut runtime = NavigationTransitionRuntime::new(960, 540, true);
-        let _ = begin_settings_transition(&mut runtime, Some(&mut cards), &unsupported);
-        assert_ne!(
-            runtime
-                .request()
-                .map(NavigationTransitionRequest::renderer_label),
-            Some("settings-cog"),
-            "unsupported raster"
+        let mut runtime = NavigationTransitionRuntime::new(800, 600, true);
+        assert!(begin_settings_transition(
+            &mut runtime,
+            Some(&mut cards),
+            &unsupported
+        ));
+        assert_eq!(
+            runtime.request().unwrap().renderer_label(),
+            "settings-page",
+            "unsupported raster must still start its page slide"
         );
     }
 
     #[test]
-    fn the_settings_zoom_waits_for_a_settled_card_and_supports_native_portrait_rasters() {
+    fn the_settings_zoom_waits_for_a_settled_card_and_supports_native_crt_rasters() {
         let fixture = Fixture::new(ScreenOrientation::Normal);
         let scene = LauncherScene::new(960, 540);
         let route = NavigationTransitionRoute::HomeToSettings;
@@ -746,46 +790,227 @@ mod tests {
             "settings-page"
         );
 
-        // A native portrait CRT raster supports the zoom.
-        let mut settled = active_cards(LauncherScene::crt(240, 640));
-        let composed = vec![COMPOSED; 240 * 640];
-        let portrait = SettingsInputs {
-            render_w: 240,
-            render_h: 640,
+        // A native landscape CRT raster supports the zoom; rotated outputs
+        // use the page slide covered by the portrait motion matrix below.
+        let layout =
+            UiLayoutGeometry::for_display(&native_crt_display(240), ScreenOrientation::Normal);
+        let mut settled = active_cards(LauncherScene::crt(640, 240));
+        let composed = vec![COMPOSED; layout.output_layout().len()];
+        let native = SettingsInputs {
+            output: layout.output_layout(),
+            crt_layout: true,
             composed: &composed,
             ..settings_inputs(&fixture, route, direction, false)
         };
-        let mut runtime = NavigationTransitionRuntime::new(240, 640, true);
+        let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
         assert!(begin_settings_transition(
             &mut runtime,
             Some(&mut settled),
-            &portrait
+            &native
         ));
         assert_eq!(runtime.request().unwrap().renderer_label(), "settings-cog");
     }
 
     #[test]
-    fn portrait_navigation_geometry_uses_physical_rectangles() {
-        let display = UiDisplay::for_framebuffer(4, 3);
-        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::MonitorClockwise);
-        let logical_rect = NavigationTransitionRect {
-            x: 0,
-            y: 0,
-            width: 2,
-            height: 1,
+    fn portrait_navigation_frames_equal_rotated_complete_page_motion() {
+        use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedPixel;
+        use mister_magik_framebuffer_scenes::navigation::{
+            NavigationTransitionBuffers, render_settings_page_transition_into,
         };
-        let geometry = NavigationTransitionGeometry {
-            source_card: logical_rect,
-            destination_preview: logical_rect,
-            ..NavigationTransitionGeometry::default()
-        };
-
-        let mapped = navigation_geometry_to_composition(layout, geometry);
-
-        assert_eq!(mapped.source_card, mapped.destination_preview);
-        assert_eq!(mapped.source_card.x, 0);
-        assert_eq!(mapped.source_card.y, 1);
-        assert_eq!(mapped.source_card.width, 1);
-        assert_eq!(mapped.source_card.height, 2);
+        for display in [
+            UiDisplay::for_framebuffer(960, 540),
+            native_crt_display(240),
+            native_crt_display(288),
+        ] {
+            for orientation in [
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::MonitorCounterclockwise,
+            ] {
+                let layout = UiLayoutGeometry::for_display(&display, orientation);
+                let output = layout.output_layout();
+                let (w, h) = (layout.logical_w(), layout.logical_h());
+                let source = (0..w * h)
+                    .map(|i| SharedPixel((i as u16).wrapping_mul(13)))
+                    .collect::<Vec<_>>();
+                let destination = (0..w * h)
+                    .map(|i| SharedPixel((i as u16).wrapping_mul(29)))
+                    .collect::<Vec<_>>();
+                let rotate = |logical: &[SharedPixel]| {
+                    let mut physical = vec![Rgb565Pixel(0); output.len()];
+                    for y in 0..h {
+                        for x in 0..w {
+                            physical[output.physical_offset(x, y)] =
+                                Rgb565Pixel(logical[y * w + x].0);
+                        }
+                    }
+                    physical
+                };
+                let physical_source = rotate(&source);
+                let physical_destination = rotate(&destination);
+                let nav = home_nav();
+                let metrics = CrtUiMetrics::for_display(&display);
+                let crt = display.output_route().is_crt();
+                let mut cards = active_cards(if crt {
+                    LauncherScene::crt(w, h)
+                } else {
+                    LauncherScene::new(w, h)
+                });
+                for direction in [
+                    NavigationTransitionDirection::Forward,
+                    NavigationTransitionDirection::Reverse,
+                ] {
+                    for route in [
+                        NavigationTransitionRoute::HomeToArcade,
+                        NavigationTransitionRoute::HomeToConsoles,
+                        NavigationTransitionRoute::ConsolesToSystem,
+                        NavigationTransitionRoute::SystemPanel,
+                        NavigationTransitionRoute::HomeToSettings,
+                        NavigationTransitionRoute::SettingsToAbout,
+                        NavigationTransitionRoute::AboutToLicenses,
+                        NavigationTransitionRoute::LicensesToLicenseText,
+                        NavigationTransitionRoute::NestedToHome,
+                    ] {
+                        let mut runtime = NavigationTransitionRuntime::new(w, h, true);
+                        let edge = match route {
+                            NavigationTransitionRoute::HomeToArcade => {
+                                Some(NavigationTransitionEdge::HomeToArcade)
+                            }
+                            NavigationTransitionRoute::HomeToConsoles => {
+                                Some(NavigationTransitionEdge::HomeToConsoles)
+                            }
+                            NavigationTransitionRoute::ConsolesToSystem => {
+                                Some(NavigationTransitionEdge::ConsolesToSystem)
+                            }
+                            NavigationTransitionRoute::SystemPanel => {
+                                Some(NavigationTransitionEdge::SystemPanel)
+                            }
+                            _ => None,
+                        };
+                        let started = if let Some(edge) = edge {
+                            begin_navigation_transition(
+                                &mut runtime,
+                                Some(&mut cards),
+                                &physical_source,
+                                &TransitionInputs {
+                                    edge,
+                                    direction,
+                                    nav: &nav,
+                                    collection_id: None,
+                                    layout,
+                                    crt_layout: crt,
+                                    crt_metrics: &metrics,
+                                    crt_backdrop: &[],
+                                    now_us: 0,
+                                },
+                                || None,
+                            )
+                        } else {
+                            begin_settings_transition(
+                                &mut runtime,
+                                Some(&mut cards),
+                                &SettingsInputs {
+                                    route,
+                                    direction,
+                                    output: layout.output_layout(),
+                                    reduce_motion: false,
+                                    crt_layout: crt,
+                                    composed: &physical_source,
+                                    now_us: 0,
+                                },
+                            )
+                        };
+                        let logical_source =
+                            source.iter().map(|p| Rgb565Pixel(p.0)).collect::<Vec<_>>();
+                        let logical_destination = destination
+                            .iter()
+                            .map(|p| Rgb565Pixel(p.0))
+                            .collect::<Vec<_>>();
+                        let mut preview = NavigationTransitionRuntime::new(w, h, true);
+                        let preview_started = if let Some(edge) = edge {
+                            start_navigation_transition(
+                                &mut preview,
+                                &TransitionInputs {
+                                    edge,
+                                    direction,
+                                    nav: &nav,
+                                    collection_id: None,
+                                    layout,
+                                    crt_layout: crt,
+                                    crt_metrics: &metrics,
+                                    crt_backdrop: &[],
+                                    now_us: 0,
+                                },
+                                &TransitionSource {
+                                    pixels: &logical_source,
+                                    card_home_rect: None,
+                                    physical: false,
+                                },
+                                || None,
+                            )
+                        } else {
+                            preview
+                                .begin(TransitionStart::portrait_page_logical(
+                                    route,
+                                    direction,
+                                    &logical_source,
+                                    0,
+                                ))
+                                .unwrap()
+                        };
+                        assert!(preview_started, "preview {route:?} did not start");
+                        assert_eq!(
+                            preview.request().unwrap().renderer_label(),
+                            runtime.request().unwrap().renderer_label()
+                        );
+                        preview
+                            .capture_destination(&logical_destination, 1)
+                            .unwrap();
+                        assert!(started, "{route:?} {orientation:?} did not start");
+                        assert!(
+                            runtime.render().unwrap() == physical_source,
+                            "{route:?} {orientation:?} used an unrotated source"
+                        );
+                        runtime
+                            .capture_destination(&physical_destination, 1)
+                            .unwrap();
+                        let duration = runtime.request().unwrap().duration_us;
+                        let mut reference = NavigationTransitionBuffers::new(w, h);
+                        reference.capture_source(&source).unwrap();
+                        reference.capture_destination(&destination).unwrap();
+                        for part in 0..=4 {
+                            runtime.tick(1 + duration * part / 4);
+                            preview.tick(1 + duration * part / 4);
+                            let logical_preview = preview
+                                .render()
+                                .unwrap()
+                                .iter()
+                                .map(|p| SharedPixel(p.0))
+                                .collect::<Vec<_>>();
+                            assert_eq!(
+                                rotate(&logical_preview),
+                                runtime.render().unwrap(),
+                                "preview differs from device: {route:?} {direction:?} {orientation:?} phase {part}"
+                            );
+                            let frame = runtime.frame();
+                            let mut logical_frame = vec![SharedPixel(0); w * h];
+                            render_settings_page_transition_into(
+                                &reference,
+                                NavigationTransitionRequest::settings_page(direction),
+                                frame,
+                                &mut logical_frame,
+                            )
+                            .unwrap();
+                            let expected = rotate(&logical_frame);
+                            let actual = runtime.render().unwrap();
+                            assert!(
+                                actual == expected,
+                                "{route:?} {direction:?} {orientation:?} {w}x{h} phase {part}: mixed portrait/landscape pixels; first mismatch {:?}",
+                                actual.iter().zip(&expected).position(|(a, b)| a != b)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

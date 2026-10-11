@@ -226,46 +226,65 @@ fn segmented_settings_motion_does_not_mark_pixels_left_of_destination_content() 
 }
 
 #[test]
-fn crt_segmented_settings_keeps_shared_cog_pixels_stationary() {
-    let (width, height) = (640, 240);
-    let mut source = vec![Rgb565Pixel(0); width * height];
-    let mut destination = source.clone();
-    for y in 55..190 {
-        for x in 350..630 {
-            let pixel = Rgb565Pixel(((x + y * 3) as u16) | 0x0821);
-            source[y * width + x] = pixel;
-            destination[y * width + x] = pixel;
+fn crt_settings_moves_complete_glyphs_even_when_pages_share_pixels() {
+    for (width, height) in [(640, 240), (640, 288), (240, 640), (288, 640)] {
+        let mut source = vec![Rgb565Pixel(0); width * height];
+        let mut destination = source.clone();
+        // Two different text shapes share a vertical stem and crossbar. Pixel
+        // equality cannot distinguish that shared foreground from background.
+        for y in 80..96 {
+            for x in 80..96 {
+                if x < 83 || y < 83 || (87..90).contains(&y) {
+                    source[y * width + x] = Rgb565Pixel(0xffff);
+                    destination[y * width + x] = Rgb565Pixel(0xffff);
+                }
+                if x >= 93 {
+                    destination[y * width + x] = Rgb565Pixel(0xffff);
+                }
+            }
         }
-    }
-    source[80 * width + 50] = Rgb565Pixel(0xffff);
-    destination[96 * width + 100] = Rgb565Pixel(0xf81f);
-
-    let mut buffers = NavigationTransitionBuffers::new(width, height);
-    buffers.capture_source(&source).unwrap();
-    buffers.capture_destination(&destination).unwrap();
-    render_navigation_transition(
-        &mut buffers,
-        NavigationTransitionRequest::settings_page_segmented(
+        for direction in [
             NavigationTransitionDirection::Forward,
-        ),
-        NavigationTransitionFrame {
-            progress_q16: 32_768,
-            ..NavigationTransitionFrame::default()
-        },
-    )
-    .unwrap();
-
-    for (x, y) in [(350, 55), (480, 120), (629, 189)] {
-        assert_eq!(
-            buffers.working()[y * width + x],
-            source[y * width + x],
-            "shared cog pixel moved at ({x}, {y})"
-        );
+            NavigationTransitionDirection::Reverse,
+        ] {
+            for axis in [
+                SettingsPageTransitionAxis::Horizontal,
+                SettingsPageTransitionAxis::Vertical,
+                SettingsPageTransitionAxis::VerticalReversed,
+            ] {
+                let mut buffers = NavigationTransitionBuffers::new(width, height);
+                buffers.capture_source(&source).unwrap();
+                buffers.capture_destination(&destination).unwrap();
+                for progress_q16 in [8_000, 24_000, 48_000] {
+                    let frame = NavigationTransitionFrame {
+                        progress_q16,
+                        ..Default::default()
+                    };
+                    render_navigation_transition(
+                        &mut buffers,
+                        NavigationTransitionRequest::settings_page_on_axis(direction, axis),
+                        frame,
+                    )
+                    .unwrap();
+                    let whole_page = buffers.working().to_vec();
+                    render_navigation_transition(
+                        &mut buffers,
+                        NavigationTransitionRequest::settings_page_segmented_on_axis(direction, axis),
+                        frame,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        buffers.working(), whole_page,
+                        "CRT {width}x{height} {direction:?} {axis:?} phase {progress_q16} split shared glyphs from their page"
+                    );
+                }
+            }
+        }
     }
 }
 
 #[test]
-fn crt_segmented_settings_has_exact_endpoints_in_portrait_space() {
+fn crt_settings_has_exact_endpoints_in_portrait_space() {
     let (width, height) = (240, 640);
     let source = vec![Rgb565Pixel(0x1234); width * height];
     let destination = vec![Rgb565Pixel(0x4321); width * height];

@@ -319,7 +319,6 @@ pub(super) struct ProjectFrame {
     pub(super) status_text: Option<LauncherStatusTextSnapshot>,
     pub(super) status_string_copy_bytes: usize,
     pub(super) arcade_status_only: bool,
-    pub(super) arcade_scroll_active: bool,
     pub(super) arcade_turbo_active: bool,
     pub(super) full_frame_present: bool,
     pub(super) wants_arcade_list: bool,
@@ -2297,10 +2296,9 @@ impl<'a> FrameLoop<'a> {
                                     &SettingsInputs {
                                         route,
                                         direction,
-                                        orientation: self.ui.nav.settings.screen_orientation,
-                                        render_w: self.env.ui.render_w(),
-                                        render_h: self.env.ui.render_h(),
+                                        output: self.out.layout.output_layout(),
                                         reduce_motion: self.ui.nav.settings.reduce_motion,
+                                        crt_layout: self.out.crt_layout,
                                         composed: self.env.target.cached_565(),
                                         now_us: pre_input.animation_us,
                                     },
@@ -3432,28 +3430,32 @@ impl<'a> FrameLoop<'a> {
                 pre_input.launching,
                 active_arcade_games_available,
             );
-        let presentation_route = if preserve_navigation_source_preview {
-            PreviewRoute::Occluded
-        } else if self.ui.nav.screen == Screen::Arcade
-            && !self.lib.memory_guard.active()
-            && !self.fx.screensaver.active
-            && !confirm_visible
-            && !fullscreen_overlay_visible
-            && !self
+        let preview_blocked = self.lib.memory_guard.active()
+            || self.fx.screensaver.active
+            || confirm_visible
+            || fullscreen_overlay_visible
+            || self
                 .ui
                 .nav
                 .arcade_search
-                .is_active(&self.ui.nav.arcade_filter.active)
-        {
-            PreviewRoute::Eligible
-        } else {
-            PreviewRoute::Unavailable
-        };
+                .is_active(&self.ui.nav.arcade_filter.active);
+        let presentation_route = arcade_preview_route(
+            preserve_navigation_source_preview,
+            self.ui.nav.screen == Screen::Arcade,
+            preview_blocked,
+        );
         self.lib.preview.set_route(presentation_route);
         let crt_backdrop_eligible = self.ui.preview_route.allows_crt_backdrop()
-            && presentation_route == PreviewRoute::Eligible
-            && (wants_arcade_list || self.ui.nav.is_system_hub())
-            && !self.ui.nav.arcade_filter.drawer_open;
+            && crt_backdrop_allowed(
+                presentation_route,
+                wants_arcade_list,
+                self.ui.nav.is_system_hub(),
+                self.ui.nav.arcade_filter.drawer_open,
+            );
+        self.env
+            .app
+            .global::<slint_ui::launcher::MisterUi>()
+            .set_custom_crt_backdrop(crt_backdrop_eligible);
         let crt_backdrop_was_eligible = self
             .out
             .crt_backdrop
@@ -3945,7 +3947,6 @@ impl<'a> FrameLoop<'a> {
             status_text,
             status_string_copy_bytes,
             arcade_status_only,
-            arcade_scroll_active,
             arcade_turbo_active,
             full_frame_present,
             wants_arcade_list,
@@ -4748,6 +4749,17 @@ impl<'a> FrameLoop<'a> {
                             ((copied.x1 - copied.x0) * (copied.y1 - copied.y0)) as u64;
                     }
                     (dirty, damage, rendered)
+                } else if project.crt_backdrop_eligible {
+                    layer_target.render_crt_foreground(
+                        &self.env.window,
+                        &mut self
+                            .out
+                            .crt_backdrop
+                            .as_mut()
+                            .expect("CRT route owns a backdrop")
+                            .foreground,
+                        $full_slint_raster || !project.crt_backdrop_was_eligible,
+                    )
                 } else if $full_slint_raster {
                     layer_target.render_slint_full(&self.env.window)
                 } else {
@@ -4842,18 +4854,6 @@ impl<'a> FrameLoop<'a> {
             if let Some(generation) = self.out.director.chart.generation() {
                 let _ = self.out.director.chart.retain_redraw(generation);
             }
-            None
-        } else if project.crt_backdrop_eligible
-            && project.crt_backdrop_was_eligible
-            && !project.crt_backdrop_leaving
-            && !project.full_frame_present
-            && (project.arcade_scroll_active || self.lib.preview.raw_transition_frame().is_some())
-        {
-            // During CRT Arcade motion, the custom compositor owns the
-            // changing backdrop, list, and chrome restoration. Keep the
-            // launcher cadence alive without rerasterizing the unchanged
-            // Slint base on every velocity tick.
-            self.env.window.request_redraw();
             None
         } else if project.composition_decision.force_full_slint_raster
             || project.crt_backdrop_leaving
@@ -5082,36 +5082,38 @@ impl<'a> FrameLoop<'a> {
             .raw_transition_frame()
             .as_ref()
             .map(|frame| frame.transition_id);
-        // Releasing a full-screen transition performs one live full Slint
-        // raster. That raster owns the CRT placeholder background, so restore
-        // the settled custom backdrop in the same frame before the list layer.
+        // Changed or removed Slint foreground pixels and transition release
+        // require a clean backdrop before the foreground and list are composed.
         let force_crt_backdrop_repaint = full_screen_transition_release_raster_rendered;
+        // Slint is captured once; native destination layers may finish later.
+        let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
+            || (self.out.director.chart.owner() == Some(FullScreenTransitionOwner::Navigation)
+                && self.out.director.chart.capture_issued());
+        let write_crt_backdrop = !navigation_capture_source_carrier_rendered
+            && !full_screen_transition_policy_before_render.snapshot_locked
+            && (full_screen_transition_policy_before_render.automatic_slint_raster
+                || full_screen_transition_policy_before_render.force_live_raster
+                || (project.composition_decision.prepare_navigation_destination
+                    && controlled_destination_raster_ready))
+            && (!self.out.director.navigation.is_active()
+                || project.composition_decision.prepare_navigation_destination);
+        let list_bounds = self
+            .out
+            .layout
+            .logical_rect_to_composition(self.out.arcade_list_renderer.dirty_rect());
+        let crt_foreground_damaged_list = slint_damage.iter().any(|rect| {
+            rect.x0 < list_bounds.x1
+                && rect.x1 > list_bounds.x0
+                && rect.y0 < list_bounds.y1
+                && rect.y1 > list_bounds.y0
+        });
         if let Some(backdrop) = self.out.crt_backdrop.as_mut() {
-            backdrop.set_hub_mode(self.ui.nav.is_system_hub().then(|| {
-                (
-                    self.ui.nav.system_hub_selected,
-                    Rgb565Pixel(
-                        crate::launcher_presentation::device_reveal_spec(
-                            self.ui.nav.device_kind(),
-                            true,
-                            true,
-                        )
-                        .accent,
-                    ),
-                )
-            }));
             let compose_start = Instant::now();
-            let crt_arcade_layout = CrtArcadeLayout::for_layout(
-                self.out.layout,
-                self.out.crt_metrics,
-                self.ui
-                    .nav
-                    .arcade_search
-                    .is_active(&self.ui.nav.arcade_filter.active),
-            );
             let result = backdrop.compose(
                 project.crt_backdrop_eligible,
                 force_crt_backdrop_repaint,
+                write_crt_backdrop,
+                &slint_damage,
                 project.arcade_turbo_active || self.out.director.navigation.is_active(),
                 self.ui.nav.arcade.selected,
                 transition_id,
@@ -5121,8 +5123,6 @@ impl<'a> FrameLoop<'a> {
                 self.out.frame_clock.elapsed(),
                 layer_target.presentation_pixels_mut(),
                 self.out.layout,
-                crt_arcade_layout,
-                self.out.crt_metrics,
             );
             crt_backdrop_work_trace = result.trace;
             crt_backdrop_copy_us = compose_start
@@ -5130,10 +5130,7 @@ impl<'a> FrameLoop<'a> {
                 .as_micros()
                 .saturating_sub(u128::from(crt_backdrop_work_trace.blend_us))
                 .min(u128::from(u64::MAX)) as u64;
-            crt_backdrop_copy_pixels = backdrop
-                .width()
-                .saturating_mul(backdrop.height())
-                .min(u32::MAX as usize) as u32;
+            crt_backdrop_copy_pixels = result.copied_pixels;
             if result.full_damage {
                 crt_backdrop_full_damage = Some(DirtyRect {
                     x0: 0,
@@ -5198,10 +5195,7 @@ impl<'a> FrameLoop<'a> {
                 let _profile = mister_magik_framebuffer_scenes::launcher_profile::span(
                     "transition.destination-layers",
                 );
-                let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
-                    || (self.out.director.chart.owner()
-                        == Some(FullScreenTransitionOwner::Navigation)
-                        && self.out.director.chart.capture_issued());
+
                 let destination_raster_ready =
                     project.composition_decision.prepare_navigation_destination
                         && controlled_destination_raster_ready;
@@ -5226,7 +5220,11 @@ impl<'a> FrameLoop<'a> {
                         && !self.lib.preview.terminal_empty()
                         && self.lib.preview.trace_cache_state() == "exact"
                         && self.lib.preview.raw_frame_status() == PreviewRawFrameStatus::Ready;
-                    let preview_surface_ready = if preview_exact {
+                    // CRT already has its full-frame backdrop and Slint foreground.
+                    // HDMI's preview aperture must never be inserted into that page.
+                    let preview_surface_ready = if self.out.crt_layout {
+                        true
+                    } else if preview_exact {
                         if self.out.director.navigation.settings_physical_space() {
                             let (ready, publication) = layer_target.compose_exact_preview_physical(
                                 &self.lib.preview,
@@ -5274,6 +5272,9 @@ impl<'a> FrameLoop<'a> {
                     {
                         #[cfg(feature = "tooling")]
                         let list_started = measure_destination.then(Instant::now);
+                        self.out
+                            .arcade_list_renderer
+                            .set_crt_portrait_rows(self.out.layout.is_portrait());
                         configure_arcade_list_renderer_geometry(
                             &mut self.out.arcade_list_renderer,
                             &self.ui.nav,
@@ -5288,7 +5289,24 @@ impl<'a> FrameLoop<'a> {
                         #[cfg(feature = "tooling")]
                         let list_draw_done = measure_destination.then(Instant::now);
                         if let Some(update) = list_update {
-                            if self.out.director.navigation.settings_physical_space() {
+                            if project.crt_backdrop_eligible {
+                                let backdrop = self
+                                    .out
+                                    .crt_backdrop
+                                    .as_ref()
+                                    .expect("CRT destination backdrop");
+                                layer_target.compose_arcade_list_over_backdrop(
+                                    &mut self.out.arcade_list_renderer,
+                                    backdrop.pixels(),
+                                    update,
+                                    backdrop.backdrop_revision(),
+                                    self.lib.catalog_version as u64,
+                                    false,
+                                    !backdrop.is_transitioning(),
+                                    true,
+                                    &mut self.out.crt_arcade_overlay,
+                                );
+                            } else if self.out.director.navigation.settings_physical_space() {
                                 let _ = layer_target.reclaim_arcade_publication(
                                     &mut self.out.arcade_list_renderer,
                                     &mut self.out.launcher_arcade_publication,
@@ -5346,14 +5364,8 @@ impl<'a> FrameLoop<'a> {
                     }
                 }
                 if destination_layers_ready
-                    && self.out.crt_layout
+                    && project.crt_backdrop_eligible
                     && self.ui.nav.screen == Screen::Arcade
-                    && self
-                        .out
-                        .director
-                        .navigation
-                        .request()
-                        .is_some_and(|r| r.is_device_card())
                     && let Some(source) = self.lib.preview.selected_backdrop_source()
                 {
                     destination_layers_ready =
@@ -5398,7 +5410,11 @@ impl<'a> FrameLoop<'a> {
                         );
                     }
                     self.out.director.navigation.update_device_reveal_backdrop(
-                        self.out.crt_backdrop.as_ref().map_or(&[], |b| b.pixels()),
+                        self.out
+                            .crt_backdrop
+                            .as_ref()
+                            .filter(|_| project.crt_backdrop_eligible)
+                            .map_or(&[], |b| b.pixels()),
                     );
                     // The first Slint destination raster can be expensive, but
                     // animation time only moves per produced frame, so cold
@@ -5747,11 +5763,15 @@ impl<'a> FrameLoop<'a> {
         } else if crt_backdrop_work_trace.active || crt_backdrop_full_damage.is_some() {
             self.out.crt_arcade_overlay.invalidate();
         }
-        let cached_arcade_rect = if project.crt_backdrop_eligible && !self.ui.nav.is_system_hub() {
+        // A refreshed backdrop must not reintroduce the live list after a
+        // full-screen transition has rendered its owned frame.
+        let cached_arcade_rect = if !project.composition_decision.allow_arcade_list_blit {
+            None
+        } else if project.crt_backdrop_eligible && !self.ui.nav.is_system_hub() {
             arcade_list_rect
                 .or_else(|| {
-                    crt_backdrop_full_damage
-                        .map(|_| ArcadeListUpdate::Full(self.out.arcade_list_renderer.dirty_rect()))
+                    (crt_backdrop_full_damage.is_some() || crt_foreground_damaged_list)
+                        .then(|| ArcadeListUpdate::Full(self.out.arcade_list_renderer.dirty_rect()))
                 })
                 .and_then(|update| {
                     let rect = arcade_update_dirty_rect(&update);
@@ -5768,7 +5788,9 @@ impl<'a> FrameLoop<'a> {
                                 self.lib.catalog_version as u64,
                                 crt_backdrop_full_damage.is_some(),
                                 !backdrop.is_transitioning() && !crt_backdrop_work_trace.active,
-                                project.full_frame_present || crt_backdrop_full_damage.is_some(),
+                                project.full_frame_present
+                                    || crt_backdrop_full_damage.is_some()
+                                    || crt_foreground_damaged_list,
                                 &mut self.out.crt_arcade_overlay,
                             )
                         })

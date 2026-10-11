@@ -38,7 +38,7 @@ export component CrtLauncherUi inherits Rectangle {
     // Settings family always has one edge-to-edge black scene background.
     background: root.settings-family
         ? (MisterUi.custom-home-base ? #000000 : transparent)
-        : MisterUi.custom-home-base ? transparent : CrtTheme.background;
+        : MisterUi.custom-home-base || MisterUi.custom-crt-backdrop ? transparent : CrtTheme.background;
 
     if root.settings-family : CrtSettingsBackdrop {
         opacity: root.settings-overlay-active ? 0.18 : 0.3;

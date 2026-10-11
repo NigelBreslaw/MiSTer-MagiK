@@ -3,17 +3,134 @@
 
 //! Host-neutral RGB565 composition for CRT screenshot backdrops.
 
-use crate::arcade_list_renderer::CrtArcadeLayout;
 use crate::preview_transition::blend_rgb565_bucket;
-use crate::ui_display::{CrtUiMetrics, ResolvedOutputRoute, UiDisplay, UiLayoutGeometry};
+use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use mister_magik_core::display::CRT_COMPOSITION_H;
 use mister_magik_framebuffer_scenes::{
-    OutputRotation, Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut,
-    blend_rgb565_neon_if_available,
+    OutputRotation, Rgb565OutputLayout, Rgb565SurfaceMut, blend_rgb565_neon_if_available,
 };
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
+
+/// Slint-owned transparent foreground. Never populated from a composed RGB565
+/// frame: screenshots, native list glyphs and transition pixels cannot enter it.
+#[derive(Default)]
+pub struct CrtForeground {
+    pixels: Vec<slint::platform::software_renderer::PremultipliedRgbaColor>,
+    spans: Vec<Vec<(usize, usize)>>,
+    width: usize,
+}
+
+/// The native list and transparent Slint foreground must use the same policy.
+/// Status pages, drawers, search and overlays retain an opaque Slint background.
+pub fn crt_backdrop_content_allowed(ready: bool, hub: bool, drawer: bool, blocked: bool) -> bool {
+    (ready || hub) && !drawer && !blocked
+}
+
+impl CrtForeground {
+    pub fn matches(&self, width: usize, height: usize) -> bool {
+        self.width == width && width != 0 && self.pixels.len() == width * height
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transparent(width: usize, height: usize) -> Self {
+        Self {
+            pixels: vec![Default::default(); width * height],
+            spans: vec![Vec::new(); height],
+            width,
+        }
+    }
+
+    pub fn render(
+        &mut self,
+        renderer: &slint::platform::software_renderer::SoftwareRenderer,
+        width: usize,
+        height: usize,
+    ) -> slint::platform::software_renderer::PhysicalRegion {
+        if !self.matches(width, height) {
+            self.pixels = vec![Default::default(); width * height];
+            self.spans = vec![Vec::new(); height];
+            self.width = width;
+        }
+        let region = renderer.render(&mut self.pixels, width);
+        for (origin, size) in region.iter() {
+            for y in origin.y as usize..(origin.y as usize + size.height as usize).min(height) {
+                let row = &self.pixels[y * width..(y + 1) * width];
+                let spans = &mut self.spans[y];
+                spans.clear();
+                let mut x = 0;
+                while x < width {
+                    if row[x].alpha == 0 {
+                        x += 1;
+                        continue;
+                    }
+                    let start = x;
+                    while x < width && row[x].alpha != 0 {
+                        x += 1;
+                    }
+                    spans.push((start, x));
+                }
+            }
+        }
+        region
+    }
+
+    /// Restore and blend only damaged foreground pixels. Restoring each rectangle
+    /// before blending also makes overlapping damage safe for translucent pixels.
+    pub fn restore_damage(
+        &self,
+        backdrop: &[Rgb565Pixel],
+        destination: &mut [Rgb565Pixel],
+        damage: &crate::framebuffer::target::DirtyRectList,
+    ) -> u32 {
+        use slint::platform::software_renderer::TargetPixel;
+        assert!(self.width != 0 && destination.len() == self.pixels.len());
+        assert_eq!(backdrop.len(), destination.len());
+        let mut copied = 0_usize;
+        for rect in damage.iter() {
+            let x0 = rect.x0.min(self.width);
+            let x1 = rect.x1.min(self.width);
+            for y in rect.y0.min(self.spans.len())..rect.y1.min(self.spans.len()) {
+                let row = y * self.width;
+                destination[row + x0..row + x1].copy_from_slice(&backdrop[row + x0..row + x1]);
+                copied += x1 - x0;
+                for &(start, end) in &self.spans[y] {
+                    let start = start.max(x0);
+                    let end = end.min(x1);
+                    if start < end {
+                        for (pixel, overlay) in destination[row + start..row + end]
+                            .iter_mut()
+                            .zip(&self.pixels[row + start..row + end])
+                        {
+                            pixel.blend(*overlay);
+                        }
+                    }
+                }
+            }
+        }
+        copied.min(u32::MAX as usize) as u32
+    }
+
+    pub fn compose(&self, destination: &mut [Rgb565Pixel]) {
+        use slint::platform::software_renderer::TargetPixel;
+        assert!(
+            self.width != 0 && destination.len() == self.pixels.len(),
+            "CRT foreground must be rendered at the destination size before composition"
+        );
+        for (y, spans) in self.spans.iter().enumerate() {
+            for &(start, end) in spans {
+                let range = y * self.width + start..y * self.width + end;
+                for (pixel, overlay) in destination[range.clone()]
+                    .iter_mut()
+                    .zip(&self.pixels[range])
+                {
+                    pixel.blend(*overlay);
+                }
+            }
+        }
+    }
+}
 
 /// A prepared, dimmed RGB565 target produced away from the launcher render
 /// thread.  The pixel and row-repeat buffers are immutable so adopting a
@@ -42,16 +159,6 @@ pub(crate) struct BackdropSource {
 pub const CRT_BACKDROP_FADE_DURATION: Duration = Duration::from_millis(130);
 pub const CRT_BACKDROP_DARK_RETAIN_PERCENT: u8 = 40;
 pub const CRT_BACKDROP_BACKGROUND: Rgb565Pixel = rgb565_from_rgb888(0x02, 0x08, 0x17);
-// Keep these synchronized with the opaque bitmap-font colors in CrtTheme.
-pub(crate) const CRT_PRODUCT_HEADER_TEXT: Rgb565Pixel = rgb565_from_rgb888(0xaa, 0xa5, 0xff);
-pub(crate) const CRT_PRODUCT_FOOTER_TEXT: Rgb565Pixel = rgb565_from_rgb888(0x8b, 0x94, 0xf8);
-const CRT_PRODUCT_WARNING_TEXT: Rgb565Pixel = rgb565_from_rgb888(0xff, 0xd1, 0x66);
-const CRT_PRODUCT_TEXT_COLORS: &[Rgb565Pixel] = &[
-    CRT_PRODUCT_HEADER_TEXT,
-    CRT_PRODUCT_FOOTER_TEXT,
-    CRT_PRODUCT_WARNING_TEXT,
-];
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CrtBackdropWorkTrace {
     pub prepare_us: u64,
@@ -274,72 +381,9 @@ impl CrtBackdropState {
         }
     }
 
-    #[cfg(feature = "ui-preview")]
-    pub fn retarget_for_layout(
-        &mut self,
-        frame: Option<PreviewFrame<'_>>,
-        now: Duration,
-        layout: UiLayoutGeometry,
-    ) {
-        if layout.output_layout().rotation() == OutputRotation::None {
-            self.retarget(frame, now);
-            return;
-        }
-        self.resolve_current(now);
-        self.source.copy_from_slice(&self.retarget);
-        self.source_row_repeats
-            .copy_from_slice(&self.retarget_row_repeats);
-        let prepare_start = Instant::now();
-        let mut x_map = Vec::new();
-        let mut y_map = Vec::new();
-        let prepared = frame.and_then(|frame| {
-            let PreviewPixels::Rgb565 {
-                pixels,
-                stride_pixels,
-            } = frame.pixels
-            else {
-                return None;
-            };
-            prepare_dimmed_rgb565_target_for_output_with_maps(
-                pixels,
-                frame.source_width,
-                frame.source_height,
-                stride_pixels,
-                layout.output_layout(),
-                self.reference_height,
-                &mut x_map,
-                &mut y_map,
-            )
-        });
-        (self.target, self.target_row_repeats) = prepared.map_or_else(
-            || {
-                (
-                    std::sync::Arc::clone(&self.plain_target),
-                    std::sync::Arc::clone(&self.plain_target_row_repeats),
-                )
-            },
-            |(pixels, row_repeats)| {
-                (
-                    std::sync::Arc::from(pixels),
-                    std::sync::Arc::from(row_repeats),
-                )
-            },
-        );
-        self.pending_prepare_us = duration_us(prepare_start.elapsed());
-        self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
-        self.transition_started = (self.source != self.target.as_ref()).then_some(now);
-        if self.transition_started.is_none() {
-            self.retarget.copy_from_slice(&self.target);
-            self.retarget_row_repeats
-                .copy_from_slice(&self.target_row_repeats);
-            self.retarget_is_plain = self.target_is_plain();
-            self.expand_to_logical();
-        }
-    }
-
     pub fn compose(&mut self, now: Duration) -> CrtBackdropWorkTrace {
         let mut logical_retarget = std::mem::take(&mut self.logical_retarget);
-        let trace = self.compose_to(now, &mut logical_retarget, &[], &[], 1);
+        let trace = self.compose_to(now, &mut logical_retarget);
         self.logical_retarget = logical_retarget;
         if !trace.active {
             self.expand_to_logical();
@@ -354,166 +398,9 @@ impl CrtBackdropState {
         now: Duration,
         destination: &mut [Rgb565Pixel],
     ) -> CrtBackdropWorkTrace {
-        let trace = self.compose_to(now, destination, &[], &[], 1);
+        let trace = self.compose_to(now, destination);
         if !trace.active {
             self.expand_to_logical();
-        }
-        trace
-    }
-
-    /// Compose the backdrop while preserving opaque UI rectangles already in
-    /// `destination`. Coordinates are in the logical RGB565 frame space.
-    /// Protected pixels are still represented by the normal UI base/chrome;
-    /// they are not part of the screenshot fade work.
-    pub fn compose_into_excluding(
-        &mut self,
-        now: Duration,
-        destination: &mut [Rgb565Pixel],
-        protected_rects: &[(usize, usize, usize, usize)],
-    ) -> CrtBackdropWorkTrace {
-        let trace = self.compose_to(now, destination, protected_rects, &[], 1);
-        if !trace.active {
-            self.expand_to_logical();
-        }
-        trace
-    }
-
-    /// Compose a deliberately coarse 2x2 backdrop fade for CRT performance
-    /// experiments. The interactive foreground remains full resolution.
-    pub fn compose_into_coarse_excluding(
-        &mut self,
-        now: Duration,
-        destination: &mut [Rgb565Pixel],
-        protected_rects: &[(usize, usize, usize, usize)],
-    ) -> CrtBackdropWorkTrace {
-        let trace = self.compose_to(now, destination, protected_rects, &[], 2);
-        if !trace.active {
-            self.expand_to_logical();
-        }
-        trace
-    }
-
-    /// Compose the fixed production CRT backdrop directly into a frame while
-    /// preserving only Arcade header and footer text pixels. Their transparent
-    /// containers therefore reveal the screenshot beneath them.
-    pub fn compose_product_into_layout(
-        &mut self,
-        now: Duration,
-        destination: &mut [Rgb565Pixel],
-        layout: UiLayoutGeometry,
-        arcade: CrtArcadeLayout,
-        metrics: CrtUiMetrics,
-    ) -> CrtBackdropWorkTrace {
-        let output = layout.output_layout();
-        let protected = if output.rotation() == OutputRotation::None {
-            product_chrome_rects(layout, metrics)
-        } else {
-            [arcade.header, arcade.footer].map(|rect| {
-                let physical = output.logical_rect_to_physical(Rgb565Rect {
-                    x0: rect.x,
-                    y0: rect.y,
-                    x1: rect.right(),
-                    y1: rect.bottom(),
-                });
-                (physical.x0, physical.y0, physical.x1, physical.y1)
-            })
-        };
-        let trace = self.compose_to(now, destination, &protected, CRT_PRODUCT_TEXT_COLORS, 1);
-        if !trace.active {
-            self.expand_to_logical();
-        }
-        trace
-    }
-
-    /// Preserve the overview's native glyphs and focus fill while composing the
-    /// same screenshot backdrop used by the list. No device hero is involved.
-    pub fn compose_system_hub_into_layout(
-        &mut self,
-        now: Duration,
-        destination: &mut [Rgb565Pixel],
-        layout: UiLayoutGeometry,
-        metrics: CrtUiMetrics,
-        highlight: (usize, Rgb565Pixel),
-    ) -> CrtBackdropWorkTrace {
-        let content = layout.content_rect();
-        let [header, footer] = product_chrome_rects(layout, metrics);
-        let hub = (
-            content.x,
-            content.y + metrics.header_height.max(1) as usize,
-            content.x + content.width,
-            content.y + content.height - metrics.footer_height.max(1) as usize,
-        );
-        let protected = [header, footer, hub].map(|(x0, y0, x1, y1)| {
-            let r = layout.logical_rect_to_composition(
-                mister_magik_mister_runtime::framebuffer::damage::DirtyRect { x0, y0, x1, y1 },
-            );
-            (r.x0, r.y0, r.x1, r.y1)
-        });
-        let colors = [
-            CRT_PRODUCT_HEADER_TEXT,
-            CRT_PRODUCT_FOOTER_TEXT,
-            CRT_PRODUCT_WARNING_TEXT,
-            rgb565_from_rgb888(0xee, 0xe8, 0xd5),
-            rgb565_from_rgb888(0x8f, 0x97, 0x96),
-            rgb565_from_rgb888(0xe7, 0x69, 0x5a),
-            rgb565_from_rgb888(0x5a, 0x71, 0xe7),
-            rgb565_from_rgb888(0xe6, 0xc2, 0x3a),
-            rgb565_from_rgb888(0x35, 0xc4, 0x8f),
-        ];
-        let trace = self.compose_to(now, destination, &protected, &colors, 1);
-        if !trace.active {
-            self.expand_to_logical();
-        }
-        // Slint's translucent fill is rasterized against its placeholder
-        // background. Reapply it over the composed screenshot, preserving
-        // native glyphs, rather than relying on a fixed colour-key palette.
-        let (w, h) = (layout.logical_w(), layout.logical_h());
-        let narrow = w.min(h);
-        let (sx, sy) = if narrow <= 288 && w.max(h) >= 640 {
-            if w > h { (2, 1) } else { (1, 2) }
-        } else if narrow >= 400 {
-            (2, 2)
-        } else {
-            (1, 1)
-        };
-        let mx = (w * 6 / 100)
-            .max(8 * sx)
-            .max(content.x.max(w - content.x - content.width));
-        let my = (h * 5 / 100)
-            .max(6 * sy)
-            .max(content.y.max(h - content.y - content.height));
-        let top = my + (44 + highlight.0.min(2) * 16) * sy;
-        let width = w.saturating_sub(2 * mx);
-        let mut surface = mister_magik_framebuffer_scenes::Rgb565SurfaceMut::new(
-            destination,
-            layout.output_layout(),
-        )
-        .expect("CRT hub destination matches the output layout");
-        for x in 0..width {
-            let position = x * 256 / width.max(1);
-            let alpha = if position < 154 {
-                154 - position * 92 / 154
-            } else {
-                (256 - position) * 62 / 102
-            };
-            let alpha = alpha as u32;
-            let accent = highlight.1.0 as u32;
-            for y in top..(top + 16 * sy).min(h) {
-                let Some(pixel) = surface.get(mx + x, y).copied() else {
-                    continue;
-                };
-                if colors.contains(&pixel) {
-                    continue;
-                }
-                let value = pixel.0 as u32;
-                let inverse = 256 - alpha;
-                let red = (((value >> 11) * inverse + (accent >> 11) * alpha) >> 8) << 11;
-                let green =
-                    ((((value >> 5) & 63) * inverse + ((accent >> 5) & 63) * alpha) >> 8) << 5;
-                let blue = ((value & 31) * inverse + (accent & 31) * alpha) >> 8;
-                let blended = red | green | blue;
-                surface.set(mx + x, y, Rgb565Pixel(blended as u16));
-            }
         }
         trace
     }
@@ -522,9 +409,6 @@ impl CrtBackdropState {
         &mut self,
         now: Duration,
         destination: &mut [Rgb565Pixel],
-        protected_rects: &[(usize, usize, usize, usize)],
-        preserved_colors: &[Rgb565Pixel],
-        coarse_factor: usize,
     ) -> CrtBackdropWorkTrace {
         let mut trace = CrtBackdropWorkTrace {
             prepare_us: std::mem::take(&mut self.pending_prepare_us),
@@ -533,7 +417,7 @@ impl CrtBackdropState {
         };
         let Some(started) = self.transition_started else {
             trace.alpha_bucket = 32;
-            self.expand_into(destination, protected_rects, preserved_colors);
+            self.expand_into(destination);
             return trace;
         };
         let elapsed = now.checked_sub(started).unwrap_or_default();
@@ -547,16 +431,14 @@ impl CrtBackdropState {
             // `retarget`. Rewrite the destination even at the alpha-zero
             // endpoint so a frame marked as fresh cannot retain the prior
             // list overlay underneath the new foreground.
-            self.expand_into(destination, protected_rects, preserved_colors);
+            self.expand_into(destination);
             trace.alpha_bucket = 0;
             trace.active = true;
             return trace;
         }
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
-        let coarse_factor = coarse_factor.max(1);
-        let mut row = 0;
-        while row < self.physical_height {
+        for row in 0..self.physical_height {
             let start = row.saturating_mul(row_width);
             let end = start.saturating_add(row_width).min(self.retarget.len());
             if row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row] {
@@ -566,39 +448,12 @@ impl CrtBackdropState {
                 let destination = &mut self.retarget[start..end];
                 let previous = &self.source[start..end];
                 let current = &self.target[start..end];
-                // The retarget buffer is stored at the physical backdrop
-                // height. Protected rectangles use logical output-space
-                // coordinates and are applied only during expansion below;
-                // mixing those coordinate systems here leaves stale rows in
-                // the expanded list viewport on 240p.
-                blend_rgb565_range(
-                    destination,
-                    previous,
-                    current,
-                    0,
-                    destination.len(),
-                    alpha_bucket,
-                    coarse_factor,
-                );
+                blend_rgb565_range(destination, previous, current, alpha_bucket);
             }
-            for copy_row in row + 1..(row + coarse_factor).min(self.physical_height) {
-                let source_start = row * row_width;
-                let source_end = source_start
-                    .saturating_add(row_width)
-                    .min(self.retarget.len());
-                let destination_start = copy_row * row_width;
-                let destination_end = destination_start
-                    .saturating_add(row_width)
-                    .min(self.retarget.len());
-                let (before, after) = self.retarget.split_at_mut(destination_start);
-                after[..destination_end - destination_start]
-                    .copy_from_slice(&before[source_start..source_end]);
-            }
-            row = row.saturating_add(coarse_factor);
         }
         for row in 0..self.physical_height {
-            self.retarget_row_repeats[row] = (coarse_factor > 1 && row % coarse_factor != 0)
-                || (row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row]);
+            self.retarget_row_repeats[row] =
+                row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row];
         }
         trace.blend_us = duration_us(blend_start.elapsed());
         trace.blend_pixels = self.retarget.len().min(u32::MAX as usize) as u32;
@@ -610,48 +465,17 @@ impl CrtBackdropState {
         } else {
             self.retarget_is_plain = false;
         }
-        self.expand_into(destination, protected_rects, preserved_colors);
+        self.expand_into(destination);
         trace
     }
 
-    fn expand_into(
-        &self,
-        destination: &mut [Rgb565Pixel],
-        protected_rects: &[(usize, usize, usize, usize)],
-        preserved_colors: &[Rgb565Pixel],
-    ) {
+    fn expand_into(&self, destination: &mut [Rgb565Pixel]) {
         let required = self.width.saturating_mul(self.height);
         if destination.len() < required {
             return;
         }
         if self.height == self.physical_height {
-            for row in 0..self.height {
-                copy_rgb565_row_preserving(
-                    &mut destination[row * self.width..(row + 1) * self.width],
-                    &self.retarget[row * self.width..(row + 1) * self.width],
-                    row,
-                    protected_rects,
-                    preserved_colors,
-                );
-            }
-            return;
-        }
-        if self.height == self.physical_height.saturating_mul(2) {
-            for physical_y in 0..self.physical_height {
-                let source_start = physical_y * self.width;
-                let source_end = source_start + self.width;
-                let logical_y = physical_y * 2;
-                for row in [logical_y, logical_y + 1] {
-                    let destination_start = row * self.width;
-                    copy_rgb565_row_preserving(
-                        &mut destination[destination_start..destination_start + self.width],
-                        &self.retarget[source_start..source_end],
-                        row,
-                        protected_rects,
-                        preserved_colors,
-                    );
-                }
-            }
+            destination[..required].copy_from_slice(&self.retarget);
             return;
         }
         for logical_y in 0..self.height {
@@ -662,13 +486,8 @@ impl CrtBackdropState {
                 .min(self.physical_height.saturating_sub(1));
             let logical_start = logical_y * self.width;
             let physical_start = physical_y * self.width;
-            copy_rgb565_row_preserving(
-                &mut destination[logical_start..logical_start + self.width],
-                &self.retarget[physical_start..physical_start + self.width],
-                logical_y,
-                protected_rects,
-                preserved_colors,
-            );
+            destination[logical_start..logical_start + self.width]
+                .copy_from_slice(&self.retarget[physical_start..physical_start + self.width]);
         }
     }
 
@@ -1134,434 +953,34 @@ fn blend_rgb565_range(
     destination: &mut [Rgb565Pixel],
     previous: &[Rgb565Pixel],
     current: &[Rgb565Pixel],
-    start: usize,
-    end: usize,
     alpha_bucket: u16,
-    coarse_factor: usize,
 ) {
-    let end = end
-        .min(destination.len())
-        .min(previous.len())
-        .min(current.len());
-    let start = start.min(end);
-    if coarse_factor <= 1
-        && blend_rgb565_neon_if_available(destination, previous, current, start, end, alpha_bucket)
-    {
+    let end = destination.len().min(previous.len()).min(current.len());
+    if blend_rgb565_neon_if_available(destination, previous, current, 0, end, alpha_bucket) {
         return;
     }
-    if coarse_factor <= 1 {
-        let mut previous_source = Rgb565Pixel(u16::MAX);
-        let mut previous_current = Rgb565Pixel(u16::MAX);
-        for index in start..end {
-            if index > start
-                && previous[index] == previous_source
-                && current[index] == previous_current
-            {
-                destination[index] = destination[index - 1];
-            } else {
-                destination[index] =
-                    blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
-            }
-            previous_source = previous[index];
-            previous_current = current[index];
-        }
-    } else {
-        if coarse_factor == 2 {
-            match alpha_bucket.min(32) {
-                0 => copy_rgb565_coarse_two_source(destination, previous, start, end),
-                32 => copy_rgb565_coarse_two_source(destination, current, start, end),
-                _ => {
-                    #[cfg(all(target_os = "linux", target_arch = "arm"))]
-                    {
-                        // SAFETY: the slices are disjoint, and the bounds passed to the C
-                        // kernel are validated by this function before entering the loop.
-                        unsafe {
-                            blend_rgb565_coarse_two_neon(
-                                destination,
-                                previous,
-                                current,
-                                start,
-                                end,
-                                alpha_bucket,
-                            );
-                        }
-                        return;
-                    }
-                    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
-                    {
-                        match alpha_bucket.min(32) {
-                            4 => blend_rgb565_coarse_two_const::<4, 28>(
-                                destination,
-                                previous,
-                                current,
-                                start,
-                                end,
-                            ),
-                            8 => blend_rgb565_coarse_two_const::<8, 24>(
-                                destination,
-                                previous,
-                                current,
-                                start,
-                                end,
-                            ),
-                            12 => blend_rgb565_coarse_two_const::<12, 20>(
-                                destination,
-                                previous,
-                                current,
-                                start,
-                                end,
-                            ),
-                            16 => blend_rgb565_coarse_two_const::<16, 16>(
-                                destination,
-                                previous,
-                                current,
-                                start,
-                                end,
-                            ),
-                            20 => blend_rgb565_coarse_two_const::<20, 12>(
-                                destination,
-                                previous,
-                                current,
-                                start,
-                                end,
-                            ),
-                            25 => blend_rgb565_coarse_two_const::<25, 7>(
-                                destination,
-                                previous,
-                                current,
-                                start,
-                                end,
-                            ),
-                            _ => {}
-                        }
-                        let mut index = start;
-                        while index + 1 < end {
-                            let pixel =
-                                blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
-                            destination[index] = pixel;
-                            destination[index + 1] = pixel;
-                            index += 2;
-                        }
-                        if index < end {
-                            destination[index] =
-                                blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
-                        }
-                    }
-                }
-            }
-            return;
-        }
-        let mut index = start;
-        let mut previous_source = Rgb565Pixel(u16::MAX);
-        let mut previous_current = Rgb565Pixel(u16::MAX);
-        let mut previous_pixel = Rgb565Pixel(0);
-        while index < end {
-            let pixel = if index > start
-                && previous[index] == previous_source
-                && current[index] == previous_current
-            {
-                previous_pixel
-            } else {
-                blend_rgb565_bucket(previous[index], current[index], alpha_bucket)
-            };
-            let block_end = index.saturating_add(coarse_factor).min(end);
-            destination[index..block_end].fill(pixel);
-            previous_source = previous[index];
-            previous_current = current[index];
-            previous_pixel = pixel;
-            index = block_end;
-        }
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-unsafe fn blend_rgb565_coarse_two_neon(
-    destination: &mut [Rgb565Pixel],
-    previous: &[Rgb565Pixel],
-    current: &[Rgb565Pixel],
-    start: usize,
-    end: usize,
-    alpha_bucket: u16,
-) {
-    unsafe extern "C" {
-        fn mister_magik_crt_backdrop_blend_coarse_two(
-            destination: *mut u16,
-            previous: *const u16,
-            current: *const u16,
-            start: usize,
-            end: usize,
-            alpha: u16,
-        );
-    }
-    // SAFETY: callers clamp all three slices to `end`; the C kernel only accesses those ranges.
-    unsafe {
-        mister_magik_crt_backdrop_blend_coarse_two(
-            destination.as_mut_ptr().cast(),
-            previous.as_ptr().cast(),
-            current.as_ptr().cast(),
-            start,
-            end,
-            alpha_bucket,
-        );
-    }
-}
-
-#[inline(always)]
-fn copy_rgb565_coarse_two_source(
-    destination: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    start: usize,
-    end: usize,
-) {
-    let mut index = start;
-    while index + 1 < end {
-        let pixel = source[index];
-        destination[index] = pixel;
-        destination[index + 1] = pixel;
-        index += 2;
-    }
-    if index < end {
-        destination[index] = source[index];
-    }
-}
-
-#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
-#[inline(always)]
-fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
-    destination: &mut [Rgb565Pixel],
-    previous: &[Rgb565Pixel],
-    current: &[Rgb565Pixel],
-    start: usize,
-    end: usize,
-) {
-    let mut index = start;
-    while index + 1 < end {
-        let pixel = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
-        destination[index] = pixel;
-        destination[index + 1] = pixel;
-        index += 2;
-    }
-    if index < end {
-        destination[index] = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
-    }
-}
-
-#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
-#[inline(always)]
-const fn blend_rgb565_const<const ALPHA: u32, const INVERSE: u32>(
-    from: Rgb565Pixel,
-    to: Rgb565Pixel,
-) -> Rgb565Pixel {
-    let from = from.0 as u32;
-    let to = to.0 as u32;
-    let red_blue = (((from & 0xf81f) * INVERSE + (to & 0xf81f) * ALPHA) >> 5) & 0xf81f;
-    let green = (((from & 0x07e0) * INVERSE + (to & 0x07e0) * ALPHA) >> 5) & 0x07e0;
-    Rgb565Pixel((red_blue | green) as u16)
-}
-
-#[inline(always)]
-fn copy_rgb565_row_preserving(
-    destination: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    row: usize,
-    protected_rects: &[(usize, usize, usize, usize)],
-    preserved_colors: &[Rgb565Pixel],
-) {
-    let width = destination.len().min(source.len());
-    let mut first_overlap = None;
-    let mut second_overlap = None;
-    let mut overlap_count = 0usize;
-    for &(x0, y0, x1, y1) in protected_rects {
-        if row >= y0 && row < y1 {
-            overlap_count += 1;
-            match overlap_count {
-                1 => first_overlap = Some((x0, x1)),
-                2 => second_overlap = Some((x0, x1)),
-                _ => {}
-            }
-        }
-    }
-    // Most backdrop rows do not intersect the protected chrome. Keep that
-    // common path to one slice copy instead of walking every protected rect.
-    match (overlap_count, first_overlap) {
-        (0, _) => {
-            destination[..width].copy_from_slice(&source[..width]);
-            return;
-        }
-        (1, Some((x0, x1))) => {
-            let protected_start = x0.min(width);
-            let protected_end = x1.min(width).max(protected_start);
-            destination[..protected_start].copy_from_slice(&source[..protected_start]);
-            if !preserved_colors.is_empty() {
-                for index in protected_start..protected_end {
-                    if !preserves_product_pixel(destination[index], preserved_colors) {
-                        destination[index] = source[index];
-                    }
-                }
-            }
-            destination[protected_end..width].copy_from_slice(&source[protected_end..width]);
-            return;
-        }
-        _ => {}
-    }
-    if let (2, Some(mut first), Some(mut second)) = (overlap_count, first_overlap, second_overlap) {
-        first.0 = first.0.min(width);
-        first.1 = first.1.min(width).max(first.0);
-        second.0 = second.0.min(width);
-        second.1 = second.1.min(width).max(second.0);
-        if second.0 < first.0 {
-            std::mem::swap(&mut first, &mut second);
-        }
-        destination[..first.0].copy_from_slice(&source[..first.0]);
-        copy_rgb565_preserving_colors(destination, source, first.0, first.1, preserved_colors);
-        if second.0 <= first.1 {
-            copy_rgb565_preserving_colors(
-                destination,
-                source,
-                first.1,
-                second.1.max(first.1),
-                preserved_colors,
-            );
+    let mut previous_source = Rgb565Pixel(u16::MAX);
+    let mut previous_current = Rgb565Pixel(u16::MAX);
+    for index in 0..end {
+        if index > 0 && previous[index] == previous_source && current[index] == previous_current {
+            destination[index] = destination[index - 1];
         } else {
-            destination[first.1..second.0].copy_from_slice(&source[first.1..second.0]);
-            copy_rgb565_preserving_colors(
-                destination,
-                source,
-                second.0,
-                second.1,
-                preserved_colors,
-            );
+            destination[index] = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
         }
-        let end = first.1.max(second.1);
-        destination[end..width].copy_from_slice(&source[end..width]);
-        return;
+        previous_source = previous[index];
+        previous_current = current[index];
     }
-    if !preserved_colors.is_empty() {
-        for index in 0..width {
-            let protected = protected_rects
-                .iter()
-                .any(|&(x0, y0, x1, y1)| row >= y0 && row < y1 && index >= x0 && index < x1);
-            if !protected || !preserves_product_pixel(destination[index], preserved_colors) {
-                destination[index] = source[index];
-            }
-        }
-        return;
-    }
-    let mut cursor = 0;
-    for &(x0, y0, x1, y1) in protected_rects {
-        if row < y0 || row >= y1 {
-            continue;
-        }
-        let protected_start = x0.min(width);
-        let protected_end = x1.min(width).max(protected_start);
-        let copy_end = protected_start.max(cursor);
-        destination[cursor..copy_end].copy_from_slice(&source[cursor..copy_end]);
-        cursor = cursor.max(protected_end);
-    }
-    destination[cursor..width].copy_from_slice(&source[cursor..width]);
-}
-
-#[inline(always)]
-fn copy_rgb565_preserving_colors(
-    destination: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    start: usize,
-    end: usize,
-    preserved_colors: &[Rgb565Pixel],
-) {
-    if preserved_colors.is_empty() {
-        return;
-    }
-    for index in start..end {
-        if !preserves_product_pixel(destination[index], preserved_colors) {
-            destination[index] = source[index];
-        }
-    }
-}
-
-#[inline(always)]
-fn preserves_product_pixel(pixel: Rgb565Pixel, preserved_colors: &[Rgb565Pixel]) -> bool {
-    if std::ptr::eq(preserved_colors, CRT_PRODUCT_TEXT_COLORS) {
-        return pixel.0 != 0 && pixel != CRT_BACKDROP_BACKGROUND;
-    }
-    preserved_colors.contains(&pixel)
 }
 
 fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u64::MAX as u128) as u64
 }
 
-pub fn product_chrome_rects(
-    layout: UiLayoutGeometry,
-    metrics: CrtUiMetrics,
-) -> [(usize, usize, usize, usize); 2] {
-    let content = layout.content_rect();
-    let grid_y = metrics.grid_y.max(1) as usize;
-    let header = (
-        content.x,
-        content.y,
-        content.x + content.width,
-        content.y + metrics.header_height.max(1) as usize + grid_y * 8,
-    );
-    let footer = layout.crt_footer_rect();
-    [
-        header,
-        (footer.x, footer.y, footer.right(), footer.bottom()),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "ui")]
-    use crate::ui_display::{ScreenOrientation, UiLayoutGeometry};
     use crate::ui_display::{UiDisplayPlan, UiFramebufferSizePolicy};
     use mister_magik_core::display::{Crt240Composition, DisplayGeometry};
-
-    #[test]
-    fn native_240p_footer_survives_plain_and_screenshot_backdrops() {
-        let display = UiDisplay::for_plan(
-            crate::ui_display::UiDisplayPlan::from_geometry_with_route_and_composition(
-                DisplayGeometry::new(640, 240),
-                ResolvedOutputRoute::Crt240p60,
-                "test-footer",
-                crate::ui_display::UiFramebufferSizePolicy::Auto,
-                Crt240Composition::Native240,
-            ),
-        );
-        let layout =
-            UiLayoutGeometry::for_display(&display, crate::settings::ScreenOrientation::Normal);
-        let metrics = CrtUiMetrics::for_display(&display);
-        let arcade = CrtArcadeLayout::for_layout(layout, metrics, false);
-        assert_eq!((arcade.footer.y, arcade.footer.bottom()), (208, 228));
-        for screenshot in [false, true] {
-            let mut state = CrtBackdropState::for_display(&display).unwrap();
-            let source = vec![Rgb565Pixel(0xffff); 320 * 240];
-            if screenshot {
-                state.retarget(Some(frame(&source, 320, 240)), Duration::ZERO);
-            }
-            let cream = rgb565_from_rgb888(0xee, 0xe8, 0xd5);
-            let mut pixels = vec![CRT_BACKDROP_BACKGROUND; 640 * 240];
-            // Slint's 12-row text cell starts five rows below the shared footer rule.
-            for y in arcade.footer.y + 5..arcade.footer.y + 17 {
-                pixels[y * 640 + 38] = cream;
-            }
-            state.compose_product_into_layout(
-                CRT_BACKDROP_FADE_DURATION,
-                &mut pixels,
-                layout,
-                arcade,
-                metrics,
-            );
-            for y in 213..225 {
-                assert_eq!(
-                    pixels[y * 640 + 38],
-                    cream,
-                    "row {y}, screenshot={screenshot}"
-                );
-            }
-        }
-    }
 
     fn frame<'a>(pixels: &'a [Rgb565Pixel], width: usize, height: usize) -> PreviewFrame<'a> {
         PreviewFrame {
@@ -1574,47 +993,6 @@ mod tests {
             display_width: width,
             display_height: height,
         }
-    }
-
-    #[cfg(feature = "ui")]
-    #[test]
-    fn hub_focus_gradient_survives_composition_without_tinting_glyphs() {
-        let plan = crate::ui_display::UiDisplayPlan::from_mister_ini_text(
-            "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
-        )
-        .unwrap();
-        let display = crate::ui_display::UiDisplay::for_plan(crate::ui_display::UiDisplayPlan {
-            fb_h: 240,
-            render_h: 240,
-            output_h: 240,
-            scan_h: 240,
-            crt240_composition: crate::ui_display::Crt240Composition::Native240,
-            ..plan
-        });
-        let layout = crate::ui_display::UiLayoutGeometry::for_display(
-            &display,
-            crate::settings::ScreenOrientation::Normal,
-        );
-        let metrics = crate::ui_display::CrtUiMetrics::for_display(&display);
-        let mut state = CrtBackdropState::for_display(&display).unwrap();
-        let mut pixels = vec![CRT_BACKDROP_BACKGROUND; 640 * 240];
-        let cream = rgb565_from_rgb888(0xee, 0xe8, 0xd5);
-        pixels[60 * 640 + 62] = cream;
-        state.compose_system_hub_into_layout(
-            Duration::ZERO,
-            &mut pixels,
-            layout,
-            metrics,
-            (0, rgb565_from_rgb888(0x5a, 0x71, 0xe7)),
-        );
-        assert_eq!(pixels[60 * 640 + 62], cream);
-        assert_eq!(
-            pixels[60 * 640 + 46],
-            Rgb565Pixel((6 << 11) | (17 << 5) | 17)
-        );
-        assert_ne!(pixels[60 * 640 + 46], pixels[60 * 640 + 320]);
-        assert_ne!(pixels[60 * 640 + 320], pixels[60 * 640 + 598]);
-        assert_eq!(pixels[80 * 640 + 46], CRT_BACKDROP_BACKGROUND);
     }
 
     #[cfg(feature = "ui")]
@@ -1846,75 +1224,6 @@ mod tests {
                 assert_eq!(x_map[logical_width - 1], crop_x + crop_width - 1);
                 assert_eq!(y_map[0], crop_y);
                 assert_eq!(y_map[639], crop_y + crop_height - 1);
-            }
-        }
-    }
-
-    #[cfg(feature = "ui")]
-    #[test]
-    fn portrait_product_chrome_survives_active_and_settled_backdrops() {
-        for (pal, expected_route) in [
-            (0, ResolvedOutputRoute::Crt240p60),
-            (1, ResolvedOutputRoute::Crt288p50),
-        ] {
-            let ini = format!("[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler=0\n");
-            let display = UiDisplay::for_plan(
-                UiDisplayPlan::from_mister_ini_text(&ini).expect("native CRT display plan"),
-            );
-            assert_eq!(display.output_route(), expected_route);
-            let metrics = CrtUiMetrics::for_display(&display);
-            for orientation in [
-                ScreenOrientation::MonitorClockwise,
-                ScreenOrientation::MonitorCounterclockwise,
-            ] {
-                let layout = UiLayoutGeometry::for_display(&display, orientation);
-                let arcade = CrtArcadeLayout::for_layout(layout, metrics, false);
-                for compose_at in [Duration::from_millis(65), CRT_BACKDROP_FADE_DURATION] {
-                    let mut backdrop = CrtBackdropState::for_display(&display).unwrap();
-                    backdrop.retarget_prepared(
-                        PreparedCrtBackdrop {
-                            pixels: std::sync::Arc::from(vec![
-                                Rgb565Pixel(0xffff);
-                                layout.output_layout().len()
-                            ]),
-                            row_repeats: std::sync::Arc::from(vec![
-                                false;
-                                layout
-                                    .output_layout()
-                                    .physical_height()
-                            ]),
-                        },
-                        Duration::ZERO,
-                        false,
-                    );
-                    let mut destination = vec![Rgb565Pixel(0x1234); layout.output_layout().len()];
-                    let [header, footer] = [arcade.header, arcade.footer].map(|rect| {
-                        layout.output_layout().logical_rect_to_physical(Rgb565Rect {
-                            x0: rect.x,
-                            y0: rect.y,
-                            x1: rect.right(),
-                            y1: rect.bottom(),
-                        })
-                    });
-                    let header_index =
-                        header.y0 * layout.output_layout().physical_stride() + header.x0;
-                    let footer_index =
-                        footer.y0 * layout.output_layout().physical_stride() + footer.x0;
-                    destination[header_index] = CRT_PRODUCT_HEADER_TEXT;
-                    destination[footer_index] = CRT_PRODUCT_FOOTER_TEXT;
-
-                    let trace = backdrop.compose_product_into_layout(
-                        compose_at,
-                        &mut destination,
-                        layout,
-                        arcade,
-                        metrics,
-                    );
-
-                    assert_eq!(trace.active, compose_at < CRT_BACKDROP_FADE_DURATION);
-                    assert_eq!(destination[header_index], CRT_PRODUCT_HEADER_TEXT);
-                    assert_eq!(destination[footer_index], CRT_PRODUCT_FOOTER_TEXT);
-                }
             }
         }
     }
@@ -2160,7 +1469,6 @@ mod tests {
                     UiFramebufferSizePolicy::Auto,
                     Crt240Composition::Native240,
                 ));
-            let metrics = CrtUiMetrics::for_display(&display);
             let source = [
                 Rgb565Pixel(0xf800),
                 Rgb565Pixel(0xf800),
@@ -2172,15 +1480,7 @@ mod tests {
             let mut destination =
                 vec![CRT_BACKDROP_BACKGROUND; display.render_w() * display.render_h()];
 
-            let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
-            let arcade = CrtArcadeLayout::for_layout(layout, metrics, false);
-            let trace = backdrop.compose_product_into_layout(
-                CRT_BACKDROP_FADE_DURATION,
-                &mut destination,
-                layout,
-                arcade,
-                metrics,
-            );
+            let trace = backdrop.compose_into(CRT_BACKDROP_FADE_DURATION, &mut destination);
 
             assert!(!trace.active);
             assert_eq!(
@@ -2314,112 +1614,23 @@ mod tests {
     }
 
     #[test]
-    fn protected_rectangles_are_not_overwritten_during_compose() {
-        let target = vec![Rgb565Pixel(0xffff); 8];
-        let mut backdrop = CrtBackdropState::new(4, 2);
-        backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
-        let marker = Rgb565Pixel(0x07e0);
-        let mut destination = vec![marker; 8];
-        let trace = backdrop.compose_into_excluding(
-            Duration::from_millis(65),
-            &mut destination,
-            &[(1, 0, 3, 2)],
-        );
-        assert!(trace.active);
-        assert_eq!(destination[1], marker);
-        assert_eq!(destination[2], marker);
-        assert_ne!(destination[0], marker);
-        assert_ne!(destination[3], marker);
-    }
-
-    #[test]
-    fn product_chrome_preserves_non_background_foreground_pixels() {
-        let marker = Rgb565Pixel(0xf81f);
-        let source = [Rgb565Pixel(0xffff); 4];
-        let mut destination = [
-            marker,
-            CRT_PRODUCT_HEADER_TEXT,
-            CRT_PRODUCT_FOOTER_TEXT,
-            marker,
-        ];
-
-        copy_rgb565_row_preserving(
-            &mut destination,
-            &source,
-            0,
-            &[(1, 0, 4, 1)],
-            CRT_PRODUCT_TEXT_COLORS,
-        );
-
-        assert_eq!(destination[0], source[0]);
-        assert_eq!(destination[1], CRT_PRODUCT_HEADER_TEXT);
-        assert_eq!(destination[2], CRT_PRODUCT_FOOTER_TEXT);
-        assert_eq!(destination[3], marker);
-    }
-
-    #[test]
-    fn two_rotated_chrome_bands_preserve_only_text_pixels() {
-        let marker = Rgb565Pixel(0xf81f);
-        let source = [Rgb565Pixel(0x1234); 10];
-        let mut destination = [marker; 10];
-        destination[1] = CRT_PRODUCT_HEADER_TEXT;
-        destination[8] = CRT_PRODUCT_FOOTER_TEXT;
-
-        copy_rgb565_row_preserving(
-            &mut destination,
-            &source,
-            0,
-            &[(1, 0, 3, 1), (7, 0, 9, 1)],
-            CRT_PRODUCT_TEXT_COLORS,
-        );
-
-        assert_eq!(destination[1], CRT_PRODUCT_HEADER_TEXT);
-        assert_eq!(destination[8], CRT_PRODUCT_FOOTER_TEXT);
-        for (index, pixel) in destination.iter().enumerate() {
-            if !matches!(index, 1 | 2 | 7 | 8) {
-                assert_eq!(*pixel, source[index], "pixel {index}");
-            } else if !matches!(index, 1 | 8) {
-                assert_eq!(*pixel, marker, "pixel {index}");
-            }
-        }
-    }
-
-    #[test]
-    fn coarse_compose_expands_each_fade_sample_to_a_two_by_two_block() {
-        let target = vec![Rgb565Pixel(0xffff); 16];
-        let mut backdrop = CrtBackdropState::new(4, 4);
-        backdrop.retarget(Some(frame(&target, 4, 4)), Duration::ZERO);
-        let mut destination = vec![Rgb565Pixel(0); 16];
-        let trace = backdrop.compose_into_coarse_excluding(
-            Duration::from_millis(65),
-            &mut destination,
-            &[],
-        );
-        assert!(trace.active);
-        assert_eq!(destination[0], destination[1]);
-        assert_eq!(destination[0], destination[4]);
-        assert_eq!(destination[2], destination[3]);
-        assert_eq!(destination[2], destination[6]);
-    }
-
-    #[test]
-    fn physical_rows_are_blended_before_logical_chrome_exclusion() {
+    fn physical_rows_are_blended_before_logical_expansion() {
         let target = vec![Rgb565Pixel(0xffff); 8];
         let mut backdrop = CrtBackdropState::new_with_heights(4, 4, 2);
         backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
         let marker = Rgb565Pixel(0x1234);
         let mut destination = vec![marker; 16];
-        let trace = backdrop.compose_into_coarse_excluding(
-            Duration::from_millis(65),
-            &mut destination,
-            &[(1, 1, 3, 3)],
-        );
+        let trace = backdrop.compose_into(Duration::from_millis(65), &mut destination);
 
         assert!(trace.active);
         assert_ne!(backdrop.retarget[5], CRT_BACKDROP_BACKGROUND);
-        assert_eq!(destination[4 + 1], marker);
-        assert_eq!(destination[8 + 1], marker);
-        assert_ne!(destination[12 + 1], marker);
+        for row in 0..4 {
+            assert_eq!(
+                destination[row * 4 + 1],
+                backdrop.retarget[(row / 2) * 4 + 1]
+            );
+            assert_ne!(destination[row * 4 + 1], marker);
+        }
     }
 
     #[test]
@@ -2429,7 +1640,7 @@ mod tests {
         backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
         let marker = Rgb565Pixel(0x1234);
         let mut destination = vec![marker; 16];
-        let trace = backdrop.compose_into_coarse_excluding(Duration::ZERO, &mut destination, &[]);
+        let trace = backdrop.compose_into(Duration::ZERO, &mut destination);
 
         assert_eq!(trace.alpha_bucket, 0);
         assert!(trace.active);
@@ -2442,11 +1653,7 @@ mod tests {
         let mut backdrop = CrtBackdropState::new_with_heights(4, 4, 2);
         backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
         let mut destination = vec![Rgb565Pixel(0); 16];
-        let trace = backdrop.compose_into_coarse_excluding(
-            CRT_BACKDROP_FADE_DURATION,
-            &mut destination,
-            &[],
-        );
+        let trace = backdrop.compose_into(CRT_BACKDROP_FADE_DURATION, &mut destination);
 
         assert_eq!(trace.alpha_bucket, 32);
         assert!(!trace.active);
@@ -2478,5 +1685,239 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == Rgb565Pixel(0xabcd))
         );
+    }
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod foreground_tests {
+    use super::*;
+    use crate::ui_display::{
+        ScreenOrientation, UiDisplayPlan, UiFramebufferSizePolicy, UiLayoutGeometry,
+    };
+    use mister_magik_core::display::{Crt240Composition, DisplayGeometry};
+    use slint::ComponentHandle;
+    use slint::platform::software_renderer::{RenderingRotation, TargetPixel};
+
+    slint::slint! {
+        export component ForegroundProbe inherits Window {
+            in property <int> w: 640;
+            in property <int> h: 240;
+            in property <int> glyph-x: 38;
+            in property <int> glyph-y: 213;
+            in property <bool> glyph-visible: true;
+            in property <bool> settings: false;
+            width: root.w * 1px; height: root.h * 1px;
+            background: root.settings ? black : transparent;
+            Rectangle { x: 10px; y: 10px; width: 40px; height: 24px; background: #5a71e780; }
+            if root.glyph-visible : Rectangle {
+                x: root.glyph-x * 1px; y: root.glyph-y * 1px;
+                width: 6px; height: 12px; background: #eee8d5;
+            }
+        }
+    }
+
+    #[test]
+    fn retained_foreground_tracks_rotated_alpha_and_full_screen_handoffs() {
+        for (height, route) in [
+            (240, ResolvedOutputRoute::Crt240p60),
+            (288, ResolvedOutputRoute::Crt288p50),
+        ] {
+            for orientation in [
+                ScreenOrientation::Normal,
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::MonitorCounterclockwise,
+            ] {
+                let window = crate::visual_platform::install_isolated_test_platform();
+                let app = ForegroundProbe::new().unwrap();
+                let display =
+                    UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
+                        DisplayGeometry::new(640, height),
+                        route,
+                        "foreground-handoff",
+                        UiFramebufferSizePolicy::Auto,
+                        Crt240Composition::Native240,
+                    ));
+                let layout = UiLayoutGeometry::for_display(&display, orientation);
+                let output = layout.output_layout();
+                window.set_rendering_rotation(match output.rotation() {
+                    OutputRotation::None => RenderingRotation::NoRotation,
+                    OutputRotation::Clockwise90 => RenderingRotation::Rotate90,
+                    OutputRotation::CounterClockwise90 => RenderingRotation::Rotate270,
+                });
+                app.set_w(layout.logical_w() as i32);
+                app.set_h(layout.logical_h() as i32);
+                app.set_glyph_x(layout.content_rect().x as i32 + 6);
+                app.set_glyph_y(layout.crt_footer_rect().y as i32 + 5);
+                window.set_size(slint::PhysicalSize::new(
+                    layout.logical_w() as u32,
+                    layout.logical_h() as u32,
+                ));
+                app.show().unwrap();
+                let mut foreground = CrtForeground::default();
+                let mut completed = vec![Rgb565Pixel(0xf81f); output.len()];
+                for color in [
+                    Rgb565Pixel(0xf800),
+                    Rgb565Pixel(0x07e0),
+                    Rgb565Pixel(0x001f),
+                ] {
+                    app.set_settings(false);
+                    app.set_glyph_visible(true);
+                    window.request_redraw();
+                    window.draw_full_frame_preserving_cache_if_needed(
+                        layout.logical_w(),
+                        layout.logical_h(),
+                        |r| {
+                            foreground.render(
+                                r,
+                                output.physical_stride(),
+                                output.physical_height(),
+                            );
+                        },
+                    );
+                    completed.fill(color);
+                    foreground.compose(&mut completed);
+                    let glyph = output
+                        .physical_offset(app.get_glyph_x() as usize, app.get_glyph_y() as usize);
+                    assert_eq!(
+                        completed[glyph],
+                        rgb565_from_rgb888(0xee, 0xe8, 0xd5),
+                        "height={height}, orientation={orientation:?}, glyph={glyph}, first opaque={:?}",
+                        foreground.pixels.iter().position(|p| p.alpha == 255)
+                    );
+                    assert_eq!(completed[output.physical_offset(100, 20)], color);
+                    let alpha = output.physical_offset(20, 20);
+                    let mut expected = color;
+                    expected.blend(foreground.pixels[alpha]);
+                    assert_eq!(completed[alpha], expected);
+
+                    // Full-screen Settings owns an RGB565 raster, while the alpha
+                    // layer remains retained separately through transition writes.
+                    app.set_settings(true);
+                    window.request_redraw();
+                    window.draw_full_frame_preserving_cache_if_needed(
+                        layout.logical_w(),
+                        layout.logical_h(),
+                        |r| {
+                            r.render(&mut completed, output.physical_stride());
+                        },
+                    );
+                    let settings = completed.clone();
+                    completed.fill(Rgb565Pixel(0xffff));
+                    window.request_redraw();
+                    window.draw_full_frame_preserving_cache_if_needed(
+                        layout.logical_w(),
+                        layout.logical_h(),
+                        |r| {
+                            r.render(&mut completed, output.physical_stride());
+                        },
+                    );
+                    assert_eq!(
+                        completed, settings,
+                        "full-screen release must remove every transition pixel"
+                    );
+                    app.set_settings(false);
+                    app.set_glyph_visible(false);
+                    window.request_redraw();
+                    window.draw_full_frame_preserving_cache_if_needed(
+                        layout.logical_w(),
+                        layout.logical_h(),
+                        |r| {
+                            foreground.render(
+                                r,
+                                output.physical_stride(),
+                                output.physical_height(),
+                            );
+                        },
+                    );
+                    completed.fill(color);
+                    foreground.compose(&mut completed);
+                    assert_eq!(
+                        completed[glyph], color,
+                        "removed footer glyph must not survive re-entry"
+                    );
+                    assert_eq!(
+                        completed[alpha], expected,
+                        "alpha must not accumulate across screens"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn partial_foreground_restore_matches_full_composition_including_overlapping_alpha() {
+        use crate::framebuffer::target::{DirtyRect, DirtyRectList, dirty_rects};
+        for rotation in [
+            RenderingRotation::NoRotation,
+            RenderingRotation::Rotate90,
+            RenderingRotation::Rotate270,
+        ] {
+            let window = crate::visual_platform::install_isolated_test_platform();
+            let app = ForegroundProbe::new().unwrap();
+            let (w, h) = if rotation == RenderingRotation::NoRotation {
+                (640, 240)
+            } else {
+                (240, 640)
+            };
+            window.set_rendering_rotation(rotation);
+            app.set_w(w);
+            app.set_h(h);
+            app.set_glyph_x(50);
+            app.set_glyph_y(h - 30);
+            window.set_size(slint::PhysicalSize::new(w as u32, h as u32));
+            app.show().unwrap();
+            let mut foreground = CrtForeground::default();
+            let backdrop = vec![Rgb565Pixel(0x1234); 640 * 240];
+            window.draw_full_frame_preserving_cache_if_needed(w as usize, h as usize, |renderer| {
+                foreground.render(renderer, 640, 240);
+            });
+            let mut actual = backdrop.clone();
+            foreground.compose(&mut actual);
+            for visible in [false, true, false, true] {
+                app.set_glyph_visible(visible);
+                window.request_redraw();
+                let mut damage = DirtyRectList::new();
+                window.draw_if_needed(|renderer| {
+                    damage = dirty_rects(&foreground.render(renderer, 640, 240), 640, 240);
+                });
+                assert!(!damage.is_empty());
+                let copied = foreground.restore_damage(&backdrop, &mut actual, &damage);
+                assert!(copied < (640 * 240) as u32);
+                let mut reference = backdrop.clone();
+                foreground.compose(&mut reference);
+                assert_eq!(
+                    actual, reference,
+                    "partial glyph removal or redraw left stale pixels"
+                );
+                if !visible {
+                    let rotation = match rotation {
+                        RenderingRotation::NoRotation => OutputRotation::None,
+                        RenderingRotation::Rotate90 => OutputRotation::Clockwise90,
+                        _ => OutputRotation::CounterClockwise90,
+                    };
+                    let output =
+                        Rgb565OutputLayout::new(w as usize, h as usize, 640, rotation).unwrap();
+                    let glyph = output.physical_offset(50, h as usize - 30);
+                    assert_eq!(
+                        actual[glyph], backdrop[glyph],
+                        "removed glyph must expose the backdrop"
+                    );
+                }
+                // Overlapping translucent damage must not blend twice.
+                let mut overlapping = DirtyRectList::from_one(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 100,
+                    y1: 100,
+                });
+                overlapping.push(DirtyRect {
+                    x0: 5,
+                    y0: 5,
+                    x1: 90,
+                    y1: 90,
+                });
+                foreground.restore_damage(&backdrop, &mut actual, &overlapping);
+                assert_eq!(actual, reference);
+            }
+        }
     }
 }

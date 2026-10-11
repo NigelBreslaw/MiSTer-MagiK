@@ -540,7 +540,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 7]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 8]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
@@ -550,6 +550,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
             .expect("valid native Spleen 6x12 bitmap font");
         [
             leak_font(stretch_font(&spleen_6x12, "Spleen 6x12 Wide", 2, 1)),
+            leak_font(stretch_font(&spleen_6x12, "Spleen 6x12 Tall", 1, 2)),
             leak_font(decode_resource(XERXES_10_RESOURCE).expect("valid Xerxes 10 bitmap font")),
             leak_font(decode_resource(NOCIVE_15_RESOURCE).expect("valid Nocive 15 bitmap font")),
             leak_font(decode_resource(JERSEY_15_RESOURCE).expect("valid Jersey 15 bitmap font")),
@@ -1320,7 +1321,7 @@ mod tests {
     #[test]
     fn crt_stretched_spleen_doubles_each_axis_exactly() {
         let base = decode_resource(SPLEEN_6X12_NATIVE_RESOURCE).unwrap();
-        for (family, sx, sy) in [("Spleen 6x12 Wide", 2, 1)] {
+        for (family, sx, sy) in [("Spleen 6x12 Wide", 2, 1), ("Spleen 6x12 Tall", 1, 2)] {
             let stretched = stretch_font(&base, family, sx, sy);
             assert_eq!(stretched.family_name, family);
             assert_eq!(stretched.pixel_size, base.pixel_size * sy);

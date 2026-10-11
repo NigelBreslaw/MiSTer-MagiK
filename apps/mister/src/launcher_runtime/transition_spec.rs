@@ -109,22 +109,6 @@ impl<'a> TransitionStart<'a> {
         }
     }
 
-    /// Super-scaler in the physical composition raster (portrait).
-    pub fn super_scaler_physical(
-        edge: NavigationTransitionEdge,
-        direction: NavigationTransitionDirection,
-        geometry: NavigationTransitionGeometry,
-        width: usize,
-        height: usize,
-        source: &'a [Rgb565Pixel],
-        now_us: u64,
-    ) -> Self {
-        Self {
-            space: RasterSpace::Physical { width, height },
-            ..Self::super_scaler(edge, direction, geometry, source, now_us)
-        }
-    }
-
     /// Device-card reveal. The clock waits for the composed destination, as with
     /// the Settings card capture contract.
     #[allow(clippy::too_many_arguments)]
@@ -166,6 +150,57 @@ impl<'a> TransitionStart<'a> {
             space: RasterSpace::Logical,
             start: StartPolicy::Immediate,
             assets: TransitionAssets::SystemPanel { backdrop },
+            source,
+            now_us,
+        }
+    }
+
+    /// Slide complete, already-oriented snapshots. No artwork or text is
+    /// regenerated in landscape coordinates while a portrait transition plays.
+    pub fn portrait_page(
+        route: NavigationTransitionRoute,
+        direction: NavigationTransitionDirection,
+        output: mister_magik_framebuffer_scenes::Rgb565OutputLayout,
+        source: &'a [Rgb565Pixel],
+        now_us: u64,
+    ) -> Self {
+        use mister_magik_framebuffer_scenes::OutputRotation;
+        let axis = match output.rotation() {
+            OutputRotation::Clockwise90 => SettingsPageTransitionAxis::Vertical,
+            OutputRotation::CounterClockwise90 => SettingsPageTransitionAxis::VerticalReversed,
+            OutputRotation::None => SettingsPageTransitionAxis::Horizontal,
+        };
+        let mut request = NavigationTransitionRequest::settings_page_on_axis(direction, axis);
+        request.duration_us = NATIVE_SETTINGS_PAGE_US;
+        Self {
+            request,
+            route,
+            space: RasterSpace::Physical {
+                width: output.physical_width(),
+                height: output.physical_height(),
+            },
+            start: StartPolicy::AfterDestination,
+            assets: TransitionAssets::None,
+            source,
+            now_us,
+        }
+    }
+
+    /// Complete portrait page motion before the preview rotates its logical raster.
+    pub fn portrait_page_logical(
+        route: NavigationTransitionRoute,
+        direction: NavigationTransitionDirection,
+        source: &'a [Rgb565Pixel],
+        now_us: u64,
+    ) -> Self {
+        let mut request = NavigationTransitionRequest::settings_page(direction);
+        request.duration_us = NATIVE_SETTINGS_PAGE_US;
+        Self {
+            request,
+            route,
+            space: RasterSpace::Logical,
+            start: StartPolicy::AfterDestination,
+            assets: TransitionAssets::None,
             source,
             now_us,
         }
@@ -345,8 +380,19 @@ mod tests {
         assert!(matches!(scaler.assets, TransitionAssets::None));
         assert_eq!(scaler.now_us, 7);
 
-        let portrait =
-            TransitionStart::super_scaler_physical(edge, direction, geometry, 12, 16, &source, 0);
+        let portrait = TransitionStart::portrait_page(
+            NavigationTransitionRoute::HomeToArcade,
+            direction,
+            mister_magik_framebuffer_scenes::Rgb565OutputLayout::new(
+                16,
+                12,
+                12,
+                mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+            )
+            .unwrap(),
+            &source,
+            0,
+        );
         assert_eq!(
             portrait.space,
             RasterSpace::Physical {
@@ -354,7 +400,7 @@ mod tests {
                 height: 16
             }
         );
-        assert_eq!(portrait.start, StartPolicy::Immediate);
+        assert_eq!(portrait.start, StartPolicy::AfterDestination);
 
         let card = TransitionStart::device_card(
             edge,
