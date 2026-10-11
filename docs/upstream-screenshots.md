@@ -22,6 +22,8 @@ automatically. Additional feeds outside Update All can be included with
 `--database-url https://...` (repeatable).
 
 MRA contents are verified against manifest MD5/size or Git blob SHA-1/size.
+Only the identity header and ROM opening-tag zip attributes are decoded; inline
+ROM bodies are skipped, including non-UTF-8 patch bytes.
 The published Arcade screenshot index is verified against the public manifest's
 SHA-256, byte size and archive identity. Coverage counts parent/family images,
 not individual clone, bootleg or hack setnames. It uses MAME/HBMAME relationships,
@@ -35,8 +37,9 @@ within one known family are reported as redundant family images. This preserves
 older catalog keys without storing multiple screenshots of the same family. Unknown or conflicting external-ROM families
 are reported as `family_unresolved`, rather than counted as new image requests.
 Embedded games with an explicit setname retain their own identity. MAME BIOS,
-device and software-list platform records are retained as `not_game`, separately
-from game screenshot requests (for example, PGM BIOS and NeoGeo Pocket). The latest MAME
+device and explicitly reviewed platform records are retained as `not_game`, separately
+from game screenshot requests (for example, PGM BIOS and Neo Geo Pocket).
+Software-list support does not exclude an otherwise runnable arcade game or its clones. The latest MAME
 release's listxml is downloaded by default; use
 `--mame-listxml PATH` for a local XML or ZIP. HBMAME parents come from the latest
 published game-database source artifact in this repository, verified against its
@@ -59,11 +62,20 @@ Results go to ignored `build/arcade-upstream-audit/` by default:
   custom MRA keys absent from machine metadata, with pinned evidence URLs.
   The current table retains all 90 custom links established by the audited MRAs. The
   catalog and audit share this file; updating it links a custom variant to its
-  family instead of adding a duplicate screenshot.
+  family instead of adding a duplicate screenshot. Both readers reject malformed,
+  duplicate, self-referencing and chained rows; the audit also requires each target
+  to be a top-level game parent in the verified machine metadata. The catalog
+  follows parent chains and selects a family image only when the installed index
+  contains it, retaining an available clone image when that is the representative.
+  Pack installation reconciles these choices without requiring a source rebuild.
+  The catalog does not infer custom families from main ROM archives because compact
+  runtime metadata lacks BIOS/device flags; add a reviewed link for those custom keys.
 - `audit.json`: complete structured results and source/pack provenance.
 - `snapshot.json`: last complete audit, used automatically as the next run's
   baseline. `new_game` and `new_gap` identify changes; they are false on the first
-  run. An incomplete run does not replace the last complete baseline.
+  run. Snapshots carry an identity-format version. An older grouping version is
+  reported as a baseline reset, with no new-game or new-gap alerts on that run.
+  An incomplete run does not replace the last complete baseline.
 - `cache/`: downloaded metadata and verified MRA bytes, reused for immutable
   objects. Feed manifests, the registry and the screenshot manifest refresh on
   every run.

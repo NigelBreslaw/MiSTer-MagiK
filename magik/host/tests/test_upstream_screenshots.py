@@ -232,6 +232,7 @@ def test_end_to_end_reports_channels_missing_keys_failures_and_baseline(
     )
     baseline = {
         "format": audit.FORMAT,
+        "identity_format": audit.IDENTITY_FORMAT,
         "complete": True,
         "generated_at": "before",
         "games": [
@@ -508,14 +509,14 @@ def test_reviewed_links_override_unknown_custom_archives():
 def test_platform_and_bios_mras_are_separate_from_game_image_requests():
     excluded = set()
     parents = audit.parent_map(
-        b'<mame><machine name="platform"><softwarelist name="games"/></machine><machine name="bios" isbios="yes"></machine><machine name="game"></machine></mame>',
+        b'<mame><machine name="ngp"><softwarelist name="games"/></machine><machine name="bios" isbios="yes"></machine><machine name="game"></machine></mame>',
         excluded,
     )
-    assert excluded == {"platform", "bios"}
-    assert set(parents) == {"platform", "bios", "game"}
+    assert excluded == {"ngp", "bios"}
+    assert set(parents) == {"ngp", "bios", "game"}
     games = audit.game_rows(
         [
-            record("Platform", "platform"),
+            record("Neo Geo Pocket", "ngp"),
             record("BIOS", "bios"),
             record("Game", "game"),
         ],
@@ -556,3 +557,100 @@ def test_verified_index_exposes_payload_identity_for_family_storage_audit():
     entries = {}
     assert audit.pack_keys(data, pack, entries) == {"parent"}
     assert entries == {"parent": (1, 1, 2, 2, 1, 2, 0)}
+
+
+def test_software_lists_do_not_hide_arcade_games_or_their_clones():
+    excluded = set()
+    parents = audit.parent_map(
+        b'<mame><machine name="game"><softwarelist name="media"/></machine>'
+        b'<machine name="clone" cloneof="game"><softwarelist name="media"/></machine>'
+        b'<machine name="ngp"><softwarelist name="ngp"/></machine>'
+        b'<machine name="ngpc" cloneof="ngp"/></mame>',
+        excluded,
+    )
+    assert excluded == {"ngp", "ngpc"}
+    games = audit.game_rows(
+        [record("Game", "game"), record("Clone", "clone")],
+        {key: parent for key, parent in parents.items() if key not in excluded},
+        set(),
+    )
+    assert len(games) == 1
+    assert games[0]["status"] == "missing"
+    assert games[0]["setnames"] == ["clone", "game"]
+
+
+def test_reviewed_clone_target_and_clone_only_picture_resolve_to_top_parent():
+    games = audit.game_rows(
+        [record("Reviewed", "dfeveronnd")],
+        {"feversos": "dfeveron", "dfeveron": "", "otherclone": "dfeveron"},
+        {"otherclone"},
+        {"dfeveronnd": "feversos"},
+    )
+    assert games[0]["screenshot_key"] == "dfeveron"
+    assert games[0]["matched_key"] == "otherclone"
+    assert games[0]["status"] == "covered"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "key\tparent",
+        "Key\tparent\thttps://example.test/mra",
+        "key\tkey\thttps://example.test/mra",
+        "key\tparent\thttp://example.test/mra",
+        "key\tparent\thttps:///mra",
+        "key\tparent\thttps://example.test/mra\textra",
+        "key\tparent\thttps://example.test/a\nkey\tother\thttps://example.test/b",
+        "custom_key\tparent\thttps://example.test/a\ncustom-key\tother\thttps://example.test/b",
+        "key\tcustom_key\thttps://example.test/a\ncustom-key\tparent\thttps://example.test/b",
+        "unknown\tparent\thttps://example.test/a",
+    ],
+)
+def test_invalid_reviewed_rows_fail_instead_of_silently_shipping(tmp_path, data):
+    path = tmp_path / "crates/catalog/data/arcade-screenshot-families.tsv"
+    path.parent.mkdir(parents=True)
+    path.write_text(data)
+    with pytest.raises(ValueError):
+        audit.reviewed_families(tmp_path)
+
+
+def test_rom_bodies_and_non_zip_attributes_are_never_decoded_as_identity():
+    data = (
+        b"<misterromdescription><name>Game</name><setname>game</setname>"
+        b"<rom zip='parent.zip' unused='\xff'><part>"
+        + b"\xff"
+        * (1024 * 1024)
+        + b"<rom zip='fake.zip'/></part><!-- </rom> --></rom>"
+        b"<!-- <rom zip='comment.zip'/> --><rom zip='clone.zip'/></misterromdescription>"
+    )
+    assert audit.inspect_mra(data)["rom_setnames"] == ["clone", "parent"]
+
+
+def test_old_identity_snapshots_reset_without_false_early_warnings(tmp_path):
+    report = {
+        "format": audit.FORMAT,
+        "generated_at": "now",
+        "complete": True,
+        "pack": {"version": "test", "entries": 0},
+        "sources": [],
+        "errors": [],
+        "games": audit.game_rows([record("Missing", "parent")], {"parent": ""}, set()),
+    }
+    old = {
+        "generated_at": "before",
+        "games": [{"identity": "family:parent", "status": "missing"}],
+    }
+    audit.write_reports(tmp_path, report, old)
+    assert report["summary"]["new_games"] == report["summary"]["new_gaps"] == 0
+    assert report["baseline_reset_reason"]
+    assert "establishes a new baseline" in (tmp_path / "report.md").read_text()
+    assert (
+        json.loads((tmp_path / "snapshot.json").read_text())["identity_format"]
+        == audit.IDENTITY_FORMAT
+    )
+    report["games"] = audit.game_rows(
+        [record("Missing", "parent"), record("New", "future")], {}, set()
+    )
+    baseline = json.loads((tmp_path / "snapshot.json").read_text())
+    audit.write_reports(tmp_path, report, baseline)
+    assert report["summary"]["new_games"] == report["summary"]["new_gaps"] == 1

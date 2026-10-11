@@ -28,6 +28,9 @@ import zipfile
 REGISTRY_URL = "https://raw.githubusercontent.com/theypsilon/Update_All_MiSTer/master/src/update_all/databases.py"
 MANIFEST_URL = "https://assets.mistermagik.com/mister-magik/v1/manifest.json"
 FORMAT = "mister-magik-upstream-screenshots-v1"
+IDENTITY_FORMAT = "arcade-screenshot-families-v2"
+# Reviewed handheld platforms; software-list support alone does not identify a platform.
+PLATFORM_MACHINES = {"ngp", "ngpc"}
 
 
 def add_command(commands):
@@ -421,19 +424,15 @@ def parent_map(data, excluded=None):
                 raise ValueError("MAME ZIP must contain one bounded listxml document")
             data = archive.read(files[0])
     parents = {}
-    name = ""
     # Decode only machine attributes, not the hundreds of MiB of ROM metadata.
-    for match in re.finditer(rb"<machine\s+([^>]+)>|<softwarelist\b", data):
-        if match[1] is None:
-            if excluded is not None and name:
-                excluded.add(name)
-            continue
+    for match in re.finditer(rb"<machine\s+([^>]+)>", data):
         attrs = match[1].decode("utf-8")
         name = attribute(attrs, "name")
         if name:
             parents[name] = attribute(attrs, "cloneof")
             if excluded is not None and (
-                attribute(attrs, "isbios") == "yes"
+                name in PLATFORM_MACHINES
+                or attribute(attrs, "isbios") == "yes"
                 or attribute(attrs, "isdevice") == "yes"
                 or attribute(attrs, "runnable") == "no"
             ):
@@ -547,20 +546,43 @@ def hbmame_parents(arguments, downloads, root):
 
 
 def inspect_mra(data):
-    uncommented = re.sub(rb"<!--.*?-->", b"", data, flags=re.S)
+    # Read identity from the header and ROM zip attributes only. Jump over each
+    # ROM body, including inline binary/hex patches, instead of decoding it.
     archives = set()
-    for match in re.finditer(rb"<rom\b([^>]*)>", uncommented, re.S | re.I):
-        for archive in attribute(match[1].decode("utf-8"), "zip").split("|"):
-            key = normalize_setname(PurePosixPath(archive.strip()).name)
-            if key:
-                archives.add(key)
-    # Extract header text only. Do not resolve external XML entities or execute anything.
-    # Large inline ROM patches are irrelevant to identity. Skip comments while
-    # locating the first real ROM element, then decode only the header.
-    for token in re.finditer(rb"<!--.*?-->|<rom\b", data, re.S | re.I):
-        if not token[0].startswith(b"<!--"):
-            data = data[: token.start()]
-            break
+    header_end = len(data)
+    position = 0
+    opening = re.compile(rb"<!--|<!\[CDATA\[|<rom\b", re.I)
+    closing = re.compile(rb"<!--.*?-->|<!\[CDATA\[.*?\]\]>|</rom\s*>", re.S | re.I)
+    while match := opening.search(data, position):
+        if match[0] in (b"<!--", b"<![CDATA["):
+            marker = b"-->" if match[0] == b"<!--" else b"]]>"
+            end = data.find(marker, match.end())
+            if end < 0:
+                raise ValueError("unterminated MRA comment or CDATA")
+            position = end + len(marker)
+            continue
+        header_end = min(header_end, match.start())
+        end = data.find(b">", match.end())
+        if end < 0:
+            raise ValueError("unterminated MRA ROM tag")
+        attrs = data[match.end() : end]
+        zip_match = re.search(rb"\bzip\s*=\s*(['\"])(.*?)\1", attrs, re.S | re.I)
+        if zip_match:
+            for archive in html.unescape(zip_match[2].decode("utf-8")).split("|"):
+                key = normalize_setname(PurePosixPath(archive.strip()).name)
+                if key:
+                    archives.add(key)
+        position = end + 1
+        if attrs.rstrip().endswith(b"/"):
+            continue
+        while token := closing.search(data, position):
+            position = token.end()
+            if token[0].lower().startswith(b"</rom"):
+                break
+        else:
+            # Header inspection does not validate ROM contents or require a closing tail.
+            position = len(data)
+    data = data[:header_end]
     text = re.sub(r"<!--.*?-->", "", data.decode("utf-8"), flags=re.S)
     if not re.search(r"<misterromdescription\b", text, re.I):
         raise ValueError("MRA has no misterromdescription root")
@@ -591,20 +613,38 @@ def normalize_setname(value):
 def reviewed_families(root):
     path = root / "crates/catalog/data/arcade-screenshot-families.tsv"
     data = path.read_bytes()
+
+    def normalized(value):
+        return re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+
     links = {}
-    for row in csv.reader(io.StringIO(data.decode()), delimiter="\t"):
-        if not row or row[0].startswith("#"):
+    normalized_keys = set()
+    for line in data.decode().splitlines():
+        if not line or line.startswith("#"):
             continue
+        row = line.split("\t")
         if len(row) != 3 or not all(
             normalize_setname(key) == key and key for key in row[:2]
         ):
             raise ValueError("invalid reviewed screenshot family")
         key, family, evidence = row
-        if key in links or key == family or urlparse(evidence).scheme != "https":
+        url = urlparse(evidence)
+        if (
+            normalized(key) in normalized_keys
+            or normalized(key) == normalized(family)
+            or key == "unknown"
+            or family == "unknown"
+            or not evidence.startswith("https://")
+            or not url.netloc
+            or any(character.isspace() for character in evidence)
+        ):
             raise ValueError(
                 "duplicate, self-referencing or unverified screenshot family"
             )
         links[key] = family
+        normalized_keys.add(normalized(key))
+    if normalized_keys & {normalized(value) for value in links.values()}:
+        raise ValueError("reviewed screenshot families must point directly to parents")
     return links, {"source": str(path.relative_to(root)), "sha256": digest(data)}
 
 
@@ -743,19 +783,28 @@ def markdown_table(headers, rows):
 
 def write_reports(output, report, baseline):
     games = report["games"]
+    compatible_baseline = (
+        baseline and baseline.get("identity_format") == IDENTITY_FORMAT
+    )
+    report["identity_format"] = IDENTITY_FORMAT
+    report["baseline_reset_reason"] = (
+        "Screenshot family grouping changed; this complete run establishes a new baseline."
+        if baseline and not compatible_baseline
+        else None
+    )
     before = (
         {row["identity"]: row["status"] for row in baseline["games"]}
-        if baseline
+        if compatible_baseline
         else {}
     )
     for game in games:
         game["new_game"] = (
-            bool(baseline)
+            bool(compatible_baseline)
             and game["status"] != "not_game"
             and game["identity"] not in before
         )
         game["new_gap"] = (
-            bool(baseline)
+            bool(compatible_baseline)
             and game["status"] not in ("covered", "not_game")
             and before.get(game["identity"], "covered") == "covered"
         )
@@ -768,7 +817,7 @@ def write_reports(output, report, baseline):
         new_games=sum(game["new_game"] for game in games),
         new_gaps=sum(game["new_gap"] for game in games),
     )
-    report["baseline"] = baseline.get("generated_at") if baseline else None
+    report["baseline"] = baseline.get("generated_at") if compatible_baseline else None
     output.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(report, indent=2) + "\n"
     (output / "audit.json").write_text(payload)
@@ -819,6 +868,8 @@ def write_reports(output, report, baseline):
         "Counts represent screenshot families, using machine metadata, reviewed links, declared MRA parents and unambiguous ROM families. A group can appear in several channels.",
         "",
     ]
+    if report["baseline_reset_reason"]:
+        lines += [report["baseline_reset_reason"], ""]
     lines += markdown_table(
         ["Status", "Games"],
         (
@@ -1058,8 +1109,11 @@ def run(arguments, root):
         key: parent for key, parent in all_parents.items() if key not in excluded
     }
     reviewed, family_provenance = reviewed_families(root)
-    if any(family not in parents for family in reviewed.values()):
-        raise ValueError("reviewed screenshot family absent from machine metadata")
+    if any(
+        family not in parents or family_key(family, parents) != family
+        for family in reviewed.values()
+    ):
+        raise ValueError("reviewed screenshot family must be a top-level game parent")
     print(
         f"Discovered {len(sources)} core/distribution feeds; pack {pack['version']}: {len(keys)} keys.",
         flush=True,

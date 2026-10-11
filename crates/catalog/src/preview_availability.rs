@@ -412,6 +412,23 @@ fn reconcile_preview_rows(
         .map_err(PreviewAvailabilityError::new)?
         .ok_or_else(|| PreviewAvailabilityError::new("pack index is missing"))?;
     let entries = stems.entries.into_iter().collect::<HashSet<_>>();
+    let arcade_families = if system_id.as_str() == "arcade" {
+        let mut families = crate::machine_family::MachineFamilyResolver::for_metadata_path(
+            &resolver.runtime_metadata,
+        );
+        let entry_families = families
+            .screenshot_families(entries.iter().cloned())
+            .map_err(PreviewAvailabilityError::new)?;
+        let identities = families
+            .screenshot_families(games.iter().map(|game| game.preview_asset_key.clone()))
+            .map_err(PreviewAvailabilityError::new)?;
+        Some((
+            crate::machine_family::available_family_screenshots(&entry_families),
+            identities,
+        ))
+    } else {
+        None
+    };
     let stable_archive_path =
         crate::preview_worker::preview_archive_path_for_system(system_id.as_str());
     let mut candidate_rows = 0;
@@ -421,6 +438,7 @@ fn reconcile_preview_rows(
     let mut derived_identity_rows = 0;
     let mut ambiguous_identity_rows = 0;
     for game in &mut games {
+        let original_key = game.preview_asset_key.clone();
         if game.preview_asset_key.is_empty() {
             let mut candidates = resolver
                 .candidates(system_id, &game.title)
@@ -454,6 +472,13 @@ fn reconcile_preview_rows(
         } else {
             existing_identity_rows += 1;
         }
+        if !entries.contains(&game.preview_asset_key)
+            && let Some((available, identities)) = &arcade_families
+            && let Some(family) = identities.get(&game.preview_asset_key)
+            && let Some(key) = available.get(family)
+        {
+            game.preview_asset_key = key.clone();
+        }
         candidate_rows += 1;
         let available = entries.contains(&game.preview_asset_key.to_ascii_lowercase());
         available_rows += usize::from(available);
@@ -462,7 +487,10 @@ fn reconcile_preview_rows(
         } else {
             ""
         };
-        if game.has_preview != available || game.preview_archive_path != archive_path {
+        if game.has_preview != available
+            || game.preview_archive_path != archive_path
+            || game.preview_asset_key != original_key
+        {
             game.has_preview = available;
             game.preview_archive_path = archive_path.to_string();
             changed_rows += 1;
@@ -560,6 +588,55 @@ mod tests {
         )
         .expect("write pack index fixture");
         archive
+    }
+
+    #[test]
+    fn arcade_reconciliation_keeps_clone_only_images_and_resolves_reviewed_parent_chains() {
+        let root = unique_temp_dir("arcade-preview-family-membership");
+        let metadata = root.join(crate::runtime_metadata::FILE_NAME);
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        let machines = [
+            ("dfeveron", None),
+            ("feversos", Some("dfeveron")),
+            ("otherclone", Some("feversos")),
+        ]
+        .into_iter()
+        .map(|(name, parent)| crate::runtime_metadata::ArcadeMachine {
+            setname: name.into(),
+            parent_setname: parent.map(str::to_string),
+            title: name.into(),
+            year: None,
+            manufacturer: None,
+            players: None,
+            control: None,
+        })
+        .collect();
+        builder
+            .add_arcade(&crate::runtime_metadata::ArcadeShard {
+                mame: machines,
+                ..Default::default()
+            })
+            .unwrap();
+        builder.write_to(&metadata).unwrap();
+        let archive = write_pack_index(&root, &["otherclone"]);
+        let system = SystemId::parse("arcade").unwrap();
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
+        let rows = vec![
+            game("Reviewed", "dfeveronnd"),
+            game("Existing clone", "otherclone"),
+            game("Parent", "dfeveron"),
+            game("Missing", "missing"),
+        ];
+        let outcome = reconcile_preview_rows(&system, &archive, rows, &mut resolver).unwrap();
+        assert_eq!(outcome.available_rows, 3);
+        assert_eq!(outcome.changed_rows, 3);
+        for row in &outcome.games[..3] {
+            assert_eq!(row.preview_asset_key, "otherclone");
+            assert!(row.has_preview);
+        }
+        assert_eq!(outcome.games[3].preview_asset_key, "missing");
+        assert!(!outcome.games[3].has_preview);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
