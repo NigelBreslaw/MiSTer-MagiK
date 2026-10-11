@@ -48,6 +48,7 @@ impl MachineFamilyResolver {
     ///
     /// A Dev MAME database and a stable HBMAME database are intentionally not
     /// mixed: both databases come from the selected root.
+    #[cfg(any(test, feature = "builder"))]
     pub(crate) fn for_storage_root(storage_root: &Path) -> Result<Self, String> {
         let roots = [
             storage_root.join("mister-magik-dev"),
@@ -163,6 +164,7 @@ impl MachineFamilyResolver {
         true
     }
 
+    #[cfg(feature = "builder")]
     pub(crate) fn finish_log(&self, system: &str) {
         crate::catalog_logln!(
             "fast_catalog_machine_family_tsv\tsystem={system}\trequested={}\tcache_hits={}\tmame_matches={}\thbmame_matches={}\tunresolved={}",

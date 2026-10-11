@@ -36,7 +36,6 @@ pub mod launch_profiles;
 pub mod lazy_sharded_reader;
 pub mod legacy_user_state_import;
 pub mod library_db;
-#[cfg(feature = "builder")]
 mod machine_family;
 #[cfg(feature = "builder")]
 mod machine_family_projection;
