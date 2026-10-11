@@ -186,17 +186,6 @@ mod navigation {
 
     const GAME: &str = "/media/fat/_Arcade/Pocket Tennis.mra";
 
-    /// A launchable game in `collection`, as the catalog fixture names them.
-    fn game_in(collection: &str) -> &'static str {
-        match collection {
-            MENU_ARCADE_SYSTEM_ID => "/media/fat/_Arcade/Metal Slug.mra",
-            "neogeopocket" => GAME,
-            "gamegear" => "/media/fat/_Arcade/Sonic.mra",
-            "nes" => "/media/fat/_Arcade/Super Mario Bros.mra",
-            other => panic!("no fixture game for {other}"),
-        }
-    }
-
     fn catalog() -> ArcadeCatalog {
         arcade_catalog(
             vec![
@@ -435,10 +424,12 @@ mod navigation {
                         entered
                             .take()
                             .expect("Arcade is only reached by a planned reveal");
-                    if next(3) == 0 {
+                    if next(3) == 0
+                        && let Some(game) = catalog
+                            .system_game_at(nav.active_collection_id().expect("a collection"), 0)
+                    {
                         // A game launch restarts the process: only saved state survives.
-                        let game = game_in(nav.active_collection_id().expect("a collection"));
-                        let state = capture_launch_return_state(&nav, &catalog, game);
+                        let state = capture_launch_return_state(&nav, &catalog, &game.mra_path);
                         if let Some(state) = state {
                             let mut restored = LauncherNav::new();
                             assert!(apply_launch_return_state(&mut restored, &catalog, state));
@@ -478,8 +469,9 @@ mod navigation {
                         else {
                             continue;
                         };
-                        // The loop selects the tile before it activates it.
+                        // Restore a settled selection, including the scroll needed to show it.
                         nav.selected = items.iter().position(|i| i.id == item.id).unwrap();
+                        nav.restore_pending_home_view(nav.home_view_state());
                         match item.kind {
                             LauncherMenuItemKind::Menu => {
                                 let _ = nav.commit_navigation_intent(

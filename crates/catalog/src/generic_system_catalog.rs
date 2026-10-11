@@ -268,7 +268,7 @@ pub fn rebuild_generic_system(
     system_id: &str,
 ) -> Result<(FastFiveSystem, GenericSystemStats), String> {
     rebuild_installed_generic_system(storage_root, system_id)?
-        .ok_or_else(|| format!("generic system {system_id} has no installed launchable content"))
+        .ok_or_else(|| format!("generic system {system_id} has no installed launch profile"))
 }
 
 pub fn rebuild_installed_generic_system(
@@ -281,7 +281,10 @@ pub fn rebuild_installed_generic_system(
         .into_iter()
         .filter(|profile| profile.system_id == system_id)
         .collect::<Vec<_>>();
-    rebuild_generic_system_from_profiles(storage_root, system_id, &profiles)
+    if profiles.is_empty() {
+        return Ok(None);
+    }
+    rebuild_generic_system_from_profiles(storage_root, system_id, &profiles).map(Some)
 }
 
 pub(crate) fn rebuild_installed_generic_system_with_observations(
@@ -294,7 +297,11 @@ pub(crate) fn rebuild_installed_generic_system_with_observations(
         .into_iter()
         .filter(|profile| profile.system_id == system_id)
         .collect::<Vec<_>>();
+    if profiles.is_empty() {
+        return Ok(None);
+    }
     rebuild_generic_system_from_profiles_with_observations(storage_root, system_id, &profiles, true)
+        .map(Some)
 }
 
 /// Discover every installed profile-backed system without assuming a fixed
@@ -350,31 +357,22 @@ pub(crate) fn discover_generic_systems_from_profiles_excluding_with_progress(
     let mut systems = Vec::new();
     let mut reports = Vec::new();
     for (system_id, profiles) in grouped {
-        let system_started = Instant::now();
-        if let Some((system, report)) =
-            rebuild_generic_system_from_profiles(storage_root, &system_id, &profiles)?
-        {
-            crate::catalog_logln!(
-                "fast_catalog_source_tsv\tadapter=generic\tsystem={}\telapsed_us={}\tfiles={}\tdirectories={}\tarchive_members={}\tgames={}\tread_errors={}\tarchive_errors={}",
-                report.system_id,
-                report.elapsed_us,
-                report.files,
-                report.directories,
-                report.archive_members,
-                report.games,
-                report.read_errors,
-                report.archive_errors,
-            );
-            system_complete(&system);
-            systems.push(system);
-            reports.push(report);
-        } else {
-            crate::catalog_logln!(
-                "fast_catalog_source_tsv\tadapter=generic\tsystem={}\telapsed_us={}\tstatus=absent",
-                system_id,
-                system_started.elapsed().as_micros(),
-            );
-        }
+        let (system, report) =
+            rebuild_generic_system_from_profiles(storage_root, &system_id, &profiles)?;
+        crate::catalog_logln!(
+            "fast_catalog_source_tsv\tadapter=generic\tsystem={}\telapsed_us={}\tfiles={}\tdirectories={}\tarchive_members={}\tgames={}\tread_errors={}\tarchive_errors={}",
+            report.system_id,
+            report.elapsed_us,
+            report.files,
+            report.directories,
+            report.archive_members,
+            report.games,
+            report.read_errors,
+            report.archive_errors,
+        );
+        system_complete(&system);
+        systems.push(system);
+        reports.push(report);
     }
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
@@ -427,6 +425,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         if excluded_system_ids.contains(&profile.system_id.as_str()) {
             continue;
         }
+        accumulator_for_profile(&mut accumulators, profile);
         for game_dir in &profile.game_dirs {
             known_roots_considered = known_roots_considered.saturating_add(1);
             let known_started = Instant::now();
@@ -594,9 +593,6 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     let mut reports = Vec::new();
     let mut watch_observations = BTreeMap::new();
     for (system_id, mut accumulator) in accumulators {
-        if accumulator.stats.roots == 0 {
-            continue;
-        }
         accumulator.games.sort_by_cached_key(|row| {
             (
                 row.game.title.to_ascii_lowercase(),
@@ -1045,21 +1041,6 @@ fn merge_namespace_stats(stats: &mut GenericSystemStats, namespace: &NamespaceWa
     stats.read_errors = stats.read_errors.saturating_add(namespace.errors);
 }
 
-pub fn discover_generic_system_ids(storage_root: &Path) -> BTreeSet<String> {
-    let roots = [storage_root.display().to_string()];
-    ProfileSet::for_roots(&roots)
-        .into_profiles()
-        .into_iter()
-        .filter(|profile| {
-            profile
-                .game_dirs
-                .iter()
-                .any(|game_dir| storage_root.join("games").join(game_dir).is_dir())
-        })
-        .map(|profile| profile.system_id)
-        .collect()
-}
-
 pub(crate) struct GenericSystemRebuild {
     pub(crate) system: FastFiveSystem,
     pub(crate) report: GenericSystemStats,
@@ -1070,9 +1051,9 @@ fn rebuild_generic_system_from_profiles(
     storage_root: &Path,
     system_id: &str,
     profiles: &[LaunchProfile],
-) -> Result<Option<(FastFiveSystem, GenericSystemStats)>, String> {
+) -> Result<(FastFiveSystem, GenericSystemStats), String> {
     rebuild_generic_system_from_profiles_with_observations(storage_root, system_id, profiles, false)
-        .map(|result| result.map(|r| (r.system, r.report)))
+        .map(|r| (r.system, r.report))
 }
 
 fn rebuild_generic_system_from_profiles_with_observations(
@@ -1080,10 +1061,7 @@ fn rebuild_generic_system_from_profiles_with_observations(
     system_id: &str,
     profiles: &[LaunchProfile],
     capture_watch: bool,
-) -> Result<Option<GenericSystemRebuild>, String> {
-    if profiles.is_empty() {
-        return Ok(None);
-    }
+) -> Result<GenericSystemRebuild, String> {
     let started = Instant::now();
     let mut stats = GenericSystemStats {
         system_id: system_id.to_string(),
@@ -1116,9 +1094,6 @@ fn rebuild_generic_system_from_profiles_with_observations(
             }
         }
     }
-    if stats.roots == 0 {
-        return Ok(None);
-    }
     crate::catalog_sort::sort_ascii_titles(
         &mut scanned,
         |row| &row.game.title,
@@ -1133,7 +1108,7 @@ fn rebuild_generic_system_from_profiles_with_observations(
             stats.read_errors
         ));
     }
-    Ok(Some(GenericSystemRebuild {
+    Ok(GenericSystemRebuild {
         system: FastFiveSystem {
             system_id: system_id.to_string(),
             display_title: profiles
@@ -1147,7 +1122,7 @@ fn rebuild_generic_system_from_profiles_with_observations(
         },
         report: stats,
         observations: capture_watch.then_some(observations),
-    }))
+    })
 }
 
 #[derive(Debug)]
@@ -1540,9 +1515,18 @@ mod tests {
         let (systems, report, _, observations) =
             discover(BTreeSet::from([prepared.clone()])).expect("prepared root exclusion");
 
-        assert!(systems.is_empty());
-        assert_eq!(report.systems.len(), 0);
-        assert!(observations.is_empty());
+        assert!(
+            systems
+                .iter()
+                .all(|system| system.system_id != "myprepared")
+        );
+        assert!(
+            report
+                .systems
+                .iter()
+                .all(|system| system.system_id != "myprepared")
+        );
+        assert!(!observations.contains_key("myprepared"));
 
         let (_, unrelated_report, _, _) = discover(BTreeSet::from([root.join("games/Unrelated")]))
             .expect("unrelated root discovery");
@@ -1597,7 +1581,6 @@ mod tests {
             fs::write(path, bytes).expect("write game");
         }
         let (systems, report) = discover_generic_systems(&root).expect("scan");
-        assert_eq!(systems.len(), 4);
         assert_eq!(report.games, 4);
         for system_id in GENERIC_EXAMPLE_SYSTEM_IDS {
             let system = systems

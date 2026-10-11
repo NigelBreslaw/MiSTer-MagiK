@@ -20,11 +20,7 @@ impl Corpus {
             NEXT.fetch_add(1, Ordering::Relaxed),
         ));
         fs::create_dir(&path).unwrap();
-        let corpus = Self(fs::canonicalize(path).unwrap());
-        // Keep the complete snapshot nonempty while testing absent target systems.
-        corpus.write("_Console/NES_20260828.rbf", b"core");
-        corpus.write("games/NES/Anchor.nes", b"rom");
-        corpus
+        Self(fs::canonicalize(path).unwrap())
     }
     fn write(&self, relative: &str, bytes: &[u8]) {
         let path = self.0.join(relative);

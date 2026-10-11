@@ -3,8 +3,7 @@
 
 //! Actual incremental source rebuilds with isolated, on-storage metadata.
 use mister_magik_catalog::{
-    fast_catalog_sources as sources, fast_five_catalog as fast, io_test_metrics,
-    runtime_metadata as meta,
+    fast_catalog_sources as sources, io_test_metrics, runtime_metadata as meta,
 };
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -106,26 +105,23 @@ fn fixture() -> Result<Fixture, String> {
     Ok(fixture)
 }
 fn execute(root: &Path, case: &str) -> Result<(), String> {
-    let snapshot = if case == "both" {
-        sources::build_independent_fast_snapshot(root)?.0
+    let systems = if case == "both" {
+        sources::build_independent_fast_snapshot(root)?
+            .0
+            .systems
+            .into_iter()
+            .filter(|system| matches!(system.system_id.as_str(), "snes" | "saturn"))
+            .collect::<Vec<_>>()
     } else {
-        let unused = fast::FastFiveSnapshot {
-            schema: fast::FAST_FIVE_SNAPSHOT_SCHEMA.into(),
-            source_fingerprint: "0".repeat(64),
-            systems: vec![],
-        };
-        let (system, _) = sources::rebuild_independent_system(root, &unused, case)?
-            .ok_or("fixture system missing")?;
-        fast::FastFiveSnapshot {
-            systems: vec![system],
-            ..unused
-        }
+        let (system, _) =
+            sources::rebuild_independent_system(root, case)?.ok_or("fixture system missing")?;
+        vec![system]
     };
     let expected = if case == "both" { 2 } else { 1 };
-    if snapshot.systems.len() != expected {
+    if systems.len() != expected {
         return Err("unexpected fixture system count".into());
     }
-    for system in snapshot.systems {
+    for system in systems {
         if system.games.len() != 1
             || system.games[0].preview_asset_key
                 != format!("mame-software__{}__family", system.system_id)

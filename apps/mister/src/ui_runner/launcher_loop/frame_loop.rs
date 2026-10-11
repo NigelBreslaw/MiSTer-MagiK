@@ -145,7 +145,6 @@ pub(super) struct Effects {
     pub(super) startup_intro_launcher_frame_ready: bool,
     pub(super) startup_intro_bridge_dirty_pending: bool,
     pub(super) startup_intro_catalog_ui_replay: Option<LauncherWorkerUiIntent>,
-    pub(super) startup_intro_catalog_shells_pending: bool,
 }
 
 /// Profiling, accounting and tooling.
@@ -222,9 +221,6 @@ macro_rules! catalog_domain {
             lifecycle_effects: &mut $frame.lib.lifecycle_effects,
             full_bridge_dirty: &mut $dirty,
             startup_intro_catalog_ui_replay: &mut $frame.fx.startup_intro_catalog_ui_replay,
-            startup_intro_catalog_shells_pending: &mut $frame
-                .fx
-                .startup_intro_catalog_shells_pending,
         }
     };
 }
@@ -898,24 +894,8 @@ impl<'a> FrameLoop<'a> {
         // The catalog-side locals, borrowed together for the worker-message handlers.
         if self.fx.startup_intro.is_none() {
             #[cfg(test)]
-            if self.fx.startup_intro_catalog_shells_pending
-                || self.fx.startup_intro_catalog_ui_replay.is_some()
-            {
+            if self.fx.startup_intro_catalog_ui_replay.is_some() {
                 record_launcher_frame_phase!(LauncherFramePhase::StartupCatalogReplay);
-            }
-            if std::mem::take(&mut self.fx.startup_intro_catalog_shells_pending) {
-                self.lib.catalog = self
-                    .ui
-                    .nav
-                    .catalog_with_build_shells(self.lib.catalog.clone());
-                self.lib.catalog_version = self.lib.catalog_version.wrapping_add(1);
-                self.ui.nav.sync_launcher_taxonomy(&self.lib.catalog);
-                let _ = reapply_pending_launch_return_state(
-                    &mut self.ui.nav,
-                    &self.lib.catalog,
-                    &mut self.lib.launch_return_session,
-                );
-                full_bridge_dirty = true;
             }
             if let Some(intent) = self.fx.startup_intro_catalog_ui_replay.take() {
                 apply_launcher_worker_ui_intent(&self.env.app, intent, &mut full_bridge_dirty);
@@ -1612,7 +1592,11 @@ impl<'a> FrameLoop<'a> {
                         .pending_collection_entry
                         .as_ref()
                         .is_none_or(|entry| {
-                            collection_has_resident_rows(&self.lib.catalog, &entry.collection_id)
+                            collection_rows_ready(
+                                &self.lib.catalog,
+                                &self.ui.nav,
+                                &entry.collection_id,
+                            )
                         })
             });
             if should_commit {
@@ -2335,8 +2319,9 @@ impl<'a> FrameLoop<'a> {
                                             .then(|| event.path.clone())
                                             .flatten();
                                         if let Some(collection_id) = collection_id.as_deref()
-                                            && !collection_has_resident_rows(
+                                            && !collection_rows_ready(
                                                 &self.lib.catalog,
+                                                &self.ui.nav,
                                                 collection_id,
                                             )
                                         {
@@ -2433,8 +2418,9 @@ impl<'a> FrameLoop<'a> {
                                                 |collection_id| {
                                                     collection_id
                                                         == arcade_catalog::MENU_ARCADE_SYSTEM_ID
-                                                        || collection_has_resident_rows(
+                                                        || collection_rows_ready(
                                                             &self.lib.catalog,
+                                                            &self.ui.nav,
                                                             collection_id,
                                                         )
                                                 },

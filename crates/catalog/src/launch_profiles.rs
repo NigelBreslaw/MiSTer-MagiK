@@ -194,7 +194,6 @@ pub(crate) struct RuntimeProfilePlan {
 pub(crate) enum RuntimeProfileDecision {
     Catalogable { profile: Box<LaunchProfile> },
     NoInstalledCore,
-    EmptyOrMediaOnly,
     NoKnownPayloadExtension,
     Ambiguous { core_ids: Vec<String> },
 }
@@ -602,8 +601,8 @@ impl CatalogScanPlan {
     /// Resolves the profile for one walker-derived game-directory fact.
     ///
     /// This deliberately delegates to finalization rather than using the
-    /// tentative streaming profile set, so an empty or unsupported runtime
-    /// directory never becomes a launch target.
+    /// tentative streaming profile set, so unsupported runtime directories
+    /// never become launch targets.
     pub(crate) fn profile_for_game_dir_facts(
         &self,
         game_dir: &catalog_discovery::GameDirFact,
@@ -831,21 +830,14 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
 }
 
 #[cfg(test)]
-fn runtime_profile_plans_for_roots_with_cores(
-    roots: &[String],
-    cores: &[catalog_discovery::InstalledCore],
-    active_game_dirs: &BTreeSet<String>,
-) -> Vec<RuntimeProfilePlan> {
-    catalog_discovery::top_level_game_dir_headers_for_roots_excluding(roots, active_game_dirs)
-        .into_iter()
-        .map(|game_dir| runtime_profile_plan_for_game_dir_header(game_dir, cores))
-        .collect()
-}
-
-#[cfg(test)]
 fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimeProfilePlan> {
     let cores = catalog_discovery::installed_cores_for_roots(roots);
-    runtime_profile_plans_for_roots_with_cores(roots, &cores, &BTreeSet::new())
+    let game_dirs =
+        catalog_discovery::top_level_game_dir_headers_for_roots_excluding(roots, &BTreeSet::new())
+            .into_iter()
+            .map(catalog_discovery::game_dir_payload_facts_for_header)
+            .collect::<Vec<_>>();
+    runtime_profile_plans_for_game_dirs_with_cores(&game_dirs, &cores, &BTreeSet::new())
 }
 
 pub(crate) fn runtime_profile_plans_for_game_dirs_with_cores(
@@ -861,110 +853,30 @@ pub(crate) fn runtime_profile_plans_for_game_dirs_with_cores(
         .collect()
 }
 
-#[cfg(test)]
-fn runtime_profile_plan_for_game_dir_header(
-    game_dir: catalog_discovery::GameDirHeader,
-    cores: &[catalog_discovery::InstalledCore],
-) -> RuntimeProfilePlan {
-    let exact_or_alias_candidates = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
-    let decision = match exact_or_alias_candidates.as_slice() {
-        [] => {
-            runtime_profile_plan_for_game_dir(
-                catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone()),
-                cores,
-            )
-            .decision
-        }
-        [candidate] => runtime_profile_decision_for_named_candidate(&game_dir, candidate),
-        _ => {
-            let facts = catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone());
-            if facts.has_payloadish_files() {
-                RuntimeProfileDecision::Ambiguous {
-                    core_ids: exact_or_alias_candidates
-                        .iter()
-                        .map(|candidate| candidate.core.core_id.clone())
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect(),
-                }
-            } else {
-                RuntimeProfileDecision::EmptyOrMediaOnly
-            }
-        }
-    };
-    RuntimeProfilePlan {
-        game_dir_name: game_dir.name,
-        decision,
-    }
-}
-
 fn runtime_profile_plan_for_game_dir(
     game_dir: catalog_discovery::GameDirFact,
     cores: &[catalog_discovery::InstalledCore],
 ) -> RuntimeProfilePlan {
-    let decision = if !game_dir.has_payloadish_files() {
-        RuntimeProfileDecision::EmptyOrMediaOnly
-    } else {
-        let candidates = runtime_core_candidates(&game_dir, cores);
-        match candidates.as_slice() {
-            [] => RuntimeProfileDecision::NoInstalledCore,
-            [candidate] => runtime_profile_for_match(&game_dir, candidate)
-                .map(|profile| RuntimeProfileDecision::Catalogable {
-                    profile: Box::new(profile),
-                })
-                .unwrap_or(RuntimeProfileDecision::NoKnownPayloadExtension),
-            _ => RuntimeProfileDecision::Ambiguous {
-                core_ids: candidates
-                    .iter()
-                    .map(|candidate| candidate.core.core_id.clone())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            },
-        }
+    let candidates = runtime_core_candidates(&game_dir, cores);
+    let decision = match candidates.as_slice() {
+        [] => RuntimeProfileDecision::NoInstalledCore,
+        [candidate] => runtime_profile_for_match(&game_dir, candidate)
+            .map(|profile| RuntimeProfileDecision::Catalogable {
+                profile: Box::new(profile),
+            })
+            .unwrap_or(RuntimeProfileDecision::NoKnownPayloadExtension),
+        _ => RuntimeProfileDecision::Ambiguous {
+            core_ids: candidates
+                .iter()
+                .map(|candidate| candidate.core.core_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        },
     };
     RuntimeProfilePlan {
         game_dir_name: game_dir.name,
         decision,
-    }
-}
-
-#[cfg(test)]
-fn runtime_profile_decision_for_named_candidate(
-    game_dir: &catalog_discovery::GameDirHeader,
-    candidate: &RuntimeCoreCandidate<'_>,
-) -> RuntimeProfileDecision {
-    if let Some(extensions) =
-        runtime_payload_extensions_for_core_or_dir(&candidate.core.core_id, &game_dir.name)
-    {
-        if catalog_discovery::game_dir_has_payload_candidate(&game_dir.path, &extensions) {
-            return RuntimeProfileDecision::Catalogable {
-                profile: Box::new(runtime_profile_for_extensions(
-                    game_dir,
-                    candidate.core,
-                    extensions,
-                )),
-            };
-        }
-        let facts = catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone());
-        if facts.has_payloadish_files() {
-            RuntimeProfileDecision::NoKnownPayloadExtension
-        } else {
-            RuntimeProfileDecision::EmptyOrMediaOnly
-        }
-    } else {
-        let facts = catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone());
-        runtime_profile_for_match(&facts, candidate)
-            .map(|profile| RuntimeProfileDecision::Catalogable {
-                profile: Box::new(profile),
-            })
-            .unwrap_or_else(|| {
-                if facts.has_payloadish_files() {
-                    RuntimeProfileDecision::NoKnownPayloadExtension
-                } else {
-                    RuntimeProfileDecision::EmptyOrMediaOnly
-                }
-            })
     }
 }
 
@@ -1352,15 +1264,6 @@ fn runtime_profile_for_match(
                 })
                 .filter(|extensions| !extensions.is_empty())
         })?;
-    if !game_dir.has_zip_files
-        && !game_dir
-            .payload_extensions
-            .iter()
-            .any(|ext| contains_ignore_ascii_case(&extensions, ext))
-    {
-        return None;
-    }
-
     Some(runtime_profile_for_extensions(
         &catalog_discovery::GameDirHeader {
             name: game_dir.name.clone(),
@@ -2677,23 +2580,6 @@ mod tests {
             .expect("computer plan");
 
         assert_eq!(plan.decision, RuntimeProfileDecision::NoInstalledCore);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn runtime_planner_rejects_empty_exact_game_folders() {
-        let root = unique_temp_dir("runtime-plan-empty");
-        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
-        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create gameboy dir");
-        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
-
-        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
-        let plan = plans
-            .iter()
-            .find(|plan| plan.game_dir_name == "Gameboy")
-            .expect("gameboy plan");
-
-        assert_eq!(plan.decision, RuntimeProfileDecision::EmptyOrMediaOnly);
         let _ = std::fs::remove_dir_all(root);
     }
 

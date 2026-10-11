@@ -1767,17 +1767,14 @@ mod tests {
         let mut models = LauncherViewModels::default();
         let root_rows = models.menu_items(&nav, 1);
 
-        assert!(nav.open_menu("computers"));
+        assert!(nav.open_menu("menu:computers:commodore"));
         let computer_rows = models.menu_items(&nav, 1);
 
         assert_ne!(root_rows.row_count(), computer_rows.row_count());
-        assert_eq!(computer_rows.row_count(), 1);
+        assert_eq!(computer_rows.row_count(), 7);
         assert_eq!(
-            computer_rows
-                .row_data(0)
-                .expect("flattened computer collection")
-                .label,
-            "Commodore Amiga"
+            computer_rows.row_data(0).expect("Amiga collection").label,
+            "Amiga"
         );
     }
 

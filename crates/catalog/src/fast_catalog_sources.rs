@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 16;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 17;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 const MAX_DISCOVERY_ENTRIES: usize = 4_000_000;
 const MAX_DISCOVERY_DEPTH: usize = 256;
@@ -175,7 +175,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         )?;
     let generic_systems_us = generic.elapsed_us;
     let phase_started = Instant::now();
-    let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
+    let planned_system_ids = discover_independent_system_ids_from_profiles(&profiles);
     let system_planning_us = elapsed_us(phase_started);
     let plan_ready_started = Instant::now();
     plan_ready(&planned_system_ids);
@@ -360,14 +360,12 @@ fn build_and_record_prepared_system(
         report.family_visible,
         report.family_variants,
     );
-    if !system.games.is_empty() || !system.variants.is_empty() {
-        if let Some(watch) = watch {
-            watch_observations.insert(system_id.to_string(), watch);
-        }
-        system_complete(&system);
-        systems.insert(system_id.to_string(), system);
-        reports.insert(system_id.to_string(), report);
+    if let Some(watch) = watch {
+        watch_observations.insert(system_id.to_string(), watch);
     }
+    system_complete(&system);
+    systems.insert(system_id.to_string(), system);
+    reports.insert(system_id.to_string(), report);
     Ok(())
 }
 
@@ -379,91 +377,58 @@ pub(crate) struct IndependentSystemRebuild {
 
 pub fn rebuild_independent_system(
     storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
     system_id: &str,
 ) -> Result<Option<(FastFiveSystem, FastSourceSystemReport)>, String> {
-    rebuild_independent_system_impl(storage_root, snapshot, system_id, false)
+    rebuild_independent_system_impl(storage_root, system_id, false)
         .map(|result| result.map(|r| (r.system, r.report)))
 }
 
 pub(crate) fn rebuild_independent_system_with_observations(
     storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
     system_id: &str,
 ) -> Result<Option<IndependentSystemRebuild>, String> {
-    rebuild_independent_system_impl(storage_root, snapshot, system_id, true)
+    rebuild_independent_system_impl(storage_root, system_id, true)
 }
 
 fn rebuild_independent_system_impl(
     storage_root: &Path,
-    _snapshot: &FastFiveSnapshot,
     system_id: &str,
     capture_watch: bool,
 ) -> Result<Option<IndependentSystemRebuild>, String> {
     let started = Instant::now();
     let mut family_resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
-    let prepared = PREPARED_SYSTEM_IDS
-        .contains(&system_id)
-        .then(|| build_prepared_system(storage_root, system_id, false, &mut family_resolver))
-        .transpose()?;
     let mut observations = None;
-    let generic = if prepared.is_some() {
-        None
-    } else if capture_watch {
-        crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
-            storage_root,
-            system_id,
-        )?
-        .map(|r| {
-            observations = r.observations;
-            (r.system, r.report)
-        })
+    let (mut system, mut report) = if PREPARED_SYSTEM_IDS.contains(&system_id) {
+        let (system, report, _) =
+            build_prepared_system(storage_root, system_id, false, &mut family_resolver)?;
+        (system, report)
     } else {
-        rebuild_installed_generic_system(storage_root, system_id)?
-    };
-    let (mut system, mut report) = match (prepared, generic) {
-        (Some((mut prepared, mut report, _)), Some((generic, generic_report))) => {
-            merge_system_rows(&mut prepared, generic);
-            merge_source_report(
-                &mut report,
-                &FastSourceSystemReport {
-                    system_id: generic_report.system_id,
-                    files_visited: generic_report.files,
-                    games: generic_report.games,
-                    invalid: generic_report
-                        .read_errors
-                        .saturating_add(generic_report.archive_errors),
-                    elapsed_us: generic_report.elapsed_us,
-                    helper_hits: 0,
-                    fallback_validations: 0,
-                    family_raw: 0,
-                    family_resolved: 0,
-                    family_visible: 0,
-                    family_variants: 0,
-                },
-            );
-            (prepared, report)
-        }
-        (Some((system, report, _)), None) => (system, report),
-        (None, Some((system, generic_report))) => (
+        let generic = if capture_watch {
+            crate::generic_system_catalog::rebuild_installed_generic_system_with_observations(
+                storage_root,
+                system_id,
+            )?
+            .map(|r| {
+                observations = r.observations;
+                (r.system, r.report)
+            })
+        } else {
+            rebuild_installed_generic_system(storage_root, system_id)?
+        };
+        let Some((system, report)) = generic else {
+            return Ok(None);
+        };
+        (
             system,
             FastSourceSystemReport {
-                system_id: generic_report.system_id,
-                files_visited: generic_report.files,
-                games: generic_report.games,
-                invalid: generic_report
-                    .read_errors
-                    .saturating_add(generic_report.archive_errors),
-                elapsed_us: generic_report.elapsed_us,
-                helper_hits: 0,
-                fallback_validations: 0,
-                family_raw: 0,
-                family_resolved: 0,
-                family_visible: 0,
-                family_variants: 0,
+                system_id: report.system_id,
+                files_visited: report.files,
+                games: report.games,
+                invalid: report.read_errors.saturating_add(report.archive_errors),
+                elapsed_us: report.elapsed_us,
+                ..Default::default()
             },
-        ),
-        (None, None) => return Ok(None),
+        )
     };
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
@@ -478,55 +443,29 @@ fn rebuild_independent_system_impl(
     enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(started);
     report.games = system.games.len();
-    if system.games.is_empty() && system.variants.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(IndependentSystemRebuild {
-            system,
-            report,
-            observations,
-        }))
-    }
+    Ok(Some(IndependentSystemRebuild {
+        system,
+        report,
+        observations,
+    }))
 }
 
 pub fn discover_independent_system_ids(storage_root: &Path) -> Result<Vec<String>, String> {
     let roots = [storage_root.display().to_string()];
     let profiles = ProfileSet::try_for_roots(&roots)?.into_profiles();
-    Ok(discover_independent_system_ids_from_profiles(
-        storage_root,
-        &profiles,
-    ))
+    Ok(discover_independent_system_ids_from_profiles(&profiles))
 }
 
-fn discover_independent_system_ids_from_profiles(
-    storage_root: &Path,
-    profiles: &[LaunchProfile],
-) -> Vec<String> {
+fn discover_independent_system_ids_from_profiles(profiles: &[LaunchProfile]) -> Vec<String> {
     let mut systems = profiles
         .iter()
-        .filter(|profile| {
-            profile
-                .game_dirs
-                .iter()
-                .any(|game_dir| storage_root.join("games").join(game_dir).is_dir())
-        })
         .map(|profile| profile.system_id.clone())
         .collect::<BTreeSet<_>>();
-    for (system_id, present) in [
-        ("amiga", storage_root.join("games/Amiga").is_dir()),
-        ("arcade", storage_root.join("_Arcade").is_dir()),
-        ("c64", storage_root.join("games/C64").is_dir()),
-        ("dos", storage_root.join("_DOS Games").is_dir()),
-        (
-            "x68000",
-            storage_root.join("_Computer/_X68000 Games").is_dir()
-                || storage_root.join("_Computer/X68000 Games").is_dir(),
-        ),
-    ] {
-        if present {
-            systems.insert(system_id.to_string());
-        }
-    }
+    systems.extend(
+        PREPARED_SYSTEM_IDS
+            .iter()
+            .map(|system_id| (*system_id).to_string()),
+    );
     systems.into_iter().collect()
 }
 
@@ -580,19 +519,6 @@ pub fn launcher_catalog_for_fast_system(
     )
 }
 
-fn merge_system_rows(target: &mut FastFiveSystem, mut additional: FastFiveSystem) {
-    target.games.append(&mut additional.games);
-    target.variants.append(&mut additional.variants);
-    crate::catalog_sort::sort_ascii_titles(
-        &mut target.games,
-        |game| &game.title,
-        |game| &game.stable_key,
-    );
-    target
-        .games
-        .dedup_by(|left, right| left.launch_ref == right.launch_ref);
-}
-
 fn sort_game_variants(variants: &mut [FastFiveGameVariant]) {
     // Preserve the old primary family ordering. A singleton family requires no
     // title normalization; equal-family groups normalize each title once.
@@ -608,29 +534,6 @@ fn sort_game_variants(variants: &mut [FastFiveGameVariant]) {
             );
         }
     }
-}
-
-fn merge_source_report(target: &mut FastSourceSystemReport, additional: &FastSourceSystemReport) {
-    target.files_visited = target
-        .files_visited
-        .saturating_add(additional.files_visited);
-    target.games = target.games.saturating_add(additional.games);
-    target.invalid = target.invalid.saturating_add(additional.invalid);
-    target.elapsed_us = target.elapsed_us.saturating_add(additional.elapsed_us);
-    target.helper_hits = target.helper_hits.saturating_add(additional.helper_hits);
-    target.fallback_validations = target
-        .fallback_validations
-        .saturating_add(additional.fallback_validations);
-    target.family_raw = target.family_raw.saturating_add(additional.family_raw);
-    target.family_resolved = target
-        .family_resolved
-        .saturating_add(additional.family_resolved);
-    target.family_visible = target
-        .family_visible
-        .saturating_add(additional.family_visible);
-    target.family_variants = target
-        .family_variants
-        .saturating_add(additional.family_variants);
 }
 
 #[hotpath::measure]
@@ -3033,11 +2936,6 @@ mod tests {
         );
         assert_eq!(report.helper_hits, 0);
         assert_eq!(report.fallback_validations, 1);
-    }
-
-    #[test]
-    fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 16);
     }
 
     #[test]

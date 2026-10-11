@@ -631,13 +631,7 @@ mod macos {
             settings.set_active_orientation(view_orientation);
             settings.set_selected_orientation(view_orientation);
             settings.set_highlighted_orientation(view_orientation);
-            launcher_nav.catalog_build_started();
-            for system in &catalog.systems {
-                launcher_nav.catalog_system_discovered(&system.id);
-                launcher_nav.catalog_system_update_ready(&system.id);
-            }
             launcher_nav.sync_launcher_taxonomy(&catalog);
-            launcher_nav.catalog_build_finished(&catalog);
             let refresh_hz = refresh_rate.headless_hz();
             let now = Instant::now();
             let next_frame_deadline = now + elapsed_for_frame(1, refresh_hz);
@@ -2642,13 +2636,7 @@ mod macos {
                         self.catalog = build.catalog;
                         self.catalog_generation = Some(build.generation);
                         self.catalog_source = format!("catalog:mac-cache:g{}", build.generation);
-                        self.launcher_nav.catalog_build_started();
-                        for system in &self.catalog.systems {
-                            self.launcher_nav.catalog_system_discovered(&system.id);
-                            self.launcher_nav.catalog_system_update_ready(&system.id);
-                        }
                         self.launcher_nav.sync_launcher_taxonomy(&self.catalog);
-                        self.launcher_nav.catalog_build_finished(&self.catalog);
                         self.selection = self
                             .selection
                             .min(self.catalog.games.len().saturating_sub(1));
@@ -5699,13 +5687,7 @@ mod macos {
         fn prepared_nav() -> (UiPreviewFixtures, LauncherNav) {
             let fixtures = UiPreviewFixtures::new().expect("preview fixtures");
             let mut nav = LauncherNav::new();
-            nav.catalog_build_started();
-            for system_id in &fixtures.shell_system_ids {
-                nav.catalog_system_discovered(system_id);
-                nav.catalog_system_update_ready(system_id);
-            }
             nav.sync_launcher_taxonomy(&fixtures.catalog);
-            nav.catalog_build_finished(&fixtures.catalog);
             (fixtures, nav)
         }
 

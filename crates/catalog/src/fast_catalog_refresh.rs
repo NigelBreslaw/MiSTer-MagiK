@@ -1776,12 +1776,10 @@ struct PreparedSystemRefresh {
 
 fn prepare_system_refresh(
     storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
     system_id: &str,
 ) -> Result<Option<PreparedSystemRefresh>, String> {
     let Some(rebuilt) = crate::fast_catalog_sources::rebuild_independent_system_with_observations(
         storage_root,
-        snapshot,
         system_id,
     )?
     else {
@@ -1817,11 +1815,7 @@ fn execute_planned_fast_refresh_with(
     request: FastCatalogRefreshRequest,
     plan: FastRefreshPlanReport,
     lease: &crate::catalog_lease::CatalogMutationLease,
-    mut prepare_system: impl FnMut(
-        &Path,
-        &FastFiveSnapshot,
-        &str,
-    ) -> Result<Option<PreparedSystemRefresh>, String>,
+    mut prepare_system: impl FnMut(&Path, &str) -> Result<Option<PreparedSystemRefresh>, String>,
     mut progress: impl FnMut(&'static str, u64),
 ) -> Result<FastCatalogRefreshReport, String> {
     let started = std::time::Instant::now();
@@ -1893,7 +1887,7 @@ fn execute_planned_fast_refresh_with(
             .systems
             .iter()
             .any(|candidate| candidate.system_id == check.system_id);
-        match prepare_system(storage_root, &snapshot, &check.system_id) {
+        match prepare_system(storage_root, &check.system_id) {
             Ok(Some(prepared)) => {
                 let PreparedSystemRefresh {
                     system,
@@ -3074,18 +3068,11 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, b"rom").unwrap();
         }
-        let unused = FastFiveSnapshot {
-            schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.into(),
-            source_fingerprint: "0".repeat(64),
-            systems: vec![],
-        };
         let before = (
             crate::io_test_metrics::source_walks(),
             crate::io_test_metrics::watch_tree_walks(),
         );
-        let prepared = prepare_system_refresh(&storage, &unused, "snes")
-            .unwrap()
-            .unwrap();
+        let prepared = prepare_system_refresh(&storage, "snes").unwrap().unwrap();
         let source = crate::io_test_metrics::source_walks() - before.0;
         let watch = crate::io_test_metrics::watch_tree_walks() - before.1;
         assert_eq!(prepared.system.games.len(), 100);
@@ -3111,11 +3098,6 @@ mod tests {
         fs::create_dir_all(storage.join("games/Atari2600")).unwrap();
         fs::write(storage.join("_Console/Atari2600.rbf"), b"core").unwrap();
         std::os::unix::fs::symlink("Atari2600", storage.join("games/ATARI2600-Sinden")).unwrap();
-        let snapshot = FastFiveSnapshot {
-            schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.into(),
-            source_fingerprint: "0".repeat(64),
-            systems: vec![],
-        };
         for (index, name) in ["First", "New Game"].iter().enumerate() {
             fs::write(storage.join(format!("games/Atari2600/{name}.a26")), b"rom").unwrap();
             let rebuilt =
@@ -3134,7 +3116,7 @@ mod tests {
                 capture_system_watch_with_observations(&storage, "atari2600", Some(&observed))
                     .unwrap();
             assert_eq!(watch, capture_system_watch(&storage, "atari2600").unwrap());
-            let prepared = prepare_system_refresh(&storage, &snapshot, "atari2600")
+            let prepared = prepare_system_refresh(&storage, "atari2600")
                 .unwrap()
                 .unwrap();
             assert_eq!(prepared.system.games.len(), index + 1);
@@ -3634,7 +3616,7 @@ mod tests {
     }
 
     #[test]
-    fn incremental_refresh_adds_then_removes_a_system() {
+    fn incremental_refresh_adds_a_system_and_updates_its_media() {
         let storage = crate::test_support::unique_temp_dir("fast-refresh-membership-storage");
         let catalog = crate::test_support::unique_temp_dir("fast-refresh-membership-catalog");
         fs::create_dir_all(storage.join("_Console")).unwrap();
@@ -3695,29 +3677,31 @@ mod tests {
         }));
 
         fs::remove_dir_all(storage.join("games/NES")).unwrap();
-        let removed = execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
-            .expect("remove NES incrementally");
-        assert!(removed.plan.discovery_changed);
-        assert!(removed.system_reports.iter().any(|system| {
-            system.system_id == "nes" && system.outcome == FastCatalogSystemOutcome::Removed
+        let updated = execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
+            .expect("update NES incrementally");
+        assert!(updated.plan.discovery_changed);
+        assert!(updated.system_reports.iter().any(|system| {
+            system.system_id == "nes"
+                && system.outcome == FastCatalogSystemOutcome::Updated
+                && system.games == 0
         }));
-        let after_remove = crate::shard_registry::read_latest_manifest_lazy(
+        let after_update = crate::shard_registry::read_latest_manifest_lazy(
             &catalog,
             crate::shard_registry::production_registry_limits(),
         )
         .unwrap();
         assert!(
-            after_remove
+            after_update
                 .systems
                 .iter()
-                .all(|system| system.system_id.as_str() != "nes")
+                .any(|system| system.system_id.as_str() == "nes" && system.active.is_artifactless())
         );
         assert!(
             read_latest_refresh_manifest(&catalog)
                 .unwrap()
                 .systems
                 .iter()
-                .all(|system| system.system_id != "nes")
+                .any(|system| system.system_id == "nes" && system.games == 0)
         );
     }
 
@@ -3757,17 +3741,16 @@ mod tests {
             FastCatalogRefreshRequest::RebuildAll,
             plan,
             &lease,
-            |storage_root, snapshot, system_id| {
+            |storage_root, system_id| {
                 if system_id == "nes" {
                     let rebuilt = crate::fast_catalog_sources::rebuild_independent_system(
                         storage_root,
-                        snapshot,
                         system_id,
                     )?;
                     assert!(rebuilt.is_some());
                     return Err("injected watch capture failure".to_string());
                 }
-                prepare_system_refresh(storage_root, snapshot, system_id)
+                prepare_system_refresh(storage_root, system_id)
             },
             |phase, work_units| checkpoints.push((phase, work_units)),
         )
