@@ -76,6 +76,9 @@ def main() -> int:
     started = time.monotonic()
     parser = argparse.ArgumentParser(prog="scripts/magik")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    from .upstream_screenshots import add_command
+
+    add_command(subcommands)
     subcommands.add_parser(
         "mcp", help="serve framebuffer screenshots to Codex over stdio"
     )
@@ -235,6 +238,14 @@ def main() -> int:
             arguments.command = "deploy"
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             print(f"magik update: {error}", file=os.sys.stderr)
+            return 2
+    if arguments.command == "upstream-screenshots":
+        from .upstream_screenshots import run
+
+        try:
+            return run(arguments, repository())
+        except Exception as error:  # noqa: BLE001 - host command boundary reports failures
+            print(f"magik upstream-screenshots: {error}", file=os.sys.stderr)
             return 2
     if arguments.command == "storage":
         from .storage import run_storage
