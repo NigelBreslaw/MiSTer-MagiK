@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 5;
+const REFRESH_SCHEMA: u32 = 6;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
@@ -66,6 +66,8 @@ pub struct FastRefreshDiscoveryWatch {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FastDiscoveryAnchor {
+    /// None watches core entries; an empty list watches all game directories.
+    pub directory_names: Option<Vec<String>>,
     pub path: String,
     pub present: bool,
     pub modified_ns: i128,
@@ -90,6 +92,7 @@ pub struct FastSystemWatchIndex {
     pub adapter_version: u32,
     pub core_profile_fingerprint: String,
     pub roots: Vec<String>,
+    pub root_symlinks: BTreeMap<String, String>,
     pub directories: Vec<FastWatchedDirectory>,
     pub containers: Vec<FastWatchedContainer>,
 }
@@ -221,6 +224,8 @@ pub struct FastRefreshPlanReport {
     pub(crate) previous_manifest: Option<FastRefreshManifest>,
     #[serde(skip)]
     pub(crate) active_manifest: Option<crate::shard_registry::CatalogManifest>,
+    #[serde(skip)]
+    planned_discovery_watch: Option<FastRefreshDiscoveryWatch>,
 }
 
 /// A refresh plan can fail because its disposable state needs regeneration,
@@ -561,7 +566,7 @@ pub fn build_fresh_catalog_with_presentation_progress(
         &discovery_watch,
         &states,
     )?;
-    commit_refresh_snapshot(catalog_root, &mut pending, &refresh, limits)?;
+    commit_refresh_snapshot(catalog_root, &mut pending, &refresh, limits, false)?;
     let build_elapsed_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
     let build_info = FastCatalogBuildInfo::new(
         publication.generation,
@@ -692,6 +697,17 @@ impl FastCatalogBuildInfo {
     }
 }
 
+fn root_symlinks(roots: &[String]) -> BTreeMap<String, String> {
+    roots
+        .iter()
+        .filter_map(|root| {
+            fs::read_link(root)
+                .ok()
+                .map(|target| (root.clone(), target.to_string_lossy().into_owned()))
+        })
+        .collect()
+}
+
 impl FastSystemWatchIndex {
     pub fn new(
         system_id: String,
@@ -706,6 +722,7 @@ impl FastSystemWatchIndex {
             system_id,
             adapter_version,
             core_profile_fingerprint,
+            root_symlinks: root_symlinks(&roots),
             roots,
             directories,
             containers,
@@ -1015,6 +1032,7 @@ fn commit_refresh_snapshot(
     catalog: &mut crate::shard_registry::CatalogManifest,
     refresh: &FastRefreshManifest,
     limits: crate::shard_registry::RegistryLimits,
+    metadata_only: bool,
 ) -> Result<(), String> {
     let root = refresh_state_root(catalog_root);
     fs::create_dir_all(root.join("commits"))
@@ -1032,25 +1050,180 @@ fn commit_refresh_snapshot(
     });
     #[cfg(test)]
     publication_barrier("before_catalog_commit", catalog_root);
-    crate::fast_five_catalog::commit_prepared_snapshot(catalog_root, catalog, limits)
+    if metadata_only {
+        read_refresh_manifest_for_catalog(catalog_root, catalog)?;
+        crate::shard_registry::replace_refresh_state(catalog_root, catalog, limits)
+            .map_err(|error| error.to_string())?;
+        #[cfg(test)]
+        publication_barrier("after_catalog_commit", catalog_root);
+    } else {
+        crate::fast_five_catalog::commit_prepared_snapshot(catalog_root, catalog, limits)?;
+    }
+    // Publication has succeeded. Cleanup failure must not report a failed refresh.
+    if let Err(error) = cleanup_refresh_history(catalog_root, limits) {
+        crate::catalog_logln!("fast_refresh_cleanup_tsv\tstatus=failed\terror={error}");
+    }
+    Ok(())
+}
+
+/// Older watch schemas need a fresh scan, but their generation still reserves
+/// immutable filenames and bounds the packs retained for the fallback catalog.
+fn read_refresh_generation(path: &Path) -> Result<u64, String> {
+    let size = fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if size > MAX_MANIFEST_BYTES as u64 {
+        return Err("refresh manifest exceeds size limit".into());
+    }
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    if bytes.len() < ENVELOPE_BYTES {
+        return Err("short refresh manifest".into());
+    }
+    let header = &bytes[..ENVELOPE_BYTES];
+    let schema = u32::from_le_bytes(header[12..16].try_into().unwrap());
+    let payload = &bytes[ENVELOPE_BYTES..];
+    if &header[..8] != MANIFEST_MAGIC
+        || u32::from_le_bytes(header[8..12].try_into().unwrap()) != ENVELOPE_VERSION
+        || !(5..=REFRESH_SCHEMA).contains(&schema)
+        || u64::from_le_bytes(header[16..24].try_into().unwrap()) != payload.len() as u64
+        || Sha256::digest(payload).as_slice() != &header[24..56]
+    {
+        return Err("invalid refresh generation envelope".into());
+    }
+    let ((payload_schema, generation), _) =
+        postcard::take_from_bytes::<(u32, u64)>(payload).map_err(|error| error.to_string())?;
+    if payload_schema != schema || generation == 0 {
+        return Err("invalid refresh generation".into());
+    }
+    Ok(generation)
+}
+
+fn cleanup_refresh_history(
+    catalog_root: &Path,
+    limits: crate::shard_registry::RegistryLimits,
+) -> Result<(), String> {
+    let root = refresh_state_root(catalog_root);
+    let mut retained = crate::shard_registry::read_manifest_slots(catalog_root, limits, false)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter_map(|(_, catalog)| {
+            catalog
+                .refresh_state
+                .map(|state| catalog_root.join(state.path))
+        })
+        .collect::<BTreeSet<_>>();
+    let mut commits = fs::read_dir(root.join("commits"))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().is_some_and(|ext| ext == "bin"))
+                .then(|| {
+                    path.file_stem()?
+                        .to_str()?
+                        .parse::<u64>()
+                        .ok()
+                        .map(|generation| (generation, path.clone()))
+                })
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    commits.sort_by_key(|(generation, _)| *generation);
+    // Keep the previous snapshot for readers that opened the catalog before commit.
+    retained.extend(commits.iter().rev().take(2).map(|(_, path)| path.clone()));
+    let mut packs = BTreeSet::new();
+    let mut legacy_pack_ceiling = 0;
+    for path in retained
+        .iter()
+        .cloned()
+        .chain([root.join(MANIFEST_A), root.join(MANIFEST_B)])
+    {
+        if path.exists() {
+            let manifest = match read_envelope::<FastRefreshManifest>(
+                &path,
+                MANIFEST_MAGIC,
+                MAX_MANIFEST_BYTES,
+            ) {
+                Ok(manifest) => manifest,
+                Err(_) => {
+                    // Keep the finite set of old-schema packs until the fallback
+                    // catalog slot is replaced. New refreshes can still be pruned.
+                    legacy_pack_ceiling = legacy_pack_ceiling.max(read_refresh_generation(&path)?);
+                    continue;
+                }
+            };
+            manifest.validate()?;
+            packs.extend(
+                manifest
+                    .systems
+                    .into_iter()
+                    .map(|system| root.join(system.watch_path)),
+            );
+        }
+    }
+    for (_, path) in commits {
+        if !retained.contains(&path) {
+            fs::remove_file(&path)
+                .map_err(|error| format!("remove {}: {error}", path.display()))?;
+        }
+    }
+    for entry in fs::read_dir(root.join("packs")).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_file())
+            && path.extension().is_some_and(|ext| ext == "watchpack")
+            && path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.parse::<u64>().ok())
+                .is_some_and(|generation| generation > legacy_pack_ceiling)
+            && !packs.contains(&path)
+        {
+            fs::remove_file(&path)
+                .map_err(|error| format!("remove {}: {error}", path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn next_refresh_generation(catalog_root: &Path) -> Result<u64, String> {
+    next_refresh_generation_with_committed(
+        catalog_root,
+        read_latest_refresh_manifest(catalog_root)
+            .ok()
+            .map(|manifest| manifest.generation),
+    )
+}
+
+fn next_refresh_generation_with_committed(
+    catalog_root: &Path,
+    committed: Option<u64>,
+) -> Result<u64, String> {
     let staged = read_latest_staged_refresh_manifest(catalog_root);
-    let committed = read_latest_refresh_manifest(catalog_root).ok();
+    let root = refresh_state_root(catalog_root);
+    let reserved = staged
+        .is_err()
+        .then(|| {
+            [MANIFEST_A, MANIFEST_B]
+                .into_iter()
+                .filter_map(|slot| read_refresh_generation(&root.join(slot)).ok())
+                .max()
+        })
+        .flatten();
     let generation = staged
         .as_ref()
         .ok()
         .map(|manifest| manifest.generation)
         .into_iter()
-        .chain(committed.map(|manifest| manifest.generation))
+        .chain(committed)
+        .chain(reserved)
         .max();
     if let Some(generation) = generation {
         return generation
             .checked_add(1)
             .ok_or_else(|| "fast refresh generation overflow".to_string());
     }
-    let root = refresh_state_root(catalog_root);
     if root.join(MANIFEST_A).exists() || root.join(MANIFEST_B).exists() {
         Err(staged.unwrap_err())
     } else {
@@ -1270,6 +1443,9 @@ pub fn publish_refresh_update(
     let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
     cleanup_refresh_temporary_files_with_lease(catalog_root, &_lease)?;
+    if read_latest_refresh_manifest(catalog_root)? != *previous {
+        return Err("stale fast refresh manifest".to_string());
+    }
     publish_refresh_update_held(
         catalog_root,
         previous,
@@ -1290,10 +1466,8 @@ fn publish_refresh_update_held(
     updated: &[FastRefreshSystemState],
     removed_system_ids: &BTreeSet<String>,
 ) -> Result<FastRefreshManifest, String> {
-    if read_latest_refresh_manifest(catalog_root)? != *previous {
-        return Err("stale fast refresh manifest".to_string());
-    }
-    let generation = next_refresh_generation(catalog_root)?;
+    let generation =
+        next_refresh_generation_with_committed(catalog_root, Some(previous.generation))?;
     let root = refresh_state_root(catalog_root);
     fs::create_dir_all(root.join("packs"))
         .map_err(|error| format!("create refresh state root: {error}"))?;
@@ -1425,7 +1599,7 @@ fn capture_refresh_state_with_profiles(
     }
     report.systems = states.len();
     report.elapsed_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
-    let discovery_watch = capture_discovery_watch(storage_root)?;
+    let discovery_watch = capture_discovery_watch_with_profiles(storage_root, profiles)?;
     Ok((states, report, discovery_watch))
 }
 
@@ -1781,6 +1955,9 @@ pub fn plan_fast_refresh_classified(
             {
                 check.status = FastSourceCheckStatus::Changed;
                 check.reason = "selected game directories changed".to_string();
+            } else if discovery_changed && root_symlinks(&watch.roots) != watch.root_symlinks {
+                check.status = FastSourceCheckStatus::Changed;
+                check.reason = "selected root symlinks changed".to_string();
             } else {
                 check_watch_index(watch, &metadata_cache, &mut check);
             }
@@ -1860,6 +2037,10 @@ pub fn plan_fast_refresh_classified(
         artifact_writes: 0,
         checks,
         previous_manifest: Some(manifest),
+        planned_discovery_watch: discovered_profiles
+            .as_ref()
+            .map(|profiles| capture_discovery_watch_with_profiles(storage_root, profiles))
+            .transpose()?,
         active_manifest: Some(active),
     })
 }
@@ -2156,7 +2337,9 @@ fn execute_planned_fast_refresh_with(
     let artifact_started = std::time::Instant::now();
     let refresh_state_changed =
         !updated_states.is_empty() || !removed_system_ids.is_empty() || plan.discovery_changed;
-    let mut prepared = if refresh_state_changed {
+    let mut prepared = if refresh_state_changed && artifact_changes.is_empty() {
+        Some(active.clone())
+    } else if refresh_state_changed {
         Some(
             crate::fast_five_catalog::prepare_snapshot_for_refresh(
                 catalog_root,
@@ -2181,7 +2364,11 @@ fn execute_planned_fast_refresh_with(
         .unwrap_or(u64::MAX);
     let snapshot_started = std::time::Instant::now();
     let refresh_generation = if let Some(pending) = &mut prepared {
-        let discovery_watch = capture_discovery_watch(storage_root)?;
+        let discovery_watch = recapture_discovery_watch(
+            plan.planned_discovery_watch
+                .as_ref()
+                .unwrap_or(&previous.discovery_watch),
+        )?;
         let refresh = publish_refresh_update_held(
             catalog_root,
             &previous,
@@ -2196,6 +2383,7 @@ fn execute_planned_fast_refresh_with(
             pending,
             &refresh,
             crate::shard_registry::production_registry_limits(),
+            artifact_changes.is_empty(),
         )?;
         refresh.generation
     } else {
@@ -2235,7 +2423,9 @@ fn execute_planned_fast_refresh_with(
         removed,
         failed_retained,
         artifact_systems_written: artifact_writes.len(),
-        catalog_generation: active.generation,
+        catalog_generation: prepared
+            .as_ref()
+            .map_or(active.generation, |manifest| manifest.generation),
         refresh_generation,
         games: active
             .systems
@@ -2392,30 +2582,110 @@ fn discovery_anchor_paths(storage_root: &Path) -> Vec<PathBuf> {
     paths
 }
 
+#[cfg(test)]
 fn capture_discovery_watch(storage_root: &Path) -> Result<FastRefreshDiscoveryWatch, String> {
+    capture_discovery_watch_with_profiles(storage_root, &crate::launch_profiles::builtin_profiles())
+}
+
+fn capture_discovery_watch_with_profiles(
+    storage_root: &Path,
+    profiles: &[crate::launch_profiles::LaunchProfile],
+) -> Result<FastRefreshDiscoveryWatch, String> {
+    let game_roots = crate::game_paths::search_roots(storage_root);
+    let cores = crate::catalog_discovery::installed_cores_for_roots_checked(&[storage_root
+        .to_string_lossy()
+        .into_owned()])?;
+    let legacy_names = profiles
+        .iter()
+        .chain(crate::launch_profiles::builtin_profiles().iter())
+        .flat_map(|profile| profile.game_dirs.iter())
+        .map(|name| name.to_ascii_lowercase())
+        .chain(
+            cores
+                .into_iter()
+                .map(|core| core.core_id.to_ascii_lowercase()),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
     let anchors = discovery_anchor_paths(storage_root)
         .into_iter()
         .map(|path| {
-            let path_string = path.to_string_lossy().into_owned();
-            if path.is_dir() {
-                let directory = capture_directory(&path)?;
-                Ok(FastDiscoveryAnchor {
-                    path: path_string,
-                    present: true,
-                    modified_ns: directory.modified_ns,
-                    entry_fingerprint: directory.entry_fingerprint,
-                })
-            } else {
-                Ok(FastDiscoveryAnchor {
-                    path: path_string,
-                    present: false,
-                    modified_ns: 0,
-                    entry_fingerprint: "0".repeat(64),
-                })
-            }
+            let directory_names = game_roots.contains(&path).then(|| {
+                if path.file_name().is_some_and(|name| name == "games") {
+                    Vec::new()
+                } else {
+                    legacy_names.clone()
+                }
+            });
+            capture_discovery_anchor(path.to_string_lossy().into_owned(), directory_names)
         })
         .collect::<Result<Vec<_>, String>>()?;
     FastRefreshDiscoveryWatch::new(anchors)
+}
+
+fn capture_discovery_anchor(
+    path: String,
+    directory_names: Option<Vec<String>>,
+) -> Result<FastDiscoveryAnchor, String> {
+    let directory = Path::new(&path);
+    let metadata = match fs::metadata(directory) {
+        Ok(metadata) if metadata.is_dir() => Some(metadata),
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("inspect {path}: {error}")),
+    };
+    let entry_fingerprint = if metadata.is_none() {
+        "0".repeat(64)
+    } else if let Some(names) = &directory_names {
+        let mut entries = Vec::new();
+        for entry in read_watch_directory_entries(directory)? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.')
+                || should_prune_source_directory(&entry.path())
+                || (!names.is_empty() && !names.contains(&name.to_ascii_lowercase()))
+            {
+                continue;
+            }
+            let kind = entry.file_type().map_err(|error| error.to_string())?;
+            if kind.is_dir() {
+                entries.push((name, String::new()));
+            } else if kind.is_symlink() && entry.path().is_dir() {
+                entries.push((
+                    name,
+                    fs::read_link(entry.path())
+                        .map_err(|error| error.to_string())?
+                        .to_string_lossy()
+                        .into_owned(),
+                ));
+            }
+        }
+        entries.sort();
+        sha256_hex(&serde_json::to_vec(&entries).map_err(|error| error.to_string())?)
+    } else {
+        capture_directory(directory)?.entry_fingerprint
+    };
+    Ok(FastDiscoveryAnchor {
+        directory_names,
+        path,
+        present: metadata.is_some(),
+        modified_ns: metadata.as_ref().map_or(0, modified_ns),
+        entry_fingerprint,
+    })
+}
+
+fn recapture_discovery_watch(
+    watch: &FastRefreshDiscoveryWatch,
+) -> Result<FastRefreshDiscoveryWatch, String> {
+    FastRefreshDiscoveryWatch::new(
+        watch
+            .anchors
+            .iter()
+            .map(|anchor| {
+                capture_discovery_anchor(anchor.path.clone(), anchor.directory_names.clone())
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    )
 }
 
 fn discovery_watch_unchanged(
@@ -2423,15 +2693,23 @@ fn discovery_watch_unchanged(
     metadata_cache: &HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
 ) -> bool {
     watch.anchors.iter().all(|anchor| {
-        let path = Path::new(&anchor.path);
-        let observed = metadata_cache.get(path).and_then(|metadata| *metadata);
-        if anchor.present {
-            observed.is_some_and(|metadata| {
-                metadata.is_dir && metadata.modified_ns == anchor.modified_ns
-            })
-        } else {
-            observed.is_none_or(|metadata| !metadata.is_dir)
+        let observed = metadata_cache
+            .get(Path::new(&anchor.path))
+            .and_then(|metadata| *metadata);
+        if !anchor.present {
+            return observed.is_none_or(|metadata| !metadata.is_dir);
         }
+        observed.is_some_and(|metadata| {
+            metadata.is_dir
+                && (metadata.modified_ns == anchor.modified_ns
+                    || capture_discovery_anchor(
+                        anchor.path.clone(),
+                        anchor.directory_names.clone(),
+                    )
+                    .is_ok_and(|current| {
+                        current.present && current.entry_fingerprint == anchor.entry_fingerprint
+                    }))
+        })
     })
 }
 
@@ -3402,6 +3680,7 @@ mod tests {
         FastRefreshSystemState {
             watch: FastSystemWatchIndex {
                 schema: REFRESH_SCHEMA,
+                root_symlinks: BTreeMap::new(),
                 system_id: system_id.to_string(),
                 adapter_version: 1,
                 core_profile_fingerprint: "1".repeat(64),
@@ -3741,6 +4020,7 @@ mod tests {
         let metadata = root.join("metadata.dat");
         fs::create_dir_all(&metadata).unwrap();
         let watch = FastSystemWatchIndex {
+            root_symlinks: BTreeMap::new(),
             schema: REFRESH_SCHEMA,
             system_id: "arcade".to_string(),
             adapter_version: 0,
@@ -4148,7 +4428,8 @@ mod tests {
             let root = crate::test_support::unique_temp_dir("fast-publication-subprocess");
             let marker = root.join("barrier.marker");
             let release = root.join("barrier.release");
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            let mut child = command
                 .arg("publication_recovery_subprocess_worker")
                 .arg("--nocapture")
                 .env(ROOT_ENV, &root)
@@ -4483,6 +4764,159 @@ mod tests {
         (fixture, storage, catalog)
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn usb_symlink_has_main_priority_on_build_refresh_and_retarget() {
+        let (fixture, storage, catalog) = transaction_fixture("usb-symlink-priority");
+        let usb = fixture.join("media/usb0/games");
+        let first = fixture.join("first-snes");
+        let second = fixture.join("second-snes");
+        fs::create_dir_all(&usb).unwrap();
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("USB.sfc"), b"rom").unwrap();
+        fs::write(second.join("USB2.sfc"), b"rom").unwrap();
+        // Equal target timestamps must not hide a link retarget.
+        let same_time = UNIX_EPOCH + std::time::Duration::from_secs(42);
+        for path in [&first, &second] {
+            fs::File::open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(same_time))
+                .unwrap();
+        }
+        let link = usb.join("SNES");
+        std::os::unix::fs::symlink(&first, &link).unwrap();
+        build_fresh_catalog(&storage, &catalog).unwrap();
+        let refresh = read_latest_refresh_manifest(&catalog).unwrap();
+        let snes = refresh
+            .systems
+            .iter()
+            .find(|system| system.system_id == "snes")
+            .unwrap();
+        assert_eq!(snes.games, 1);
+        let watch = read_system_watch(&catalog, snes).unwrap();
+        assert!(watch.roots.contains(&link.to_string_lossy().into_owned()));
+        let clean =
+            execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert_eq!(clean.artifact_systems_written, 0);
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&second, &link).unwrap();
+        let changed =
+            execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert_eq!(changed.artifact_systems_written, 1);
+        crate::catalog_acceptance::inspect_catalog(&catalog).unwrap();
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn unrelated_drive_files_and_directories_do_not_trigger_discovery() {
+        let (fixture, storage, catalog) = transaction_fixture("discovery-root-files");
+        let usb = fixture.join("media/usb0");
+        fs::create_dir_all(usb.join("games")).unwrap();
+        build_fresh_catalog(&storage, &catalog).unwrap();
+        for path in [
+            storage.join("notes.txt"),
+            usb.join("notes.txt"),
+            usb.join("games/notes.txt"),
+        ] {
+            fs::write(path, b"notes").unwrap();
+        }
+        fs::create_dir_all(usb.join("unrelated-folder")).unwrap();
+        let plan =
+            plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert!(!plan.discovery_changed);
+        assert_eq!(plan.changed + plan.rescans, 0);
+        fs::create_dir_all(usb.join("games/SNES")).unwrap();
+        let plan =
+            plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+        assert!(plan.discovery_changed);
+        assert!(plan.checks.iter().any(
+            |check| check.system_id == "snes" && check.status == FastSourceCheckStatus::Changed
+        ));
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn schema_upgrade_keeps_generation_names_unique_and_history_bounded() {
+        let (fixture, storage, catalog) = transaction_fixture("refresh-schema-gc");
+        let mut legacy = read_latest_refresh_manifest(&catalog).unwrap();
+        legacy.schema = 5;
+        let mut bytes = encode_envelope(&legacy, MANIFEST_MAGIC).unwrap();
+        bytes[12..16].copy_from_slice(&5_u32.to_le_bytes());
+        let root = refresh_state_root(&catalog);
+        fs::write(root.join("commits/1.bin"), &bytes).unwrap();
+        fs::write(root.join(MANIFEST_B), &bytes).unwrap();
+        let slot = catalog.join("registry/manifest-a.json");
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&slot).unwrap()).unwrap();
+        stored["refresh_state"]["hash"] = serde_json::Value::String(sha256_hex(&bytes));
+        fs::write(slot, serde_json::to_vec(&stored).unwrap()).unwrap();
+        build_fresh_catalog(&storage, &catalog).unwrap();
+        assert_eq!(
+            read_latest_refresh_manifest(&catalog).unwrap().generation,
+            2
+        );
+        for index in 0..6 {
+            fs::write(
+                storage.join(format!("games/SNES/.upgrade-{index}")),
+                b"ignored",
+            )
+            .unwrap();
+            execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update).unwrap();
+            assert!(fs::read_dir(root.join("commits")).unwrap().count() <= 3);
+            assert!(fs::read_dir(root.join("packs")).unwrap().count() <= 5);
+            crate::catalog_acceptance::inspect_catalog(&catalog).unwrap();
+        }
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn metadata_refresh_history_is_bounded_and_retained_snapshots_remain_readable() {
+        let (fixture, storage, catalog) = transaction_fixture("refresh-history-gc");
+        let limits = crate::shard_registry::production_registry_limits();
+        let initial = crate::shard_registry::read_latest_manifest_lazy(&catalog, limits).unwrap();
+        for index in 0..8 {
+            let previous =
+                crate::shard_registry::read_latest_manifest_lazy(&catalog, limits).unwrap();
+            fs::write(
+                storage.join(format!("games/SNES/.ignored-{index}")),
+                b"metadata",
+            )
+            .unwrap();
+            let report =
+                execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
+                    .unwrap();
+            assert_eq!(report.artifact_systems_written, 0);
+            assert_eq!(report.catalog_generation, initial.generation);
+            let previous_refresh = read_refresh_manifest_for_catalog(&catalog, &previous).unwrap();
+            for system in &previous_refresh.systems {
+                read_system_watch(&catalog, system).unwrap();
+            }
+            for (_, retained) in
+                crate::shard_registry::read_manifest_slots(&catalog, limits, false).unwrap()
+            {
+                let refresh = read_refresh_manifest_for_catalog(&catalog, &retained).unwrap();
+                for system in &refresh.systems {
+                    read_system_watch(&catalog, system).unwrap();
+                }
+            }
+            assert!(
+                fs::read_dir(refresh_state_root(&catalog).join("commits"))
+                    .unwrap()
+                    .count()
+                    <= 3
+            );
+            assert!(
+                fs::read_dir(refresh_state_root(&catalog).join("packs"))
+                    .unwrap()
+                    .count()
+                    <= 4
+            );
+            crate::catalog_acceptance::inspect_catalog(&catalog).unwrap();
+        }
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
     #[test]
     fn metadata_publication_failure_preserves_catalog_pair_and_retry() {
         for mode in ["fresh", "incremental", "metadata-only", "legacy"] {
@@ -4554,8 +4988,12 @@ mod tests {
                 current_snes.active.games,
                 if mode == "metadata-only" { 1 } else { 3 }
             );
-            assert!(current.generation > old.generation);
             if mode == "metadata-only" {
+                assert_eq!(current.generation, old.generation);
+                assert_eq!(
+                    crate::fast_five_catalog::registry_fingerprint_for_manifest(&current),
+                    crate::fast_five_catalog::registry_fingerprint_for_manifest(&old)
+                );
                 assert_eq!(
                     current_snes.active,
                     old.systems
@@ -4564,6 +5002,9 @@ mod tests {
                         .unwrap()
                         .active
                 );
+            }
+            if mode != "metadata-only" {
+                assert!(current.generation > old.generation);
             }
             crate::catalog_acceptance::inspect_catalog(&catalog).unwrap();
             fs::remove_dir_all(fixture).unwrap();
@@ -4576,16 +5017,43 @@ mod tests {
             return;
         };
         let root = PathBuf::from(root);
-        build_fresh_catalog(&root.join("media/fat"), &root.join("catalog")).unwrap();
+        if std::env::var_os("MISTER_MAGIK_TEST_METADATA_ONLY").is_some() {
+            execute_fast_refresh(
+                &root.join("media/fat"),
+                &root.join("catalog"),
+                FastCatalogRefreshRequest::Update,
+            )
+            .unwrap();
+        } else {
+            build_fresh_catalog(&root.join("media/fat"), &root.join("catalog")).unwrap();
+        }
     }
 
     #[test]
     fn process_interruption_preserves_a_complete_catalog_pair() {
-        for point in ["before_catalog_commit", "after_catalog_commit"] {
+        for (point, metadata_only) in [
+            ("before_catalog_commit", false),
+            ("after_catalog_commit", false),
+            ("before_catalog_commit", true),
+            ("after_catalog_commit", true),
+        ] {
             let (fixture, storage, catalog) = transaction_fixture(point);
-            fs::write(storage.join("games/SNES/New.sfc"), b"new").unwrap();
+            fs::write(
+                storage.join(if metadata_only {
+                    "games/SNES/.ignored"
+                } else {
+                    "games/SNES/New.sfc"
+                }),
+                b"new",
+            )
+            .unwrap();
+            let old_refresh = read_latest_refresh_manifest(&catalog).unwrap();
             let marker = fixture.join("barrier-marker");
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            if metadata_only {
+                command.env("MISTER_MAGIK_TEST_METADATA_ONLY", "1");
+            }
+            let mut child = command
                 .args([
                     "--exact",
                     "fast_catalog_refresh::tests::catalog_transaction_crash_child",
@@ -4627,12 +5095,23 @@ mod tests {
                     .unwrap()
                     .active
                     .games,
-                if point == "before_catalog_commit" {
+                if point == "before_catalog_commit" || metadata_only {
                     1
                 } else {
                     2
                 }
             );
+            let current_refresh = read_latest_refresh_manifest(&catalog).unwrap();
+            assert_eq!(
+                current_refresh.generation == old_refresh.generation,
+                point == "before_catalog_commit"
+            );
+            if metadata_only {
+                assert_eq!(
+                    current_refresh.catalog_generation,
+                    old_refresh.catalog_generation
+                );
+            }
             // Rebuilding after a killed process cleans orphan shards and commits safely.
             build_fresh_catalog(&storage, &catalog).unwrap();
             crate::catalog_acceptance::inspect_catalog(&catalog).unwrap();

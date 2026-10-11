@@ -12,6 +12,7 @@ pub struct LauncherConnectionState {
 
 pub(crate) struct LauncherConnectionIndicator {
     pub(in crate::launcher) state: LauncherConnectionState,
+    pub(in crate::launcher) clock: String,
     rect: crate::Rgb565Rect,
     pixels: Vec<Rgb565Pixel>,
 }
@@ -21,19 +22,34 @@ impl LauncherConnectionIndicator {
         scene: super::super::LauncherScene,
         state: LauncherConnectionState,
         typography: LauncherTypography<'_>,
+        clock: &str,
     ) -> Self {
         let layout = super::Layout::for_scene(scene);
-        let (sx, sy, clock_left, top, crt) = match layout {
-            Some(layout) => (
-                layout.sx,
-                layout.sy,
-                layout.width - layout.margin_x - if layout.crt { 30 * layout.sx } else { 45 },
-                layout.margin_y + if layout.crt { 0 } else { 4 },
-                layout.crt,
-            ),
-            None => (1, 1, 875, 26, false),
-        };
-        let (size, badge, gap) = if crt { (12, 24, 6) } else { (15, 32, 8) };
+        let fonts = layout.map(|layout| layout.fonts(Some(typography)));
+        let heading = fonts.as_ref().map_or(typography.heading, |fonts| {
+            fonts.get(super::super::TextRole::Heading)
+        });
+        let (clock_left, clock_top) = layout.map_or_else(
+            || super::super::native_clock_origin(),
+            |layout| layout.clock_origin(clock, heading),
+        );
+        let ink_top = clock
+            .chars()
+            .filter_map(|c| heading.glyph(c))
+            .map(|g| heading.ascent - g.top)
+            .min()
+            .unwrap_or(0);
+        let ink_bottom = clock
+            .chars()
+            .filter_map(|c| heading.glyph(c))
+            .map(|g| heading.ascent - g.top + g.height as i32)
+            .max()
+            .unwrap_or(ink_top + 1);
+        let (sx, sy, crt) =
+            layout.map_or((1, 1, false), |layout| (layout.sx, layout.sy, layout.crt));
+        let top = (clock_top as i32 + ink_top).max(0) as usize;
+        let (badge, gap) = if crt { (24, 6) } else { (32, 8) };
+        let size = ((ink_bottom - ink_top) as usize / sy).max(1);
         let (globe_w, globe_h, badge_w, gap) = (size * sx, size * sy, badge * sx, gap * sx);
         let width = badge_w + gap + globe_w;
         let height = globe_h;
@@ -53,7 +69,6 @@ impl LauncherConnectionIndicator {
                     }
                 }
             }
-            let fonts = layout.map(|layout| layout.fonts(Some(typography)));
             let font = fonts.as_ref().map_or(typography.metadata, |fonts| {
                 fonts.get(super::super::TextRole::Metadata)
             });
@@ -109,6 +124,7 @@ impl LauncherConnectionIndicator {
         }
         Self {
             state,
+            clock: clock.to_owned(),
             rect,
             pixels,
         }

@@ -716,8 +716,9 @@ fn decode_variant_payload(
         .map_err(|error| format!("decode candidate {system_id} variants: {error}"))
 }
 
-#[cfg(feature = "builder")]
-pub fn publish_snapshot(
+// Test fixtures deliberately exercise migration from catalogs without refresh state.
+#[cfg(all(feature = "builder", test))]
+pub(crate) fn publish_snapshot(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
     limits: RegistryLimits,
@@ -730,87 +731,25 @@ pub fn publish_snapshot(
     )
 }
 
-#[cfg(feature = "builder")]
-pub fn publish_snapshot_with_profile(
+#[cfg(all(feature = "builder", test))]
+pub(crate) fn publish_snapshot_with_profile(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
 ) -> Result<FastFivePublishReport, String> {
-    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    publish_snapshot_with_profile_held(storage_root, snapshot, limits, artifact_profile, &lease)
-}
-
-#[cfg(feature = "builder")]
-pub(crate) fn publish_snapshot_with_profile_held(
-    storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
-    limits: RegistryLimits,
-    artifact_profile: FastFiveArtifactProfile,
-    _lease: &crate::catalog_lease::CatalogMutationLease,
-) -> Result<FastFivePublishReport, String> {
-    publish_snapshot_selection(storage_root, snapshot, limits, artifact_profile, None)
-}
-
-#[cfg(feature = "builder")]
-pub fn publish_changed_snapshot_with_profile(
-    storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
-    changed_system_ids: &BTreeSet<String>,
-    limits: RegistryLimits,
-    artifact_profile: FastFiveArtifactProfile,
-) -> Result<FastFivePublishReport, String> {
-    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
-        .map_err(|error| error.to_string())?;
-    publish_changed_snapshot_with_profile_held(
-        storage_root,
-        snapshot,
-        changed_system_ids,
-        limits,
-        artifact_profile,
-        &lease,
-    )
-}
-
-#[cfg(feature = "builder")]
-pub(crate) fn publish_changed_snapshot_with_profile_held(
-    storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
-    changed_system_ids: &BTreeSet<String>,
-    limits: RegistryLimits,
-    artifact_profile: FastFiveArtifactProfile,
-    _lease: &crate::catalog_lease::CatalogMutationLease,
-) -> Result<FastFivePublishReport, String> {
-    publish_snapshot_selection(
-        storage_root,
-        snapshot,
-        limits,
-        artifact_profile,
-        Some(changed_system_ids),
-    )
-}
-
-#[cfg(feature = "builder")]
-fn publish_snapshot_selection(
-    storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
-    limits: RegistryLimits,
-    artifact_profile: FastFiveArtifactProfile,
-    changed_system_ids: Option<&BTreeSet<String>>,
-) -> Result<FastFivePublishReport, String> {
     let (manifest, report) = prepare_snapshot_selection(
         storage_root,
         snapshot,
         limits,
         artifact_profile,
-        changed_system_ids,
+        None,
         None,
         |_, _| {},
     )?;
-    if !changed_system_ids.is_some_and(BTreeSet::is_empty) {
-        commit_prepared_snapshot(storage_root, &manifest, limits)?;
-    }
+    commit_prepared_snapshot(storage_root, &manifest, limits)?;
     Ok(report)
 }
 
@@ -832,7 +771,7 @@ pub(crate) fn prepare_snapshot_for_refresh(
     {
         return Err("serial prebuilt publication is missing a system artifact pair".to_string());
     }
-    let (mut manifest, mut report) = prepare_snapshot_selection(
+    let (mut manifest, report) = prepare_snapshot_selection(
         storage_root,
         snapshot,
         limits,
@@ -841,15 +780,6 @@ pub(crate) fn prepare_snapshot_for_refresh(
         prebuilt,
         progress,
     )?;
-    // A metadata-only refresh still gets a new commit, retaining all existing shards.
-    if changed_system_ids.is_some_and(BTreeSet::is_empty) {
-        manifest.generation = manifest
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| "fast-five generation overflow".to_string())?;
-        report.generation = manifest.generation;
-        report.registry_fingerprint = registry_fingerprint_for_manifest(&manifest);
-    }
     manifest.refresh_state = None;
     Ok((manifest, report))
 }
@@ -860,6 +790,10 @@ pub(crate) fn commit_prepared_snapshot(
     manifest: &CatalogManifest,
     limits: RegistryLimits,
 ) -> Result<(), String> {
+    #[cfg(not(test))]
+    if manifest.refresh_state.is_none() {
+        return Err("catalog publication requires bound refresh state".to_string());
+    }
     if manifest.refresh_state.is_some() {
         crate::fast_catalog_refresh::read_refresh_manifest_for_catalog(storage_root, manifest)?;
     }

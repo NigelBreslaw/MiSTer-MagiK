@@ -1352,10 +1352,13 @@ impl PreparedLauncher {
         if self
             .connection_status
             .as_ref()
-            .is_none_or(|status| status.state != state)
+            .is_none_or(|status| status.state != state || status.clock != self.chrome_state.clock)
         {
             self.connection_status = Some(LauncherConnectionIndicator::new(
-                self.scene, state, typography,
+                self.scene,
+                state,
+                typography,
+                &self.chrome_state.clock,
             ));
         }
         let stride = self
@@ -1454,6 +1457,10 @@ const fn rgb(red: u16, green: u16, blue: u16) -> u16 {
     ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
 }
 
+fn native_clock_origin() -> (usize, usize) {
+    (875, 22)
+}
+
 fn render_logical(
     pixels: &mut [Rgb565Pixel],
     data: LauncherData<'_>,
@@ -1478,8 +1485,8 @@ fn render_logical(
         pixels,
         typography,
         TextRole::Heading,
-        875,
-        22,
+        native_clock_origin().0,
+        native_clock_origin().1,
         data.clock,
         CREAM,
         2,

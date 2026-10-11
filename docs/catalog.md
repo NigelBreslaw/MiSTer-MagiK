@@ -175,10 +175,22 @@ sources. Its discovered rows are sorted, deduplicated, and validated rather
 than merged with persisted game rows. Direct ROM contents are not hashed
 because the catalog identity and launch plan are path-based.
 
+Discovery watches game directory names and the installed core namespaces. An
+unrelated file added to a drive root does not trigger full system discovery.
+System directory symlinks are followed at the scan root, preserving MiSTer's
+storage priority; changing a selected root symlink invalidates that system.
+
 If source facts changed but canonical rows did not, only refresh state is
-updated. If rows changed, only that system's NavPack and search database are
-republished. A missing, corrupt, incompatible, or generation-mismatched
-snapshot causes a conservative system-level rescan.
+updated. The selected registry slot atomically replaces its refresh-state
+reference while retaining the catalog generation and fingerprint, so metadata
+changes do not reopen launcher catalog readers. If rows changed, only that
+system's NavPack and search database are republished.
+
+After a successful commit, cleanup retains refresh snapshots referenced by both
+registry slots and the two most recent snapshots, then removes obsolete
+snapshots and unreferenced watch packs. Older schema packs remain protected
+while their fallback catalog exists. A missing, corrupt, incompatible, or
+generation-mismatched snapshot causes a conservative system-level rescan.
 
 Snapshot manifests use two atomic slots with fixed binary headers, bounded
 decoding, checksums, and manifest-last publication. A crash can cause extra

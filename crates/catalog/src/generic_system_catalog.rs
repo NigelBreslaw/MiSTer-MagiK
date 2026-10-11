@@ -16,7 +16,7 @@ use crate::launch_profiles::{
     PayloadDisposition, PayloadRule, ProfileSet,
 };
 use crate::namespace_walk::{
-    self, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
+    self, NamespaceEntryKind, NamespaceRootPolicy, NamespaceSignatureCapture, NamespaceWalkStats,
 };
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
@@ -150,9 +150,10 @@ pub(crate) fn inventory_prepared_extension_under_named_roots(
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.to_ascii_lowercase().contains(&marker)))
     };
-    let namespace = namespace_walk::visit_with_signature_capture(
+    let namespace = namespace_walk::visit_with_root_policy_and_signature_capture(
         root,
         None,
+        NamespaceRootPolicy::FollowSymlink,
         NamespaceSignatureCapture::AllDirectories,
         ignore,
         |entry| {
@@ -760,9 +761,10 @@ fn collect_generic_namespace_inventory(
     let mut watch_complete = true;
     let mut walked_entries = 0usize;
     let namespace_started = Instant::now();
-    let namespace = namespace_walk::visit_with_signature_capture(
+    let namespace = namespace_walk::visit_with_root_policy_and_signature_capture(
         &header.path,
         max_depth,
+        NamespaceRootPolicy::FollowSymlink,
         NamespaceSignatureCapture::AllDirectories,
         should_ignore_path,
         |entry| {
@@ -1146,9 +1148,10 @@ fn scan_namespace_borrowed(
     } else {
         NamespaceSignatureCapture::None
     };
-    let namespace = namespace_walk::visit_with_signature_capture(
+    let namespace = namespace_walk::visit_with_root_policy_and_signature_capture(
         root,
         None,
+        NamespaceRootPolicy::FollowSymlink,
         signatures,
         should_ignore_path,
         |entry| {

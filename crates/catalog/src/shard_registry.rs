@@ -692,6 +692,40 @@ fn publish_manifest_with_hash_policy(
         }
         _ => return Err(RegistryError::new("publish-manifest", "invalid slot state")),
     };
+    write_manifest_slot(storage_root, manifest, limits, target_relative)
+}
+
+/// Refresh metadata can advance without changing the catalog identity. Replace
+/// only the selected slot, after proving that all catalog contents are identical.
+#[cfg(feature = "builder")]
+pub(crate) fn replace_refresh_state(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+) -> Result<(), RegistryError> {
+    validate_manifest(storage_root, manifest, limits, false, false)?;
+    let (path, current) = read_manifest_slots(storage_root, limits, false)?
+        .into_iter()
+        .max_by_key(|(_, existing)| existing.generation)
+        .ok_or_else(|| RegistryError::new("refresh-state", "no committed catalog"))?;
+    let mut expected = current;
+    expected.refresh_state = manifest.refresh_state.clone();
+    if expected != *manifest {
+        return Err(RegistryError::new(
+            "refresh-state",
+            "catalog changed during metadata refresh",
+        ));
+    }
+    write_manifest_slot(storage_root, manifest, limits, path).map(|_| ())
+}
+
+#[cfg(feature = "builder")]
+fn write_manifest_slot(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+    target_relative: PathBuf,
+) -> Result<PathBuf, RegistryError> {
     let stored = to_stored(manifest);
     let bytes = serde_json::to_vec_pretty(&stored)
         .map_err(|error| RegistryError::with("encode manifest", error))?;
@@ -766,7 +800,7 @@ pub fn manifest_slots_present(storage_root: &Path) -> bool {
         .any(|relative| fs::symlink_metadata(storage_root.join(relative)).is_ok())
 }
 
-fn read_manifest_slots(
+pub(crate) fn read_manifest_slots(
     storage_root: &Path,
     limits: RegistryLimits,
     validate_artifacts: bool,

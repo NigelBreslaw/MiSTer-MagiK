@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::process::{Command, Stdio};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ impl ConnectionStatus {
                     if internet_tx.send(ConnectionEvent::Internet(online)).is_err() {
                         break;
                     }
-                    std::thread::sleep(Duration::from_secs(30));
+                    std::thread::sleep(Duration::from_secs(60));
                 }
             });
         let usb = std::thread::Builder::new()
@@ -73,35 +73,27 @@ impl ConnectionStatus {
 }
 
 fn internet_connected() -> bool {
-    let mut command = Command::new("curl");
-    command.args([
-        "--head",
-        "--fail",
-        "--silent",
-        "--location",
-        "--connect-timeout",
-        "2",
-        "--max-time",
-        "4",
-        "--output",
-        "/dev/null",
-        "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
-    ]);
-    let ca_bundle = "/etc/ssl/certs/cacert.pem";
-    if std::path::Path::new(ca_bundle).is_file() {
-        command.args(["--cacert", ca_bundle]);
-    }
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    // Public HTTPS reachability, independent of update preferences. No vendor
+    // request, HTTP payload, DNS lookup, or curl process is needed for the lamp.
+    internet_reachable(SocketAddr::from((Ipv4Addr::new(1, 1, 1, 1), 443)))
+}
+
+fn internet_reachable(address: SocketAddr) -> bool {
+    TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reachability_probe_handles_accepting_and_closed_endpoints() {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        assert!(internet_reachable(address));
+        drop(listener);
+        assert!(!internet_reachable(address));
+    }
 
     #[test]
     fn independent_probe_events_update_and_clear_status_without_spurious_redraws() {
