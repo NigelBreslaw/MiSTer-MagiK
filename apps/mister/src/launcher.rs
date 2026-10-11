@@ -1206,7 +1206,6 @@ pub struct LauncherNav {
     user_catalog_token: Option<crate::arcade_catalog::CatalogProjectionToken>,
     arcade_user_list_mode: ArcadeUserListMode,
     user_list_indexes: Vec<usize>,
-    root_favourite_rows: Arc<Vec<crate::arcade_catalog::ArcadeGameEntry>>,
     pending_game_action_path: Option<String>,
     /// A on a card that was still turning: open it once the carousel settles,
     /// so the level change starts from the card that is actually selected.
@@ -1311,7 +1310,6 @@ pub struct NavigationTransitionState {
     user_catalog_token: Option<crate::arcade_catalog::CatalogProjectionToken>,
     arcade_user_list_mode: ArcadeUserListMode,
     user_list_indexes: Vec<usize>,
-    root_favourite_rows: Arc<Vec<crate::arcade_catalog::ArcadeGameEntry>>,
     pending_game_action_path: Option<String>,
     game_list_memory: HashMap<String, GameListMemory>,
     collection_filters: HashMap<String, ArcadeFilter>,
@@ -1746,7 +1744,6 @@ impl LauncherNav {
             user_catalog_token: None,
             arcade_user_list_mode: ArcadeUserListMode::Games,
             user_list_indexes: Vec::new(),
-            root_favourite_rows: Default::default(),
             pending_game_action_path: None,
             pending_home_activation: false,
             game_list_memory: HashMap::new(),
@@ -2673,7 +2670,6 @@ impl LauncherNav {
             user_catalog_token: self.user_catalog_token.clone(),
             arcade_user_list_mode: self.arcade_user_list_mode,
             user_list_indexes: self.user_list_indexes.clone(),
-            root_favourite_rows: self.root_favourite_rows.clone(),
             pending_game_action_path: self.pending_game_action_path.clone(),
             game_list_memory: self.game_list_memory.clone(),
             collection_filters: self.collection_filters.clone(),
@@ -2728,7 +2724,6 @@ impl LauncherNav {
         self.arcade_user_list_mode = state.arcade_user_list_mode;
         self.drawer_projection.get_mut().take();
         self.user_list_indexes = state.user_list_indexes;
-        self.root_favourite_rows = state.root_favourite_rows;
         self.pending_game_action_path = state.pending_game_action_path;
         self.game_list_memory = state.game_list_memory;
         self.collection_filters = state.collection_filters;
@@ -4390,33 +4385,6 @@ impl LauncherNav {
                 })
                 .collect(),
         };
-        // Display-only rows: keep catalog titles and launch identities intact.
-        self.root_favourite_rows = if self.arcade_user_list_mode == ArcadeUserListMode::Favourites
-            && active_collection.is_none()
-        {
-            self.user_list_indexes
-                .iter()
-                .map(|&index| {
-                    let mut game = catalog.games[index].clone();
-                    let title = game.title.as_ref();
-                    let name = title
-                        .find(['(', '['])
-                        .map_or(title, |index| &title[..index])
-                        .trim();
-                    let name = if name.is_empty() { title } else { name };
-                    let system = catalog
-                        .systems
-                        .iter()
-                        .find(|system| system.id == game.system_id.as_ref())
-                        .map_or(game.system_id.as_ref(), |system| system.title.as_str());
-                    game.title = format!("{name} ({system})").into();
-                    game
-                })
-                .collect::<Vec<_>>()
-                .into()
-        } else {
-            Default::default()
-        };
     }
 
     pub fn favourite_count(&self) -> usize {
@@ -4494,11 +4462,6 @@ impl LauncherNav {
         catalog: &'a ArcadeCatalog,
         system_id: &str,
     ) -> crate::arcade_catalog::ArcadeGameView<'a> {
-        if self.arcade_user_list_mode == ArcadeUserListMode::Favourites
-            && self.active_collection_id().is_none()
-        {
-            return crate::arcade_catalog::ArcadeGameView::contiguous(&self.root_favourite_rows);
-        }
         if self.arcade_user_list_mode != ArcadeUserListMode::Games {
             return self.active_collection_id().map_or_else(
                 || {
@@ -12355,12 +12318,58 @@ mod tests {
     }
 
     #[test]
+    fn top_level_favourites_restore_reads_current_catalog_and_handles_removal() {
+        let mut catalog = multi_system_catalog();
+        let first = catalog.games[0].mra_path.to_string();
+        let second = catalog.games[1].mra_path.to_string();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.set_user_game_refs(&catalog, [first.clone(), second.clone()], Vec::new());
+        nav.selected = 4;
+        nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
+        let state = nav.navigation_transition_state();
+
+        // Restore without rebuilding the list: catalog metadata must remain authoritative.
+        let game = &mut Arc::make_mut(&mut catalog.games)[0];
+        game.title = "Updated title (USA revision 2)".into();
+        game.preview_archive_path = "updated-preview.zip".into();
+        game.preview_asset_key = "updated-preview".into();
+        nav.go_root();
+        nav.restore_navigation_transition_state(state);
+        let rows = nav.active_arcade_game_view(&catalog, "");
+        assert_eq!(
+            rows.get(0).unwrap().title.as_ref(),
+            "Updated title (USA revision 2)"
+        );
+        assert_eq!(
+            rows.get(0).unwrap().preview_archive_path.as_ref(),
+            "updated-preview.zip"
+        );
+        assert_eq!(
+            rows.get(0).unwrap().preview_asset_key.as_ref(),
+            "updated-preview"
+        );
+
+        nav.reconcile_favourite_state(&catalog, &first, false);
+        assert_eq!(nav.active_collection_id(), None);
+        assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Favourites);
+        assert_eq!(nav.favourite_count(), 1);
+        assert_eq!(nav.active_arcade_game_count(&catalog, ""), 1);
+        assert_eq!(
+            nav.active_arcade_game_view(&catalog, "")
+                .get(0)
+                .unwrap()
+                .mra_path
+                .as_ref(),
+            second
+        );
+    }
+
+    #[test]
     fn root_favourites_card_opens_favourites_across_systems() {
         let first = "/media/fat/_Arcade/1942.mra";
         let second = "magik-plan:amiga-agony";
-        let mut catalog = multi_system_catalog();
-        Arc::make_mut(&mut catalog.games)[0].title = "1942 (USA 1984) [revision 1]".into();
-        Arc::make_mut(&mut catalog.games)[1].title = "Agony [Europe]".into();
+        let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         nav.sync_launcher_taxonomy(&catalog);
         nav.set_user_game_refs(
@@ -12379,19 +12388,6 @@ mod tests {
         assert_eq!(favourites.len(), 2);
         assert_eq!(favourites.get(0).unwrap().mra_path.as_ref(), first);
         assert_eq!(favourites.get(1).unwrap().mra_path.as_ref(), second);
-        assert_eq!(favourites.get(0).unwrap().title.as_ref(), "1942 (Arcade)");
-        assert_eq!(favourites.get(1).unwrap().title.as_ref(), "Agony (Amiga)");
-
-        assert!(nav.open_system(&catalog, "arcade"));
-        nav.set_arcade_user_list_mode(&catalog, ArcadeUserListMode::Favourites);
-        assert_eq!(
-            nav.active_arcade_game_view(&catalog, "arcade")
-                .get(0)
-                .unwrap()
-                .title
-                .as_ref(),
-            "1942 (USA 1984) [revision 1]"
-        );
     }
 
     #[test]

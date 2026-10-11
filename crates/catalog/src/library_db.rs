@@ -34,7 +34,8 @@ pub(crate) fn canonical_variant_title(title: &str) -> String {
     }
 }
 
-fn variant_title_without_annotations(title: &str) -> String {
+/// Remove parenthesized and bracketed annotations while retaining the surrounding title.
+pub fn variant_title_without_annotations(title: &str) -> String {
     let mut out = String::new();
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;

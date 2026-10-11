@@ -523,6 +523,7 @@ pub struct ArcadeListRenderer {
     row_preparer_failed: bool,
     favourite_launch_refs: HashSet<String>,
     favourite_launch_refs_revision: u64,
+    top_level_favourite_titles: Option<Vec<FavouriteRowTitle>>,
     surface: Vec<Rgb565Pixel>,
     sparse_metadata_enabled: bool,
     surface_nonfill_runs: Vec<Vec<(usize, usize)>>,
@@ -778,9 +779,16 @@ pub struct CachedArcadeRow {
     pub last_used: u64,
 }
 
+struct FavouriteRowTitle {
+    source_title: Arc<str>,
+    system_id: Arc<str>,
+    launch_ref: Arc<str>,
+    display_title: Arc<str>,
+}
+
 impl CachedArcadeRow {
-    fn matches(&self, game: &ArcadeGameEntry, is_favourite: bool) -> bool {
-        arc_str_eq(&self.title, &game.title)
+    fn matches(&self, game: &ArcadeGameEntry, is_favourite: bool, title: &Arc<str>) -> bool {
+        arc_str_eq(&self.title, title)
             && self.is_new == game.is_new
             && self.is_favourite == is_favourite
     }
@@ -911,6 +919,7 @@ impl ArcadeListRenderer {
             row_preparer_failed: false,
             favourite_launch_refs: HashSet::new(),
             favourite_launch_refs_revision: u64::MAX,
+            top_level_favourite_titles: None,
             surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
             sparse_metadata_enabled: style.crt_palette,
             surface_nonfill_runs: vec![Vec::new(); ARCADE_LIST_H],
@@ -1072,6 +1081,82 @@ impl ArcadeListRenderer {
         self.favourite_launch_refs_revision = revision;
     }
 
+    pub fn set_top_level_favourites(&mut self, enabled: bool) {
+        if self.top_level_favourite_titles.is_some() == enabled {
+            return;
+        }
+        self.top_level_favourite_titles = enabled.then(Vec::new);
+        self.row_cache.clear();
+        self.row_fingerprint_cache.clear();
+        self.invalidate_presented_layer();
+    }
+
+    fn refresh_favourite_titles(&mut self, games: ArcadeGameView<'_>) {
+        let Some(titles) = &self.top_level_favourite_titles else {
+            return;
+        };
+        if titles.len() == games.len()
+            && titles.iter().zip(games.iter()).all(|(title, game)| {
+                arc_str_eq(&title.source_title, &game.title)
+                    && arc_str_eq(&title.system_id, &game.system_id)
+                    && arc_str_eq(&title.launch_ref, &game.mra_path)
+            })
+        {
+            return;
+        }
+        let names = games
+            .iter()
+            .map(|game| {
+                let name = mister_magik_catalog::library_db::variant_title_without_annotations(
+                    &game.title,
+                );
+                let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+                let name = if name.is_empty() {
+                    game.title.to_string()
+                } else {
+                    name
+                };
+                (name, crate::arcade_catalog::system_title(&game.system_id))
+            })
+            .collect::<Vec<_>>();
+        let mut counts = HashMap::new();
+        for (name, system) in &names {
+            *counts
+                .entry((name.as_str(), system.as_str()))
+                .or_insert(0usize) += 1;
+        }
+        self.top_level_favourite_titles = Some(
+            games
+                .iter()
+                .zip(&names)
+                .map(|(game, (name, system))| {
+                    // Keep region/revision annotations when the short labels would collide.
+                    let name = if counts[&(name.as_str(), system.as_str())] > 1 {
+                        game.title.as_ref()
+                    } else {
+                        name.as_str()
+                    };
+                    FavouriteRowTitle {
+                        source_title: game.title.clone(),
+                        system_id: game.system_id.clone(),
+                        launch_ref: game.mra_path.clone(),
+                        display_title: format!("{name} ({system})").into(),
+                    }
+                })
+                .collect(),
+        );
+        self.row_cache.clear();
+        self.row_fingerprint_cache.clear();
+        self.invalidate_presented_layer();
+    }
+
+    fn row_title<'a>(&'a self, index: usize, game: &'a ArcadeGameEntry) -> &'a Arc<str> {
+        self.top_level_favourite_titles
+            .as_ref()
+            .and_then(|titles| titles.get(index))
+            .map_or(&game.title, |title| &title.display_title)
+    }
+
     fn poll_prepared_rows(&mut self, games: ArcadeGameView<'_>) {
         let Some(worker) = self.row_preparer.as_mut() else {
             return;
@@ -1098,6 +1183,7 @@ impl ArcadeListRenderer {
             if !row.matches(
                 game,
                 self.favourite_launch_refs.contains(game.mra_path.as_ref()),
+                self.row_title(index, game),
             ) {
                 continue;
             }
@@ -1112,6 +1198,7 @@ impl ArcadeListRenderer {
     /// Prepare the upcoming HDMI Games rows while its hub is visible. Drawing
     /// never waits for this worker: unavailable or stale rows use the normal path.
     pub fn prepare_visible_rows(&mut self, games: ArcadeGameView<'_>, visual_index: f32) {
+        self.refresh_favourite_titles(games);
         self.poll_prepared_rows(games);
         if self.style != ArcadeListStyle::hdmi()
             || self.row_preparer_failed
@@ -1145,14 +1232,14 @@ impl ArcadeListRenderer {
             if self
                 .row_cache
                 .get(&index)
-                .is_some_and(|row| row.matches(game, favourite))
+                .is_some_and(|row| row.matches(game, favourite, self.row_title(index, game)))
             {
                 continue;
             }
             rows.push((
                 index,
                 CachedArcadeRow {
-                    title: Arc::clone(&game.title),
+                    title: self.row_title(index, game).clone(),
                     is_new: game.is_new,
                     is_favourite: favourite,
                     pixels: Vec::new(),
@@ -1186,6 +1273,7 @@ impl ArcadeListRenderer {
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
+        self.refresh_favourite_titles(games);
         self.poll_prepared_rows(games);
         self.previous_selection_normal_rect = None;
         self.last_filter_draw = None;
@@ -1554,20 +1642,21 @@ impl ArcadeListRenderer {
         y: isize,
     ) {
         let is_favourite = self.favourite_launch_refs.contains(game.mra_path.as_ref());
+        let title = self.row_title(idx, game).clone();
         let needs_render = self
             .row_cache
             .get(&idx)
-            .is_none_or(|cached| !cached.matches(game, is_favourite));
+            .is_none_or(|cached| !cached.matches(game, is_favourite, &title));
         if needs_render {
             if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
                 prune_arcade_row_cache(&mut self.row_cache);
             }
-            let row = self.render_row(game.title.as_ref(), game.is_new, is_favourite, idx);
+            let row = self.render_row(&title, game.is_new, is_favourite, idx);
             let last_used = self.next_row_cache_epoch();
             self.row_cache.insert(
                 idx,
                 CachedArcadeRow {
-                    title: Arc::clone(&game.title),
+                    title,
                     is_new: game.is_new,
                     is_favourite,
                     pixels: row,
@@ -1718,7 +1807,10 @@ impl ArcadeListRenderer {
         if self.row_fingerprint_cache.len() >= ARCADE_ROW_FINGERPRINT_CACHE_MAX {
             prune_arcade_row_fingerprint_cache(&mut self.row_fingerprint_cache);
         }
-        let hash = arcade_game_hash(game);
+        let mut hash = arcade_game_hash(game);
+        if self.top_level_favourite_titles.is_some() {
+            arcade_hash_bytes(&mut hash, self.row_title(idx, game).as_bytes());
+        }
         self.row_fingerprint_cache.insert(
             idx,
             CachedArcadeRowFingerprint {
@@ -4007,6 +4099,102 @@ mod tests {
         arcade_game(title).system_id(system_id).path(path).build()
     }
 
+    #[test]
+    fn top_level_favourite_labels_preserve_subtitles_and_use_system_names() {
+        let games = vec![
+            game("arcade", "rondo.mra", "Castlevania (USA) - Rondo of Blood"),
+            game("snes", "tetris.sfc", "Tetris [USA]"),
+            game("arcade", "mrdo.mra", "Mr Do Rocks (USA 1983)"),
+        ];
+        for mut renderer in [
+            ArcadeListRenderer::new(),
+            ArcadeListRenderer::new_for_crt(36),
+        ] {
+            renderer.set_top_level_favourites(true);
+            renderer
+                .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+                .unwrap();
+            for (index, label) in [
+                "Castlevania - Rondo of Blood (Arcade)",
+                "Tetris (SNES)",
+                "Mr Do Rocks (Arcade)",
+            ]
+            .iter()
+            .enumerate()
+            {
+                assert_eq!(renderer.row_cache[&index].title.as_ref(), *label);
+                let expected = renderer.render_row(label, false, false, index);
+                assert_eq!(renderer.row_cache[&index].pixels, expected);
+            }
+            assert!(
+                renderer
+                    .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+                    .is_none()
+            );
+
+            renderer.set_top_level_favourites(false);
+            assert!(
+                renderer
+                    .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+                    .is_some()
+            );
+            assert_eq!(
+                renderer.row_cache[&0].title.as_ref(),
+                games[0].title.as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_favourite_labels_keep_variants_distinct_and_refresh_after_removal() {
+        let games = vec![
+            game("arcade", "usa.mra", "1942 (USA revision 1)"),
+            game("arcade", "japan.mra", "1942 (Japan revision 2)"),
+            game("snes", "1942.sfc", "1942 (USA)"),
+        ];
+        let mut renderer = ArcadeListRenderer::new();
+        renderer.set_top_level_favourites(true);
+        renderer
+            .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+            .unwrap();
+        assert_eq!(
+            renderer.row_cache[&0].title.as_ref(),
+            "1942 (USA revision 1) (Arcade)"
+        );
+        assert_eq!(
+            renderer.row_cache[&1].title.as_ref(),
+            "1942 (Japan revision 2) (Arcade)"
+        );
+        assert_eq!(renderer.row_cache[&2].title.as_ref(), "1942 (SNES)");
+
+        // Removing the other Arcade variant lets the remaining row use the short label.
+        renderer
+            .draw(ArcadeGameView::indexed(&games, &[1, 2]), 0, 0.0, false)
+            .unwrap();
+        assert_eq!(renderer.row_cache[&0].title.as_ref(), "1942 (Arcade)");
+        assert_eq!(renderer.row_cache[&1].title.as_ref(), "1942 (SNES)");
+    }
+
+    #[test]
+    fn top_level_favourite_labels_follow_current_titles_and_systems() {
+        let mut games = vec![game("arcade", "saved.mra", "Old title (USA)")];
+        let mut renderer = ArcadeListRenderer::new();
+        renderer.set_top_level_favourites(true);
+        renderer
+            .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+            .unwrap();
+        games[0].title = "New title [Europe]".into();
+        renderer
+            .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+            .unwrap();
+        assert_eq!(renderer.row_cache[&0].title.as_ref(), "New title (Arcade)");
+        games[0].system_id = "snes".into();
+        renderer
+            .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+            .unwrap();
+        assert_eq!(renderer.row_cache[&0].title.as_ref(), "New title (SNES)");
+    }
+
     fn games(system_id: &str, count: usize) -> Vec<ArcadeGameEntry> {
         (0..count)
             .map(|idx| {
@@ -5599,7 +5787,7 @@ mod tests {
 
     #[test]
     fn prepared_rows_reject_changed_content_favourites_width_and_style() {
-        for mismatch in 0..4 {
+        for mismatch in 0..5 {
             let games = games("arcade", 3);
             let view = ArcadeGameView::contiguous(&games);
             let mut renderer = ArcadeListRenderer::new();
@@ -5635,10 +5823,15 @@ mod tests {
             if mismatch == 3 {
                 renderer.style.row_height += 4;
             }
+            if mismatch == 4 {
+                renderer.set_top_level_favourites(true);
+                renderer.refresh_favourite_titles(view);
+            }
             renderer.poll_prepared_rows(view);
             assert!(renderer.row_cache.is_empty());
             renderer.draw(view, 0, 0.0, true);
             let mut reference = ArcadeListRenderer::new_with_style(renderer.style, None);
+            reference.set_top_level_favourites(mismatch == 4);
             reference.draw(view, 0, 0.0, true);
             assert!(renderer.surface == reference.surface);
         }
