@@ -30,8 +30,6 @@ use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-#[cfg(test)]
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -48,12 +46,6 @@ struct OwnedProcess {
     start_ticks: String,
     #[serde(default)]
     sha256: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Status<'a> {
-    pub identity: &'a str,
-    pub capabilities: &'a [&'a str],
 }
 
 /// Single-device native service state. It owns only its installation root.
@@ -1780,41 +1772,6 @@ fn installed_hash(path: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-fn publish_atomically(
-    root: &Path,
-    artifact: &str,
-    expected_hash: &str,
-    body: &[u8],
-) -> Result<(), String> {
-    let name = Path::new(artifact);
-    if name.file_name().and_then(|value| value.to_str()) != Some(artifact) || artifact.is_empty() {
-        return Err("artifact must be one plain filename".to_owned());
-    }
-    fs::create_dir_all(root).map_err(|error| error.to_string())?;
-    let temporary = root.join(format!(".{artifact}.part"));
-    let final_path = root.join(artifact);
-    let result = (|| -> Result<(), String> {
-        let mut output = File::create(&temporary).map_err(|error| error.to_string())?;
-        output.write_all(body).map_err(|error| error.to_string())?;
-        output.sync_all().map_err(|error| error.to_string())?;
-        let actual_hash = Sha256::digest(body)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        if actual_hash != expected_hash {
-            return Err("sha256 mismatch".to_owned());
-        }
-        fs::rename(&temporary, &final_path).map_err(|error| error.to_string())?;
-        fs::set_permissions(final_path, fs::Permissions::from_mode(0o700))
-            .map_err(|error| error.to_string())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2022,16 +1979,6 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_upload_is_never_published() {
-        let directory =
-            std::env::temp_dir().join(format!("magik-agent-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        assert!(publish_atomically(&directory, "probe", "bad", b"content").is_err());
-        assert!(!directory.join("probe").exists());
-        let _ = std::fs::remove_dir_all(directory);
-    }
-
-    #[test]
     fn installed_hash_tracks_the_published_artifact() {
         let directory =
             std::env::temp_dir().join(format!("magik-agent-hash-{}", std::process::id()));
@@ -2060,13 +2007,17 @@ mod tests {
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>()
         };
-        publish_atomically(
+        let body = b"probe Payload";
+        let staged = upload::receive(
+            &mut &body[..],
             &directory,
             "probe",
-            &hex(b"probe Payload"),
-            b"probe Payload",
+            &hex(body),
+            body.len(),
+            "hash-cache-republish",
         )
-        .expect("republish artifact");
+        .expect("verify replacement artifact");
+        staged.publish(&artifact).expect("republish artifact");
         assert_eq!(installed_hash(&artifact), Some(hex(b"probe Payload")));
         assert_eq!(digests(), before + 2);
         let _ = std::fs::remove_dir_all(directory);

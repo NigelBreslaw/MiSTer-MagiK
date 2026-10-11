@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::{
-    CaptureVisibility, EncodedFrame, JPEG_HEIGHT, JPEG_WIDTH, MovieObservation, analyze_luma,
-    classified, validate_movie_observation,
+    EncodedFrame, JPEG_HEIGHT, JPEG_WIDTH, MovieObservation, classified, luma_is_visible,
+    validate_movie_observation,
 };
 use crate::error::{AgentError, AgentResult};
 use block2::RcBlock;
@@ -55,7 +55,6 @@ const MOVIE_FRAME_QUEUE_CAPACITY: usize = 4;
 
 struct DelegateIvars {
     result: Mutex<Option<SyncSender<AgentResult<EncodedFrame>>>>,
-    require_visible: bool,
 }
 
 define_class!(
@@ -75,34 +74,22 @@ define_class!(
             sample_buffer: &CMSampleBuffer,
             _connection: &AVCaptureConnection,
         ) {
-            let result = process_sample(sample_buffer);
-            let should_send = match &result {
-                Ok(Some(frame)) => {
-                    !self.ivars().require_visible
-                        || frame.luma.is_some_and(|analysis| {
-                            matches!(
-                                analysis.visibility,
-                                CaptureVisibility::Visible | CaptureVisibility::Corrupted
-                            )
-                        })
-                }
-                Ok(None) => false,
-                Err(_) => true,
+            let result = match process_sample(sample_buffer) {
+                Ok(Some(frame)) => Ok(frame),
+                Ok(None) => return,
+                Err(error) => Err(error),
             };
-            if should_send && let Some(sender) = self.ivars().result.lock().unwrap().take() {
-                let _ = sender.send(
-                    result.map(|frame| frame.expect("nonblank sample result must contain a frame")),
-                );
+            if let Some(sender) = self.ivars().result.lock().unwrap().take() {
+                let _ = sender.send(result);
             }
         }
     }
 );
 
 impl FrameDelegate {
-    fn new(sender: SyncSender<AgentResult<EncodedFrame>>, require_visible: bool) -> Retained<Self> {
+    fn new(sender: SyncSender<AgentResult<EncodedFrame>>) -> Retained<Self> {
         let this = Self::alloc().set_ivars(DelegateIvars {
             result: Mutex::new(Some(sender)),
-            require_visible,
         });
         // SAFETY: The instance variables are initialized and NSObject's initializer is valid.
         unsafe { msg_send![super(this), init] }
@@ -325,11 +312,7 @@ fn receive_with_run_loop<T>(
 }
 
 pub(super) fn capture(timeout: Duration) -> AgentResult<EncodedFrame> {
-    autoreleasepool(|_| capture_inner(timeout, true))
-}
-
-pub(super) fn capture_analyzed(timeout: Duration) -> AgentResult<EncodedFrame> {
-    autoreleasepool(|_| capture_inner(timeout, false))
+    autoreleasepool(|_| capture_inner(timeout))
 }
 
 pub(super) fn record(output: &Path, duration: Duration) -> AgentResult<()> {
@@ -339,7 +322,7 @@ pub(super) fn record(output: &Path, duration: Duration) -> AgentResult<()> {
     })
 }
 
-fn capture_inner(timeout: Duration, require_visible: bool) -> AgentResult<EncodedFrame> {
+fn capture_inner(timeout: Duration) -> AgentResult<EncodedFrame> {
     require_camera_access()?;
     let device = find_device()?;
     let (format, rate) = select_format(&device)?;
@@ -389,7 +372,7 @@ fn capture_inner(timeout: Duration, require_visible: bool) -> AgentResult<Encode
     }
 
     let (sender, receiver) = mpsc::sync_channel(1);
-    let delegate = FrameDelegate::new(sender, require_visible);
+    let delegate = FrameDelegate::new(sender);
     let queue = DispatchQueue::new("io.mister-magik.usb-video", DispatchQueueAttr::SERIAL);
     let protocol = ProtocolObject::from_ref(&*delegate);
     unsafe {
@@ -400,8 +383,7 @@ fn capture_inner(timeout: Duration, require_visible: bool) -> AgentResult<Encode
         mpsc::RecvTimeoutError::Timeout => classified(
             "camera_timeout",
             format!(
-                "USB Video did not produce a {} frame within {} seconds",
-                if require_visible { "visible" } else { "valid" },
+                "USB Video did not produce a visible frame within {} seconds",
                 timeout.as_secs()
             ),
         ),
@@ -1100,12 +1082,12 @@ fn process_sample(sample_buffer: &CMSampleBuffer) -> AgentResult<Option<EncodedF
             "USB Video luma plane size overflowed",
         )
     })?;
-    let analysis = if base.is_null() {
-        None
+    let visible = if base.is_null() {
+        false
     } else {
         // SAFETY: AVFoundation owns a locked luma plane of at least row_bytes * height bytes.
         let luma = unsafe { slice::from_raw_parts(base, plane_len) };
-        analyze_luma(luma, width, height, row_bytes)
+        luma_is_visible(luma, width, height, row_bytes)
     };
     let unlock = unsafe { CVPixelBufferUnlockBaseAddress(&pixel_buffer, flags) };
     if unlock != kCVReturnSuccess {
@@ -1114,7 +1096,7 @@ fn process_sample(sample_buffer: &CMSampleBuffer) -> AgentResult<Option<EncodedF
             format!("could not unlock USB Video pixel buffer ({unlock})"),
         ));
     }
-    if analysis.is_none() {
+    if !visible {
         return Ok(None);
     }
 
@@ -1148,6 +1130,5 @@ fn process_sample(sample_buffer: &CMSampleBuffer) -> AgentResult<Option<EncodedF
         jpeg: data.to_vec(),
         width: JPEG_WIDTH,
         height: JPEG_HEIGHT,
-        luma: analysis,
     }))
 }

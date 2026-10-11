@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -103,6 +104,32 @@ def test_branch_clients_keep_a_suitable_agent_despite_identity_changes(
         _agent, discovered = cli.connect_agent(run)
         assert discovered.supports(required)
     assert tokens == ["cached-token", "cached-token", "cached-token"]
+
+
+def test_status_dispatch_retains_a_service_with_the_status_capability(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.delenv("MISTER_MAGIK2_REPAIR", raising=False)
+    current = AgentStatus.from_response(
+        {"identity": "current-service", "capabilities": ["status"], "running": True}
+    )
+    responses = [current]
+    tokens = configure_native(monkeypatch, tmp_path, responses)
+
+    def unexpected_replacement(*_args):
+        pytest.fail("status must reuse the compatible installed service")
+
+    monkeypatch.setattr(cli, "agent_binary_path", unexpected_replacement)
+    monkeypatch.setattr(cli, "SshBootstrap", unexpected_replacement)
+    run = create_run(tmp_path, "status", {})
+
+    assert cli.dispatch(SimpleNamespace(command="status"), run) == 0
+    assert tokens == ["cached-token"]
+    assert responses == []
+    assert (
+        "identity=current-service running=True capabilities=status"
+        in capsys.readouterr().out
+    )
 
 
 def test_missing_capability_bootstraps_once_and_continues(

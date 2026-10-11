@@ -662,10 +662,6 @@ impl UiDisplayPlan {
         Self::from_mister_ini_hdmi_text_with_policy(ini, UiFramebufferSizePolicy::Auto)
     }
 
-    pub fn direct_video_policy_from_mister_ini_text(ini: &str) -> bool {
-        direct_video_from_parsed(&ParsedIni::parse(ini))
-    }
-
     fn from_parsed_mister_ini(
         parsed: &ParsedIni<'_>,
         fb_policy: UiFramebufferSizePolicy,

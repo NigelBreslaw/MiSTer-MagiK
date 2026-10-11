@@ -78,14 +78,6 @@ CONTRACTS = (
         "16px",
     ),
     PrimitiveContract(
-        UI_ROOT / "components/terminus_8x14.slint",
-        "Terminus8x14",
-        "Terminus8x14Size",
-        ("px8", "px14", "px16", "px24", "px28", "px32"),
-        "Terminus 8x14",
-        "14px",
-    ),
-    PrimitiveContract(
         UI_ROOT / "components/spleen_5x8.slint",
         "Spleen5x8",
         "Spleen5x8Size",

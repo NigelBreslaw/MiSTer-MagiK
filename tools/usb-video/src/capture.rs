@@ -19,21 +19,6 @@ const MOVIE_MAX_SECONDS: u64 = 60;
 const MOVIE_DURATION_TOLERANCE_SECONDS: f64 = 0.5;
 #[cfg(any(target_os = "macos", test))]
 const MOVIE_MIN_DECODED_FRAMES_PER_SECOND: u64 = 5;
-#[cfg(any(target_os = "macos", test))]
-const SPATIAL_LUMA_SAMPLE_STEP: usize = 4;
-#[cfg(any(target_os = "macos", test))]
-const STRONG_ROW_DISCONTINUITY: u8 = 12;
-const TEMPORAL_LUMA_GRID_COLUMNS: usize = 16;
-const TEMPORAL_LUMA_GRID_ROWS: usize = 9;
-const TEMPORAL_LUMA_GRID_LEN: usize = TEMPORAL_LUMA_GRID_COLUMNS * TEMPORAL_LUMA_GRID_ROWS;
-#[cfg(any(target_os = "macos", test))]
-const TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS: usize = 32;
-#[cfg(any(target_os = "macos", test))]
-const TEMPORAL_LUMA_VIDEO_MINIMUM: u8 = 16;
-#[cfg(any(target_os = "macos", test))]
-const TEMPORAL_LUMA_VIDEO_RANGE: u16 = 219;
-#[cfg(any(target_os = "macos", test))]
-const TEMPORAL_LUMA_FULL_RANGE: u16 = 255;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CaptureArtifact {
@@ -48,24 +33,11 @@ pub struct CaptureArtifact {
     pub capture_ms: u64,
 }
 
-impl CaptureArtifact {
-    #[must_use]
-    pub fn markdown_link(&self) -> String {
-        let label = if self.kind == "usb_video_movie" {
-            "USB Video recording"
-        } else {
-            "USB Video frame"
-        };
-        format!("[{label}](<{}>)", self.path.display())
-    }
-}
-
 #[derive(Clone, Debug)]
 struct EncodedFrame {
     jpeg: Vec<u8>,
     width: u32,
     height: u32,
-    luma: Option<LumaAnalysis>,
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -124,40 +96,6 @@ fn validate_movie_observation(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureVisibility {
-    Black,
-    Corrupted,
-    SignalLost,
-    Visible,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct LumaAnalysis {
-    minimum: u8,
-    maximum: u8,
-    mean: u8,
-    strong_row_discontinuity_permille: u16,
-    temporal_luma_grid: [u8; TEMPORAL_LUMA_GRID_LEN],
-    visibility: CaptureVisibility,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct AnalyzedCaptureArtifact {
-    #[serde(flatten)]
-    pub artifact: CaptureArtifact,
-    pub visibility: CaptureVisibility,
-    pub luma_minimum: u8,
-    pub luma_maximum: u8,
-    pub luma_mean: u8,
-    pub strong_row_discontinuity_permille: u16,
-    #[serde(skip)]
-    temporal_luma_grid: [u8; TEMPORAL_LUMA_GRID_LEN],
-}
-
-impl AnalyzedCaptureArtifact {}
-
 trait CaptureBackend {
     fn capture(&self, timeout: Duration) -> AgentResult<EncodedFrame>;
 }
@@ -183,31 +121,6 @@ pub fn execute(output: Option<&Path>) -> AgentResult<CaptureArtifact> {
         timestamp_ms,
         started,
     )
-}
-
-pub fn execute_analyzed(output: Option<&Path>) -> AgentResult<AnalyzedCaptureArtifact> {
-    let started = Instant::now();
-    let timestamp_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| classified("camera_clock_invalid", error.to_string()))?
-        .as_millis();
-    let frame = native::capture_analyzed(CAPTURE_TIMEOUT)?;
-    let luma = frame.luma.ok_or_else(|| {
-        classified(
-            "camera_analysis_unavailable",
-            "USB Video capture did not include luma analysis",
-        )
-    })?;
-    let artifact = store_frame(output, &std::env::temp_dir(), timestamp_ms, started, frame)?;
-    Ok(AnalyzedCaptureArtifact {
-        artifact,
-        visibility: luma.visibility,
-        luma_minimum: luma.minimum,
-        luma_maximum: luma.maximum,
-        luma_mean: luma.mean,
-        strong_row_discontinuity_permille: luma.strong_row_discontinuity_permille,
-        temporal_luma_grid: luma.temporal_luma_grid,
-    })
 }
 
 pub fn execute_movie(output: Option<&Path>, seconds: u64) -> AgentResult<CaptureArtifact> {
@@ -485,15 +398,12 @@ fn classified(code: &'static str, detail: impl Into<String>) -> AgentError {
 
 #[must_use]
 #[cfg(any(target_os = "macos", test))]
-fn analyze_luma(
-    luma: &[u8],
-    width: usize,
-    height: usize,
-    row_bytes: usize,
-) -> Option<LumaAnalysis> {
-    let required = row_bytes.checked_mul(height)?;
+fn luma_is_visible(luma: &[u8], width: usize, height: usize, row_bytes: usize) -> bool {
+    let Some(required) = row_bytes.checked_mul(height) else {
+        return false;
+    };
     if width == 0 || height == 0 || row_bytes < width || luma.len() < required {
-        return None;
+        return false;
     }
     let mut total = 0_u64;
     let mut samples = 0_u64;
@@ -509,114 +419,12 @@ fn analyze_luma(
         }
     }
     if samples == 0 {
-        return None;
+        return false;
     }
     let mean = u8::try_from(total / samples).unwrap_or(u8::MAX);
-    // An all-zero plane is a missing/invalid camera sample. HDMI video-level
-    // black is normally around luma 16 and is valid evidence worth retaining.
-    if maximum <= 1 {
-        return None;
-    }
-    let strong_row_discontinuity_permille =
-        strong_row_discontinuity_permille(luma, width, height, row_bytes);
-    let temporal_luma_grid = temporal_luma_grid(luma, width, height, row_bytes, minimum, maximum)?;
-    let visibility = if is_capture_card_signal_loss(luma, width, height, row_bytes) {
-        CaptureVisibility::SignalLost
-    } else if mean > 24 || maximum.saturating_sub(minimum) > 12 {
-        CaptureVisibility::Visible
-    } else {
-        CaptureVisibility::Black
-    };
-    Some(LumaAnalysis {
-        minimum,
-        maximum,
-        mean,
-        strong_row_discontinuity_permille,
-        temporal_luma_grid,
-        visibility,
-    })
-}
-
-#[must_use]
-#[cfg(any(target_os = "macos", test))]
-fn temporal_luma_grid(
-    luma: &[u8],
-    width: usize,
-    height: usize,
-    row_bytes: usize,
-    minimum: u8,
-    maximum: u8,
-) -> Option<[u8; TEMPORAL_LUMA_GRID_LEN]> {
-    if width < TEMPORAL_LUMA_GRID_COLUMNS || height < TEMPORAL_LUMA_GRID_ROWS {
-        return None;
-    }
-    let active_width = if width > TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS * 2 {
-        width - TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS
-    } else {
-        width
-    };
-    let mut totals = [0_u64; TEMPORAL_LUMA_GRID_LEN];
-    let mut samples = [0_u64; TEMPORAL_LUMA_GRID_LEN];
-    for y in (0..height).step_by(SPATIAL_LUMA_SAMPLE_STEP) {
-        let grid_y = y * TEMPORAL_LUMA_GRID_ROWS / height;
-        for x in (0..active_width).step_by(SPATIAL_LUMA_SAMPLE_STEP) {
-            let grid_x = x * TEMPORAL_LUMA_GRID_COLUMNS / active_width;
-            let index = grid_y * TEMPORAL_LUMA_GRID_COLUMNS + grid_x;
-            totals[index] += u64::from(canonical_temporal_luma(
-                luma[y * row_bytes + x],
-                minimum,
-                maximum,
-            ));
-            samples[index] += 1;
-        }
-    }
-    let mut grid = [0_u8; TEMPORAL_LUMA_GRID_LEN];
-    for (index, sample_count) in samples.into_iter().enumerate() {
-        if sample_count == 0 {
-            return None;
-        }
-        grid[index] = u8::try_from(totals[index] / sample_count).unwrap_or(u8::MAX);
-    }
-    Some(grid)
-}
-
-#[must_use]
-#[cfg(any(target_os = "macos", test))]
-fn canonical_temporal_luma(value: u8, minimum: u8, maximum: u8) -> u8 {
-    if minimum <= 1 && maximum >= 254 {
-        let scaled = (u16::from(value) * TEMPORAL_LUMA_VIDEO_RANGE + TEMPORAL_LUMA_FULL_RANGE / 2)
-            / TEMPORAL_LUMA_FULL_RANGE;
-        u8::try_from(u16::from(TEMPORAL_LUMA_VIDEO_MINIMUM) + scaled).unwrap_or(u8::MAX)
-    } else {
-        value
-    }
-}
-
-#[must_use]
-#[cfg(any(target_os = "macos", test))]
-fn strong_row_discontinuity_permille(
-    luma: &[u8],
-    width: usize,
-    height: usize,
-    row_bytes: usize,
-) -> u16 {
-    if height < 2 {
-        return 0;
-    }
-    let samples_per_row = width.div_ceil(SPATIAL_LUMA_SAMPLE_STEP);
-    let strong_total = usize::from(STRONG_ROW_DISCONTINUITY) * samples_per_row;
-    let strong_rows = (1..height)
-        .filter(|&y| {
-            (0..width)
-                .step_by(SPATIAL_LUMA_SAMPLE_STEP)
-                .map(|x| {
-                    usize::from(luma[y * row_bytes + x].abs_diff(luma[(y - 1) * row_bytes + x]))
-                })
-                .sum::<usize>()
-                >= strong_total
-        })
-        .count();
-    u16::try_from(strong_rows * 1000 / (height - 1)).unwrap_or(u16::MAX)
+    maximum > 1
+        && !is_capture_card_signal_loss(luma, width, height, row_bytes)
+        && (mean > 24 || maximum.saturating_sub(minimum) > 12)
 }
 
 #[must_use]
@@ -665,13 +473,6 @@ mod native {
         ))
     }
 
-    pub(super) fn capture_analyzed(_timeout: Duration) -> AgentResult<EncodedFrame> {
-        Err(classified(
-            "camera_unsupported",
-            "USB Video still capture requires macOS",
-        ))
-    }
-
     pub(super) fn record(_output: &Path, _duration: Duration) -> AgentResult<()> {
         Err(classified(
             "camera_unsupported",
@@ -702,7 +503,6 @@ mod tests {
             jpeg: b"\xff\xd8fixture\xff\xd9".to_vec(),
             width: JPEG_WIDTH,
             height: JPEG_HEIGHT,
-            luma: None,
         }
     }
 
@@ -711,26 +511,19 @@ mod tests {
     }
 
     #[test]
-    fn luma_analysis_distinguishes_signal_black_and_visible_content() {
-        assert_eq!(analyze_luma(&vec![0; 64 * 64], 64, 64, 64), None);
-        assert_eq!(analyze_luma(&vec![16; 63 * 64], 64, 64, 64), None);
-        assert_eq!(analyze_luma(&vec![16; 64 * 64], 65, 64, 64), None);
-        assert_eq!(
-            analyze_luma(&vec![16; 64 * 64], 64, 64, 64)
-                .unwrap()
-                .visibility,
-            CaptureVisibility::Black
-        );
+    fn luma_visibility_rejects_invalid_black_and_signal_lost_frames() {
+        assert!(!luma_is_visible(&vec![0; 64 * 64], 64, 64, 64));
+        assert!(!luma_is_visible(&vec![16; 63 * 64], 64, 64, 64));
+        assert!(!luma_is_visible(&vec![16; 64 * 64], 65, 64, 64));
+        assert!(!luma_is_visible(&vec![16; 64 * 64], 64, 64, 64));
+        assert!(!luma_is_visible(&[], 1, 2, usize::MAX));
 
         let mut padded = vec![0; 80 * 64];
         for y in 0..64 {
             padded[y * 80..y * 80 + 64].fill(16);
         }
         padded[32 * 80 + 32] = 48;
-        assert_eq!(
-            analyze_luma(&padded, 64, 64, 80).unwrap().visibility,
-            CaptureVisibility::Visible
-        );
+        assert!(luma_is_visible(&padded, 64, 64, 80));
 
         let bars = [235_u8, 210, 170, 145, 106, 81, 41, 16];
         let mut signal_lost = vec![0; 64 * 64];
@@ -739,23 +532,18 @@ mod tests {
                 signal_lost[y * 64 + x] = bars[x * bars.len() / 64];
             }
         }
-        assert_eq!(
-            analyze_luma(&signal_lost, 64, 64, 64).unwrap().visibility,
-            CaptureVisibility::SignalLost
-        );
+        assert!(!luma_is_visible(&signal_lost, 64, 64, 64));
 
         let mut corrupted = vec![0; 64 * 64];
         for y in 0..64 {
             corrupted[y * 64..(y + 1) * 64].fill(if y % 2 == 0 { 16 } else { 64 });
         }
         corrupted[32 * 64 + 32] = 64;
-        let analysis = analyze_luma(&corrupted, 64, 64, 64).unwrap();
-        assert_eq!(analysis.visibility, CaptureVisibility::Visible);
-        assert_eq!(analysis.strong_row_discontinuity_permille, 1000);
+        assert!(luma_is_visible(&corrupted, 64, 64, 64));
     }
 
     #[test]
-    fn default_capture_uses_unique_temporary_jpeg_and_markdown_link() {
+    fn default_capture_uses_unique_temporary_jpeg() {
         let root = temp_root("default");
         fs::create_dir_all(&root).unwrap();
         let backend = FixtureBackend {
@@ -767,10 +555,6 @@ mod tests {
         assert!(first.path.ends_with("mister-magik-usb-video-1234.jpg"));
         assert!(second.path.ends_with("mister-magik-usb-video-1234-2.jpg"));
         assert_eq!(fs::read(&first.path).unwrap(), b"\xff\xd8fixture\xff\xd9");
-        assert_eq!(
-            first.markdown_link(),
-            format!("[USB Video frame](<{}>)", first.path.display())
-        );
         let json = serde_json::to_value(&first).unwrap();
         assert_eq!(json["event"], "artifact");
         assert_eq!(json["kind"], "usb_video_frame");

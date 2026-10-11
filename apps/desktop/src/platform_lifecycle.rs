@@ -10,12 +10,6 @@ pub(crate) struct DisplayClockTick {
     pub(crate) duration_us: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DisplayClockSource {
-    Native,
-    SlintTimer,
-}
-
 pub(crate) trait DisplayClockAdapter {
     type Clock;
 
@@ -23,39 +17,10 @@ pub(crate) trait DisplayClockAdapter {
     fn start_slint_timer(&mut self) -> Self::Clock;
 }
 
-pub(crate) struct DisplayClockController<C> {
-    active: Option<C>,
-    source: DisplayClockSource,
-}
-
-impl<C> DisplayClockController<C> {
-    pub(crate) fn start(adapter: &mut impl DisplayClockAdapter<Clock = C>) -> Self {
-        let (active, source) = match adapter.start_native() {
-            Some(clock) => (clock, DisplayClockSource::Native),
-            None => (adapter.start_slint_timer(), DisplayClockSource::SlintTimer),
-        };
-        Self {
-            active: Some(active),
-            source,
-        }
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn replace(&mut self, adapter: &mut impl DisplayClockAdapter<Clock = C>) {
-        let replacement = Self::start(adapter);
-        self.active = replacement.active;
-        self.source = replacement.source;
-    }
-
-    pub(crate) fn source(&self) -> DisplayClockSource {
-        self.source
-    }
-
-    pub(crate) fn into_clock(mut self) -> C {
-        self.active
-            .take()
-            .expect("display clock controller is active")
-    }
+pub(crate) fn start_display_clock<A: DisplayClockAdapter>(adapter: &mut A) -> A::Clock {
+    adapter
+        .start_native()
+        .unwrap_or_else(|| adapter.start_slint_timer())
 }
 
 pub(crate) trait TitlebarAdapter {
@@ -103,86 +68,50 @@ pub(crate) fn timer_tick(elapsed: Duration, interval: Duration) -> DisplayClockT
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    struct FakeClock(Rc<Cell<usize>>);
-
-    impl Drop for FakeClock {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() + 1);
-        }
-    }
 
     struct FakeDisplayAdapter {
         native_available: bool,
         native_starts: usize,
         timer_starts: usize,
-        stops: Rc<Cell<usize>>,
     }
 
     impl DisplayClockAdapter for FakeDisplayAdapter {
-        type Clock = FakeClock;
+        type Clock = ();
 
         fn start_native(&mut self) -> Option<Self::Clock> {
             self.native_starts += 1;
-            self.native_available
-                .then(|| FakeClock(Rc::clone(&self.stops)))
+            self.native_available.then_some(())
         }
 
         fn start_slint_timer(&mut self) -> Self::Clock {
             self.timer_starts += 1;
-            FakeClock(Rc::clone(&self.stops))
         }
     }
 
     #[test]
     fn native_display_clock_is_preferred_when_available() {
-        let stops = Rc::new(Cell::new(0));
         let mut adapter = FakeDisplayAdapter {
             native_available: true,
             native_starts: 0,
             timer_starts: 0,
-            stops,
         };
-        let controller = DisplayClockController::start(&mut adapter);
+        start_display_clock(&mut adapter);
 
-        assert_eq!(controller.source(), DisplayClockSource::Native);
         assert_eq!(adapter.native_starts, 1);
         assert_eq!(adapter.timer_starts, 0);
     }
 
     #[test]
     fn slint_timer_is_used_when_native_clock_is_unavailable() {
-        let stops = Rc::new(Cell::new(0));
         let mut adapter = FakeDisplayAdapter {
             native_available: false,
             native_starts: 0,
             timer_starts: 0,
-            stops,
         };
-        let controller = DisplayClockController::start(&mut adapter);
+        start_display_clock(&mut adapter);
 
-        assert_eq!(controller.source(), DisplayClockSource::SlintTimer);
         assert_eq!(adapter.native_starts, 1);
         assert_eq!(adapter.timer_starts, 1);
-    }
-
-    #[test]
-    fn replacing_and_dropping_controller_stop_each_clock_once() {
-        let stops = Rc::new(Cell::new(0));
-        let mut adapter = FakeDisplayAdapter {
-            native_available: true,
-            native_starts: 0,
-            timer_starts: 0,
-            stops: Rc::clone(&stops),
-        };
-        let mut controller = DisplayClockController::start(&mut adapter);
-        controller.replace(&mut adapter);
-        assert_eq!(stops.get(), 1);
-
-        drop(controller);
-        assert_eq!(stops.get(), 2);
     }
 
     #[test]

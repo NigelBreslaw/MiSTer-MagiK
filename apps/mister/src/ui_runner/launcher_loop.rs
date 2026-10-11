@@ -302,23 +302,7 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
         Screen::About => Some(SelectionFeedbackTarget::new("about", "licenses")),
         Screen::Licenses => Some(SelectionFeedbackTarget::new(
             "licenses",
-            [
-                "mister-magik",
-                "ffmpeg",
-                "slint",
-                "press-start-2p",
-                "commercial-fonts",
-                "jersey-25",
-                "jersey-15",
-                "spleen",
-                "terminus-font",
-                "rust-standard-library",
-                "zlib",
-                "libpng",
-            ]
-            .get(nav.licenses_selected)
-            .copied()
-            .unwrap_or("unknown"),
+            format!("license:{}", nav.licenses_selected),
         )),
         Screen::Arcade
             if nav.arcade_search.is_active(&nav.arcade_filter.active)
@@ -4035,6 +4019,86 @@ mod tests {
     }
 
     #[test]
+    fn licenses_navigation_feedback_acknowledges_the_row_ids_used_by_both_views() {
+        use slint::ComponentHandle;
+        use slint::platform::software_renderer::Rgb565Pixel;
+
+        let window = crate::visual_platform::install_isolated_test_platform();
+        window.set_size(slint::PhysicalSize::new(960, 540));
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        app.global::<slint_ui::launcher::NavigationView>()
+            .set_screen(slint_ui::launcher::LauncherScreen::Licenses);
+        app.show().expect("show launcher");
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Licenses;
+        let mut models = LauncherViewModels::default();
+        let started = Instant::now();
+
+        for index in 1..crate::licenses::LICENSE_TITLES.len() {
+            let before = nav_selection_feedback_target(&nav);
+            let pressed = crate::input::PadState {
+                dpad_down: true,
+                ..Default::default()
+            };
+            let now = started + Duration::from_millis(index as u64 * 32);
+            assert!(nav.handle_input(&pressed, now, &catalog).is_none());
+            assert_eq!(nav.licenses_selected, index);
+            let after = nav_selection_feedback_target(&nav);
+            assert!(models.note_selection_feedback_change(before.as_ref(), after.as_ref()));
+            models.sync(&app, &nav, &catalog, None, false, None);
+
+            let feedback = app.global::<slint_ui::launcher::FeedbackView>();
+            assert!(feedback.invoke_acknowledged(
+                "licenses".into(),
+                format!("license:{index}").into(),
+                feedback.get_revision(),
+            ));
+            assert!(!feedback.invoke_acknowledged(
+                "licenses".into(),
+                "license:0".into(),
+                feedback.get_revision(),
+            ));
+            if index == 2 {
+                let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+                window.request_redraw();
+                assert!(
+                    window.draw_full_frame_resetting_cache_if_needed(|renderer| {
+                        renderer.render(&mut pixels, 960);
+                    })
+                );
+                let acknowledged = Rgb565Pixel::from_rgb(0x73, 0x5d, 0xbd);
+                assert!(
+                    (144..164)
+                        .any(|y| pixels[y * 960 + 308..y * 960 + 600].contains(&acknowledged)),
+                    "the previous license row must render its acknowledgement color"
+                );
+            }
+            assert!(
+                nav.handle_input(&crate::input::PadState::default(), now, &catalog)
+                    .is_none()
+            );
+        }
+
+        let stamp = models.selection_feedback_stamp();
+        let visible_at = started + Duration::from_secs(1);
+        assert!(
+            !models
+                .confirm_selection_feedback(&stamp, visible_at)
+                .is_empty()
+        );
+        assert!(models.expire_selection_feedback(visible_at + Duration::from_secs(1)));
+        models.sync(&app, &nav, &catalog, None, false, None);
+        assert!(models.selection_feedback_stamp().entries.is_empty());
+        let feedback = app.global::<slint_ui::launcher::FeedbackView>();
+        assert!(!feedback.invoke_acknowledged(
+            "licenses".into(),
+            format!("license:{}", nav.licenses_selected).into(),
+            feedback.get_revision(),
+        ));
+    }
+
+    #[test]
     fn discrete_feedback_targets_cover_included_and_excluded_surfaces() {
         let mut nav = LauncherNav::new();
 
@@ -4070,7 +4134,17 @@ mod tests {
         nav.licenses_selected = 2;
         assert_eq!(
             nav_selection_feedback_target(&nav),
-            Some(SelectionFeedbackTarget::new("licenses", "slint"))
+            Some(SelectionFeedbackTarget::new("licenses", "license:2"))
+        );
+        nav.licenses_selected = 7;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("licenses", "license:7"))
+        );
+        nav.licenses_selected = 10;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("licenses", "license:10"))
         );
         nav.screen = Screen::Arcade;
         nav.system_page_mode = launcher::SystemPageMode::List;
