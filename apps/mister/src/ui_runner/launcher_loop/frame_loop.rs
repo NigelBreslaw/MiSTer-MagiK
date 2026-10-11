@@ -1225,11 +1225,8 @@ impl<'a> FrameLoop<'a> {
         let clock_update_us = clock_update_start
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
-        if background_work_allowed && let Some(state) = self.lib.connection_status.poll() {
-            let navigation = self.env.app.global::<slint_ui::launcher::NavigationView>();
-            navigation.set_internet_connected(state.internet);
-            navigation.set_usb_connected(state.usb);
-            light_bridge_dirty = true;
+        if background_work_allowed {
+            let _ = self.lib.connection_status.poll();
         }
         if background_work_allowed
             && let Some(available) = self.lib.update_check.try_recv()
@@ -3609,6 +3606,7 @@ impl<'a> FrameLoop<'a> {
                         &self.lib.catalog,
                     );
                 }
+                session.set_connection_state(self.lib.connection_status.state());
                 let accepted = session.update_from_navigation(
                     super::launcher_card_home::scene_for_display(self.env.ui, self.out.layout),
                     &self.lib.card_level,

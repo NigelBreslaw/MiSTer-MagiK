@@ -51,7 +51,6 @@ import {
 } from "api.slint";
 import { CrtLauncherUi } from "variants/crt_ui.slint";
 import { HdmiLauncherUi } from "variants/hdmi_ui.slint";
-import { LauncherConnectionStatus } from "components/connection_status.slint";
 
 export { MisterUi }
 export {
@@ -150,13 +149,6 @@ export component Launcher inherits MisterWindow {
 
     if MisterUi.crt-layout : CrtLauncherUi { }
     if !MisterUi.crt-layout : HdmiLauncherUi { }
-
-    if NavigationView.screen != LauncherScreen.controller
-        && SetupView.phase == SetupPhase.none
-        && OverlayView.loading-state != LoadingState.active
-        && OverlayView.confirmation-kind == ConfirmationKind.none
-        && SettingsView.popup == SettingsPopup.none
-        && CatalogView.activity != CatalogActivity.foreground : LauncherConnectionStatus { }
 
     if InputView.input-availability == InputAvailability.unavailable : Rectangle {
         x: 12px;

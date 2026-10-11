@@ -4,6 +4,8 @@
 //! Native-raster launcher layouts. Only artwork is filtered; bitmap labels are
 //! baked at the selected card's exact output dimensions, never screen-scaled.
 use super::*;
+#[path = "connection_status.rs"]
+pub(super) mod connection_status;
 use crate::bitmap_text::BitmapGlyph;
 use std::borrow::Cow;
 

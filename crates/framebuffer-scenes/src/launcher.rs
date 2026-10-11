@@ -12,9 +12,12 @@ use crate::bitmap_text::BitmapFont;
 use crate::launcher_flip::Dither;
 use std::sync::Arc;
 mod artwork;
+
 mod level_trick;
 mod responsive;
 mod row;
+use responsive::connection_status::LauncherConnectionIndicator;
+pub use responsive::connection_status::LauncherConnectionState;
 const CAROUSEL_CAPACITY: usize = 8;
 use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
 pub use level_trick::{LEVEL_TRICK_EDGE_MILLIS, LEVEL_TRICK_MILLIS, LevelChange};
@@ -521,6 +524,7 @@ pub struct PreparedLauncher {
     /// Pristine static chrome. Level transitions fade between two levels'
     /// chrome without re-rendering text in motion.
     chrome: Vec<Rgb565Pixel>,
+    connection_status: Option<LauncherConnectionIndicator>,
     chrome_state: ChromeState,
     level_chrome_spans: Vec<level_trick::ChromeSpan>,
     level_chrome_alpha: Option<u32>,
@@ -1226,6 +1230,7 @@ impl PreparedLauncher {
             scene,
             responsive,
             chrome: chrome.clone(),
+            connection_status: None,
             chrome_state: ChromeState::new(data),
             level_chrome_spans: Vec::new(),
             level_chrome_alpha: None,
@@ -1334,6 +1339,32 @@ impl PreparedLauncher {
         );
         // The projected card rasterizer clips its writes to the
         // carousel. Static margins therefore need no restoration pass.
+        self.fit_output();
+    }
+
+    /// Draw live status into the native header after cards and level fades.
+    /// It shares the clock layout and becomes part of every retained frame.
+    pub fn render_connection_status(
+        &mut self,
+        state: LauncherConnectionState,
+        typography: LauncherTypography<'_>,
+    ) {
+        if self
+            .connection_status
+            .as_ref()
+            .is_none_or(|status| status.state != state)
+        {
+            self.connection_status = Some(LauncherConnectionIndicator::new(
+                self.scene, state, typography,
+            ));
+        }
+        let stride = self
+            .responsive
+            .map_or(LOGICAL_WIDTH, |layout| layout.size().0);
+        self.connection_status
+            .as_ref()
+            .unwrap()
+            .paint(&mut self.logical, stride);
         self.fit_output();
     }
 

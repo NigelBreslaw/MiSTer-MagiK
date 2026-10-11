@@ -1106,130 +1106,6 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn connection_status_changes_stay_beside_clock_and_clear_on_removal() {
-        std::thread::spawn(|| {
-            use slint_ui::launcher::{Launcher, LauncherScreen, MisterUi, NavigationView};
-            for (width, height, crt) in [
-                (960usize, 540usize, false),
-                (540, 960, false),
-                (320, 240, true),
-                (640, 240, true),
-                (640, 288, true),
-                (240, 640, true),
-                (288, 640, true),
-                (640, 480, true),
-                (480, 640, true),
-            ] {
-                let window = install_isolated_test_platform();
-                let app = Launcher::new().unwrap();
-                let ui = app.global::<MisterUi>();
-                ui.set_window_width(width as i32);
-                ui.set_window_height(height as i32);
-                ui.set_crt_layout(crt);
-                ui.set_custom_home_base(true);
-                ui.set_screen_orientation(if height > width {
-                    slint_ui::launcher::ScreenOrientation::MonitorClockwise
-                } else {
-                    slint_ui::launcher::ScreenOrientation::Normal
-                });
-                window.set_size(PhysicalSize::new(width as u32, height as u32));
-                if crt {
-                    let sy = if width.min(height) >= 400 || height >= 640 && width <= 288 { 2 } else { 1 };
-                    app.global::<slint_ui::launcher::LauncherLayout>().set_crt_footer(slint_ui::launcher::LayoutRect {
-                        x: 0, y: (height - (height * 5 / 100).max(6 * sy) - 16 * sy) as i32,
-                        width: width as i32, height: (16 * sy) as i32,
-                    });
-                }
-                let nav = app.global::<NavigationView>();
-                nav.set_internet_icon(super::super::connection_status::internet_icon());
-                nav.set_screen(LauncherScreen::Home);
-                nav.set_clock_text("12:34".into());
-                app.show().unwrap();
-                let display = UiDisplay::for_framebuffer(width, height);
-                let mut target =
-                    UiFrameTarget::cached(FramebufferTargetGeometry::new(width, height));
-                let background = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0x39e7); width * height];
-                let mut render = || {
-                    // Native Home composes Slint through render_by_line, which
-                    // exercises the production image-mask composition path.
-                    LayerTarget::new(&mut target, &display)
-                        .render_custom_home(&window, &background, false, Some(DirtyRect {
-                            x0: 16, y0: 80, x1: width - 16, y1: height - 16,
-                        }));
-                    target.cached_565().to_vec()
-                };
-                let offline = render();
-                nav.set_internet_connected(true);
-                let online = render();
-                nav.set_usb_connected(true);
-                let usb = render();
-                assert_eq!(render(), usb, "native card damage erased status {width}x{height}");
-                nav.set_usb_connected(false);
-                assert_eq!(render(), online, "USB removal {width}x{height}");
-                nav.set_internet_connected(false);
-                assert_eq!(render(), offline, "internet loss {width}x{height}");
-                let sx = if crt && (width.min(height) >= 400 || width >= 640 && height <= 288) { 2 } else { 1 };
-                let sy = if crt && (width.min(height) >= 400 || height >= 640 && width <= 288) {
-                    2
-                } else {
-                    1
-                };
-                let clock_x = if crt {
-                    width - (width * 6 / 100).max(8 * sx) - 30 * sx
-                } else if height > width {
-                    width - width * 6 / 100 - 45
-                } else {
-                    875
-                };
-                let top = if crt {
-                    (height * 5 / 100).max(6 * sy)
-                } else if height > width {
-                    height * 5 / 100 + 4
-                } else {
-                    26
-                };
-                let globe_width = if crt { 12 * sx } else { 15 };
-                let badge_width = if crt { 24 * sx } else { 32 };
-                let gap = if crt { 6 * sx } else { 8 };
-                let status_height = if crt { 12 * sy } else { 15 };
-                let globe_left = clock_x - gap - globe_width;
-                if !crt {
-                    for x in globe_left - gap - badge_width..globe_left - gap {
-                        assert_eq!(usb[top * width + x].0, 0xef5a, "USB border missing at {x},{top}");
-                    }
-                    for (index, pixel) in usb.iter().enumerate() {
-                        let (x, y) = (index % width, index / width);
-                        if !((globe_left - gap - badge_width..clock_x - gap).contains(&x)
-                            && (top..top + status_height).contains(&y)) {
-                            assert_eq!(pixel.0, background[index].0, "status erased native background at {x},{y}");
-                        }
-                    }
-                }
-                for (before, after, x0, x1) in [
-                    (&offline, &online, globe_left, clock_x - gap),
-                    (&online, &usb, globe_left - gap - badge_width, globe_left - gap),
-                ] {
-                    let mut changed = 0;
-                    for (index, (a, b)) in before.iter().zip(after.iter()).enumerate() {
-                        if a != b {
-                            changed += 1;
-                            let (x, y) = (index % width, index / width);
-                            assert!(
-                                x >= x0 && x < x1 && y >= top && y < top + status_height,
-                                "status covered other content at {x},{y} for {width}x{height}, expected x={x0}..{x1}, top={top}, sy={sy}"
-                            );
-                        }
-                    }
-                    assert!(changed > 0, "status invisible for {width}x{height}");
-                }
-
-            }
-        })
-        .join()
-        .unwrap();
-    }
-
     // Background activity pills are Slint content composed before the Rust
     // Arcade list and preview layers, so they must stay in the header band:
     // on screen, clear of the title and clock, and outside both layer rects.
@@ -1917,7 +1793,7 @@ mod tests {
                     let mut actual = vec![Rgb565Pixel(0x1234); layout.output_layout().len()];
                     foreground.compose(&mut actual);
                     // Native portrait CRT text uses 6x24 cells. The title and clock
-                    // must leave the gap before the status icons clear; 12x24 glyphs collide here.
+                    // must leave this gap clear; 12x24 glyphs collide here.
                     let output = layout.output_layout();
                     let margin_x = (layout.logical_w() * 6 / 100)
                         .max(content.x)
@@ -1927,7 +1803,7 @@ mod tests {
                         .max(layout.logical_h() - content.bottom());
                     for y in margin_y..margin_y + 24 {
                         for x in margin_x + "MISTER MAGIK".len() * 6
-                            ..layout.logical_w() - margin_x - (5 * 6 + 18)
+                            ..layout.logical_w() - margin_x - 5 * 6
                         {
                             assert_eq!(
                                 actual[output.physical_offset(x, y)].0,
@@ -1975,8 +1851,6 @@ mod tests {
             let app = slint_ui::launcher::Launcher::new().expect("production launcher");
             app.global::<slint_ui::launcher::MisterUi>()
                 .set_custom_home_base(true);
-            app.global::<slint_ui::launcher::NavigationView>()
-                .set_internet_icon(super::super::connection_status::internet_icon());
             let ui = UiDisplay::for_framebuffer(960, 540);
             window.set_size(PhysicalSize::new(960, 540));
             app.show().expect("show production launcher");
@@ -2005,23 +1879,10 @@ mod tests {
                 .iter()
                 .map(|pixel| Rgb565Pixel(pixel.0))
                 .collect::<Vec<_>>();
-            for (index, (actual, native)) in layer
-                .presentation_frame_view()
-                .pixels()
-                .iter()
-                .zip(&expected)
-                .enumerate()
-            {
-                let (x, y) = (index % 960, index / 960);
-                if !(852..867).contains(&x) || !(26..41).contains(&y) {
-                    assert_eq!(
-                        actual, native,
-                        "cold-start source lost native cards at {x},{y}"
-                    );
-                }
-            }
-            // The morph target includes the shared Slint header status overlay.
-            let expected = layer.presentation_frame_view().pixels().to_vec();
+            assert!(
+                layer.presentation_frame_view().pixels() == expected,
+                "cold-start morph source must contain the native launcher"
+            );
             let mut intro = crate::launcher_runtime::startup_intro::StartupIntroPlayback::new(&ui)
                 .expect("production intro");
             intro

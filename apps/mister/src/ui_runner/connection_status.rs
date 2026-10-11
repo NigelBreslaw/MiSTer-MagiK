@@ -5,27 +5,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-/// Native line rendering accepts image masks without SVG decoding or Path support.
-pub(super) fn internet_icon() -> slint::Image {
-    let alpha: &[u8; 32 * 32] = include_bytes!("../../ui/icons/internet.alpha");
-    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
-    for (pixel, alpha) in pixels
-        .make_mut_bytes()
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(alpha)
-    {
-        pixel.copy_from_slice(&[255, 255, 255, *alpha]);
-    }
-    slint::Image::from_rgba8(pixels)
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct ConnectionState {
-    pub internet: bool,
-    pub usb: bool,
-}
+use mister_magik_framebuffer_scenes::launcher::LauncherConnectionState as ConnectionState;
 
 enum ConnectionEvent {
     Internet(bool),
@@ -74,6 +54,10 @@ impl ConnectionStatus {
             rx,
             state: ConnectionState::default(),
         }
+    }
+
+    pub(super) fn state(&self) -> ConnectionState {
+        self.state
     }
 
     pub(super) fn poll(&mut self) -> Option<ConnectionState> {
