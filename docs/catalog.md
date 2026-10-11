@@ -34,6 +34,19 @@ watches cover USB/network namespaces, including absent mounts, and detect a
 change of selected directory when a drive is attached, removed, or gains a
 higher-priority system folder. Launch plans retain the selected absolute path.
 
+For a complete Dev catalog rebuild, `scripts/magik device catalog rebuild --layout dev`
+requests a one-shot rebuild and resumes the persistent launcher through Main.
+It preserves games, screenshots, and user state; the build finishes independently
+of the bounded UI test session.
+
+Catalog publication has one commit point. Fresh builds and incremental refreshes
+first sync immutable game artifacts, watch packs, and a refresh manifest. The
+catalog registry then atomically activates their shared generation by storing
+that refresh manifest's path and checksum. A failed or interrupted build before
+activation leaves the previous catalog and refresh state selected. Retrying
+cleans orphan game artifacts and uses a new refresh generation; legacy two-slot
+refresh state remains readable until the first complete transaction commits.
+
 Five collections have prepared adapters because their upstream shape is known:
 
 - Arcade combines Update_All metadata with installed MRA, core, and ROM

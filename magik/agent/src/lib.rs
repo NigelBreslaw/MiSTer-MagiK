@@ -203,6 +203,7 @@ impl Agent {
             "input-probe-runtime-v1",
             "input-probe-passive-v1",
             "catalog-operations-v1",
+            "catalog-rebuild-v1",
             "card-artwork-v1",
             "card-artwork-v2",
             "publication-v1",

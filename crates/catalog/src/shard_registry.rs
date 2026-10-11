@@ -80,8 +80,15 @@ pub fn cleanup_registry_temporary_files(storage_root: &Path) -> Result<usize, Re
     Ok(removed)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublishedRefreshState {
+    pub path: PathBuf,
+    pub hash: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogManifest {
+    pub refresh_state: Option<PublishedRefreshState>,
     pub format: Option<CatalogFormatDescriptor>,
     pub generation: u64,
     pub systems: Vec<ManifestSystem>,
@@ -153,6 +160,8 @@ pub struct PublishedNavPack {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredManifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh_state: Option<PublishedRefreshState>,
     schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     format: Option<CatalogFormatDescriptor>,
@@ -792,6 +801,17 @@ fn validate_manifest(
     validate_artifacts: bool,
     verify_hashes: bool,
 ) -> Result<(), RegistryError> {
+    if let Some(refresh) = &manifest.refresh_state
+        && (!safe_relative_path(&refresh.path)
+            || !refresh.path.starts_with("state")
+            || refresh.hash.len() != 64
+            || !refresh.hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "invalid refresh state reference",
+        ));
+    }
     if manifest.systems.len() > limits.max_systems {
         return Err(RegistryError::new(
             "validate-manifest",
@@ -1066,6 +1086,7 @@ fn validate_generation(
 #[cfg(feature = "builder")]
 fn to_stored(manifest: &CatalogManifest) -> StoredManifest {
     StoredManifest {
+        refresh_state: manifest.refresh_state.clone(),
         schema_version: MANIFEST_SCHEMA_VERSION,
         format: manifest.format.clone(),
         generation: manifest.generation,
@@ -1117,6 +1138,7 @@ fn from_stored(stored: StoredManifest) -> Result<CatalogManifest, RegistryError>
         ));
     }
     Ok(CatalogManifest {
+        refresh_state: stored.refresh_state,
         format: stored.format,
         generation: stored.generation,
         systems: stored
@@ -1667,6 +1689,7 @@ mod tests {
     #[test]
     fn stored_manifest_rejects_traversal_paths() {
         let stored = StoredManifest {
+            refresh_state: None,
             schema_version: MANIFEST_SCHEMA_VERSION,
             format: Some(CatalogFormatDescriptor::current()),
             generation: 1,
@@ -1753,6 +1776,7 @@ mod tests {
         previous: Option<PublishedGeneration>,
     ) -> CatalogManifest {
         CatalogManifest {
+            refresh_state: None,
             format: Some(CatalogFormatDescriptor::current()),
             generation,
             systems: vec![ManifestSystem {

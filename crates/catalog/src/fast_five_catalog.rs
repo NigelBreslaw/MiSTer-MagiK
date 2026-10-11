@@ -761,7 +761,7 @@ pub(crate) fn publish_snapshot_with_profile_held(
     )
 }
 
-#[cfg(feature = "builder")]
+#[cfg(all(test, feature = "builder"))]
 pub(crate) fn publish_snapshot_with_profile_held_and_progress_and_prebuilt(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
@@ -830,7 +830,6 @@ pub(crate) fn publish_changed_snapshot_with_profile_held(
 }
 
 #[cfg(feature = "builder")]
-#[hotpath::measure]
 fn publish_snapshot_selection(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
@@ -838,14 +837,101 @@ fn publish_snapshot_selection(
     artifact_profile: FastFiveArtifactProfile,
     changed_system_ids: Option<&BTreeSet<String>>,
     prebuilt: Option<&BTreeMap<String, PrebuiltSystemArtifacts>>,
-    mut progress: impl FnMut(usize, usize),
+    progress: impl FnMut(usize, usize),
 ) -> Result<FastFivePublishReport, String> {
+    let (manifest, report) = prepare_snapshot_selection(
+        storage_root,
+        snapshot,
+        limits,
+        artifact_profile,
+        changed_system_ids,
+        prebuilt,
+        progress,
+    )?;
+    if !changed_system_ids.is_some_and(BTreeSet::is_empty) {
+        commit_prepared_snapshot(storage_root, &manifest, limits)?;
+    }
+    Ok(report)
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn prepare_snapshot_for_refresh(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    changed_system_ids: Option<&BTreeSet<String>>,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+    prebuilt: Option<&BTreeMap<String, PrebuiltSystemArtifacts>>,
+    progress: impl FnMut(usize, usize),
+) -> Result<(CatalogManifest, FastFivePublishReport), String> {
+    if let Some(prebuilt) = prebuilt
+        && snapshot.systems.iter().any(|system| {
+            !(system.games.is_empty() && system.variants.is_empty())
+                && !prebuilt.contains_key(&system.system_id)
+        })
+    {
+        return Err("serial prebuilt publication is missing a system artifact pair".to_string());
+    }
+    let (mut manifest, mut report) = prepare_snapshot_selection(
+        storage_root,
+        snapshot,
+        limits,
+        artifact_profile,
+        changed_system_ids,
+        prebuilt,
+        progress,
+    )?;
+    // A metadata-only refresh still gets a new commit, retaining all existing shards.
+    if changed_system_ids.is_some_and(BTreeSet::is_empty) {
+        manifest.generation = manifest
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| "fast-five generation overflow".to_string())?;
+        report.generation = manifest.generation;
+        report.registry_fingerprint = registry_fingerprint_for_manifest(&manifest);
+    }
+    manifest.refresh_state = None;
+    Ok((manifest, report))
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn commit_prepared_snapshot(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+) -> Result<(), String> {
+    if manifest.refresh_state.is_some() {
+        crate::fast_catalog_refresh::read_refresh_manifest_for_catalog(storage_root, manifest)?;
+    }
+    crate::shard_registry::publish_manifest_with_trusted_artifacts(storage_root, manifest, limits)
+        .map_err(|error| format!("publish fast-five manifest: {error}"))?;
+    #[cfg(test)]
+    crate::fast_catalog_refresh::publication_barrier("after_catalog_commit", storage_root);
+    // The commit is already visible. Cleanup cannot turn it into a failed publication.
+    if let Err(error) = crate::shard_registry::garbage_collect_unreferenced(storage_root, manifest)
+    {
+        crate::catalog_logln!("fast_catalog_cleanup_tsv\tstatus=failed\terror={error}");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "builder")]
+#[hotpath::measure]
+fn prepare_snapshot_selection(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+    changed_system_ids: Option<&BTreeSet<String>>,
+    prebuilt: Option<&BTreeMap<String, PrebuiltSystemArtifacts>>,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<(CatalogManifest, FastFivePublishReport), String> {
     use crate::catalog_domain::ScanUnitId;
     use crate::catalog_format::CatalogFormatDescriptor;
     use crate::shard_registry::{
         ManifestSystem, garbage_collect_unreferenced, manifest_slots_present,
-        publish_manifest_with_trusted_artifacts, publish_prevalidated_system_artifacts_deferred,
-        publish_system_artifacts, sync_artifact_batch,
+        publish_prevalidated_system_artifacts_deferred, publish_system_artifacts,
+        sync_artifact_batch,
     };
     use crate::system_shard::{
         ShardArtifactProfile, ShardDurability, SystemShardData,
@@ -875,45 +961,51 @@ fn publish_snapshot_selection(
         let current = current
             .as_ref()
             .ok_or_else(|| "selective publication requires an active catalog".to_string())?;
-        return Ok(FastFivePublishReport {
-            artifact_profile,
-            generation: current.generation,
-            systems: snapshot.systems.len(),
-            games: snapshot.game_count(),
-            variants: snapshot.variant_count(),
-            elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
-            registry_fingerprint: registry_fingerprint(storage_root, limits)?,
-            copied_bytes: 0,
-            copy_hash_us: 0,
-            system_builds: snapshot
-                .systems
-                .iter()
-                .map(|source| {
-                    let published = current
-                        .systems
-                        .iter()
-                        .find(|system| system.system_id.as_str() == source.system_id)
-                        .ok_or_else(|| format!("active catalog is missing {}", source.system_id))?;
-                    Ok(FastFiveSystemBuildReport {
-                        system_id: source.system_id.clone(),
-                        games: source.games.len(),
-                        variants: source.variants.len(),
-                        sqlite_bytes: published.active.sqlite_bytes.unwrap_or(0),
-                        navigation_bytes: published.active.navigation_bytes.unwrap_or(0),
-                        navpack_bytes: published
-                            .active
-                            .navpack
-                            .as_ref()
-                            .map_or(0, |navpack| navpack.bytes),
-                        elapsed_us: 0,
+        return Ok((
+            current.clone(),
+            FastFivePublishReport {
+                artifact_profile,
+                generation: current.generation,
+                systems: snapshot.systems.len(),
+                games: snapshot.game_count(),
+                variants: snapshot.variant_count(),
+                elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                registry_fingerprint: registry_fingerprint(storage_root, limits)?,
+                copied_bytes: 0,
+                copy_hash_us: 0,
+                system_builds: snapshot
+                    .systems
+                    .iter()
+                    .map(|source| {
+                        let published = current
+                            .systems
+                            .iter()
+                            .find(|system| system.system_id.as_str() == source.system_id)
+                            .ok_or_else(|| {
+                                format!("active catalog is missing {}", source.system_id)
+                            })?;
+                        Ok(FastFiveSystemBuildReport {
+                            system_id: source.system_id.clone(),
+                            games: source.games.len(),
+                            variants: source.variants.len(),
+                            sqlite_bytes: published.active.sqlite_bytes.unwrap_or(0),
+                            navigation_bytes: published.active.navigation_bytes.unwrap_or(0),
+                            navpack_bytes: published
+                                .active
+                                .navpack
+                                .as_ref()
+                                .map_or(0, |navpack| navpack.bytes),
+                            elapsed_us: 0,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>, String>>()?,
-        });
+                    .collect::<Result<Vec<_>, String>>()?,
+            },
+        ));
     }
     garbage_collect_unreferenced(
         storage_root,
         current.as_ref().unwrap_or(&CatalogManifest {
+            refresh_state: None,
             format: None,
             generation: 0,
             systems: Vec::new(),
@@ -1176,26 +1268,27 @@ fn publish_snapshot_selection(
         .map_err(|error| format!("sync fast-five artifacts: {error}"))?;
     manifest_systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     let manifest = CatalogManifest {
+        refresh_state: None,
         format: Some(CatalogFormatDescriptor::current()),
         generation,
         systems: manifest_systems,
     };
-    publish_manifest_with_trusted_artifacts(storage_root, &manifest, limits)
-        .map_err(|error| format!("publish fast-five manifest: {error}"))?;
-    garbage_collect_unreferenced(storage_root, &manifest)
-        .map_err(|error| format!("collect fast-five artifacts: {error}"))?;
-    Ok(FastFivePublishReport {
-        artifact_profile,
-        generation,
-        systems: snapshot.systems.len(),
-        games: snapshot.game_count(),
-        variants: snapshot.variant_count(),
-        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
-        registry_fingerprint: registry_fingerprint(storage_root, limits)?,
-        copied_bytes,
-        copy_hash_us,
-        system_builds,
-    })
+    let registry_fingerprint = registry_fingerprint_for_manifest(&manifest);
+    Ok((
+        manifest,
+        FastFivePublishReport {
+            artifact_profile,
+            generation,
+            systems: snapshot.systems.len(),
+            games: snapshot.game_count(),
+            variants: snapshot.variant_count(),
+            elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+            registry_fingerprint,
+            copied_bytes,
+            copy_hash_us,
+            system_builds,
+        },
+    ))
 }
 
 #[cfg(feature = "builder")]

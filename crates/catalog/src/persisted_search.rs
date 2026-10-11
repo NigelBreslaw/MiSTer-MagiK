@@ -1153,6 +1153,7 @@ mod tests {
         let catalog = PersistedSearchCatalog {
             storage_root: root.clone(),
             manifest: Arc::new(CatalogManifest {
+                refresh_state: None,
                 format: None,
                 generation: 1,
                 systems: vec![ManifestSystem {
