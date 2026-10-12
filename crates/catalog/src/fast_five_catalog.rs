@@ -481,6 +481,80 @@ pub(crate) struct PrebuiltSystemArtifacts {
     pub(crate) staging: std::path::PathBuf,
 }
 
+/// System artifact pairs built in tmpfs, possibly while publication already
+/// copies earlier systems to the SD card. Publication blocks only for the
+/// system it needs next, so CPU-bound building overlaps SD-bound copying while
+/// the SD card still has a single reader/writer.
+#[cfg(feature = "builder")]
+#[derive(Debug, Default)]
+pub(crate) struct PrebuiltArtifacts {
+    state: std::sync::Mutex<PrebuiltState>,
+    changed: std::sync::Condvar,
+    cancelled: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(feature = "builder")]
+#[derive(Debug, Default)]
+struct PrebuiltState {
+    systems: BTreeMap<String, PrebuiltSystemArtifacts>,
+    finished: bool,
+    failure: Option<String>,
+}
+
+#[cfg(feature = "builder")]
+impl PrebuiltArtifacts {
+    fn lock(&self) -> std::sync::MutexGuard<'_, PrebuiltState> {
+        self.state.lock().expect("prebuilt artifact state poisoned")
+    }
+
+    pub(crate) fn publish(&self, system_id: String, artifacts: PrebuiltSystemArtifacts) {
+        self.lock().systems.insert(system_id, artifacts);
+        self.changed.notify_all();
+    }
+
+    /// Mark building finished, with a failure if it failed. The first call
+    /// wins, so a builder thread that unwinds can call this from a guard
+    /// without overwriting a normal finish.
+    pub(crate) fn finish(&self, failure: Option<String>) {
+        let mut state = self.lock();
+        if !state.finished {
+            state.finished = true;
+            state.failure = failure;
+        }
+        drop(state);
+        self.changed.notify_all();
+    }
+
+    /// Ask the builder to stop; publication no longer needs its output.
+    pub(crate) fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn wait_for(&self, system_id: &str) -> Result<PrebuiltSystemArtifacts, String> {
+        let mut state = self.lock();
+        loop {
+            if let Some(artifacts) = state.systems.get(system_id) {
+                return Ok(artifacts.clone());
+            }
+            if let Some(failure) = &state.failure {
+                return Err(failure.clone());
+            }
+            if state.finished {
+                return Err("serial prebuilt publication is missing a system artifact pair".into());
+            }
+            state = self
+                .changed
+                .wait(state)
+                .expect("prebuilt artifact state poisoned");
+        }
+    }
+}
+
 #[cfg(feature = "builder")]
 const FAST_FIVE_VARIANT_PAYLOAD_FORMAT: &str = "mister-magik-fast-five-variants-v1";
 
@@ -647,17 +721,9 @@ pub(crate) fn prepare_snapshot_for_refresh(
     changed_system_ids: Option<&BTreeSet<String>>,
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
-    prebuilt: Option<&BTreeMap<String, PrebuiltSystemArtifacts>>,
+    prebuilt: Option<&PrebuiltArtifacts>,
     progress: impl FnMut(usize, usize),
 ) -> Result<(CatalogManifest, FastFivePublishReport), String> {
-    if let Some(prebuilt) = prebuilt
-        && snapshot.systems.iter().any(|system| {
-            !(system.games.is_empty() && system.variants.is_empty())
-                && !prebuilt.contains_key(&system.system_id)
-        })
-    {
-        return Err("serial prebuilt publication is missing a system artifact pair".to_string());
-    }
     let (mut manifest, report) = prepare_snapshot_selection(
         storage_root,
         snapshot,
@@ -704,7 +770,7 @@ fn prepare_snapshot_selection(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
     changed_system_ids: Option<&BTreeSet<String>>,
-    prebuilt: Option<&BTreeMap<String, PrebuiltSystemArtifacts>>,
+    prebuilt: Option<&PrebuiltArtifacts>,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<(CatalogManifest, FastFivePublishReport), String> {
     use crate::catalog_domain::ScanUnitId;
@@ -901,8 +967,11 @@ fn prepare_snapshot_selection(
             std::process::id(),
             source.system_id
         ));
-        let prebuilt_artifacts = prebuilt.and_then(|artifacts| artifacts.get(&source.system_id));
-        let (sqlite, navigation, mut staging_cleanup) = if let Some(prebuilt) = prebuilt_artifacts {
+        let prebuilt_artifacts = prebuilt
+            .map(|artifacts| artifacts.wait_for(&source.system_id))
+            .transpose()?;
+        let (sqlite, navigation, mut staging_cleanup) = if let Some(prebuilt) = &prebuilt_artifacts
+        {
             (
                 prebuilt.sqlite.clone(),
                 prebuilt.navigation.clone(),
@@ -1460,7 +1529,7 @@ mod builder_tests {
         ));
         let staging_root = root.with_extension("tmpfs");
         let limits = crate::shard_registry::production_registry_limits();
-        let mut prebuilt = BTreeMap::new();
+        let prebuilt = PrebuiltArtifacts::default();
         for (index, source) in snapshot.systems.iter().enumerate() {
             let staging = staging_root.join(format!("system-{index}"));
             let system_id = SystemId::parse(&source.system_id).unwrap();
@@ -1473,7 +1542,7 @@ mod builder_tests {
                 FastFiveArtifactProfile::SearchOnly,
             )
             .unwrap();
-            prebuilt.insert(
+            prebuilt.publish(
                 source.system_id.clone(),
                 PrebuiltSystemArtifacts {
                     sqlite,
@@ -1482,6 +1551,7 @@ mod builder_tests {
                 },
             );
         }
+        prebuilt.finish(None);
         let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().unwrap();
         let (pending, _) = prepare_snapshot_for_refresh(
             &root,
@@ -1508,6 +1578,54 @@ mod builder_tests {
     }
 
     #[test]
+    fn waiting_publication_is_released_by_a_later_publish_from_another_thread() {
+        let artifacts = PrebuiltArtifacts::default();
+        let published = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                artifacts.publish(
+                    "snes".into(),
+                    PrebuiltSystemArtifacts {
+                        sqlite: "a.sqlite3".into(),
+                        navigation: "a.nav".into(),
+                        staging: "a".into(),
+                    },
+                );
+                artifacts.finish(None);
+            });
+            artifacts.wait_for("snes")
+        });
+        assert_eq!(
+            published.unwrap().sqlite,
+            std::path::PathBuf::from("a.sqlite3")
+        );
+        // Cancelling lets a builder stop without ever finishing publication.
+        assert!(!artifacts.is_cancelled());
+        artifacts.cancel();
+        assert!(artifacts.is_cancelled());
+    }
+
+    #[test]
+    fn finishing_normally_is_not_overwritten_by_the_unwind_guard() {
+        let artifacts = PrebuiltArtifacts::default();
+        artifacts.finish(None);
+        artifacts.finish(Some("builder stopped".into()));
+        let error = artifacts.wait_for("snes").unwrap_err();
+        assert!(error.contains("missing a system artifact pair"), "{error}");
+
+        let unwound = PrebuiltArtifacts::default();
+        unwound.finish(Some("builder stopped".into()));
+        unwound.finish(None);
+        assert_eq!(unwound.wait_for("snes").unwrap_err(), "builder stopped");
+    }
+
+    fn finished_artifacts() -> PrebuiltArtifacts {
+        let artifacts = PrebuiltArtifacts::default();
+        artifacts.finish(None);
+        artifacts
+    }
+
+    #[test]
     fn prebuilt_publication_rejects_incomplete_artifact_map() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-fast-five-prebuilt-missing-{}-{}",
@@ -1524,13 +1642,22 @@ mod builder_tests {
             None,
             crate::shard_registry::production_registry_limits(),
             FastFiveArtifactProfile::SearchOnly,
-            Some(&BTreeMap::new()),
+            Some(&finished_artifacts()),
             |_, _| {},
         )
         .expect_err("fresh prebuilt publication must not fall back to inline builds");
         assert!(error.contains("missing a system artifact pair"));
-        assert!(!root.exists());
+        // The failure now surfaces while publishing; an interrupted generation
+        // is never activated, so no manifest may exist.
+        assert!(
+            crate::shard_registry::read_latest_manifest_lazy(
+                &root,
+                crate::shard_registry::production_registry_limits()
+            )
+            .is_err()
+        );
         drop(lease);
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn c64_game(title: &str, launch_ref: &str) -> SystemGame {

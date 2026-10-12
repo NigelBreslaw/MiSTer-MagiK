@@ -351,31 +351,34 @@ impl Drop for SerialTmpfsArtifactStaging {
     }
 }
 
-fn build_serial_tmpfs_artifacts(
+/// Build every system's artifact pair in tmpfs, publishing each to `prebuilt`
+/// as soon as it is complete. This touches no SD-card path, so it may run while
+/// publication copies earlier systems.
+fn build_tmpfs_artifacts(
     snapshot: &FastFiveSnapshot,
     generation: u64,
     limits: crate::shard_registry::RegistryLimits,
     artifact_profile: crate::fast_five_catalog::FastFiveArtifactProfile,
-) -> Result<
-    (
-        BTreeMap<String, crate::fast_five_catalog::PrebuiltSystemArtifacts>,
-        FastCatalogTmpfsArtifactBuildReport,
-        SerialTmpfsArtifactStaging,
-    ),
-    String,
-> {
+    staging_root: &Path,
+    prebuilt: &crate::fast_five_catalog::PrebuiltArtifacts,
+) -> Result<FastCatalogTmpfsArtifactBuildReport, String> {
     let started = std::time::Instant::now();
-    let staging = SerialTmpfsArtifactStaging::create()?;
-    let mut prebuilt = BTreeMap::new();
     let mut artifactless_systems = 0usize;
     for (index, source) in snapshot.systems.iter().enumerate() {
+        // Publication never waits for an artifactless system, so skip it before
+        // the checkpoint and cancellation: parking or cancelling here would turn
+        // an already successful publication into a failed build.
         if source.games.is_empty() && source.variants.is_empty() {
             artifactless_systems = artifactless_systems.saturating_add(1);
             continue;
         }
+        crate::cooperative_work::checkpoint();
+        if prebuilt.is_cancelled() {
+            return Err("artifact building cancelled".into());
+        }
         let system_id = crate::catalog_classify::SystemId::parse(&source.system_id)
             .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
-        let system_staging = staging.root.join(format!("system-{index}"));
+        let system_staging = staging_root.join(format!("system-{index}"));
         let (sqlite, navigation) = crate::fast_five_catalog::build_staged_system_artifacts(
             &system_staging,
             source,
@@ -384,7 +387,7 @@ fn build_serial_tmpfs_artifacts(
             limits,
             artifact_profile,
         )?;
-        prebuilt.insert(
+        prebuilt.publish(
             source.system_id.clone(),
             crate::fast_five_catalog::PrebuiltSystemArtifacts {
                 sqlite,
@@ -393,20 +396,38 @@ fn build_serial_tmpfs_artifacts(
             },
         );
     }
-    Ok((
-        prebuilt,
-        FastCatalogTmpfsArtifactBuildReport {
-            enabled: true,
-            systems: snapshot.systems.len().saturating_sub(artifactless_systems),
-            artifactless_systems,
-            elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
-            copied_bytes: 0,
-            copy_hash_us: 0,
-            cleanup_status: "pending",
-            fallback_status: "none",
-        },
-        staging,
-    ))
+    Ok(FastCatalogTmpfsArtifactBuildReport {
+        enabled: true,
+        systems: snapshot.systems.len().saturating_sub(artifactless_systems),
+        artifactless_systems,
+        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        copied_bytes: 0,
+        copy_hash_us: 0,
+        cleanup_status: "pending",
+        fallback_status: "none",
+    })
+}
+
+/// Marks building finished even if the builder thread unwinds, so publication
+/// never waits forever for a system that will not arrive. After a normal
+/// finish this is a no-op.
+struct FinishPrebuilt<'a>(&'a crate::fast_five_catalog::PrebuiltArtifacts);
+
+impl Drop for FinishPrebuilt<'_> {
+    fn drop(&mut self) {
+        self.0
+            .finish(Some("artifact builder stopped unexpectedly".into()));
+    }
+}
+
+/// Publication's own error comes first: it cancels the builder on failure, so
+/// the builder's "cancelled" error would otherwise hide the real cause.
+fn publication_then_build<P, B>(
+    publication: Result<P, String>,
+    build: Result<B, String>,
+) -> Result<(P, B), String> {
+    let publication = publication?;
+    Ok((publication, build?))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -513,19 +534,53 @@ pub fn build_fresh_catalog_with_presentation_progress(
         .iter()
         .map(|system| system.system_id.clone())
         .collect::<Vec<_>>();
-    let (prebuilt, mut tmpfs_artifact_build, staging) =
-        build_serial_tmpfs_artifacts(&snapshot, artifact_generation, limits, artifact_profile)?;
-    let (mut pending, publication) = crate::fast_five_catalog::prepare_snapshot_for_refresh(
-        catalog_root,
-        &snapshot,
-        None,
-        limits,
-        artifact_profile,
-        Some(&prebuilt),
-        |current, total| {
-            progress(FastCatalogBuildProgress::SavingSystem { current, total });
-        },
-    )?;
+    let staging = SerialTmpfsArtifactStaging::create()?;
+    let prebuilt = crate::fast_five_catalog::PrebuiltArtifacts::default();
+    // CPU-bound building (tmpfs only) overlaps SD-bound copying: publication
+    // waits only for the next system's artifacts, and the SD card keeps a
+    // single reader/writer.
+    let (publication_result, build_result) = std::thread::scope(|scope| {
+        let builder = scope.spawn(|| {
+            let _finish_on_unwind = FinishPrebuilt(&prebuilt);
+            crate::runtime_thread::apply_runtime_thread_policy(
+                crate::runtime_thread::RuntimeThreadRole::CatalogShardPublisher,
+            );
+            // Park for UI motion and interaction, like the catalog thread.
+            let _background = crate::cooperative_work::BackgroundScope::enter();
+            let result = build_tmpfs_artifacts(
+                &snapshot,
+                artifact_generation,
+                limits,
+                artifact_profile,
+                &staging.root,
+                &prebuilt,
+            );
+            prebuilt.finish(result.as_ref().err().cloned());
+            result
+        });
+        let publication = crate::fast_five_catalog::prepare_snapshot_for_refresh(
+            catalog_root,
+            &snapshot,
+            None,
+            limits,
+            artifact_profile,
+            Some(&prebuilt),
+            |current, total| {
+                progress(FastCatalogBuildProgress::SavingSystem { current, total });
+            },
+        );
+        // A failed publication leaves no use for the rest of the builder's work;
+        // after a successful one the builder has only artifactless systems left.
+        if publication.is_err() {
+            prebuilt.cancel();
+        }
+        let build = builder
+            .join()
+            .unwrap_or_else(|_| Err("artifact builder panicked".into()));
+        (publication, build)
+    });
+    let ((mut pending, publication), mut tmpfs_artifact_build) =
+        publication_then_build(publication_result, build_result)?;
     tmpfs_artifact_build.copied_bytes = publication.copied_bytes;
     tmpfs_artifact_build.copy_hash_us = publication.copy_hash_us;
     drop(prebuilt);
@@ -4577,17 +4632,55 @@ mod tests {
     }
 
     #[test]
-    fn serial_artifact_phase_has_no_concurrent_worker_implementation() {
+    fn a_cancelled_builder_still_succeeds_when_only_artifactless_systems_remain() {
+        let snapshot = FastFiveSnapshot {
+            schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
+            source_fingerprint: String::new(),
+            systems: vec![FastFiveSystem {
+                system_id: "x68000".to_string(),
+                display_title: "X68000".to_string(),
+                games: Vec::new(),
+                variants: Vec::new(),
+            }],
+        };
+        let prebuilt = crate::fast_five_catalog::PrebuiltArtifacts::default();
+        prebuilt.cancel();
+        let report = build_tmpfs_artifacts(
+            &snapshot,
+            1,
+            crate::shard_registry::production_registry_limits(),
+            crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
+            Path::new("/nonexistent-staging"),
+            &prebuilt,
+        )
+        .expect("artifactless systems need no building, so cancellation cannot fail them");
+        assert_eq!((report.systems, report.artifactless_systems), (0, 1));
+    }
+
+    #[test]
+    fn a_publication_failure_is_not_hidden_by_the_cancelled_builder() {
+        let error = publication_then_build::<(), ()>(
+            Err("publish snes shard: disk full".into()),
+            Err("artifact building cancelled".into()),
+        )
+        .unwrap_err();
+        assert_eq!(error, "publish snes shard: disk full");
+        let error =
+            publication_then_build(Ok(1), Err::<(), _>("invalid system".into())).unwrap_err();
+        assert_eq!(error, "invalid system");
+        assert_eq!(publication_then_build(Ok(1), Ok(2)).unwrap(), (1, 2));
+    }
+
+    #[test]
+    fn artifact_builder_thread_never_touches_catalog_or_media_storage() {
+        // Building may overlap SD copying only because it is tmpfs-only.
         let source = include_str!("fast_catalog_refresh.rs");
-        let phase_start = source.find("fn build_serial_tmpfs_artifacts").unwrap();
-        let phase_end = source.find("impl FastRefreshManifest {").unwrap();
-        let phase = &source[phase_start..phase_end];
-        let forbidden_thread = ["std::", "thread::"].concat();
-        let forbidden_channel = ["sync_", "channel"].concat();
-        let forbidden_worker = ["Artifact", "BuildWorker"].concat();
-        assert!(!phase.contains(&forbidden_thread));
-        assert!(!phase.contains(&forbidden_channel));
-        assert!(!phase.contains(&forbidden_worker));
+        let start = source.find("fn build_tmpfs_artifacts").unwrap();
+        let end = source.find("struct FinishPrebuilt").unwrap();
+        let builder = &source[start..end];
+        for storage in ["storage_root", "catalog_root", "/media/fat"] {
+            assert!(!builder.contains(storage), "{storage}");
+        }
     }
 
     #[test]
