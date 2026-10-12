@@ -255,7 +255,6 @@ impl StartupIntroSession {
         self.playback.frame()
     }
 
-    #[cfg(test)]
     pub(super) fn elapsed(&self) -> Duration {
         self.playback.elapsed()
     }
