@@ -30,14 +30,14 @@ The production launcher uses the embedded `intro-v1` scene only for
 registry is a warm start and goes directly to the interactive launcher. An
 interrupted first run repeats the intro unless it reached manifest publication.
 
-The intro owns the production direct hidden-slot latch for 20 seconds of
+The intro owns the production direct hidden-slot latch for 19 seconds of
 storyboard time. Storyboard time advances by the resolved physical refresh
 period only after the posted sequence becomes the active scanout sequence at a
-confirmed physical vblank, and is clamped to exactly 20 seconds. Physical frame
+confirmed physical vblank, and is clamped to exactly 19 seconds. Physical frame
 numbering remains independent for projection cohorts and flicker. Acceptance or
 pending status is insufficient. A missing grant, failed post, or incomplete
 latch confirmation retries the same storyboard timestamp. The expected post
-count is therefore `ceil(20 seconds / refresh_period)`, plus any cabinet-wait
+count is therefore `ceil(19 seconds / refresh_period)`, plus any cabinet-wait
 frames. The catalog builder starts
 with the intro and reserves CPU1 for rendering: its coordinator, Arcade
 bootstrap, walker, audit, projection, snapshot, and persistence work all use
@@ -48,10 +48,12 @@ into an invisible Slint tree. Transient catalog scan milestones do not clone
 navigation shells or rebuild launcher taxonomy on CPU1; the authoritative
 published projection supplies that state.
 
-HDMI retains the original 102,400 initial and 40,960 steady particles. All four
-resolved CRT routes (`crt-240p60`, `crt-288p50`, `crt-480p60`, and
-`crt-576p50`) use deterministic half-density tracks with 51,200 initial and
-20,480 steady particles. Thinning occurs independently within each MiSTer/MagiK
+HDMI uses 102,400 initial static particles, 20,480 text particles (50% of the
+original population), and 24,576 cabinet particles (60%). Text and cabinet
+geometry are half their original size. All four resolved CRT routes
+(`crt-240p60`, `crt-288p50`, `crt-480p60`, and `crt-576p50`) halve these
+populations again: 51,200 initial, 10,240 text, and 12,288 cabinet particles.
+Thinning occurs independently within each MiSTer/MagiK
 letter track, preserving paired morph identity, group alignment, and cabinet
 ordering. CRT projection fits the complete 16:9 scene inside the 4:3 raster:
 X uses scale `2/3`, Y uses `framebuffer_height/720`, and the resulting frame is
@@ -77,9 +79,16 @@ The final handoff is derived only from the production launcher's live frame:
    cache regions while the intro owns scanout.
    It immediately
    snapshots that exact cache, then a low-priority CPU0 worker derives all
-   40,960 HDMI or 20,480 CRT launcher particle positions and colors without
+   up to 40,960 HDMI or 20,480 CRT launcher particle positions and colors without
    blocking CPU1. No
-   design-time launcher image or point cloud is embedded.
+   design-time launcher image or point cloud is embedded. Targets exclude black
+   and the dominant background color; sparse frames use fewer unique targets
+   rather than filling the quota with background. Every cabinet particle remains
+   in the morph and converges onto those targets; the static formation then draws
+   each selected pixel once. Each target retains the selected pixel's original
+   RGB565 color and raster offset, without mapping it to the intro palette or
+   deriving its final pixel offset from floating-point projection. Snapshot
+   retries always resample the immutable final cabinet pose.
 2. If no usable launcher frame exists at 16 seconds, logical storyboard time
    pauses and the fully formed cabinet keeps spinning at the resolved physical
    refresh cadence. Each four-second
@@ -87,12 +96,13 @@ The final handoff is derived only from the production launcher's live frame:
    exactly that velocity: one seamless full turn every ten seconds. Once the
    real launcher frame is ready, the normal morph begins.
 3. From 16 to 18 seconds the cabinet particles morph into that live launcher
-   formation. At 18 seconds both hidden slots settle on the static target;
-   repeated hold frames perform no pixel writes.
-4. From 19 to 20 seconds the particle scene uses incremental Bayer buckets to
-   crossfade into the same retained live frame without allocation or a
-   full-frame rewrite.
-5. The frame at exactly 20 logical seconds is pixel-identical to the cached launcher.
+   formation. The crossfade starts immediately when formation ends at 18 seconds.
+4. From 18 to 19 seconds the particle scene uses incremental Bayer buckets to
+   crossfade into the same retained live frame. Each hidden slot is initialized
+   once; subsequent frames need no allocation or full-frame rewrite. Already
+   formed pixels and the black background need no crossfade writes; buckets
+   reveal only the remaining pixels.
+5. The frame at exactly 19 logical seconds is pixel-identical to the cached launcher.
    The host restores the same pixels to the interactive cache, returns the
    hidden mappings, leaves external-direct mode, and only then enables startup
    input.

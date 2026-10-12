@@ -189,8 +189,8 @@ impl IntroRecipe {
 
 pub fn embedded_intro_recipe() -> Result<IntroRecipe, String> {
     let recipe = parse_intro_recipe(EMBEDDED_INTRO_RECIPE_JSON)?;
-    if recipe.total_ms != 20_000 {
-        return Err("embedded intro recipe must total exactly 20000ms".into());
+    if recipe.total_ms != 19_000 {
+        return Err("embedded intro recipe must total exactly 19000ms".into());
     }
     Ok(recipe)
 }
@@ -334,7 +334,6 @@ fn validate_storyboard(cues: &[IntroCue]) -> Result<(), String> {
         "cloud",
         "target_orbit",
         "morph_target",
-        "hold_target",
         "launcher_crossfade",
     ];
     if kinds != expected {
@@ -427,13 +426,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_storyboard_is_exactly_twenty_seconds() {
+    fn embedded_storyboard_fades_within_one_second_of_launcher_formation() {
         let recipe = embedded_intro_recipe().unwrap();
-        assert_eq!(recipe.total_ms, 20_000);
+        assert_eq!(recipe.total_ms, 19_000);
+        assert_eq!(recipe.cue_at(18_000), (8, 0));
         assert_eq!(recipe.initial_particle_count, 102_400);
         assert_eq!(recipe.steady_particle_count, 40_960);
         assert_eq!(recipe.cue_at(12_000), (6, 0));
-        assert_eq!(recipe.cue_at(20_100), (9, 1_000));
+        assert_eq!(recipe.cue_at(20_100), (8, 1_000));
         let IntroCue::Cloud {
             stagger_ms,
             formation_start_percent,
@@ -467,6 +467,10 @@ mod tests {
         let mut value: serde_json::Value =
             serde_json::from_slice(EMBEDDED_INTRO_RECIPE_JSON).unwrap();
         value["tracks"][1]["destination"] = serde_json::json!("magik:wrong");
+        assert!(parse_intro_recipe(&serde_json::to_vec(&value).unwrap()).is_err());
+        let mut value: serde_json::Value =
+            serde_json::from_slice(EMBEDDED_INTRO_RECIPE_JSON).unwrap();
+        value["cues"][2]["duration_ms"] = serde_json::json!(0);
         assert!(parse_intro_recipe(&serde_json::to_vec(&value).unwrap()).is_err());
     }
 }

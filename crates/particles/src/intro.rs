@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Standalone twenty-second startup intro scene.
+//! Standalone startup intro scene.
 
 use crate::intro_recipe::{IntroCue, IntroRecipe};
 use crate::point_cloud::{
@@ -56,17 +56,25 @@ struct PointTarget {
     groups: Vec<ParticleGroupSpan>,
 }
 
+struct LiveLauncherTarget {
+    positions: Vec<[f32; 3]>,
+    colors: Vec<Rgb565Pixel>,
+    commands: Vec<PointCloudDrawCommand>,
+}
+
 /// Fully prepared live-launcher target that can be built away from the
 /// scanout thread and installed with ownership transfers only.
 pub struct PreparedLauncherSnapshot {
     geometry: SceneGeometry,
     particle_count: usize,
-    launcher: PointTarget,
+    launcher_positions: Vec<[f32; 3]>,
     launcher_q5: QuantizedPointCloud,
+    launcher_colors: Vec<Rgb565Pixel>,
+    launcher_source: Vec<[f32; 3]>,
+    launcher_source_q5: QuantizedPointCloud,
     launcher_snapshot: Vec<Rgb565Pixel>,
     launcher_commands: Vec<PointCloudDrawCommand>,
-    launcher_thresholds: Vec<u8>,
-    crossfade_visible_counts: [usize; 65],
+    crossfade_buckets: Vec<Vec<u32>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -93,6 +101,13 @@ pub struct IntroProjectionScale {
 
 impl IntroProjectionScale {
     pub const HDMI: Self = Self { x: 1.0, y: 1.0 };
+
+    fn half_size(self) -> Self {
+        Self {
+            x: self.x * 0.5,
+            y: self.y * 0.5,
+        }
+    }
 
     #[must_use]
     pub fn crt(framebuffer_height: usize) -> Self {
@@ -127,7 +142,6 @@ enum IntroSlotState {
     #[default]
     Uninitialized,
     Dynamic,
-    LauncherPoints,
     Crossfade(u8),
     Snapshot,
 }
@@ -179,6 +193,8 @@ pub struct IntroScene {
     magik_q5: QuantizedPointCloud,
     magik_commands: Vec<PointCloudDrawCommand>,
     magik_pivots: [[f32; 3]; 6],
+    cabinet_source: PointTarget,
+    cabinet_source_q5: QuantizedPointCloud,
     scatter_vectors: Vec<[f32; 3]>,
     scatter_q15: QuantizedPointCloud,
     cloud: PointTarget,
@@ -187,16 +203,16 @@ pub struct IntroScene {
     cabinet_q5: QuantizedPointCloud,
     cabinet_blocks: Vec<PointCloudPositionBlock>,
     cabinet_formation: f32,
+    cabinet_morph_source: Vec<[f32; 3]>,
     launcher_source: Vec<[f32; 3]>,
     launcher_source_q5: QuantizedPointCloud,
-    launcher: PointTarget,
+    launcher_positions: Vec<[f32; 3]>,
     launcher_q5: QuantizedPointCloud,
     launcher_snapshot: Vec<Rgb565Pixel>,
+    launcher_colors: Vec<Rgb565Pixel>,
     launcher_ready: bool,
     launcher_commands: Vec<PointCloudDrawCommand>,
-    launcher_thresholds: Vec<u8>,
     launcher_mix_thresholds: Vec<u16>,
-    crossfade_visible_counts: [usize; 65],
     crossfade_buckets: Vec<Vec<u32>>,
     slot_states: [IntroSlotState; 2],
     static_xy: Vec<[f32; 2]>,
@@ -230,6 +246,7 @@ impl IntroScene {
         let geometry =
             SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
         let divisor = options.particle_density.divisor();
+        let object_projection_scale = options.projection_scale.half_size();
         let initial_particle_count = recipe.initial_particle_count / divisor;
         let steady_particle_count = recipe.steady_particle_count / divisor;
         let mister = thin_grouped_target(
@@ -238,34 +255,32 @@ impl IntroScene {
                 Some((INTRO_WORDMARK_GROUPS, 6)),
                 TargetScale::Text,
             )?,
-            divisor,
+            divisor * 2,
         )?;
         let magik = thin_grouped_target(
             decode_target(MAGIK_CLOUD, Some((MAGIK_GROUPS, 6)), TargetScale::Text)?,
-            divisor,
+            divisor * 2,
         )?;
-        if mister.positions.len() != steady_particle_count {
+        let text_particle_count = steady_particle_count / 2;
+        let cabinet_particle_count = steady_particle_count * 3 / 5;
+        if mister.positions.len() != text_particle_count {
             return Err(format!(
                 "MiSTer target has {} particles, expected {}",
                 mister.positions.len(),
-                steady_particle_count
+                text_particle_count
             ));
         }
-        if magik.positions.len() != steady_particle_count || magik.groups != mister.groups {
+        if magik.positions.len() != text_particle_count || magik.groups != mister.groups {
             return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
         let mister_commands = prepare_target_commands(
             &mister.positions,
             &recipe,
             geometry,
-            options.projection_scale,
+            object_projection_scale,
         );
-        let magik_commands = prepare_target_commands(
-            &magik.positions,
-            &recipe,
-            geometry,
-            options.projection_scale,
-        );
+        let magik_commands =
+            prepare_target_commands(&magik.positions, &recipe, geometry, object_projection_scale);
         let mister_pivots = std::array::from_fn(|group| {
             let span = mister.groups[group];
             pivot(&mister.positions[span.start..span.start + span.count])
@@ -284,7 +299,7 @@ impl IntroScene {
                     0.0,
                     &recipe,
                     geometry,
-                    options.projection_scale,
+                    object_projection_scale,
                 )
             })
             .collect();
@@ -305,11 +320,13 @@ impl IntroScene {
             Some(IntroCue::Cloud { radius, .. }) => *radius,
             _ => return Err("intro cloud cue is missing".into()),
         };
+        let cabinet_source = resample_grouped_target(&magik, cabinet_particle_count);
+        let cabinet_source_q5 = QuantizedPointCloud::from_positions(&cabinet_source.positions);
         let cloud = letter_cloud_target(
-            steady_particle_count,
+            cabinet_particle_count,
             recipe.seed,
             cloud_radius,
-            &magik.groups,
+            &cabinet_source.groups,
             &magik_pivots,
         );
         let cloud_q5 = QuantizedPointCloud::from_positions(&cloud.positions);
@@ -321,6 +338,7 @@ impl IntroScene {
             start: 0,
             count: steady_particle_count,
         }];
+        let cabinet = resample_grouped_target(&cabinet, cabinet_particle_count);
         let (cabinet_formation, cabinet_final_yaw) = match recipe.cues.get(6) {
             Some(IntroCue::TargetOrbit {
                 start_turns,
@@ -348,80 +366,44 @@ impl IntroScene {
         let cabinet_blocks = prepare_position_blocks(&cabinet_formed);
         let cabinet_q5 = QuantizedPointCloud::from_positions(&cabinet_formed);
         let (cabinet_final_sin, cabinet_final_cos) = cabinet_final_yaw.sin_cos();
-        let launcher_source = cabinet_formed
+        let cabinet_morph_source = cabinet_formed
             .iter()
             .map(|formed| {
                 [
-                    formed[0].mul_add(cabinet_final_cos, formed[2] * cabinet_final_sin),
-                    formed[1],
+                    formed[0].mul_add(cabinet_final_cos, formed[2] * cabinet_final_sin) * 0.5,
+                    formed[1] * 0.5,
                     (-formed[0]).mul_add(cabinet_final_sin, formed[2] * cabinet_final_cos),
                 ]
             })
             .collect::<Vec<_>>();
-        let launcher_source_q5 = QuantizedPointCloud::from_positions(&launcher_source);
-        // The production launcher target is installed from its live off-screen
-        // RGB565 frame before the morph cue. Until then these same-sized
-        // placeholders keep all render storage allocated without embedding a
-        // design-time launcher image.
-        let launcher = PointTarget {
-            positions: launcher_source.clone(),
-            palette: vec![0; steady_particle_count],
-            groups: vec![ParticleGroupSpan {
-                id: 0,
-                start: 0,
-                count: steady_particle_count,
-            }],
-        };
-        let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
-        let launcher_snapshot =
-            vec![Rgb565Pixel(recipe.appearance.background.0); width.saturating_mul(height)];
-        let launcher_commands = prepare_target_commands(
-            &launcher.positions,
-            &recipe,
-            geometry,
-            options.projection_scale,
-        );
-        let launcher_thresholds: Vec<u8> = launcher_commands
-            .iter()
-            .map(|command| {
-                command.offset().map_or(64, |offset| {
-                    bayer8(offset % geometry.width(), offset / geometry.width())
-                })
-            })
-            .collect();
-        let crossfade_visible_counts = std::array::from_fn(|threshold| {
-            launcher_commands
-                .iter()
-                .zip(&launcher_thresholds)
-                .filter(|(command, particle_threshold)| {
-                    command.offset().is_some() && usize::from(**particle_threshold) >= threshold
-                })
-                .count()
-        });
+        // Only the cabinet pose is needed before the worker installs the live
+        // launcher target. Allocate its clouds and commands in that worker.
+        let launcher_source = Vec::new();
+        let launcher_source_q5 = QuantizedPointCloud::from_positions(&[]);
+        let launcher_positions = Vec::new();
+        let launcher_q5 = QuantizedPointCloud::from_positions(&[]);
+        let launcher_snapshot = Vec::new();
+        let launcher_commands = Vec::new();
         let launcher_mix_thresholds = (0..steady_particle_count)
             .map(|index| (mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff) as u16)
             .collect();
-        let mut crossfade_buckets = vec![Vec::new(); 64];
-        for offset in 0..width.saturating_mul(height) {
-            crossfade_buckets[usize::from(bayer8(offset % width, offset / width))]
-                .push(offset as u32);
-        }
+        let crossfade_buckets = vec![Vec::new(); 64];
         let mut static_xy = Vec::with_capacity(initial_particle_count);
         let mut static_origins = Vec::with_capacity(initial_particle_count);
-        let mut formation_screen = Vec::with_capacity(steady_particle_count);
-        let mut formation_styles = Vec::with_capacity(steady_particle_count);
+        let mut formation_screen = Vec::with_capacity(text_particle_count);
+        let mut formation_styles = Vec::with_capacity(text_particle_count);
         let mut retiring_formation =
-            Vec::with_capacity(initial_particle_count.saturating_sub(steady_particle_count));
+            Vec::with_capacity(initial_particle_count.saturating_sub(text_particle_count));
         for index in 0..initial_particle_count {
             let random = mix32((recipe.seed as u32).wrapping_add(index as u32));
-            let target_index = index % steady_particle_count;
+            let target_index = index % text_particle_count;
             let source = [
                 unit01(random) * width as f32,
                 unit01(random.rotate_left(13)) * height as f32,
             ];
             static_origins.push([source[0] as u16, source[1] as u16]);
             static_xy.push(source);
-            if index < steady_particle_count {
+            if index < text_particle_count {
                 formation_screen.push(mister_screen[target_index]);
                 formation_styles.push(mister.palette[target_index]);
             } else {
@@ -451,6 +433,8 @@ impl IntroScene {
             magik_q5,
             magik_commands,
             magik_pivots,
+            cabinet_source,
+            cabinet_source_q5,
             scatter_vectors,
             scatter_q15,
             cloud,
@@ -459,16 +443,16 @@ impl IntroScene {
             cabinet_q5,
             cabinet_blocks,
             cabinet_formation,
+            cabinet_morph_source,
             launcher_source,
             launcher_source_q5,
-            launcher,
+            launcher_positions,
             launcher_q5,
             launcher_snapshot,
+            launcher_colors: Vec::new(),
             launcher_ready: false,
             launcher_commands,
-            launcher_thresholds,
             launcher_mix_thresholds,
-            crossfade_visible_counts,
             crossfade_buckets,
             slot_states: [IntroSlotState::Uninitialized; 2],
             static_xy,
@@ -498,10 +482,12 @@ impl IntroScene {
         self.recipe.cue_at(elapsed_ms.min(self.recipe.total_ms))
     }
 
-    /// Builds both the particle formation and exact handoff frame from the
-    /// production launcher's live off-screen RGB565 render. All allocation and
-    /// target preparation happens before the morph cue; the crossfade hot path
-    /// only consumes the prepared storage.
+    /// Copies the final cabinet pose for the background snapshot worker.
+    pub fn launcher_morph_source(&self) -> Vec<[f32; 3]> {
+        self.cabinet_morph_source.clone()
+    }
+
+    /// Builds the formation and exact handoff from the live RGB565 frame.
     pub fn replace_launcher_snapshot(&mut self, pixels: &[Rgb565Pixel]) -> Result<(), String> {
         let prepared = Self::prepare_launcher_snapshot(
             self.geometry.width(),
@@ -509,6 +495,7 @@ impl IntroScene {
             self.recipe.clone(),
             self.options,
             pixels.to_vec(),
+            self.launcher_morph_source(),
         )?;
         self.install_launcher_snapshot(prepared)
     }
@@ -521,6 +508,7 @@ impl IntroScene {
         recipe: IntroRecipe,
         options: IntroSceneOptions,
         pixels: Vec<Rgb565Pixel>,
+        morph_source: Vec<[f32; 3]>,
     ) -> Result<PreparedLauncherSnapshot, String> {
         let geometry =
             SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
@@ -531,47 +519,62 @@ impl IntroScene {
                 geometry.len()
             ));
         }
-        let launcher = live_launcher_target_from_snapshot(
+        let particle_count = recipe.steady_particle_count / options.particle_density.divisor();
+        if morph_source.is_empty() || morph_source.len() > particle_count {
+            return Err("launcher morph source population is invalid".into());
+        }
+        let LiveLauncherTarget {
+            positions: mut launcher_positions,
+            colors: mut launcher_colors,
+            commands: launcher_commands,
+        } = live_launcher_target_from_snapshot(
             &pixels,
-            recipe.steady_particle_count / options.particle_density.divisor(),
+            particle_count,
             &recipe,
             geometry,
             options.projection_scale,
         )?;
-        let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
-        let launcher_commands = prepare_target_commands(
-            &launcher.positions,
-            &recipe,
-            geometry,
-            options.projection_scale,
-        );
-        let launcher_thresholds = launcher_commands
-            .iter()
-            .map(|command| {
-                command.offset().map_or(64, |offset| {
-                    bayer8(offset % geometry.width(), offset / geometry.width())
-                })
-            })
+        // Keep every cabinet particle during the morph. Sparse targets repeat
+        // visible destinations until those particles converge, then the static
+        // crossfade draws each selected source pixel only once.
+        let target_count = launcher_positions.len();
+        let morph_count = target_count.max(morph_source.len());
+        for index in target_count..morph_count {
+            launcher_positions.push(launcher_positions[index % target_count]);
+            launcher_colors.push(launcher_colors[index % target_count]);
+        }
+        let launcher_source = (0..morph_count)
+            .map(|index| morph_source[index * morph_source.len() / morph_count])
             .collect::<Vec<_>>();
-        let crossfade_visible_counts = std::array::from_fn(|threshold| {
-            launcher_commands
-                .iter()
-                .zip(&launcher_thresholds)
-                .filter(|(command, particle_threshold)| {
-                    command.offset().is_some() && usize::from(**particle_threshold) >= threshold
-                })
-                .count()
-        });
+        let launcher_source_q5 = padded_launcher_cloud(&launcher_source);
+        let launcher_q5 = padded_launcher_cloud(&launcher_positions);
+        // The formed particles already have their exact final colors. Only
+        // missing pixels need revealing; black background stays untouched.
+        let mut formed = vec![false; geometry.len()];
+        for command in &launcher_commands {
+            if let Some(offset) = command.offset() {
+                formed[offset] = true;
+            }
+        }
+        let mut crossfade_buckets = vec![Vec::new(); 64];
+        for (offset, pixel) in pixels.iter().enumerate() {
+            if !formed[offset] && pixel.0 != recipe.appearance.background.0 {
+                crossfade_buckets[usize::from(bayer8(offset % width, offset / width))]
+                    .push(offset as u32);
+            }
+        }
 
         Ok(PreparedLauncherSnapshot {
             geometry,
-            particle_count: recipe.steady_particle_count / options.particle_density.divisor(),
-            launcher,
+            particle_count,
+            launcher_positions,
             launcher_q5,
+            launcher_colors,
+            launcher_source,
+            launcher_source_q5,
             launcher_snapshot: pixels,
             launcher_commands,
-            launcher_thresholds,
-            crossfade_visible_counts,
+            crossfade_buckets,
         })
     }
 
@@ -587,11 +590,13 @@ impl IntroScene {
             return Err("prepared launcher snapshot does not match the intro scene".into());
         }
         self.launcher_snapshot = prepared.launcher_snapshot;
-        self.launcher = prepared.launcher;
+        self.launcher_positions = prepared.launcher_positions;
         self.launcher_q5 = prepared.launcher_q5;
+        self.launcher_colors = prepared.launcher_colors;
+        self.launcher_source = prepared.launcher_source;
+        self.launcher_source_q5 = prepared.launcher_source_q5;
         self.launcher_commands = prepared.launcher_commands;
-        self.launcher_thresholds = prepared.launcher_thresholds;
-        self.crossfade_visible_counts = prepared.crossfade_visible_counts;
+        self.crossfade_buckets = prepared.crossfade_buckets;
         self.launcher_ready = true;
         self.slot_states = [IntroSlotState::Uninitialized; 2];
         Ok(())
@@ -640,8 +645,8 @@ impl IntroScene {
             clock.frame,
         );
         Ok(IntroFrameStats {
-            particles: self.steady_particle_count,
-            projected_particles: self.steady_particle_count,
+            particles: self.cabinet_formed.len(),
+            projected_particles: self.cabinet_formed.len(),
             projection_cohorts: 1,
             visible: rendered.visible,
             pixel_writes: rendered.pixel_writes,
@@ -707,7 +712,7 @@ impl IntroScene {
                 visible += 1;
             }
         };
-        for index in 0..self.steady_particle_count {
+        for index in 0..self.mister.positions.len() {
             let target = self.formation_screen[index];
             let source = self.static_xy[index];
             let flicker = text_flicker_index(self.formation_styles[index], index, frame);
@@ -736,21 +741,18 @@ impl IntroScene {
         target: ScenePointTarget,
         frame: u64,
     ) -> IntroRenderResult {
-        let text_palette_mix =
-            matches!(target, ScenePointTarget::Mister | ScenePointTarget::Magik).then_some(0.0);
         let (target, commands) = match target {
             ScenePointTarget::Mister => (&self.mister, &self.mister_commands),
             ScenePointTarget::Magik => (&self.magik, &self.magik_commands),
-            ScenePointTarget::Launcher => (&self.launcher, &self.launcher_commands),
         };
         raster_point_commands(
             destination,
             &self.recipe,
             self.geometry,
             &target.positions,
-            &target.palette,
+            PointColors::Palette(&target.palette),
             commands,
-            text_palette_mix,
+            Some(0.0),
             false,
             frame,
             None,
@@ -850,10 +852,10 @@ impl IntroScene {
             destination,
             &self.recipe,
             self.geometry,
-            self.options.projection_scale,
-            &self.dynamic_positions,
+            self.options.projection_scale.half_size(),
+            &self.dynamic_positions[..self.magik.positions.len()],
             None,
-            &self.magik.palette,
+            PointColors::Palette(&self.magik.palette),
             &mut self.positions,
             &mut self.commands,
             Some(0.0),
@@ -894,7 +896,7 @@ impl IntroScene {
             .saturating_sub(stagger_ms.saturating_mul(4))
             .max(1);
         let mut positions_prepared = true;
-        for (group_index, span) in self.magik.groups.iter().enumerate() {
+        for (group_index, span) in self.cabinet_source.groups.iter().enumerate() {
             let start_ms = letter_stagger_start_ms(group_index, stagger_ms);
             let progress = ease(
                 cue_elapsed_ms.saturating_sub(start_ms) as f32 / local_duration as f32,
@@ -909,7 +911,7 @@ impl IntroScene {
             let group_prepared = transform_cloud_q5_neon(
                 span.start,
                 span.count,
-                &self.magik_q5,
+                &self.cabinet_source_q5,
                 &self.cloud_q5,
                 &self.cabinet_q5,
                 quantized_point(pivot),
@@ -925,7 +927,7 @@ impl IntroScene {
                     if !update_all && !updates_transform_cohort(index, frame) {
                         continue;
                     }
-                    let source = self.magik.positions[index];
+                    let source = self.cabinet_source.positions[index];
                     let local_x = source[0] - pivot[0];
                     let local_z = source[2] - pivot[2];
                     let spun = [
@@ -953,10 +955,10 @@ impl IntroScene {
             destination,
             &self.recipe,
             self.geometry,
-            self.options.projection_scale,
-            &self.dynamic_positions,
+            self.options.projection_scale.half_size(),
+            &self.dynamic_positions[..self.cabinet_source.positions.len()],
             None,
-            &self.magik.palette,
+            PointColors::Palette(&self.cabinet_source.palette),
             &mut self.positions,
             &mut self.commands,
             Some(0.0),
@@ -988,10 +990,10 @@ impl IntroScene {
             destination,
             &self.recipe,
             self.geometry,
-            self.options.projection_scale,
+            self.options.projection_scale.half_size(),
             &self.cabinet_formed,
             Some(&self.cabinet_blocks),
-            &self.magik.palette,
+            PointColors::Palette(&self.cabinet_source.palette),
             &mut self.positions,
             &mut self.commands,
             Some(0.0),
@@ -1020,16 +1022,21 @@ impl IntroScene {
             quantize_unit_q15(progress),
             &mut self.positions,
         );
-        if !positions_prepared {
-            for index in 0..self.steady_particle_count {
-                let from = self.launcher_source[index];
-                let to = self.launcher.positions[index];
-                self.dynamic_positions[index] = [
-                    from[0] + (to[0] - from[0]) * progress,
-                    from[1] + (to[1] - from[1]) * progress,
-                    from[2] + (to[2] - from[2]) * progress,
-                ];
-            }
+        // Projection handles incomplete four-lane tails in scalar code even
+        // when the ARM lerp prepared the packed blocks.
+        let scalar_start = if positions_prepared {
+            self.launcher_positions.len() / PARTICLE_LANES * PARTICLE_LANES
+        } else {
+            0
+        };
+        for index in scalar_start..self.launcher_positions.len() {
+            let from = self.launcher_source[index];
+            let to = self.launcher_positions[index];
+            self.dynamic_positions[index] = [
+                from[0] + (to[0] - from[0]) * progress,
+                from[1] + (to[1] - from[1]) * progress,
+                from[2] + (to[2] - from[2]) * progress,
+            ];
         }
         let transform_us = elapsed_us(transform_started.elapsed());
         render_point_cloud(
@@ -1037,9 +1044,9 @@ impl IntroScene {
             &self.recipe,
             self.geometry,
             self.options.projection_scale,
-            &self.dynamic_positions,
+            &self.dynamic_positions[..self.launcher_positions.len()],
             None,
-            &self.launcher.palette,
+            PointColors::Rgb565(&self.launcher_colors),
             &mut self.positions,
             &mut self.commands,
             Some(progress),
@@ -1060,7 +1067,6 @@ impl IntroScene {
         cue_elapsed_ms: u64,
         duration_ms: u64,
         easing: RecipeEasing,
-        _frame: u64,
     ) -> IntroRenderResult {
         let raster_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
@@ -1074,50 +1080,26 @@ impl IntroScene {
                 elapsed_us(raster_started.elapsed()),
             );
         }
+        let mut writes = 0;
         let previous_threshold = match previous {
-            IntroSlotState::LauncherPoints => Some(0),
-            IntroSlotState::Crossfade(threshold) => Some(threshold),
-            _ => None,
-        };
-        if let Some(previous_threshold) = previous_threshold
-            && previous_threshold <= threshold
-        {
-            let mut writes = 0;
-            for bucket in
-                &self.crossfade_buckets[usize::from(previous_threshold)..usize::from(threshold)]
-            {
-                for &offset in bucket {
-                    destination[offset as usize] = self.launcher_snapshot[offset as usize];
-                    writes += 1;
+            IntroSlotState::Crossfade(previous_threshold) if previous_threshold <= threshold => {
+                previous_threshold
+            }
+            _ => {
+                destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
+                writes += destination.len();
+                for (index, command) in self.launcher_commands.iter().copied().enumerate() {
+                    if let Some(offset) = command.offset() {
+                        destination[offset] = self.launcher_colors[index];
+                        writes += 1;
+                    }
                 }
+                0
             }
-            self.slot_states[buffer_id] = if threshold == 64 {
-                IntroSlotState::Snapshot
-            } else {
-                IntroSlotState::Crossfade(threshold)
-            };
-            return IntroRenderResult::raster_only(
-                self.crossfade_visible_counts[usize::from(threshold)],
-                writes,
-                "launcher-static-crossfade",
-                elapsed_us(raster_started.elapsed()),
-            );
-        }
-
-        destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
-        let mut writes = destination.len();
-        for (index, command) in self.launcher_commands.iter().copied().enumerate() {
-            let Some(offset) = command.offset() else {
-                continue;
-            };
-            if self.launcher_thresholds[index] >= threshold {
-                destination[offset] = Rgb565Pixel(
-                    self.recipe.appearance.palette[usize::from(self.launcher.palette[index])].0,
-                );
-                writes += 1;
-            }
-        }
-        for bucket in &self.crossfade_buckets[..usize::from(threshold)] {
+        };
+        for bucket in
+            &self.crossfade_buckets[usize::from(previous_threshold)..usize::from(threshold)]
+        {
             for &offset in bucket {
                 destination[offset as usize] = self.launcher_snapshot[offset as usize];
                 writes += 1;
@@ -1129,7 +1111,7 @@ impl IntroScene {
             IntroSlotState::Crossfade(threshold)
         };
         IntroRenderResult::raster_only(
-            self.crossfade_visible_counts[usize::from(threshold)],
+            self.launcher_commands.len(),
             writes,
             "launcher-static-crossfade",
             elapsed_us(raster_started.elapsed()),
@@ -1145,7 +1127,7 @@ fn render_point_cloud(
     projection_scale: IntroProjectionScale,
     target_positions: &[[f32; 3]],
     packed_target_positions: Option<&[PointCloudPositionBlock]>,
-    target_palette: &[u8],
+    target_colors: PointColors<'_>,
     positions: &mut [PointCloudPositionBlock],
     commands: &mut [PointCloudDrawCommand],
     text_palette_mix: Option<f32>,
@@ -1156,6 +1138,8 @@ fn render_point_cloud(
     yaw_sin_cos: [f32; 2],
     positions_prepared: bool,
 ) -> IntroRenderResult {
+    let commands = &mut commands[..target_positions.len()];
+    let positions = &mut positions[..target_positions.len().div_ceil(PARTICLE_LANES)];
     let transform_started = Instant::now();
     if packed_target_positions.is_none() && !positions_prepared {
         if let Some(first_block) = projection_cohort {
@@ -1204,15 +1188,6 @@ fn render_point_cloud(
     let backend = if vector_end > 0 {
         "point-cloud-neon"
     } else {
-        for index in 0..target_positions.len() {
-            commands[index] = project_yaw_command(
-                target_positions[index],
-                yaw_sin_cos,
-                recipe,
-                geometry,
-                projection_scale,
-            );
-        }
         "point-cloud-scalar"
     };
     let projection_us = elapsed_us(projection_started.elapsed());
@@ -1221,7 +1196,7 @@ fn render_point_cloud(
         recipe,
         geometry,
         target_positions,
-        target_palette,
+        target_colors,
         commands,
         text_palette_mix,
         text_neighbors,
@@ -1239,7 +1214,7 @@ fn raster_point_commands(
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
     target_positions: &[[f32; 3]],
-    target_palette: &[u8],
+    target_colors: PointColors<'_>,
     commands: &[PointCloudDrawCommand],
     text_palette_mix: Option<f32>,
     text_neighbors: bool,
@@ -1252,7 +1227,12 @@ fn raster_point_commands(
     let raster_started = Instant::now();
     let mut visible = 0;
     let mut writes = 0;
-    for (index, command) in commands.iter().copied().enumerate() {
+    for (index, command) in commands
+        .iter()
+        .copied()
+        .take(target_positions.len())
+        .enumerate()
+    {
         let Some(offset) = command.offset() else {
             continue;
         };
@@ -1269,11 +1249,11 @@ fn raster_point_commands(
             }
         };
         let color = if !target_color {
-            recipe.appearance.text_palette[text_flicker_index(target_palette[index], index, frame)]
+            Rgb565Pixel(recipe.appearance.text_palette[target_colors.flicker_index(index, frame)].0)
         } else {
-            recipe.appearance.palette[usize::from(target_palette[index])]
+            target_colors.rgb565(index, recipe)
         };
-        destination[offset] = Rgb565Pixel(color.0);
+        destination[offset] = color;
         visible += 1;
         writes += 1;
         if !target_color
@@ -1335,8 +1315,7 @@ impl FramebufferScene for IntroScene {
                 "live launcher snapshot was not installed before the morph cue".into(),
             ));
         }
-        let incremental_frame =
-            matches!(&cue, IntroCue::LauncherCrossfade { .. }) || cue_index == 8;
+        let incremental_frame = matches!(&cue, IntroCue::LauncherCrossfade { .. });
         let clear_us = if incremental_frame {
             0
         } else {
@@ -1420,26 +1399,6 @@ impl FramebufferScene for IntroScene {
                 *easing,
                 clock.frame,
             ),
-            IntroCue::HoldTarget { .. } if cue_index == 8 => {
-                if self.slot_states[buffer_id] == IntroSlotState::LauncherPoints {
-                    IntroRenderResult::raster_only(0, 0, "launcher-static-particles", 0)
-                } else {
-                    let raster_started = Instant::now();
-                    target
-                        .pixels_mut()
-                        .fill(Rgb565Pixel(self.recipe.appearance.background.0));
-                    let mut result = self.render_point_target(
-                        target.pixels_mut(),
-                        ScenePointTarget::Launcher,
-                        clock.frame,
-                    );
-                    result.pixel_writes = result.pixel_writes.saturating_add(self.geometry.len());
-                    result.raster_us = elapsed_us(raster_started.elapsed());
-                    result.projection_backend = "launcher-static-particles";
-                    self.slot_states[buffer_id] = IntroSlotState::LauncherPoints;
-                    result
-                }
-            }
             IntroCue::LauncherCrossfade {
                 duration_ms,
                 easing,
@@ -1450,21 +1409,22 @@ impl FramebufferScene for IntroScene {
                 cue_elapsed_ms,
                 *duration_ms,
                 *easing,
-                clock.frame,
             ),
             _ => {
                 let point_target = match cue_index {
                     0..=3 => ScenePointTarget::Mister,
                     4 => ScenePointTarget::Magik,
-                    _ => ScenePointTarget::Launcher,
+                    _ => return Err(SceneError::Render("unsupported intro cue".into())),
                 };
                 self.render_point_target(target.pixels_mut(), point_target, clock.frame)
             }
         };
-        let particles = if cue_index < 2 {
-            self.initial_particle_count
-        } else {
-            self.steady_particle_count
+        let particles = match cue_index {
+            0..=1 => self.initial_particle_count,
+            2..=4 => self.magik.positions.len(),
+            5..=6 => self.cabinet_formed.len(),
+            7 => self.launcher_positions.len(),
+            _ => self.launcher_commands.len(),
         };
         Ok(IntroFrameStats {
             particles,
@@ -1506,7 +1466,6 @@ enum TargetScale {
 enum ScenePointTarget {
     Mister,
     Magik,
-    Launcher,
 }
 
 fn decode_target(
@@ -1610,6 +1569,72 @@ fn thin_grouped_target(target: PointTarget, divisor: usize) -> Result<PointTarge
     })
 }
 
+/// Resample each letter independently; cumulative lane boundaries preserve the
+/// exact requested total while keeping the ARM morph kernels four-lane aligned.
+fn resample_grouped_target(target: &PointTarget, count: usize) -> PointTarget {
+    let mut positions = Vec::with_capacity(count);
+    let mut palette = Vec::with_capacity(count);
+    let mut groups = Vec::with_capacity(target.groups.len());
+    let mut source_end = 0;
+    for group in &target.groups {
+        source_end += group.count;
+        let end = source_end * count / target.positions.len() / PARTICLE_LANES * PARTICLE_LANES;
+        let start = positions.len();
+        let group_count = end - start;
+        for index in 0..group_count {
+            let source = group.start + index * group.count / group_count;
+            positions.push(target.positions[source]);
+            palette.push(target.palette[source]);
+        }
+        groups.push(ParticleGroupSpan {
+            id: group.id,
+            start,
+            count: group_count,
+        });
+    }
+    PointTarget {
+        positions,
+        palette,
+        groups,
+    }
+}
+
+// The ARM lerp kernel reads complete four-lane tails. The target list and draw
+// count stay unpadded; only the final packed block gets extra lanes.
+fn padded_launcher_cloud(positions: &[[f32; 3]]) -> QuantizedPointCloud {
+    let mut cloud = QuantizedPointCloud::from_positions(positions);
+    let count = positions.len().div_ceil(PARTICLE_LANES) * PARTICLE_LANES;
+    cloud.x_q5.resize(count, *cloud.x_q5.last().unwrap());
+    cloud.y_q5.resize(count, *cloud.y_q5.last().unwrap());
+    cloud.z_q5.resize(count, *cloud.z_q5.last().unwrap());
+    cloud
+}
+
+#[derive(Clone, Copy)]
+enum PointColors<'a> {
+    Palette(&'a [u8]),
+    Rgb565(&'a [Rgb565Pixel]),
+}
+
+impl PointColors<'_> {
+    fn flicker_index(self, index: usize, frame: u64) -> usize {
+        let style = match self {
+            Self::Palette(styles) => styles[index],
+            Self::Rgb565(_) => 0,
+        };
+        text_flicker_index(style, index, frame)
+    }
+
+    fn rgb565(self, index: usize, recipe: &IntroRecipe) -> Rgb565Pixel {
+        match self {
+            Self::Palette(styles) => {
+                Rgb565Pixel(recipe.appearance.palette[usize::from(styles[index])].0)
+            }
+            Self::Rgb565(colors) => colors[index],
+        }
+    }
+}
+
 fn empty_block() -> PointCloudPositionBlock {
     PointCloudPositionBlock {
         target_x: [0.0; PARTICLE_LANES],
@@ -1687,12 +1712,6 @@ fn prepare_target_commands(
     for index in vector_end..target_positions.len() {
         commands[index] =
             project_command(target_positions[index], recipe, geometry, projection_scale);
-    }
-    if vector_end == 0 {
-        for index in 0..target_positions.len() {
-            commands[index] =
-                project_command(target_positions[index], recipe, geometry, projection_scale);
-        }
     }
     commands
 }
@@ -1794,10 +1813,10 @@ fn live_launcher_target_from_snapshot(
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
     projection_scale: IntroProjectionScale,
-) -> Result<PointTarget, String> {
-    if pixels.len() != geometry.len() || pixels.len() < count {
+) -> Result<LiveLauncherTarget, String> {
+    if pixels.len() != geometry.len() {
         return Err(format!(
-            "live launcher snapshot has {} pixels, expected at least {count} for {}x{}",
+            "live launcher snapshot has {} pixels, expected {}x{}",
             pixels.len(),
             geometry.width(),
             geometry.height()
@@ -1813,10 +1832,12 @@ fn live_launcher_target_from_snapshot(
             background,
         ))] += 1;
     }
-    if histogram[1..].iter().sum::<usize>() == 0 {
+    let foreground_count = histogram[1..].iter().sum::<usize>();
+    if foreground_count == 0 {
         return Err("live launcher snapshot contains no visible UI detail".into());
     }
 
+    let count = count.min(foreground_count);
     let mut above = 0_usize;
     let mut threshold = 0_u8;
     for score in (0_u8..=u8::MAX).rev() {
@@ -1834,7 +1855,8 @@ fn live_launcher_target_from_snapshot(
     let center_y = geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y;
     let mut tie_accumulator = 0_usize;
     let mut positions = Vec::with_capacity(count);
-    let mut palette = Vec::with_capacity(count);
+    let mut colors = Vec::with_capacity(count);
+    let mut commands = Vec::with_capacity(count);
     for (offset, pixel) in pixels.iter().copied().enumerate() {
         let score = launcher_pixel_salience(pixels, offset, geometry.width(), background);
         let selected = if score > threshold {
@@ -1860,7 +1882,12 @@ fn live_launcher_target_from_snapshot(
             (y - center_y) * compensation[1],
             0.0,
         ]);
-        palette.push(nearest_launcher_palette(pixel, &recipe.appearance.palette));
+        colors.push(pixel);
+        commands.push(PointCloudDrawCommand::visible(
+            offset,
+            recipe.camera.dolly,
+            offset % geometry.width(),
+        ));
         if positions.len() == count {
             break;
         }
@@ -1871,14 +1898,10 @@ fn live_launcher_target_from_snapshot(
             positions.len()
         ));
     }
-    Ok(PointTarget {
+    Ok(LiveLauncherTarget {
         positions,
-        palette,
-        groups: vec![ParticleGroupSpan {
-            id: 0,
-            start: 0,
-            count,
-        }],
+        colors,
+        commands,
     })
 }
 
@@ -1903,6 +1926,9 @@ fn launcher_pixel_salience(
     background: Rgb565Pixel,
 ) -> u8 {
     let pixel = pixels[offset];
+    if pixel.0 == 0 || pixel == background {
+        return 0;
+    }
     let background_distance = rgb565_distance(pixel, background);
     let horizontal = if offset % width + 1 < width {
         rgb565_distance(pixel, pixels[offset + 1])
@@ -1932,22 +1958,6 @@ fn rgb565_channels(pixel: Rgb565Pixel) -> [u16; 3] {
         (pixel.0 >> 5) & 0x3f,
         (pixel.0 & 0x1f) << 1,
     ]
-}
-
-fn nearest_launcher_palette(pixel: Rgb565Pixel, palette: &[crate::recipes::RecipeRgb565; 8]) -> u8 {
-    let [red, green, blue] = rgb565_channels(pixel);
-    palette
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, candidate)| {
-            let [candidate_red, candidate_green, candidate_blue] =
-                rgb565_channels(Rgb565Pixel(candidate.0));
-            let red = i32::from(red) - i32::from(candidate_red);
-            let green = i32::from(green) - i32::from(candidate_green);
-            let blue = i32::from(blue) - i32::from(candidate_blue);
-            red * red + green * green + blue * blue
-        })
-        .map_or(0, |(index, _)| index as u8)
 }
 
 #[inline(always)]
@@ -2087,7 +2097,6 @@ const fn cue_label(index: usize) -> &'static str {
         5 => "letters-to-cabinet",
         6 => "cabinet-orbit",
         7 => "form-launcher",
-        8 => "hold-launcher-particles",
         _ => "crossfade-launcher",
     }
 }
@@ -2117,15 +2126,15 @@ mod tests {
         assert_eq!(scene.cue_at(Duration::from_millis(4_000)), (2, 0));
         assert_eq!(scene.static_xy.len(), 102_400);
         assert_eq!(scene.static_origins.len(), 102_400);
-        assert_eq!(scene.formation_screen.len(), 40_960);
-        assert_eq!(scene.retiring_formation.len(), 61_440);
+        assert_eq!(scene.formation_screen.len(), 20_480);
+        assert_eq!(scene.retiring_formation.len(), 81_920);
         assert!(
             scene
                 .retiring_formation
                 .windows(2)
                 .all(|pair| pair[0].threshold <= pair[1].threshold)
         );
-        assert_eq!(scene.mister.positions.len(), 40_960);
+        assert_eq!(scene.mister.positions.len(), 20_480);
     }
 
     #[test]
@@ -2143,8 +2152,8 @@ mod tests {
 
         assert_eq!(scene.initial_particle_count, 51_200);
         assert_eq!(scene.steady_particle_count, 20_480);
-        assert_eq!(scene.mister.positions.len(), 20_480);
-        assert_eq!(scene.magik.positions.len(), 20_480);
+        assert_eq!(scene.mister.positions.len(), 10_240);
+        assert_eq!(scene.magik.positions.len(), 10_240);
         assert_eq!(scene.mister.groups, scene.magik.groups);
         assert_eq!(
             scene
@@ -2153,13 +2162,14 @@ mod tests {
                 .iter()
                 .map(|group| group.count)
                 .collect::<Vec<_>>(),
-            [4_096, 2_048, 4_096, 2_048, 4_096, 4_096]
+            [2_048, 1_024, 2_048, 1_024, 2_048, 2_048]
         );
         assert!(scene.mister.groups.iter().all(|group| {
             group.start.is_multiple_of(PARTICLE_LANES) && group.count.is_multiple_of(PARTICLE_LANES)
         }));
-        assert_eq!(scene.cabinet_formed.len(), 20_480);
-        assert_eq!(scene.launcher.positions.len(), 20_480);
+        assert_eq!(scene.cabinet_formed.len(), 12_288);
+        assert!(!scene.launcher_ready);
+        assert!(scene.launcher_positions.is_empty());
     }
 
     #[test]
@@ -2403,7 +2413,13 @@ mod tests {
             vec![Rgb565Pixel(0); geometry.len()],
             vec![Rgb565Pixel(0); geometry.len()],
         ];
-        for (frame, time_ms) in (19_000..=20_000).step_by(125).enumerate() {
+        // Include backwards timestamps: each slot must rebuild when its cached
+        // threshold cannot be reused, while forward frames remain incremental.
+        for (frame, time_ms) in (18_000..=19_000)
+            .step_by(125)
+            .chain([18_750, 18_500, 19_000, 18_000, 19_000])
+            .enumerate()
+        {
             let slot = frame & 1;
             let buffer = SceneBufferId::new(slot as u8, 2).unwrap();
             let clock = SceneClock {
@@ -2430,33 +2446,113 @@ mod tests {
     }
 
     #[test]
-    fn live_launcher_snapshot_is_pixel_exact_at_handoff() {
-        let recipe = embedded_intro_recipe().unwrap();
-        let geometry = SceneGeometry::new(320, 180, 320).unwrap();
-        let mut scene = IntroScene::new(320, 180, recipe).unwrap();
-        let expected = (0..geometry.len())
-            .map(|offset| Rgb565Pixel((offset as u16).rotate_left(3)))
-            .collect::<Vec<_>>();
-        scene.replace_launcher_snapshot(&expected).unwrap();
-        let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
-        let buffer = SceneBufferId::new(0, 2).unwrap();
+    fn dense_launcher_snapshot_is_pixel_exact_at_handoff_on_every_route() {
+        let profiles = [(960, 540, IntroSceneOptions::default())]
+            .into_iter()
+            .chain([240, 288, 480, 576].map(|height| {
+                (
+                    640,
+                    height,
+                    IntroSceneOptions {
+                        particle_density: IntroParticleDensity::Half,
+                        projection_scale: IntroProjectionScale::crt(height),
+                    },
+                )
+            }));
+        for (width, height, options) in profiles {
+            let geometry = SceneGeometry::new(width, height, width).unwrap();
+            let mut scene = IntroScene::new_with_options(
+                width,
+                height,
+                embedded_intro_recipe().unwrap(),
+                options,
+            )
+            .unwrap();
+            let expected = (0..geometry.len())
+                .map(|offset| Rgb565Pixel((offset as u16).wrapping_mul(37).rotate_left(3)))
+                .collect::<Vec<_>>();
+            scene.replace_launcher_snapshot(&expected).unwrap();
+            for (command, color) in scene.launcher_commands.iter().zip(&scene.launcher_colors) {
+                assert_eq!(expected[command.offset().unwrap()], *color);
+            }
+            let mut slots = [
+                vec![Rgb565Pixel(0xffff); geometry.len()],
+                vec![Rgb565Pixel(0xffff); geometry.len()],
+            ];
+            for time_ms in [16_000, 17_000, 17_999, 18_000, 18_250, 18_750, 19_000] {
+                for (slot, pixels) in slots.iter_mut().enumerate() {
+                    scene
+                        .render(
+                            SceneTarget::new(
+                                pixels,
+                                geometry,
+                                SceneBufferId::new(slot as u8, 2).unwrap(),
+                            )
+                            .unwrap(),
+                            SceneClock {
+                                frame: time_ms / 16,
+                                elapsed: Duration::from_millis(time_ms),
+                                next_elapsed: None,
+                            },
+                        )
+                        .unwrap();
+                    if time_ms == 19_000 {
+                        assert_eq!(*pixels, expected, "route={width}x{height} slot={slot}");
+                    }
+                }
+            }
+        }
+    }
 
-        scene
+    #[test]
+    fn snapshot_retry_keeps_the_original_cabinet_pose() {
+        let mut scene = IntroScene::new(640, 240, embedded_intro_recipe().unwrap()).unwrap();
+        let original = scene.launcher_morph_source();
+        let mut sparse = vec![Rgb565Pixel(0); scene.geometry.len()];
+        sparse[10_001] = Rgb565Pixel(0xf800);
+        scene.replace_launcher_snapshot(&sparse).unwrap();
+        assert!(scene.launcher_morph_source() == original);
+        let dense = live_test_snapshot(scene.geometry);
+        scene.replace_launcher_snapshot(&dense).unwrap();
+        let mut fresh = IntroScene::new(640, 240, embedded_intro_recipe().unwrap()).unwrap();
+        fresh.replace_launcher_snapshot(&dense).unwrap();
+        assert!(scene.launcher_source == fresh.launcher_source);
+        assert!(scene.launcher_morph_source() == original);
+        scene.replace_launcher_snapshot(&sparse).unwrap();
+        fresh.replace_launcher_snapshot(&sparse).unwrap();
+        assert!(scene.launcher_source == fresh.launcher_source);
+        assert_eq!(scene.launcher_source.len(), original.len());
+    }
+
+    #[test]
+    fn sparse_launcher_morph_keeps_the_cabinet_population() {
+        let mut scene = IntroScene::new(640, 240, embedded_intro_recipe().unwrap()).unwrap();
+        let mut sparse = vec![Rgb565Pixel(0); scene.geometry.len()];
+        sparse[10_001] = Rgb565Pixel(0xf800);
+        scene.replace_launcher_snapshot(&sparse).unwrap();
+        let count = scene.cabinet_formed.len();
+        let mut pixels = vec![Rgb565Pixel(0); scene.geometry.len()];
+        let stats = scene
             .render(
-                SceneTarget::new(&mut pixels, geometry, buffer).unwrap(),
+                SceneTarget::new(
+                    &mut pixels,
+                    scene.geometry,
+                    SceneBufferId::new(0, 2).unwrap(),
+                )
+                .unwrap(),
                 SceneClock {
-                    frame: 1_200,
-                    elapsed: Duration::from_millis(20_000),
+                    frame: 960,
+                    elapsed: Duration::from_millis(16_000),
                     next_elapsed: None,
                 },
             )
             .unwrap();
-
-        assert_eq!(pixels, expected);
+        assert_eq!(stats.particles, count);
+        assert!(scene.launcher_source == scene.launcher_morph_source());
     }
 
     #[test]
-    fn particle_launcher_hold_becomes_zero_write_per_slot() {
+    fn crossfade_reuses_an_unchanged_bayer_threshold() {
         let recipe = embedded_intro_recipe().unwrap();
         let geometry = SceneGeometry::new(320, 180, 320).unwrap();
         let mut scene = IntroScene::new(320, 180, recipe).unwrap();
@@ -2501,7 +2597,7 @@ mod tests {
 
         assert!(scene.launcher_ready);
         assert_eq!(
-            scene.launcher.positions.len(),
+            scene.launcher_positions.len(),
             scene.recipe.steady_particle_count
         );
         assert!(scene.launcher_commands.iter().all(|command| {
@@ -2509,6 +2605,216 @@ mod tests {
                 .offset()
                 .is_some_and(|offset| offset % geometry.width() < geometry.width() * 3 / 4)
         }));
+    }
+
+    #[test]
+    fn stage_counts_preserve_text_tracks_and_cabinet_density() {
+        for (density, text_count, cabinet_count) in [
+            (IntroParticleDensity::Full, 20_480, 24_576),
+            (IntroParticleDensity::Half, 10_240, 12_288),
+        ] {
+            let mut scene = IntroScene::new_with_options(
+                960,
+                540,
+                embedded_intro_recipe().unwrap(),
+                IntroSceneOptions {
+                    particle_density: density,
+                    ..IntroSceneOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(scene.magik.positions.len(), text_count);
+            assert_eq!(scene.cabinet_source.positions.len(), cabinet_count);
+            assert_eq!(scene.cabinet_formed.len(), cabinet_count);
+            assert!(
+                scene
+                    .cabinet_source
+                    .groups
+                    .iter()
+                    .all(|group| group.start.is_multiple_of(PARTICLE_LANES)
+                        && group.count.is_multiple_of(PARTICLE_LANES))
+            );
+            let geometry = scene.geometry;
+            let buffer = SceneBufferId::new(0, 2).unwrap();
+            let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
+            // Exercise transitions and cohort changes with both populations.
+            for (time_ms, expected) in [
+                (4_000, text_count),
+                (4_750, text_count),
+                (8_500, text_count),
+                (9_000, cabinet_count),
+                (9_050, cabinet_count),
+                (11_999, cabinet_count),
+                (12_000, cabinet_count),
+            ] {
+                let stats = scene
+                    .render(
+                        SceneTarget::new(&mut pixels, geometry, buffer).unwrap(),
+                        SceneClock {
+                            frame: time_ms / 16,
+                            elapsed: Duration::from_millis(time_ms),
+                            next_elapsed: Some(Duration::from_millis(time_ms + 16)),
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(stats.particles, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn launcher_morph_starts_at_the_half_size_cabinet_pose() {
+        let scene = IntroScene::new(1280, 720, embedded_intro_recipe().unwrap()).unwrap();
+        let IntroCue::TargetOrbit {
+            start_turns, turns, ..
+        } = scene.recipe.cues[6]
+        else {
+            panic!("cabinet orbit cue is missing");
+        };
+        let yaw = (start_turns + turns) * std::f32::consts::TAU;
+        for index in (0..scene.cabinet_formed.len()).step_by(137) {
+            let cabinet = project(
+                scene.cabinet_formed[index],
+                yaw,
+                0.0,
+                &scene.recipe,
+                scene.geometry,
+                scene.options.projection_scale.half_size(),
+            );
+            let launcher = project(
+                scene.cabinet_morph_source[index],
+                0.0,
+                0.0,
+                &scene.recipe,
+                scene.geometry,
+                scene.options.projection_scale,
+            );
+            assert!((cabinet[0] - launcher[0]).abs() < 0.001);
+            assert!((cabinet[1] - launcher[1]).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn sparse_launcher_preserves_original_colors_and_excludes_black_edges() {
+        for options in [
+            IntroSceneOptions::default(),
+            IntroSceneOptions {
+                particle_density: IntroParticleDensity::Half,
+                projection_scale: IntroProjectionScale::crt(240),
+            },
+        ] {
+            let geometry = SceneGeometry::new(640, 240, 640).unwrap();
+            let mut scene =
+                IntroScene::new_with_options(640, 240, embedded_intro_recipe().unwrap(), options)
+                    .unwrap();
+            let mut snapshot = vec![Rgb565Pixel(0); geometry.len()];
+            for (offset, color) in [(10_001, 0xf800), (30_003, 0x001f), (50_007, 0x8410)] {
+                snapshot[offset] = Rgb565Pixel(color);
+            }
+            scene.replace_launcher_snapshot(&snapshot).unwrap();
+            assert_eq!(scene.launcher_commands.len(), 3);
+            assert_eq!(scene.launcher_positions.len(), scene.cabinet_formed.len());
+            assert_eq!(
+                scene.launcher_colors[..3],
+                [
+                    Rgb565Pixel(0xf800),
+                    Rgb565Pixel(0x001f),
+                    Rgb565Pixel(0x8410)
+                ]
+            );
+            assert_eq!(scene.launcher_q5.x_q5.len(), scene.cabinet_formed.len());
+            assert_eq!(
+                scene.launcher_source_q5.x_q5.len(),
+                scene.cabinet_formed.len()
+            );
+            let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
+            let buffer = SceneBufferId::new(0, 2).unwrap();
+            for time_ms in [16_000, 17_000, 18_000, 18_500, 19_000] {
+                let stats = scene
+                    .render(
+                        SceneTarget::new(&mut pixels, geometry, buffer).unwrap(),
+                        SceneClock {
+                            frame: time_ms / 16,
+                            elapsed: Duration::from_millis(time_ms),
+                            next_elapsed: None,
+                        },
+                    )
+                    .unwrap();
+                if time_ms >= 18_000 {
+                    assert_eq!(pixels, snapshot, "time={time_ms}");
+                    if time_ms > 18_000 {
+                        assert_eq!(stats.pixel_writes, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn launcher_morph_handles_a_partial_four_lane_tail() {
+        for options in [
+            IntroSceneOptions::default(),
+            IntroSceneOptions {
+                particle_density: IntroParticleDensity::Half,
+                projection_scale: IntroProjectionScale::crt(240),
+            },
+        ] {
+            let geometry = SceneGeometry::new(640, 240, 640).unwrap();
+            let mut scene =
+                IntroScene::new_with_options(640, 240, embedded_intro_recipe().unwrap(), options)
+                    .unwrap();
+            let count = scene.cabinet_formed.len() + 3;
+            let mut snapshot = vec![Rgb565Pixel(0); geometry.len()];
+            for (index, pixel) in snapshot[..count].iter_mut().enumerate() {
+                *pixel = [
+                    Rgb565Pixel(0xf800),
+                    Rgb565Pixel(0x07e0),
+                    Rgb565Pixel(0x001f),
+                ][index % 3];
+            }
+            scene.replace_launcher_snapshot(&snapshot).unwrap();
+            assert_eq!(scene.launcher_positions.len(), count);
+            assert_eq!(
+                scene.launcher_q5.x_q5.len(),
+                count.div_ceil(PARTICLE_LANES) * PARTICLE_LANES
+            );
+            let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
+            for time_ms in [16_000, 17_000, 17_999, 18_000, 19_000] {
+                let stats = scene
+                    .render(
+                        SceneTarget::new(&mut pixels, geometry, SceneBufferId::new(0, 2).unwrap())
+                            .unwrap(),
+                        SceneClock {
+                            frame: time_ms / 16,
+                            elapsed: Duration::from_millis(time_ms),
+                            next_elapsed: None,
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(stats.particles, count);
+                if time_ms >= 18_000 {
+                    assert!(pixels == snapshot, "time={time_ms}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dominant_nonblack_background_is_not_a_particle_target() {
+        let geometry = SceneGeometry::new(64, 64, 64).unwrap();
+        let mut snapshot = vec![Rgb565Pixel(0x0841); geometry.len()];
+        snapshot[100] = Rgb565Pixel(0xffff);
+        snapshot[101] = Rgb565Pixel(0);
+        let target = live_launcher_target_from_snapshot(
+            &snapshot,
+            40_960,
+            &embedded_intro_recipe().unwrap(),
+            geometry,
+            IntroProjectionScale::default(),
+        )
+        .unwrap();
+        assert_eq!(target.positions.len(), 1);
+        assert_eq!(target.colors, [Rgb565Pixel(0xffff)]);
     }
 
     #[test]
