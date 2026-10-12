@@ -28,6 +28,8 @@ def catalog_database(value):
 
 
 def add_commands(commands):
+    from pathlib import Path
+
     for group, choices in (
         ("orientation", ORIENTATIONS),
         ("mode", ("dev", "public", "stock")),
@@ -50,6 +52,7 @@ def add_commands(commands):
     for name in (
         "inspect",
         "rebuild",
+        "cold-build",
         "metadata-qualification",
         "neogeo-family-audit",
         "screenshots",
@@ -60,10 +63,18 @@ def add_commands(commands):
         "screenshot-qualification",
     ):
         item = catalog.add_parser(name)
-        item.add_argument("--layout", choices=("dev", "public"), default="dev")
+        item.add_argument(
+            "--layout",
+            choices=("dev",) if name == "cold-build" else ("dev", "public"),
+            default="dev",
+        )
+        if name == "cold-build":
+            item.add_argument("--attended", action="store_true", required=True)
+            item.add_argument("--baseline", type=Path, help="earlier cold-build run")
+            item.add_argument(
+                "--symbols", type=Path, help="unstripped executable that is installed"
+            )
         if name == "publish":
-            from pathlib import Path
-
             item.add_argument("--release-dir", type=Path, required=True)
         if name == "purge":
             item.add_argument("--confirm", action="store_true", required=True)
@@ -190,7 +201,33 @@ def run_device(arguments, run):
     return 0
 
 
+def catalog_operation(agent, run, fields, name="catalog"):
+    """Run one native catalog operation, keeping its output beside the run."""
+    from .client import AgentError
+
+    response, body = agent._request(
+        "catalog-operation", fields, attempts=1, timeout=130
+    )
+    (run / f"{name}-output.txt").write_bytes(body)
+    (run / f"{name}-result.json").write_text(
+        json.dumps(dict(response.fields), indent=2) + "\n"
+    )
+    if response.operation == "error":
+        raise AgentError.from_fields(response.fields)
+    if (
+        response.operation != "catalog-result"
+        or response.fields.get("exit_code") != 0
+        or response.fields.get("error")
+    ):
+        raise AgentError(f"catalog operation failed; see {run / f'{name}-result.json'}")
+    return response, body
+
+
 def run_catalog(arguments, run):
+    if arguments.action == "cold-build":
+        from .catalog_cold import cold_build
+
+        return cold_build(arguments, run)
     if arguments.action == "screenshot-qualification":
         from .catalog import qualify_screenshots
 
@@ -200,7 +237,6 @@ def run_catalog(arguments, run):
 
         return databases(arguments, run)
     from .cli import connect_agent
-    from .client import AgentError
     from .results import append_event
 
     fields = {"action": arguments.action, "layout": arguments.layout}
@@ -212,21 +248,7 @@ def run_catalog(arguments, run):
     if arguments.action == "rebuild":
         required.add("catalog-rebuild-v1")
     agent, _ = connect_agent(run, required)
-    response, body = agent._request(
-        "catalog-operation", fields, attempts=1, timeout=130
-    )
-    (run / "catalog-output.txt").write_bytes(body)
-    (run / "catalog-result.json").write_text(
-        json.dumps(dict(response.fields), indent=2) + "\n"
-    )
-    if response.operation == "error":
-        raise AgentError.from_fields(response.fields)
-    if (
-        response.operation != "catalog-result"
-        or response.fields.get("exit_code") != 0
-        or response.fields.get("error")
-    ):
-        raise AgentError(f"catalog operation failed; see {run / 'catalog-result.json'}")
+    response, body = catalog_operation(agent, run, fields)
     if arguments.action == "metadata-qualification":
         from .catalog import validate_metadata
 
@@ -248,6 +270,7 @@ def reboot_device(arguments, run, *, agent=None):
     import time
     from .cli import connect_agent
     from .client import AgentError
+    from .protocol import ProtocolError
 
     if agent is None:
         agent, _ = connect_agent(run, {"device-control-v1"})
@@ -265,7 +288,9 @@ def reboot_device(arguments, run, *, agent=None):
             report["request"] = agent.device_operation(
                 "device-reboot", {"attended": arguments.attended}
             )
-        except (OSError, TimeoutError) as error:
+        except (OSError, TimeoutError, ProtocolError) as error:
+            # The device may reboot before it answers; a closed connection
+            # is a lost acknowledgement, never a reason to replay.
             report["ambiguous_request"] = str(error)
         deadline = time.monotonic() + 90
         rediscovery_at = time.monotonic() + 30

@@ -2203,6 +2203,12 @@ fn run_fast_catalog_refresh_in_process(
     let _ = tx.send(CatalogWorkerMessage::Done);
 }
 
+/// Milestones for the tooling build's fresh-build evidence; no-ops otherwise.
+#[cfg(feature = "tooling")]
+use crate::catalog_build_evidence::mark;
+#[cfg(not(feature = "tooling"))]
+fn mark(_: &str) {}
+
 fn run_fast_catalog_fresh_build(
     root: &str,
     catalog_root: &Path,
@@ -2215,6 +2221,8 @@ fn run_fast_catalog_fresh_build(
     };
 
     let storage_root = PathBuf::from("/media/fat");
+    #[cfg(feature = "tooling")]
+    let evidence = crate::catalog_build_evidence::start_fresh_build();
     report_catalog_filesystem_headroom(tx, "fresh-begin");
     let mut planned_system_ids = Vec::new();
     let mut completed_system_ids = std::collections::BTreeSet::new();
@@ -2224,6 +2232,7 @@ fn run_fast_catalog_fresh_build(
         catalog_root,
         mutation_lease,
         |system_ids| {
+            mark("plan-ready");
             planned_system_ids = system_ids.to_vec();
             let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
                 system_ids: system_ids.to_vec(),
@@ -2255,6 +2264,7 @@ fn run_fast_catalog_fresh_build(
             });
         },
         |system| {
+            mark(&format!("system-prepared:{}", system.system_id));
             if completed_system_ids.insert(system.system_id.clone()) {
                 let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
                     system_id: system.system_id.clone(),
@@ -2315,11 +2325,28 @@ fn run_fast_catalog_fresh_build(
                 }
                 FastCatalogBuildProgress::FinishingCatalog => "Finishing catalog…".to_string(),
             };
+            match progress {
+                FastCatalogBuildProgress::SavingSystem { current: 1, .. } => mark("saving-systems"),
+                FastCatalogBuildProgress::SavingSystem { .. } => {}
+                FastCatalogBuildProgress::SavingCatalogMetadata => mark("saving-metadata"),
+                FastCatalogBuildProgress::FinishingCatalog => mark("finishing"),
+            }
             let _ = tx.send(CatalogWorkerMessage::BuildStatus { title });
         },
     ) {
-        Ok(report) => report,
+        Ok(report) => {
+            mark("published");
+            #[cfg(feature = "tooling")]
+            if let Some(evidence) = evidence {
+                evidence.finish("published");
+            }
+            report
+        }
         Err(error) => {
+            #[cfg(feature = "tooling")]
+            if let Some(evidence) = evidence {
+                evidence.finish("failed");
+            }
             report_catalog_filesystem_headroom(tx, "fresh-error");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("catalog build failed: {error}"),

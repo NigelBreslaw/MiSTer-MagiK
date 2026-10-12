@@ -40,6 +40,8 @@ def parser():
         "catalog screenshots --system arcade",
         "catalog purge --confirm",
         "catalog publish --release-dir /tmp/release",
+        "catalog cold-build --attended",
+        "catalog cold-build --attended --baseline /tmp/run --symbols /tmp/elf",
         "media check --system arcade",
     ],
 )
@@ -57,6 +59,8 @@ def test_native_command_surface(command):
         "input-probe --seconds 31",
         "mode set public",
         "catalog purge",
+        "catalog cold-build",
+        "catalog cold-build --attended --layout public",
         "catalog query --database registry",
         "catalog screenshots",
         "media download",
@@ -214,6 +218,34 @@ def test_failed_platform_reboot_keeps_recoverable_stage(monkeypatch, tmp_path):
         publish(agent, tmp_path, {}, kind="platform", layout="dev", attended=True)
     assert agent._request.call_count == reboot.call_count == 1
     assert json.loads((tmp_path / "publication.json").read_text())["stage"]
+
+
+def test_reboot_acknowledgement_lost_to_a_closed_connection_is_not_replayed(
+    monkeypatch, tmp_path
+):
+    import time
+    from magik.protocol import ProtocolError
+
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    agent = Mock()
+    agent.device_operation.side_effect = [
+        {"boot_id": {"text": "original"}},
+        ProtocolError("connection closed while reading a framed message"),
+        {
+            "boot_id": {"text": "new"},
+            "main_status": {"launcher_ready_phase": "ready"},
+        },
+    ]
+    device.reboot_device(SimpleNamespace(attended=True), tmp_path, agent=agent)
+    assert [call.args[0] for call in agent.device_operation.call_args_list] == [
+        "device-evidence",
+        "device-reboot",
+        "device-evidence",
+    ]
+    assert (
+        "closed"
+        in json.loads((tmp_path / "reboot.json").read_text())["ambiguous_request"]
+    )
 
 
 def test_reboot_timeout_uses_only_native_discovery_and_never_replays(
