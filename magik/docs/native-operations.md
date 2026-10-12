@@ -22,12 +22,17 @@ For Dev test preparation, use `device orientation status` and
 Python uses `agent.device_operation("orientation-set", {"orientation": "normal",
 "attended": True})`. The `orientation-control-v1` capability is supplied automatically
 by the CLI when missing. Apply orientation before opening a Slint test session.
-The operation suspends the ready Dev launcher through Main, atomically changes only
-its saved orientation, and resumes it. It preserves other settings and restores
-the previous file on activation failure. It does not open Settings or confirmation
-dialogs. `configured_orientation` reports saved configuration; `main_status`
-reports launcher readiness. Public and stock Main are rejected.
-This replaces `check set-orientation` and its `MAGIK_ORIENTATION` override.
+An active test session or concurrent service mutation is rejected immediately,
+and a launcher environment containing Slint test settings must be restored first.
+The operation suspends the ready Dev launcher through Main, atomically writes the
+requested orientation, and resumes it. It preserves other fields in version 1
+settings; invalid orientation values are repaired. Corrupt settings or an unsupported
+version use launcher defaults. Status reports landscape for invalid saved values,
+matching launcher fallback. Write or activation failure restores the exact previous
+file or its absence before resuming. It does not open Settings or confirmation
+dialogs. `configured_orientation` reports the orientation derived from saved
+configuration, including launcher fallback; `main_status` reports launcher readiness.
+Public and stock Main are rejected.
 
 Display changes likewise use `device display set MODE --attended`, which applies
 headlessly and confirms through Main's protocol after launcher readiness. To run

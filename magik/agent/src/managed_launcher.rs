@@ -76,6 +76,16 @@ fn read_env(path: &Path) -> Result<String, String> {
     )
 }
 
+pub(crate) fn require_no_test_server(path: &Path) -> Result<(), String> {
+    if read_env(path)?
+        .lines()
+        .any(|line| line.trim_start().starts_with("export SLINT_TEST_SERVER="))
+    {
+        return Err("orientation-set requires a launcher without Slint test settings".into());
+    }
+    Ok(())
+}
+
 pub fn update(path: &Path, values: Option<&[(&str, String)]>) -> Result<(), String> {
     let text = read_env(path)?;
     let mut next = without_block(&text)?;
@@ -309,7 +319,14 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.starts_with(original));
         assert!(content.contains("'\\''"));
+        assert!(
+            require_no_test_server(&path)
+                .unwrap_err()
+                .contains("Slint test settings")
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), content);
         update(&path, Some(&[("MISTER_MAGIK_PATH", "/another".into())])).unwrap();
+        require_no_test_server(&path).unwrap();
         assert!(
             !fs::read_to_string(&path)
                 .unwrap()
