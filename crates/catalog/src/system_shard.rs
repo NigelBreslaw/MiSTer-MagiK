@@ -117,6 +117,9 @@ pub struct SystemNavigationOpenTiming {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShardDurability {
     Immediate,
+    /// A build in tmpfs that is discarded on any failure: no journal, no syncs,
+    /// and a larger in-memory cache. The resulting file bytes are identical.
+    Scratch,
 }
 
 #[cfg(feature = "builder")]
@@ -403,12 +406,16 @@ fn write_system_shard_with_options_and_profile(
         .map_err(|error| SystemShardError::with("open staging SQLite", error))?;
     let durability_pragmas = match durability {
         ShardDurability::Immediate => "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;",
+        ShardDurability::Scratch => "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;",
     };
     connection
         .execute_batch(durability_pragmas)
         .map_err(|error| SystemShardError::with("configure shard durability", error))?;
-    let sqlite_tuning_pragmas = match sqlite_tuning {
-        ShardSqliteTuning::Conservative => "PRAGMA cache_size=-2048; PRAGMA temp_store=FILE;",
+    let sqlite_tuning_pragmas = match (sqlite_tuning, durability) {
+        (_, ShardDurability::Scratch) => "PRAGMA cache_size=-16384; PRAGMA temp_store=MEMORY;",
+        (ShardSqliteTuning::Conservative, ShardDurability::Immediate) => {
+            "PRAGMA cache_size=-2048; PRAGMA temp_store=FILE;"
+        }
     };
     let games_schema = if artifact_profile.stores_games() {
         "CREATE TABLE games (

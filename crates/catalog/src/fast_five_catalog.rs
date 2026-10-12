@@ -648,7 +648,7 @@ pub(crate) fn build_staged_system_artifacts(
             &navigation,
             data,
             limits.shard,
-            ShardDurability::Immediate,
+            ShardDurability::Scratch,
             shard_profile,
             variant_payload,
         )
