@@ -27,8 +27,8 @@ DIGESTS = (
 PHASES = (
     ("start to Arcade ready", "system-prepared:arcade"),
     ("scan other systems", "plan-ready"),
-    ("build search DBs and NavPacks", "saving-systems"),
-    ("copy artifacts to SD", "saving-metadata"),
+    ("build first artifacts", "saving-systems"),
+    ("build and copy artifacts", "saving-metadata"),
     ("metadata and publish", "published"),
 )
 EVIDENCE_TIMEOUT_SECONDS = 900

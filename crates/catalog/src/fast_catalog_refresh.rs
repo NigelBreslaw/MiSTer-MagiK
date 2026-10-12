@@ -365,6 +365,7 @@ fn build_tmpfs_artifacts(
     let started = std::time::Instant::now();
     let mut artifactless_systems = 0usize;
     for (index, source) in snapshot.systems.iter().enumerate() {
+        crate::cooperative_work::checkpoint();
         if prebuilt.is_cancelled() {
             return Err("artifact building cancelled".into());
         }
@@ -540,6 +541,8 @@ pub fn build_fresh_catalog_with_presentation_progress(
             crate::runtime_thread::apply_runtime_thread_policy(
                 crate::runtime_thread::RuntimeThreadRole::CatalogShardPublisher,
             );
+            // Park for UI motion and interaction, like the catalog thread.
+            let _background = crate::cooperative_work::BackgroundScope::enter();
             let result = build_tmpfs_artifacts(
                 &snapshot,
                 artifact_generation,

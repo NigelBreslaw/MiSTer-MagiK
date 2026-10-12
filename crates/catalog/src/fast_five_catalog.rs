@@ -1602,6 +1602,34 @@ mod builder_tests {
     }
 
     #[test]
+    fn waiting_publication_is_released_by_a_later_publish_from_another_thread() {
+        let artifacts = PrebuiltArtifacts::default();
+        let published = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                artifacts.publish(
+                    "snes".into(),
+                    PrebuiltSystemArtifacts {
+                        sqlite: "a.sqlite3".into(),
+                        navigation: "a.nav".into(),
+                        staging: "a".into(),
+                    },
+                );
+                artifacts.finish(None);
+            });
+            artifacts.wait_for("snes")
+        });
+        assert_eq!(
+            published.unwrap().sqlite,
+            std::path::PathBuf::from("a.sqlite3")
+        );
+        // Cancelling lets a builder stop without ever finishing publication.
+        assert!(!artifacts.is_cancelled());
+        artifacts.cancel();
+        assert!(artifacts.is_cancelled());
+    }
+
+    #[test]
     fn finishing_normally_is_not_overwritten_by_the_unwind_guard() {
         let artifacts = PrebuiltArtifacts::default();
         artifacts.finish(None);
