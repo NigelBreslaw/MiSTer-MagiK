@@ -30,6 +30,7 @@ def parser():
         "mode set dev --attended",
         "display status",
         "display set crt-240p60 --attended",
+        "orientation status",
         "catalog inspect",
         "catalog rebuild --layout dev",
         "catalog cores",
@@ -50,6 +51,8 @@ def test_native_command_surface(command):
     "command",
     [
         "display set crt-240p60",
+        "orientation set normal",
+        "orientation set upside-down --attended",
         "input-probe --ordinary-launcher",
         "input-probe --seconds 31",
         "mode set public",
@@ -79,6 +82,25 @@ def test_input_probe_requests_only_passive_fields(monkeypatch, tmp_path):
     connect.assert_called_once_with(tmp_path, {"input-probe-passive-v1"})
     agent.device_operation.assert_called_once_with(
         "input-probe", {"seconds": 20, "events": ["event0"]}
+    )
+
+
+@pytest.mark.parametrize("orientation", device.ORIENTATIONS)
+def test_orientation_uses_native_operation_and_requests_its_capability(
+    monkeypatch, tmp_path, orientation
+):
+    agent = Mock()
+    agent.device_operation.return_value = {"configured_orientation": orientation}
+    connect = Mock(return_value=(agent, None))
+    monkeypatch.setattr("magik.cli.connect_agent", connect)
+    device.run_device(
+        parser().parse_args(["orientation", "set", orientation, "--attended"]), tmp_path
+    )
+    connect.assert_called_once_with(
+        tmp_path, {"device-control-v1", "orientation-control-v1"}
+    )
+    agent.device_operation.assert_called_once_with(
+        "orientation-set", {"orientation": orientation, "attended": True}
     )
 
 

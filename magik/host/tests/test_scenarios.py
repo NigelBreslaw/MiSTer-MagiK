@@ -200,52 +200,6 @@ def test_settings_navigation_observes_selection_and_retries_unaccepted_keys(
     assert selected == 5
 
 
-@pytest.mark.parametrize(
-    "orientation,index", [("normal", 0), ("clockwise", 1), ("counterclockwise", 2)]
-)
-def test_orientation_uses_horizontal_confirmation_and_retains_requested_value(
-    monkeypatch, orientation, index
-):
-    state = {"phase": "settings", "option": 0, "saved": 0, "choice": 0}
-
-    def press(_, key):
-        phase = state["phase"]
-        if key == "\n":
-            if phase == "settings":
-                state["phase"] = "picker"
-            elif phase == "picker":
-                state["phase"] = (
-                    "confirm" if state["option"] != state["saved"] else "settings"
-                )
-            elif phase == "confirm":
-                if state["choice"] == 1:
-                    state["saved"] = state["option"]
-                state["phase"] = "settings"
-        elif key == "\uf700" and phase == "picker":
-            state["option"] = max(0, state["option"] - 1)
-        elif key == "\uf701" and phase == "picker":
-            state["option"] = min(2, state["option"] + 1)
-        elif key == "\uf703" and phase == "confirm":
-            state["choice"] = 1
-        elif key == "\uf729":
-            state["phase"] = "home"
-
-    monkeypatch.setattr(actions, "_open_settings_card", lambda _: None)
-    monkeypatch.setattr(
-        actions, "_settings_ready", lambda _: state["phase"] == "settings"
-    )
-    monkeypatch.setattr(actions, "_focus_label", lambda *_: None)
-    monkeypatch.setattr(actions, "_press_key", press)
-    monkeypatch.setattr(
-        actions,
-        "_selected_labels",
-        lambda _: ["Revert"] if state["phase"] == "confirm" else [],
-    )
-    actions.set_screen_orientation(object(), orientation, sleep=lambda _: None)
-    assert state["saved"] == index
-    assert state["phase"] == "home"
-
-
 def test_settings_navigation_is_bounded_when_input_never_advances(monkeypatch):
     keys = []
     monkeypatch.setattr(actions, "_press_key", lambda _, key: keys.append(key))

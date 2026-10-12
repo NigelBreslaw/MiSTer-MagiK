@@ -26,6 +26,4 @@ mister-magik-scanout-contract = { path = "../../mister/platform/contracts/scanou
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false }
+mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false, features = ["app-runtime"] }

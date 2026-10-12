@@ -16,6 +16,7 @@ mod main_control;
 mod managed_launcher;
 mod media;
 mod mode;
+mod orientation;
 mod publication;
 mod sd;
 mod service_boot;
@@ -185,6 +186,7 @@ impl Agent {
             "status",
             "device-identity-v1",
             "device-control-v1",
+            "orientation-control-v1",
             "application-install-inspect-v1",
             "application-install-inspect-v2",
             "crash-report-read-v1",
@@ -548,7 +550,30 @@ impl Agent {
             return self.catalog_operation(stream, &request, &body);
         }
         if device::OPERATIONS.contains(&request.op.as_str()) {
-            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            // Test sessions own this lock through persistent-launcher restoration.
+            // Reject orientation setup during that lease instead of queuing it.
+            let lock = if request.op == "orientation-set" {
+                self.mutations.try_lock().map_err(|_| ())
+            } else {
+                Ok(self.mutations.lock().expect("mutation state poisoned"))
+            };
+            let _mutation = match lock {
+                Ok(lock) => lock,
+                Err(()) => {
+                    return write_frame(
+                        stream,
+                        &response(
+                            &request.id,
+                            "error",
+                            serde_json::json!({
+                                "code":"device-operation-busy",
+                                "detail":"orientation-set requires no active test session or concurrent mutation"
+                            }),
+                        ),
+                        &[],
+                    );
+                }
+            };
             let result = self.device_operation(&request, &body);
             if result.op == "error" {
                 return write_frame(stream, &result, &[]);
@@ -1832,6 +1857,47 @@ mod tests {
         assert!(!root.join("transfer-check").exists());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn orientation_rejects_an_active_test_or_mutation_lease_before_device_access() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let root = std::env::temp_dir().join(format!("orientation-busy-{}", std::process::id()));
+        let agent = Arc::new(Agent::with_state_root(
+            "test".into(),
+            "token".into(),
+            root.clone(),
+            root.join("state"),
+        ));
+        // The same guard surrounds test-start through persistent restoration,
+        // deployment, display changes and launcher restarts in handle().
+        let lease = agent.mutations.lock().unwrap();
+        let server_agent = Arc::clone(&agent);
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            server_agent.handle(&mut stream).unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let request = Envelope {
+            id: "busy-orientation".into(),
+            op: "orientation-set".into(),
+            token: "token".into(),
+            fields: serde_json::json!({"orientation":"normal", "attended":true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        write_frame(&mut client, &request, &[]).unwrap();
+        let (reply, _) = read_frame(&mut client).unwrap();
+        assert_eq!(reply.op, "error");
+        assert_eq!(reply.fields["code"], "device-operation-busy");
+        assert!(!root.exists());
+        server.join().unwrap();
+        drop(lease);
     }
 
     #[test]

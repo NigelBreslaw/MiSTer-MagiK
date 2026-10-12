@@ -16,6 +16,40 @@ does not reboot. `reboot --attended` sends one request and observes one bounded
 boot transition; it never repeats an ambiguous reboot. `recover --attended`
 clears owned arming state and resumes Main without rebooting.
 
+For Dev test preparation, use `device orientation status` and
+`device orientation set normal|monitor-clockwise|monitor-counterclockwise --attended`.
+`normal` is landscape; the portrait values describe the monitor's mounting direction.
+Python uses `agent.device_operation("orientation-set", {"orientation": "normal",
+"attended": True})`. The `orientation-control-v1` capability is supplied automatically
+by the CLI when missing. Apply orientation before opening a Slint test session.
+An active test session or concurrent service mutation is rejected immediately,
+and a launcher environment containing Slint test settings must be restored first.
+The operation suspends the ready Dev launcher through Main, atomically writes the
+requested orientation, and resumes it. It preserves other fields in version 1
+settings; invalid orientation values are repaired. Corrupt settings or an unsupported
+version use launcher defaults. Status reports landscape for invalid saved values,
+matching launcher fallback. Write or activation failure restores the exact previous
+file or its absence before resuming. It does not open Settings or confirmation
+dialogs. `configured_orientation` reports the orientation derived from saved
+configuration, including launcher fallback; `main_status` reports launcher readiness.
+Public and stock Main are rejected.
+
+Display changes likewise use `device display set MODE --attended`, which applies
+headlessly and confirms through Main's protocol after launcher readiness. To run
+the same Dev journey in HDMI 1080p and then CRT 240p:
+
+```bash
+scripts/magik device orientation set normal --attended
+scripts/magik device display set hdmi-1920x1080p60 --attended
+MAGIK_EXPECT_DISPLAY_MODE=hdmi-1920x1080p60 scripts/magik check journeys
+scripts/magik device display set crt-240p60 --attended
+MAGIK_EXPECT_DISPLAY_MODE=crt-240p60 scripts/magik check journeys
+```
+
+For an already-running test-enabled Dev binary, append `--installed-sha256 HASH`
+to each check to avoid a build/deployment. The mode guard checks the requested mode
+and the absence of a pending display transaction before and after each test session.
+
 `device catalog` provides `inspect`, `cores`, `metadata-qualification`,
 `neogeo-family-audit`, `query --database system:ID --sql SQL`,
 `screenshots --system ID`, and `screenshot-qualification --system ID`.

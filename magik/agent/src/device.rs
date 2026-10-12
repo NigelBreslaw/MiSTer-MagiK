@@ -25,6 +25,8 @@ pub const OPERATIONS: &[&str] = &[
     "launcher-return",
     "display-status",
     "display-set",
+    "orientation-status",
+    "orientation-set",
 ];
 const DISPLAY_MODES: &[&str] = &[
     "auto",
@@ -317,7 +319,7 @@ fn evidence() -> Value {
         "uptime":evidence_file(Path::new("/proc/uptime"))})
 }
 
-fn wait_launcher(previous: Option<u64>) -> Result<Value, String> {
+pub(super) fn wait_launcher(previous: Option<u64>) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let state = status()?;
@@ -422,6 +424,7 @@ impl Agent {
                     request.op.as_str(),
                     "input-probe"
                         | "display-set"
+                        | "orientation-set"
                         | "media-operation"
                         | "mode-set"
                         | "device-reboot"
@@ -505,6 +508,8 @@ impl Agent {
                     })
                 }
                 "display-set" => set_display(&request.fields),
+                "orientation-status" => crate::orientation::status(),
+                "orientation-set" => crate::orientation::set(&request.fields),
                 _ => Err("unsupported device operation".into()),
             }
         })();

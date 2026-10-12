@@ -18,6 +18,8 @@ DISPLAY_MODES = (
     "crt-576p50",
 )
 
+ORIENTATIONS = ("normal", "monitor-clockwise", "monitor-counterclockwise")
+
 
 def catalog_database(value):
     if not re.fullmatch(r"system:[a-z0-9-]+", value):
@@ -26,11 +28,17 @@ def catalog_database(value):
 
 
 def add_commands(commands):
-    mode = commands.add_parser("mode").add_subparsers(dest="action", required=True)
-    mode.add_parser("status")
-    change = mode.add_parser("set")
-    change.add_argument("mode", choices=("dev", "public", "stock"))
-    change.add_argument("--attended", action="store_true", required=True)
+    for group, choices in (
+        ("orientation", ORIENTATIONS),
+        ("mode", ("dev", "public", "stock")),
+    ):
+        actions = commands.add_parser(group).add_subparsers(
+            dest="action", required=True
+        )
+        actions.add_parser("status")
+        change = actions.add_parser("set")
+        change.add_argument(group, choices=choices)
+        change.add_argument("--attended", action="store_true", required=True)
     media = commands.add_parser("media").add_subparsers(dest="action", required=True)
     for name in ("check", "download"):
         item = media.add_parser(name)
@@ -146,10 +154,10 @@ def run_device(arguments, run):
             "restart": "launcher-restart",
             "return-to-launcher": "launcher-return",
         }[action]
-    elif group == "mode":
-        operation = "mode-" + arguments.action
+    elif group in {"mode", "orientation"}:
+        operation = group + "-" + arguments.action
         if arguments.action == "set":
-            fields = {"mode": arguments.mode, "attended": arguments.attended}
+            fields = {group: getattr(arguments, group), "attended": arguments.attended}
     elif group == "display":
         operation = "display-" + arguments.action
         if arguments.action == "set":
@@ -159,7 +167,9 @@ def run_device(arguments, run):
     else:
         operation = "device-evidence"
     required = {"device-control-v1"}
-    if group == "input-probe":
+    if group == "orientation":
+        required.add("orientation-control-v1")
+    elif group == "input-probe":
         required = {"input-probe-passive-v1"}
     elif group == "application-install-inspect":
         required.add("application-install-inspect-v2")
