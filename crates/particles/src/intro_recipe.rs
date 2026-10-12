@@ -189,8 +189,8 @@ impl IntroRecipe {
 
 pub fn embedded_intro_recipe() -> Result<IntroRecipe, String> {
     let recipe = parse_intro_recipe(EMBEDDED_INTRO_RECIPE_JSON)?;
-    if recipe.total_ms != 20_000 {
-        return Err("embedded intro recipe must total exactly 20000ms".into());
+    if recipe.total_ms != 19_000 {
+        return Err("embedded intro recipe must total exactly 19000ms".into());
     }
     Ok(recipe)
 }
@@ -240,7 +240,7 @@ pub fn parse_intro_recipe(bytes: &[u8]) -> Result<IntroRecipe, String> {
         if cue.id().is_empty() || !ids.insert(cue.id()) {
             return Err("intro cue ids must be non-empty and unique".into());
         }
-        if cue.duration_ms() == 0 {
+        if cue.duration_ms() == 0 && !matches!(cue, IntroCue::HoldTarget { .. }) {
             return Err(format!("intro cue {:?} has zero duration", cue.id()));
         }
         total_ms = total_ms
@@ -427,9 +427,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_storyboard_is_exactly_twenty_seconds() {
+    fn embedded_storyboard_fades_within_one_second_of_launcher_formation() {
         let recipe = embedded_intro_recipe().unwrap();
-        assert_eq!(recipe.total_ms, 20_000);
+        assert_eq!(recipe.total_ms, 19_000);
+        assert_eq!(recipe.cue_at(18_000), (9, 0));
         assert_eq!(recipe.initial_particle_count, 102_400);
         assert_eq!(recipe.steady_particle_count, 40_960);
         assert_eq!(recipe.cue_at(12_000), (6, 0));

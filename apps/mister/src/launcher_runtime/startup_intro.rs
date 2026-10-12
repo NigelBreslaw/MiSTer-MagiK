@@ -21,7 +21,7 @@ use std::time::Duration;
 
 const DEFAULT_REFRESH_PERIOD_US: u64 = 16_667;
 pub const MORPH_START: Duration = Duration::from_secs(16);
-pub const FINAL_ELAPSED: Duration = Duration::from_secs(20);
+pub const FINAL_ELAPSED: Duration = Duration::from_secs(19);
 
 pub struct StartupIntroPlayback {
     scene: IntroScene,
@@ -114,13 +114,20 @@ impl StartupIntroPlayback {
         let height = self.scene.geometry().height();
         let recipe = self.scene.recipe().clone();
         let options = self.scene.options();
+        let morph_source = self.scene.launcher_morph_source();
         let (tx, rx) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("intro-snapshot".to_string())
             .spawn(move || {
                 apply_runtime_thread_policy(RuntimeThreadRole::StartupIntroSnapshot);
-                let prepared =
-                    IntroScene::prepare_launcher_snapshot(width, height, recipe, options, pixels);
+                let prepared = IntroScene::prepare_launcher_snapshot(
+                    width,
+                    height,
+                    recipe,
+                    options,
+                    pixels,
+                    morph_source,
+                );
                 let _ = tx.send(prepared);
             })
             .map_err(|error| format!("failed to start launcher snapshot preparation: {error}"))?;

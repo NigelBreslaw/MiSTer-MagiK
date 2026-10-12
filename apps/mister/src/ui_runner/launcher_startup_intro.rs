@@ -461,15 +461,15 @@ mod tests {
         };
 
         let (exact_session, exact) = run(None);
-        assert_eq!(exact.confirmed_frames, 1_200);
-        assert_eq!(exact.expected_refresh_intervals, 1_199);
+        assert_eq!(exact.confirmed_frames, 1_140);
+        assert_eq!(exact.expected_refresh_intervals, 1_139);
         assert_eq!(exact.software_estimated_dropped_frames, 0);
         assert_eq!(exact.pacing_failures, 0);
         assert_eq!(exact_session.elapsed(), FINAL_ELAPSED);
 
         let (dropped_session, dropped) = run(Some(600));
-        assert_eq!(dropped.confirmed_frames, 1_200);
-        assert_eq!(dropped.expected_refresh_intervals, 1_200);
+        assert_eq!(dropped.confirmed_frames, 1_140);
+        assert_eq!(dropped.expected_refresh_intervals, 1_140);
         assert_eq!(dropped.software_estimated_dropped_frames, 1);
         assert_eq!(dropped.pacing_failures, 0);
         assert_eq!(dropped_session.elapsed(), FINAL_ELAPSED);
@@ -546,8 +546,8 @@ mod tests {
     }
 
     #[test]
-    fn pal_and_ntsc_complete_at_exactly_twenty_storyboard_seconds() {
-        for (period_us, expected_frames) in [(16_667, 1_200), (20_000, 1_000)] {
+    fn pal_and_ntsc_complete_at_exactly_nineteen_storyboard_seconds() {
+        for (period_us, expected_frames) in [(16_667, 1_140), (20_000, 950)] {
             let mut session = test_session();
             let mut completed = None;
             for frame in 0..expected_frames {
