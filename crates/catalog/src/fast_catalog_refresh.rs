@@ -1414,7 +1414,7 @@ fn publish_refresh_state_with_report_held(
     report.fingerprint_us = fingerprint_started.elapsed().as_micros() as u64;
     let watch_relative = format!("packs/{generation}.watchpack");
     let write_started = std::time::Instant::now();
-    write_new_file(&root, &root.join(&watch_relative), &pack_bytes)?;
+    write_new_file_before_filesystem_sync(&root, &root.join(&watch_relative), &pack_bytes)?;
     report.write_us = write_started.elapsed().as_micros() as u64;
     for (state, source_fingerprint) in systems.iter().zip(pack_watch_fingerprints) {
         references.push(FastRefreshSystemRef {
@@ -3298,13 +3298,24 @@ fn refresh_pack_is_referenced(root: &Path, path: &Path) -> bool {
 }
 
 fn write_new_file(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
-    write_new_file_with_writer(root, path, bytes, write_synced)
+    write_new_file_with_writer(root, path, bytes, true, write_synced)
+}
+
+/// Like `write_new_file`, for a caller that runs `sync_filesystem` before the
+/// file is referenced, which makes the per-file parent sync redundant.
+fn write_new_file_before_filesystem_sync(
+    root: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), String> {
+    write_new_file_with_writer(root, path, bytes, false, write_synced)
 }
 
 fn write_new_file_with_writer(
     root: &Path,
     path: &Path,
     bytes: &[u8],
+    sync_parent: bool,
     write: impl FnOnce(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     if path.exists() {
@@ -3349,7 +3360,7 @@ fn write_new_file_with_writer(
         Ok(()) => {
             #[cfg(test)]
             publication_barrier("after_rename_before_parent_sync", path);
-            if let Some(parent) = path.parent() {
+            if sync_parent && let Some(parent) = path.parent() {
                 sync_directory(parent)?;
             }
             Ok(())
@@ -4408,10 +4419,13 @@ mod tests {
             let root = crate::test_support::unique_temp_dir(&format!("fast-publication-{label}"));
             let path = root.join("packs/1.watchpack");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            let result =
-                write_new_file_with_writer(&root, &path, b"replacement", |temporary, bytes| {
-                    write_partial_then_fail(temporary, bytes, error)
-                });
+            let result = write_new_file_with_writer(
+                &root,
+                &path,
+                b"replacement",
+                true,
+                |temporary, bytes| write_partial_then_fail(temporary, bytes, error),
+            );
             assert!(result.is_err());
             assert!(!path.exists());
             assert!(
