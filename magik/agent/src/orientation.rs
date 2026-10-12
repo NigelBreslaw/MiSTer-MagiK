@@ -84,7 +84,7 @@ fn change(
     mut lifecycle: impl FnMut(bool) -> Result<Value, String>,
 ) -> Result<Value, String> {
     // Suspend before reading so no launcher writer can race this edit.
-    let prepared = (|| {
+    let (original, next) = (|| {
         lifecycle(false)?;
         let original = read(path)?;
         let mut value = document(original.as_deref())?;
@@ -94,11 +94,8 @@ fn change(
             return Err("updated orientation settings exceed 64 KiB".into());
         }
         Ok::<_, String>((original, next))
-    })();
-    let (original, next) = match prepared {
-        Ok(prepared) => prepared,
-        Err(error) => return Err(format!("{error}; Main resumption: {:?}", lifecycle(true))),
-    };
+    })()
+    .map_err(|error| format!("{error}; Main resumption: {:?}", lifecycle(true)))?;
     let result = write(path, Some(&next)).and_then(|()| lifecycle(true));
     match result {
         Ok(state) => Ok(json!({"configured_orientation": orientation, "main_status": state})),

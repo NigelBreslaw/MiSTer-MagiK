@@ -28,18 +28,17 @@ def catalog_database(value):
 
 
 def add_commands(commands):
-    orientation = commands.add_parser("orientation").add_subparsers(
-        dest="action", required=True
-    )
-    orientation.add_parser("status")
-    change = orientation.add_parser("set")
-    change.add_argument("orientation", choices=ORIENTATIONS)
-    change.add_argument("--attended", action="store_true", required=True)
-    mode = commands.add_parser("mode").add_subparsers(dest="action", required=True)
-    mode.add_parser("status")
-    change = mode.add_parser("set")
-    change.add_argument("mode", choices=("dev", "public", "stock"))
-    change.add_argument("--attended", action="store_true", required=True)
+    for group, choices in (
+        ("orientation", ORIENTATIONS),
+        ("mode", ("dev", "public", "stock")),
+    ):
+        actions = commands.add_parser(group).add_subparsers(
+            dest="action", required=True
+        )
+        actions.add_parser("status")
+        change = actions.add_parser("set")
+        change.add_argument(group, choices=choices)
+        change.add_argument("--attended", action="store_true", required=True)
     media = commands.add_parser("media").add_subparsers(dest="action", required=True)
     for name in ("check", "download"):
         item = media.add_parser(name)
