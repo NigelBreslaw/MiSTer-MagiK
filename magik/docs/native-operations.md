@@ -42,9 +42,14 @@ the same Dev journey in HDMI 1080p and then CRT 240p:
 scripts/magik device orientation set normal --attended
 scripts/magik device display set hdmi-1920x1080p60 --attended
 MAGIK_EXPECT_DISPLAY_MODE=hdmi-1920x1080p60 scripts/magik check journeys
+DEV_SHA256=$(shasum -a 256 apps/mister/target/armv7-unknown-linux-gnueabihf/release-device-ui-tests/mister-magik-fb | cut -d " " -f 1)
 scripts/magik device display set crt-240p60 --attended
-MAGIK_EXPECT_DISPLAY_MODE=crt-240p60 scripts/magik check journeys
+MAGIK_EXPECT_DISPLAY_MODE=crt-240p60 scripts/magik check journeys --installed-sha256 "$DEV_SHA256"
 ```
+
+The first check prepares and delivers the application once. Each journey opens a
+fresh test lease pinned to that binary; the CRT check verifies and reuses the
+same installed SHA-256 without building or deploying again.
 
 For an already-running test-enabled Dev binary, append `--installed-sha256 HASH`
 to each check to avoid a build/deployment. The mode guard checks the requested mode

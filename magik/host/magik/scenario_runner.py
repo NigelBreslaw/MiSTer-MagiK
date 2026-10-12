@@ -107,17 +107,22 @@ def magik_run(request):
 
 
 @pytest.fixture(scope="session")
-def application_session(request, magik_run):
-    yield from _application_session(request, magik_run)
+def prepared_application(request, magik_run):
+    return _prepare_application(request, magik_run)
+
+
+@pytest.fixture(scope="session")
+def application_session(request, magik_run, prepared_application):
+    yield from _application_session(request, magik_run, prepared_application)
 
 
 @pytest.fixture
-def journey_application_session(request, magik_run):
+def journey_application_session(request, magik_run, prepared_application):
     # Each reversible journey stays inside the native 60-second test lease.
-    yield from _application_session(request, magik_run)
+    yield from _application_session(request, magik_run, prepared_application)
 
 
-def _application_session(request, magik_run):
+def _prepare_application(request, magik_run):
     from .cli import (
         connect_agent,
         ensure_application,
@@ -125,11 +130,10 @@ def _application_session(request, magik_run):
         PROFILE_AGENT_CAPABILITIES,
     )
 
-    from .apps import application, validate_renderer_context
-    from .measurement_contract import expected_display_mode, verify_display
+    from .apps import application
+    from .measurement_contract import expected_display_mode
 
     profiled = request.config.getoption("--magik-profile")
-    profile_id = f"{magik_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
     evidence_capabilities = (
         {"metrics-body-32m-v1"}
         if request.config.getoption("--magik-frame-evidence") != "off"
@@ -174,6 +178,15 @@ def _application_session(request, magik_run):
     except Exception:
         retain_diagnostics(magik_run, agent)
         raise
+    return agent
+
+
+def _application_session(request, magik_run, agent):
+    from .apps import validate_renderer_context
+    from .measurement_contract import verify_display
+
+    profiled = request.config.getoption("--magik-profile")
+    profile_id = f"{magik_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
     verify_display(agent, magik_run, "before-session")
     with managed_session(
         agent, magik_run, profile_id, "shared application session"

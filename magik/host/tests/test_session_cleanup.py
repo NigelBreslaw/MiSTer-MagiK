@@ -93,7 +93,7 @@ def test_extended_metrics_capability_is_negotiated_only_for_detailed_capture(
     connect = Mock(side_effect=RuntimeError("stop before device connection"))
     monkeypatch.setattr(cli, "connect_agent", connect)
     with pytest.raises(RuntimeError, match="stop before device connection"):
-        next(scenario_runner._application_session(request, tmp_path))
+        scenario_runner._prepare_application(request, tmp_path)
     assert ("metrics-body-32m-v1" in connect.call_args.args[1]) is required
 
 
@@ -138,7 +138,8 @@ def test_real_session_validates_renderer_before_scenario(
         yield "app"
 
     monkeypatch.setattr(scenario_runner, "managed_session", session)
-    generator = scenario_runner._application_session(request, tmp_path)
+    agent = scenario_runner._prepare_application(request, tmp_path)
+    generator = scenario_runner._application_session(request, tmp_path, agent)
     if matching:
         assert next(generator)[0] == "app"
         generator.close()
