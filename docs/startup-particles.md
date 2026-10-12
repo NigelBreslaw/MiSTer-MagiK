@@ -82,9 +82,13 @@ The final handoff is derived only from the production launcher's live frame:
    up to 40,960 HDMI or 20,480 CRT launcher particle positions and colors without
    blocking CPU1. No
    design-time launcher image or point cloud is embedded. Targets exclude black
-   and the dominant background color; sparse frames use fewer particles rather
-   than filling the quota with background. Each particle retains the selected
-   pixel's original RGB565 color, without mapping it to the intro palette.
+   and the dominant background color; sparse frames use fewer unique targets
+   rather than filling the quota with background. Every cabinet particle remains
+   in the morph and converges onto those targets; the static formation then draws
+   each selected pixel once. Each target retains the selected pixel's original
+   RGB565 color and raster offset, without mapping it to the intro palette or
+   deriving its final pixel offset from floating-point projection. Snapshot
+   retries always resample the immutable final cabinet pose.
 2. If no usable launcher frame exists at 16 seconds, logical storyboard time
    pauses and the fully formed cabinet keeps spinning at the resolved physical
    refresh cadence. Each four-second
