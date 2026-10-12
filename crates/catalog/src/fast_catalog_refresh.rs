@@ -406,13 +406,14 @@ fn build_tmpfs_artifacts(
 }
 
 /// Marks building finished even if the builder thread unwinds, so publication
-/// never waits forever for a system that will not arrive.
+/// never waits forever for a system that will not arrive. After a normal
+/// finish this is a no-op.
 struct FinishPrebuilt<'a>(&'a crate::fast_five_catalog::PrebuiltArtifacts);
 
 impl Drop for FinishPrebuilt<'_> {
     fn drop(&mut self) {
         self.0
-            .finish_if_unfinished("artifact builder stopped unexpectedly");
+            .finish(Some("artifact builder stopped unexpectedly".into()));
     }
 }
 

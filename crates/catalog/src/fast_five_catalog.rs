@@ -490,6 +490,7 @@ pub(crate) struct PrebuiltSystemArtifacts {
 pub(crate) struct PrebuiltArtifacts {
     state: std::sync::Mutex<PrebuiltState>,
     changed: std::sync::Condvar,
+    cancelled: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(feature = "builder")]
@@ -497,70 +498,45 @@ pub(crate) struct PrebuiltArtifacts {
 struct PrebuiltState {
     systems: BTreeMap<String, PrebuiltSystemArtifacts>,
     finished: bool,
-    cancelled: bool,
     failure: Option<String>,
 }
 
 #[cfg(feature = "builder")]
 impl PrebuiltArtifacts {
-    /// Artifacts that are already complete.
-    #[cfg(test)]
-    pub(crate) fn complete(systems: BTreeMap<String, PrebuiltSystemArtifacts>) -> Self {
-        let artifacts = Self::default();
-        artifacts.update(|state| {
-            state.systems = systems;
-            state.finished = true;
-        });
-        artifacts
-    }
-
-    fn update(&self, change: impl FnOnce(&mut PrebuiltState)) {
-        let mut state = self.state.lock().expect("prebuilt artifact state poisoned");
-        change(&mut state);
-        self.changed.notify_all();
+    fn lock(&self) -> std::sync::MutexGuard<'_, PrebuiltState> {
+        self.state.lock().expect("prebuilt artifact state poisoned")
     }
 
     pub(crate) fn publish(&self, system_id: String, artifacts: PrebuiltSystemArtifacts) {
-        self.update(|state| {
-            state.systems.insert(system_id, artifacts);
-        });
+        self.lock().systems.insert(system_id, artifacts);
+        self.changed.notify_all();
     }
 
-    /// Mark building finished. The first failure is kept.
+    /// Mark building finished, with a failure if it failed. The first call
+    /// wins, so a builder thread that unwinds can call this from a guard
+    /// without overwriting a normal finish.
     pub(crate) fn finish(&self, failure: Option<String>) {
-        self.update(|state| {
+        let mut state = self.lock();
+        if !state.finished {
             state.finished = true;
-            if state.failure.is_none() {
-                state.failure = failure;
-            }
-        });
-    }
-
-    /// Mark building failed only if it never finished, such as a builder
-    /// thread that unwound; a normal finish is left untouched.
-    pub(crate) fn finish_if_unfinished(&self, failure: &str) {
-        self.update(|state| {
-            if !state.finished {
-                state.finished = true;
-                state.failure = Some(failure.to_string());
-            }
-        });
+            state.failure = failure;
+        }
+        drop(state);
+        self.changed.notify_all();
     }
 
     /// Ask the builder to stop; publication no longer needs its output.
     pub(crate) fn cancel(&self) {
-        self.update(|state| state.cancelled = true);
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.state
-            .lock()
-            .expect("prebuilt artifact state poisoned")
-            .cancelled
+        self.cancelled.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn wait_for(&self, system_id: &str) -> Result<PrebuiltSystemArtifacts, String> {
-        let mut state = self.state.lock().expect("prebuilt artifact state poisoned");
+        let mut state = self.lock();
         loop {
             if let Some(artifacts) = state.systems.get(system_id) {
                 return Ok(artifacts.clone());
@@ -1633,13 +1609,20 @@ mod builder_tests {
     fn finishing_normally_is_not_overwritten_by_the_unwind_guard() {
         let artifacts = PrebuiltArtifacts::default();
         artifacts.finish(None);
-        artifacts.finish_if_unfinished("builder stopped");
+        artifacts.finish(Some("builder stopped".into()));
         let error = artifacts.wait_for("snes").unwrap_err();
         assert!(error.contains("missing a system artifact pair"), "{error}");
 
         let unwound = PrebuiltArtifacts::default();
-        unwound.finish_if_unfinished("builder stopped");
+        unwound.finish(Some("builder stopped".into()));
+        unwound.finish(None);
         assert_eq!(unwound.wait_for("snes").unwrap_err(), "builder stopped");
+    }
+
+    fn finished_artifacts() -> PrebuiltArtifacts {
+        let artifacts = PrebuiltArtifacts::default();
+        artifacts.finish(None);
+        artifacts
     }
 
     #[test]
@@ -1659,7 +1642,7 @@ mod builder_tests {
             None,
             crate::shard_registry::production_registry_limits(),
             FastFiveArtifactProfile::SearchOnly,
-            Some(&PrebuiltArtifacts::complete(BTreeMap::new())),
+            Some(&finished_artifacts()),
             |_, _| {},
         )
         .expect_err("fresh prebuilt publication must not fall back to inline builds");
