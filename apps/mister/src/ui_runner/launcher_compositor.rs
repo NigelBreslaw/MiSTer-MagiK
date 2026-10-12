@@ -1900,8 +1900,11 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
             // Advance to the last 60 Hz crossfade frame before handoff.
-            for _ in 0..1199 {
-                assert!(!intro.note_presented(16_667));
+            let refresh_period_us = 16_667;
+            let refresh_period = Duration::from_micros(refresh_period_us);
+            let final_elapsed = crate::launcher_runtime::startup_intro::FINAL_ELAPSED;
+            while intro.elapsed() + refresh_period < final_elapsed {
+                assert!(!intro.note_presented(refresh_period_us));
             }
             for slot in 0..2 {
                 let mut hidden_pixels = vec![Rgb565Pixel(0); expected.len()];
@@ -1913,6 +1916,8 @@ mod tests {
                     "particle endpoint must be the live card frame in both hidden slots"
                 );
             }
+            assert!(intro.note_presented(refresh_period_us));
+            assert_eq!(intro.elapsed(), final_elapsed);
             layer.render_black();
             assert!(intro.restore_handoff_snapshot(layer.target.cached_565_mut()));
             assert_eq!(layer.presentation_frame_view().pixels(), expected);
