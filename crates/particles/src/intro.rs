@@ -68,8 +68,7 @@ pub struct PreparedLauncherSnapshot {
     launcher_source_q5: QuantizedPointCloud,
     launcher_snapshot: Vec<Rgb565Pixel>,
     launcher_commands: Vec<PointCloudDrawCommand>,
-    launcher_thresholds: Vec<u8>,
-    crossfade_visible_counts: [usize; 65],
+    launcher_visible_count: usize,
     crossfade_buckets: Vec<Vec<u32>>,
 }
 
@@ -131,7 +130,6 @@ enum IntroSlotState {
     #[default]
     Uninitialized,
     Dynamic,
-    LauncherPoints,
     Crossfade(u8),
     Snapshot,
 }
@@ -201,9 +199,8 @@ pub struct IntroScene {
     launcher_colors: Vec<Rgb565Pixel>,
     launcher_ready: bool,
     launcher_commands: Vec<PointCloudDrawCommand>,
-    launcher_thresholds: Vec<u8>,
     launcher_mix_thresholds: Vec<u16>,
-    crossfade_visible_counts: [usize; 65],
+    launcher_visible_count: usize,
     crossfade_buckets: Vec<Vec<u32>>,
     slot_states: [IntroSlotState; 2],
     static_xy: Vec<[f32; 2]>,
@@ -393,23 +390,6 @@ impl IntroScene {
             geometry,
             options.projection_scale,
         );
-        let launcher_thresholds: Vec<u8> = launcher_commands
-            .iter()
-            .map(|command| {
-                command.offset().map_or(64, |offset| {
-                    bayer8(offset % geometry.width(), offset / geometry.width())
-                })
-            })
-            .collect();
-        let crossfade_visible_counts = std::array::from_fn(|threshold| {
-            launcher_commands
-                .iter()
-                .zip(&launcher_thresholds)
-                .filter(|(command, particle_threshold)| {
-                    command.offset().is_some() && usize::from(**particle_threshold) >= threshold
-                })
-                .count()
-        });
         let launcher_mix_thresholds = (0..steady_particle_count)
             .map(|index| (mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff) as u16)
             .collect();
@@ -477,9 +457,8 @@ impl IntroScene {
             launcher_colors: Vec::new(),
             launcher_ready: false,
             launcher_commands,
-            launcher_thresholds,
             launcher_mix_thresholds,
-            crossfade_visible_counts,
+            launcher_visible_count: 0,
             crossfade_buckets,
             slot_states: [IntroSlotState::Uninitialized; 2],
             static_xy,
@@ -567,24 +546,6 @@ impl IntroScene {
             geometry,
             options.projection_scale,
         );
-        let launcher_thresholds = launcher_commands
-            .iter()
-            .map(|command| {
-                command.offset().map_or(64, |offset| {
-                    bayer8(offset % geometry.width(), offset / geometry.width())
-                })
-            })
-            .collect::<Vec<_>>();
-        let crossfade_visible_counts = std::array::from_fn(|threshold| {
-            launcher_commands
-                .iter()
-                .zip(&launcher_thresholds)
-                .filter(|(command, particle_threshold)| {
-                    command.offset().is_some() && usize::from(**particle_threshold) >= threshold
-                })
-                .count()
-        });
-
         // The formed particles already have their exact final colors. Only
         // missing pixels need revealing; black background stays untouched.
         let mut formed = vec![false; geometry.len()];
@@ -611,8 +572,7 @@ impl IntroScene {
             launcher_source_q5,
             launcher_snapshot: pixels,
             launcher_commands,
-            launcher_thresholds,
-            crossfade_visible_counts,
+            launcher_visible_count: formed.iter().filter(|&&pixel| pixel).count(),
             crossfade_buckets,
         })
     }
@@ -635,8 +595,7 @@ impl IntroScene {
         self.launcher_source = prepared.launcher_source;
         self.launcher_source_q5 = prepared.launcher_source_q5;
         self.launcher_commands = prepared.launcher_commands;
-        self.launcher_thresholds = prepared.launcher_thresholds;
-        self.crossfade_visible_counts = prepared.crossfade_visible_counts;
+        self.launcher_visible_count = prepared.launcher_visible_count;
         self.crossfade_buckets = prepared.crossfade_buckets;
         self.launcher_ready = true;
         self.slot_states = [IntroSlotState::Uninitialized; 2];
@@ -789,25 +748,18 @@ impl IntroScene {
         target: ScenePointTarget,
         frame: u64,
     ) -> IntroRenderResult {
-        let text_palette_mix =
-            matches!(target, ScenePointTarget::Mister | ScenePointTarget::Magik).then_some(0.0);
         let (target, commands) = match target {
             ScenePointTarget::Mister => (&self.mister, &self.mister_commands),
             ScenePointTarget::Magik => (&self.magik, &self.magik_commands),
-            ScenePointTarget::Launcher => (&self.launcher, &self.launcher_commands),
         };
         raster_point_commands(
             destination,
             &self.recipe,
             self.geometry,
             &target.positions,
-            if text_palette_mix.is_some() {
-                PointColors::Palette(&target.palette)
-            } else {
-                PointColors::Rgb565(&self.launcher_colors)
-            },
+            PointColors::Palette(&target.palette),
             commands,
-            text_palette_mix,
+            Some(0.0),
             false,
             frame,
             None,
@@ -1137,7 +1089,6 @@ impl IntroScene {
             );
         }
         let previous_threshold = match previous {
-            IntroSlotState::LauncherPoints => Some(0),
             IntroSlotState::Crossfade(threshold) => Some(threshold),
             _ => None,
         };
@@ -1159,7 +1110,7 @@ impl IntroScene {
                 IntroSlotState::Crossfade(threshold)
             };
             return IntroRenderResult::raster_only(
-                self.crossfade_visible_counts[usize::from(threshold)],
+                self.launcher_visible_count,
                 writes,
                 "launcher-static-crossfade",
                 elapsed_us(raster_started.elapsed()),
@@ -1187,7 +1138,7 @@ impl IntroScene {
             IntroSlotState::Crossfade(threshold)
         };
         IntroRenderResult::raster_only(
-            self.crossfade_visible_counts[usize::from(threshold)],
+            self.launcher_visible_count,
             writes,
             "launcher-static-crossfade",
             elapsed_us(raster_started.elapsed()),
@@ -1401,8 +1352,7 @@ impl FramebufferScene for IntroScene {
                 "live launcher snapshot was not installed before the morph cue".into(),
             ));
         }
-        let incremental_frame =
-            matches!(&cue, IntroCue::LauncherCrossfade { .. }) || cue_index == 8;
+        let incremental_frame = matches!(&cue, IntroCue::LauncherCrossfade { .. });
         let clear_us = if incremental_frame {
             0
         } else {
@@ -1486,26 +1436,6 @@ impl FramebufferScene for IntroScene {
                 *easing,
                 clock.frame,
             ),
-            IntroCue::HoldTarget { .. } if cue_index == 8 => {
-                if self.slot_states[buffer_id] == IntroSlotState::LauncherPoints {
-                    IntroRenderResult::raster_only(0, 0, "launcher-static-particles", 0)
-                } else {
-                    let raster_started = Instant::now();
-                    target
-                        .pixels_mut()
-                        .fill(Rgb565Pixel(self.recipe.appearance.background.0));
-                    let mut result = self.render_point_target(
-                        target.pixels_mut(),
-                        ScenePointTarget::Launcher,
-                        clock.frame,
-                    );
-                    result.pixel_writes = result.pixel_writes.saturating_add(self.geometry.len());
-                    result.raster_us = elapsed_us(raster_started.elapsed());
-                    result.projection_backend = "launcher-static-particles";
-                    self.slot_states[buffer_id] = IntroSlotState::LauncherPoints;
-                    result
-                }
-            }
             IntroCue::LauncherCrossfade {
                 duration_ms,
                 easing,
@@ -1522,7 +1452,7 @@ impl FramebufferScene for IntroScene {
                 let point_target = match cue_index {
                     0..=3 => ScenePointTarget::Mister,
                     4 => ScenePointTarget::Magik,
-                    _ => ScenePointTarget::Launcher,
+                    _ => return Err(SceneError::Render("unsupported intro cue".into())),
                 };
                 self.render_point_target(target.pixels_mut(), point_target, clock.frame)
             }
@@ -1573,7 +1503,6 @@ enum TargetScale {
 enum ScenePointTarget {
     Mister,
     Magik,
-    Launcher,
 }
 
 fn decode_target(
@@ -2210,7 +2139,6 @@ const fn cue_label(index: usize) -> &'static str {
         5 => "letters-to-cabinet",
         6 => "cabinet-orbit",
         7 => "form-launcher",
-        8 => "hold-launcher-particles",
         _ => "crossfade-launcher",
     }
 }

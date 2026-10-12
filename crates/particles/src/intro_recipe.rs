@@ -240,7 +240,7 @@ pub fn parse_intro_recipe(bytes: &[u8]) -> Result<IntroRecipe, String> {
         if cue.id().is_empty() || !ids.insert(cue.id()) {
             return Err("intro cue ids must be non-empty and unique".into());
         }
-        if cue.duration_ms() == 0 && !matches!(cue, IntroCue::HoldTarget { .. }) {
+        if cue.duration_ms() == 0 {
             return Err(format!("intro cue {:?} has zero duration", cue.id()));
         }
         total_ms = total_ms
@@ -334,7 +334,6 @@ fn validate_storyboard(cues: &[IntroCue]) -> Result<(), String> {
         "cloud",
         "target_orbit",
         "morph_target",
-        "hold_target",
         "launcher_crossfade",
     ];
     if kinds != expected {
@@ -430,11 +429,11 @@ mod tests {
     fn embedded_storyboard_fades_within_one_second_of_launcher_formation() {
         let recipe = embedded_intro_recipe().unwrap();
         assert_eq!(recipe.total_ms, 19_000);
-        assert_eq!(recipe.cue_at(18_000), (9, 0));
+        assert_eq!(recipe.cue_at(18_000), (8, 0));
         assert_eq!(recipe.initial_particle_count, 102_400);
         assert_eq!(recipe.steady_particle_count, 40_960);
         assert_eq!(recipe.cue_at(12_000), (6, 0));
-        assert_eq!(recipe.cue_at(20_100), (9, 1_000));
+        assert_eq!(recipe.cue_at(20_100), (8, 1_000));
         let IntroCue::Cloud {
             stagger_ms,
             formation_start_percent,
