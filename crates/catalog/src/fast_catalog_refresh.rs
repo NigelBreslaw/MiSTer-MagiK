@@ -411,8 +411,18 @@ struct FinishPrebuilt<'a>(&'a crate::fast_five_catalog::PrebuiltArtifacts);
 impl Drop for FinishPrebuilt<'_> {
     fn drop(&mut self) {
         self.0
-            .finish(Some("artifact builder stopped unexpectedly".into()));
+            .finish_if_unfinished("artifact builder stopped unexpectedly");
     }
+}
+
+/// Publication's own error comes first: it cancels the builder on failure, so
+/// the builder's "cancelled" error would otherwise hide the real cause.
+fn publication_then_build<P, B>(
+    publication: Result<P, String>,
+    build: Result<B, String>,
+) -> Result<(P, B), String> {
+    let publication = publication?;
+    Ok((publication, build?))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -526,7 +536,7 @@ pub fn build_fresh_catalog_with_presentation_progress(
     // single reader/writer.
     let (publication_result, build_result) = std::thread::scope(|scope| {
         let builder = scope.spawn(|| {
-            let finish = FinishPrebuilt(&prebuilt);
+            let _finish_on_unwind = FinishPrebuilt(&prebuilt);
             crate::runtime_thread::apply_runtime_thread_policy(
                 crate::runtime_thread::RuntimeThreadRole::CatalogShardPublisher,
             );
@@ -539,7 +549,6 @@ pub fn build_fresh_catalog_with_presentation_progress(
                 &prebuilt,
             );
             prebuilt.finish(result.as_ref().err().cloned());
-            drop(finish);
             result
         });
         let publication = crate::fast_five_catalog::prepare_snapshot_for_refresh(
@@ -560,8 +569,8 @@ pub fn build_fresh_catalog_with_presentation_progress(
             .unwrap_or_else(|_| Err("artifact builder panicked".into()));
         (publication, build)
     });
-    let mut tmpfs_artifact_build = build_result?;
-    let (mut pending, publication) = publication_result?;
+    let ((mut pending, publication), mut tmpfs_artifact_build) =
+        publication_then_build(publication_result, build_result)?;
     tmpfs_artifact_build.copied_bytes = publication.copied_bytes;
     tmpfs_artifact_build.copy_hash_us = publication.copy_hash_us;
     drop(prebuilt);
@@ -4610,6 +4619,20 @@ mod tests {
         assert!(root.exists());
         drop(staging);
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn a_publication_failure_is_not_hidden_by_the_cancelled_builder() {
+        let error = publication_then_build::<(), ()>(
+            Err("publish snes shard: disk full".into()),
+            Err("artifact building cancelled".into()),
+        )
+        .unwrap_err();
+        assert_eq!(error, "publish snes shard: disk full");
+        let error =
+            publication_then_build(Ok(1), Err::<(), _>("invalid system".into())).unwrap_err();
+        assert_eq!(error, "invalid system");
+        assert_eq!(publication_then_build(Ok(1), Ok(2)).unwrap(), (1, 2));
     }
 
     #[test]

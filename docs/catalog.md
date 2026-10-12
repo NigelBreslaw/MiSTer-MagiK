@@ -126,7 +126,10 @@ A fresh build:
 3. invokes prepared adapters for known collections, with OneLoad64 likewise
    deriving rows and refresh watches from one namespace inventory;
 4. validates launchability and canonicalizes rows;
-5. writes one NavPack and one search SQLite database per system;
+5. writes one NavPack and one search SQLite database per system: a builder
+   thread (CPU1) prepares each pair in tmpfs while the catalog thread copies
+   the previous pair to the SD card, so CPU-bound preparation overlaps SD-bound
+   publication and the card still has one reader/writer;
 6. publishes the active catalog manifest;
 7. captures any remaining fallback watch indexes and all row snapshots for
    later refreshes.

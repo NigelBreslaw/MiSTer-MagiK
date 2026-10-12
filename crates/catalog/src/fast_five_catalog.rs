@@ -536,6 +536,17 @@ impl PrebuiltArtifacts {
         });
     }
 
+    /// Mark building failed only if it never finished, such as a builder
+    /// thread that unwound; a normal finish is left untouched.
+    pub(crate) fn finish_if_unfinished(&self, failure: &str) {
+        self.update(|state| {
+            if !state.finished {
+                state.finished = true;
+                state.failure = Some(failure.to_string());
+            }
+        });
+    }
+
     /// Ask the builder to stop; publication no longer needs its output.
     pub(crate) fn cancel(&self) {
         self.update(|state| state.cancelled = true);
@@ -1588,6 +1599,19 @@ mod builder_tests {
         drop(lease);
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(staging_root).unwrap();
+    }
+
+    #[test]
+    fn finishing_normally_is_not_overwritten_by_the_unwind_guard() {
+        let artifacts = PrebuiltArtifacts::default();
+        artifacts.finish(None);
+        artifacts.finish_if_unfinished("builder stopped");
+        let error = artifacts.wait_for("snes").unwrap_err();
+        assert!(error.contains("missing a system artifact pair"), "{error}");
+
+        let unwound = PrebuiltArtifacts::default();
+        unwound.finish_if_unfinished("builder stopped");
+        assert_eq!(unwound.wait_for("snes").unwrap_err(), "builder stopped");
     }
 
     #[test]
