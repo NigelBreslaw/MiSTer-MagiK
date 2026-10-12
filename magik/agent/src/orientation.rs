@@ -84,10 +84,8 @@ fn change(
     mut lifecycle: impl FnMut(bool) -> Result<Value, String>,
 ) -> Result<Value, String> {
     // Suspend before reading so no launcher writer can race this edit.
-    if let Err(error) = lifecycle(false) {
-        return Err(format!("{error}; Main resumption: {:?}", lifecycle(true)));
-    }
     let prepared = (|| {
+        lifecycle(false)?;
         let original = read(path)?;
         let mut value = document(original.as_deref())?;
         value["screen_orientation"] = orientation.into();
