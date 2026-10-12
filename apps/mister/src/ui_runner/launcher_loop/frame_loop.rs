@@ -7233,6 +7233,7 @@ impl<'a> FrameLoop<'a> {
                 self.out
                     .launcher_presenter
                     .invalidate_external_hidden_mode();
+                let logical_elapsed_ms = intro.elapsed().as_millis();
                 self.fx.startup_intro = None;
                 self.env.window.request_redraw();
                 print_startup_event(
@@ -7240,13 +7241,14 @@ impl<'a> FrameLoop<'a> {
                     "startup_intro_completed",
                     format!(
                         concat!(
-                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} ",
+                            "frames={} logical_elapsed_ms={} cabinet_wait_frames={} ",
                             "expected_refresh_intervals={} ",
                             "dropped_frames={} ",
                             "software_estimated_dropped_frames={} pacing_failures={} ",
                             "max_confirmation_gap_us={} cadence_qualified={} cadence_error={}"
                         ),
                         software_cadence.confirmed_frames,
+                        logical_elapsed_ms,
                         software_cadence.cabinet_wait_frames,
                         software_cadence.expected_refresh_intervals,
                         dropped_frames,

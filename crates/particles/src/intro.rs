@@ -367,29 +367,17 @@ impl IntroScene {
                 ]
             })
             .collect::<Vec<_>>();
-        let launcher_source_q5 = QuantizedPointCloud::from_positions(&launcher_source);
-        // The production launcher target is installed from its live off-screen
-        // RGB565 frame before the morph cue. Until then these same-sized
-        // placeholders keep all render storage allocated without embedding a
-        // design-time launcher image.
+        // Only the cabinet pose is needed before the worker installs the live
+        // launcher target. Allocate its clouds and commands in that worker.
+        let launcher_source_q5 = QuantizedPointCloud::from_positions(&[]);
         let launcher = PointTarget {
-            positions: launcher_source.clone(),
-            palette: vec![0; cabinet_particle_count],
-            groups: vec![ParticleGroupSpan {
-                id: 0,
-                start: 0,
-                count: cabinet_particle_count,
-            }],
+            positions: Vec::new(),
+            palette: Vec::new(),
+            groups: Vec::new(),
         };
-        let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
-        let launcher_snapshot =
-            vec![Rgb565Pixel(recipe.appearance.background.0); width.saturating_mul(height)];
-        let launcher_commands = prepare_target_commands(
-            &launcher.positions,
-            &recipe,
-            geometry,
-            options.projection_scale,
-        );
+        let launcher_q5 = QuantizedPointCloud::from_positions(&[]);
+        let launcher_snapshot = Vec::new();
+        let launcher_commands = Vec::new();
         let launcher_mix_thresholds = (0..steady_particle_count)
             .map(|index| (mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff) as u16)
             .collect();
@@ -1074,7 +1062,6 @@ impl IntroScene {
         cue_elapsed_ms: u64,
         duration_ms: u64,
         easing: RecipeEasing,
-        _frame: u64,
     ) -> IntroRenderResult {
         let raster_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
@@ -1088,45 +1075,26 @@ impl IntroScene {
                 elapsed_us(raster_started.elapsed()),
             );
         }
+        let mut writes = 0;
         let previous_threshold = match previous {
-            IntroSlotState::Crossfade(threshold) => Some(threshold),
-            _ => None,
-        };
-        if let Some(previous_threshold) = previous_threshold
-            && previous_threshold <= threshold
-        {
-            let mut writes = 0;
-            for bucket in
-                &self.crossfade_buckets[usize::from(previous_threshold)..usize::from(threshold)]
-            {
-                for &offset in bucket {
-                    destination[offset as usize] = self.launcher_snapshot[offset as usize];
-                    writes += 1;
-                }
+            IntroSlotState::Crossfade(previous_threshold) if previous_threshold <= threshold => {
+                previous_threshold
             }
-            self.slot_states[buffer_id] = if threshold == 64 {
-                IntroSlotState::Snapshot
-            } else {
-                IntroSlotState::Crossfade(threshold)
-            };
-            return IntroRenderResult::raster_only(
-                self.launcher_visible_count,
-                writes,
-                "launcher-static-crossfade",
-                elapsed_us(raster_started.elapsed()),
-            );
-        }
-
-        destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
-        let mut writes = destination.len();
-        for (index, command) in self.launcher_commands.iter().copied().enumerate() {
-            let Some(offset) = command.offset() else {
-                continue;
-            };
-            destination[offset] = self.launcher_colors[index];
-            writes += 1;
-        }
-        for bucket in &self.crossfade_buckets[..usize::from(threshold)] {
+            _ => {
+                destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
+                writes += destination.len();
+                for (index, command) in self.launcher_commands.iter().copied().enumerate() {
+                    if let Some(offset) = command.offset() {
+                        destination[offset] = self.launcher_colors[index];
+                        writes += 1;
+                    }
+                }
+                0
+            }
+        };
+        for bucket in
+            &self.crossfade_buckets[usize::from(previous_threshold)..usize::from(threshold)]
+        {
             for &offset in bucket {
                 destination[offset as usize] = self.launcher_snapshot[offset as usize];
                 writes += 1;
@@ -1215,15 +1183,6 @@ fn render_point_cloud(
     let backend = if vector_end > 0 {
         "point-cloud-neon"
     } else {
-        for index in 0..target_positions.len() {
-            commands[index] = project_yaw_command(
-                target_positions[index],
-                yaw_sin_cos,
-                recipe,
-                geometry,
-                projection_scale,
-            );
-        }
         "point-cloud-scalar"
     };
     let projection_us = elapsed_us(projection_started.elapsed());
@@ -1285,12 +1244,15 @@ fn raster_point_commands(
             }
         };
         let color = if !target_color {
-            recipe.appearance.text_palette
-                [text_flicker_index(target_colors.style(index), index, frame)]
+            Rgb565Pixel(
+                recipe.appearance.text_palette
+                    [text_flicker_index(target_colors.style(index), index, frame)]
+                .0,
+            )
         } else {
-            crate::recipes::RecipeRgb565(target_colors.rgb565(index, recipe).0)
+            target_colors.rgb565(index, recipe)
         };
-        destination[offset] = Rgb565Pixel(color.0);
+        destination[offset] = color;
         visible += 1;
         writes += 1;
         if !target_color
@@ -1446,7 +1408,6 @@ impl FramebufferScene for IntroScene {
                 cue_elapsed_ms,
                 *duration_ms,
                 *easing,
-                clock.frame,
             ),
             _ => {
                 let point_target = match cue_index {
@@ -1749,12 +1710,6 @@ fn prepare_target_commands(
         commands[index] =
             project_command(target_positions[index], recipe, geometry, projection_scale);
     }
-    if vector_end == 0 {
-        for index in 0..target_positions.len() {
-            commands[index] =
-                project_command(target_positions[index], recipe, geometry, projection_scale);
-        }
-    }
     commands
 }
 
@@ -1874,11 +1829,12 @@ fn live_launcher_target_from_snapshot(
             background,
         ))] += 1;
     }
-    if histogram[1..].iter().sum::<usize>() == 0 {
+    let foreground_count = histogram[1..].iter().sum::<usize>();
+    if foreground_count == 0 {
         return Err("live launcher snapshot contains no visible UI detail".into());
     }
 
-    let count = count.min(histogram[1..].iter().sum());
+    let count = count.min(foreground_count);
     let mut above = 0_usize;
     let mut threshold = 0_u8;
     for score in (0_u8..=u8::MAX).rev() {
@@ -2210,7 +2166,8 @@ mod tests {
             group.start.is_multiple_of(PARTICLE_LANES) && group.count.is_multiple_of(PARTICLE_LANES)
         }));
         assert_eq!(scene.cabinet_formed.len(), 12_288);
-        assert_eq!(scene.launcher.positions.len(), 12_288);
+        assert!(!scene.launcher_ready);
+        assert!(scene.launcher.positions.is_empty());
     }
 
     #[test]
@@ -2454,7 +2411,13 @@ mod tests {
             vec![Rgb565Pixel(0); geometry.len()],
             vec![Rgb565Pixel(0); geometry.len()],
         ];
-        for (frame, time_ms) in (18_000..=19_000).step_by(125).enumerate() {
+        // Include backwards timestamps: each slot must rebuild when its cached
+        // threshold cannot be reused, while forward frames remain incremental.
+        for (frame, time_ms) in (18_000..=19_000)
+            .step_by(125)
+            .chain([18_750, 18_500, 19_000, 18_000, 19_000])
+            .enumerate()
+        {
             let slot = frame & 1;
             let buffer = SceneBufferId::new(slot as u8, 2).unwrap();
             let clock = SceneClock {

@@ -468,5 +468,9 @@ mod tests {
             serde_json::from_slice(EMBEDDED_INTRO_RECIPE_JSON).unwrap();
         value["tracks"][1]["destination"] = serde_json::json!("magik:wrong");
         assert!(parse_intro_recipe(&serde_json::to_vec(&value).unwrap()).is_err());
+        let mut value: serde_json::Value =
+            serde_json::from_slice(EMBEDDED_INTRO_RECIPE_JSON).unwrap();
+        value["cues"][2]["duration_ms"] = serde_json::json!(0);
+        assert!(parse_intro_recipe(&serde_json::to_vec(&value).unwrap()).is_err());
     }
 }
