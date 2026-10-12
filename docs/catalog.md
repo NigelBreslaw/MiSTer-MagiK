@@ -282,6 +282,21 @@ the effective runtime rows without downloading or writing catalog state.
   reads, row reconciliation, SQLite, NavPack, copying/hashing, sync, publication,
   memory, and available Cortex-A9 counters.
 
+`scripts/magik device catalog cold-build --attended` takes one such reboot-cold
+sample on a Development MiSTer. It purges the Dev catalog and screenshot packs,
+reboots once (never replayed), lets the launcher run its intro with the fresh
+build, then fetches the build's evidence and the published catalog's output
+digests into the run directory. The Development application records the
+evidence in tmpfs, so recording adds no SD-card I/O: a 50 ms CPU and SD
+timeline (build thread, other threads, all CPUs), the syscall and path each
+blocked thread waits on, CPU stack samples, and builder milestones. `summary.json`
+reports wall time per phase, plus symbolised CPU and blocked-path rankings when
+`--symbols` (default: the built executable) matches the installed one.
+`--baseline RUN_DIR` compares wall time and requires identical output digests, so
+an optimisation is accepted only if the build is faster and the catalog is
+unchanged. The command needs the Development tooling build installed: without
+it the purge still happens and no evidence appears.
+
 ## Relevant implementation
 
 - `fast_catalog_sources.rs`: dynamic source adapters and prepared collections.

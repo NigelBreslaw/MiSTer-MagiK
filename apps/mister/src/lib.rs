@@ -52,6 +52,8 @@ pub mod bitmap_font_resource;
 pub mod bitmap_text;
 pub mod build_identity;
 #[cfg(feature = "tooling")]
+pub(crate) mod catalog_build_evidence;
+#[cfg(feature = "tooling")]
 pub mod catalog_equivalence;
 pub mod catalog_failure_report;
 pub mod catalog_progress_report;
