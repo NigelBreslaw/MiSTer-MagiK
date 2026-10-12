@@ -151,9 +151,15 @@ def main() -> int:
         choices=("default", "reduced"),
         default="default",
     )
-    check_command.add_argument(
+    installed = check_command.add_mutually_exclusive_group()
+    installed.add_argument(
         "--installed-sha256",
         help="Verify and benchmark this running hash without building or deploying",
+    )
+    installed.add_argument(
+        "--reuse-installed",
+        action="store_true",
+        help="Pin the ready running application's hash and check it without building or deploying",
     )
     subcommands.add_parser("watch")
     subcommands.add_parser("status")
@@ -516,8 +522,10 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
             )
             return 2
         options += ["--magik-profile"]
-    if getattr(arguments, "installed_sha256", None):
+    if getattr(arguments, "installed_sha256", None) is not None:
         options += ["--magik-installed-sha256", arguments.installed_sha256]
+    if getattr(arguments, "reuse_installed", False):
+        options += ["--magik-reuse-installed"]
     result = int(pytest.main(options))
     append_event(
         run,

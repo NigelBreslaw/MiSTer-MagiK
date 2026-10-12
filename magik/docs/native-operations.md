@@ -39,16 +39,22 @@ headlessly and confirms through Main's protocol after launcher readiness. To run
 the same Dev journey in HDMI 1080p and then CRT 240p:
 
 ```bash
-scripts/magik device orientation set normal --attended
-scripts/magik device display set hdmi-1920x1080p60 --attended
-MAGIK_EXPECT_DISPLAY_MODE=hdmi-1920x1080p60 scripts/magik check journeys
-scripts/magik device display set crt-240p60 --attended
-MAGIK_EXPECT_DISPLAY_MODE=crt-240p60 scripts/magik check journeys
+scripts/magik device orientation set normal --attended &&
+scripts/magik device display set hdmi-1920x1080p60 --attended &&
+MAGIK_EXPECT_DISPLAY_MODE=hdmi-1920x1080p60 scripts/magik check journeys &&
+scripts/magik device display set crt-240p60 --attended &&
+MAGIK_EXPECT_DISPLAY_MODE=crt-240p60 scripts/magik check journeys --reuse-installed
 ```
 
-For an already-running test-enabled Dev binary, append `--installed-sha256 HASH`
-to each check to avoid a build/deployment. The mode guard checks the requested mode
-and the absence of a pending display transaction before and after each test session.
+The HDMI check prepares and delivers the application once. The CRT check pins the
+ready Dev binary's hash from native status and reuses it without building or
+deploying. The command chain stops on failure, before switching to the next mode.
+For an exact previously recorded hash, use `--installed-sha256 HASH` instead of
+`--reuse-installed`. Both installed-binary options verify the pinned hash and
+readiness before every test session; they fail if the application changes or stops.
+Normal checks use native start to ensure the prepared binary is ready before each
+fresh test lease, restarting it if needed without rebuilding. Display guards check
+the requested mode and `pending=none` before and after every session.
 
 `device catalog` provides `inspect`, `cores`, `metadata-qualification`,
 `neogeo-family-audit`, `query --database system:ID --sql SQL`,

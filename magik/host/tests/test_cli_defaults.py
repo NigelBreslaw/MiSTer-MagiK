@@ -103,3 +103,36 @@ def test_full_app_benchmark_accepts_separate_diagnostic_modes(
     monkeypatch.setattr(cli, "dispatch", dispatch)
     assert cli.main() == 0
     assert dispatch.call_args.args[0].scenario == "animation-app"
+
+
+def test_reuse_installed_is_explicit_and_excludes_a_manual_hash(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISTER_MAGIK2_RESULTS", str(tmp_path))
+    monkeypatch.setattr(
+        "sys.argv", ["scripts/magik", "check", "journeys", "--reuse-installed"]
+    )
+    dispatch = Mock(return_value=0)
+    monkeypatch.setattr(cli, "dispatch", dispatch)
+    assert cli.main() == 0
+    assert dispatch.call_args.args[0].reuse_installed
+    assert dispatch.call_args.args[0].installed_sha256 is None
+    dispatch.reset_mock()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["scripts/magik", "check", "--reuse-installed", "--installed-sha256", "a" * 64],
+    )
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    dispatch.assert_not_called()
+
+
+def test_check_forwards_native_reuse_to_the_fixture_plugin(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISTER_MAGIK2_RESULTS", str(tmp_path))
+    monkeypatch.setattr(
+        "sys.argv", ["scripts/magik", "check", "journeys", "--reuse-installed"]
+    )
+    run_pytest = Mock(return_value=0)
+    monkeypatch.setattr(pytest, "main", run_pytest)
+    assert cli.main() == 0
+    assert "--magik-reuse-installed" in run_pytest.call_args.args[0]
+    assert "--magik-installed-sha256" not in run_pytest.call_args.args[0]

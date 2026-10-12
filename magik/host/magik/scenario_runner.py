@@ -34,6 +34,7 @@ def pytest_addoption(parser):
     )
     group.addoption("--magik-run", help="Existing result directory for this invocation")
     group.addoption("--magik-installed-sha256")
+    group.addoption("--magik-reuse-installed", action="store_true")
     group.addoption(
         "--magik-frame-evidence", choices=("off", "neighbors", "phases"), default="off"
     )
@@ -107,17 +108,23 @@ def magik_run(request):
 
 
 @pytest.fixture(scope="session")
-def application_session(request, magik_run):
-    yield from _application_session(request, magik_run)
+def prepared_application(request, magik_run):
+    profiled = request.config.getoption("--magik-profile")
+    return _prepare_application(request, magik_run, profiled), profiled
+
+
+@pytest.fixture(scope="session")
+def application_session(request, magik_run, prepared_application):
+    yield from _application_session(request, magik_run, *prepared_application)
 
 
 @pytest.fixture
-def journey_application_session(request, magik_run):
+def journey_application_session(request, magik_run, prepared_application):
     # Each reversible journey stays inside the native 60-second test lease.
-    yield from _application_session(request, magik_run)
+    yield from _application_session(request, magik_run, *prepared_application)
 
 
-def _application_session(request, magik_run):
+def _prepare_application(request, magik_run, profiled):
     from .cli import (
         connect_agent,
         ensure_application,
@@ -125,11 +132,9 @@ def _application_session(request, magik_run):
         PROFILE_AGENT_CAPABILITIES,
     )
 
-    from .apps import application, validate_renderer_context
-    from .measurement_contract import expected_display_mode, verify_display
+    from .apps import application
+    from .measurement_contract import expected_display_mode
 
-    profiled = request.config.getoption("--magik-profile")
-    profile_id = f"{magik_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
     evidence_capabilities = (
         {"metrics-body-32m-v1"}
         if request.config.getoption("--magik-frame-evidence") != "off"
@@ -145,23 +150,22 @@ def _application_session(request, magik_run):
     )
     try:
         installed = request.config.getoption("--magik-installed-sha256")
-        if installed:
+        reuse = request.config.getoption("--magik-reuse-installed")
+        if installed is not None and reuse:
+            raise ValueError("choose installed SHA-256 or reuse-installed, not both")
+        if reuse:
+            installed = status.fields.get("running_sha256")
+        if installed is not None or reuse:
             app_name = request.config.getoption("--magik-app")
-            if len(installed) != 64 or any(
-                c not in "0123456789abcdef" for c in installed
+            if (
+                not isinstance(installed, str)
+                or len(installed) != 64
+                or any(c not in "0123456789abcdef" for c in installed)
             ):
                 raise ValueError(
                     "installed SHA-256 must be 64 lowercase hexadecimal characters"
                 )
-            if not (
-                status.fields.get("running")
-                and status.fields.get("ready")
-                and status.fields.get("artifact") == app_name
-                and status.fields.get("running_sha256") == installed
-            ):
-                raise AssertionError(
-                    "running development artifact does not match requested SHA-256"
-                )
+            _require_running_artifact(status, app_name, installed)
             agent.artifact = app_name
             agent.expected_sha256 = installed
             append_event(
@@ -174,6 +178,46 @@ def _application_session(request, magik_run):
     except Exception:
         retain_diagnostics(magik_run, agent)
         raise
+    return agent
+
+
+def _require_running_artifact(status, app_name, expected):
+    if not (
+        status.fields.get("running") is True
+        and status.fields.get("ready") is True
+        and status.fields.get("artifact") == app_name
+        and status.fields.get("running_sha256") == expected
+    ):
+        raise AssertionError(
+            "running development artifact does not match requested SHA-256 or is not ready"
+        )
+
+
+def _application_session(request, magik_run, agent, profiled):
+    from .apps import validate_renderer_context
+    from .measurement_contract import verify_display
+
+    try:
+        if request.config.getoption(
+            "--magik-installed-sha256"
+        ) is not None or request.config.getoption("--magik-reuse-installed"):
+            _require_running_artifact(
+                agent.status(), agent.artifact, agent.expected_sha256
+            )
+        else:
+            agent.start(expected_sha256=agent.expected_sha256)
+        append_event(
+            magik_run,
+            {
+                "phase": "application-ready",
+                "sha256": agent.expected_sha256,
+                "outcome": "passed",
+            },
+        )
+    except Exception:
+        retain_diagnostics(magik_run, agent)
+        raise
+    profile_id = f"{magik_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
     verify_display(agent, magik_run, "before-session")
     with managed_session(
         agent, magik_run, profile_id, "shared application session"
