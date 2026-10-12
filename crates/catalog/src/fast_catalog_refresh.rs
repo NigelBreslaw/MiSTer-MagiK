@@ -365,13 +365,16 @@ fn build_tmpfs_artifacts(
     let started = std::time::Instant::now();
     let mut artifactless_systems = 0usize;
     for (index, source) in snapshot.systems.iter().enumerate() {
-        crate::cooperative_work::checkpoint();
-        if prebuilt.is_cancelled() {
-            return Err("artifact building cancelled".into());
-        }
+        // Publication never waits for an artifactless system, so skip it before
+        // the checkpoint and cancellation: parking or cancelling here would turn
+        // an already successful publication into a failed build.
         if source.games.is_empty() && source.variants.is_empty() {
             artifactless_systems = artifactless_systems.saturating_add(1);
             continue;
+        }
+        crate::cooperative_work::checkpoint();
+        if prebuilt.is_cancelled() {
+            return Err("artifact building cancelled".into());
         }
         let system_id = crate::catalog_classify::SystemId::parse(&source.system_id)
             .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
@@ -566,8 +569,11 @@ pub fn build_fresh_catalog_with_presentation_progress(
                 progress(FastCatalogBuildProgress::SavingSystem { current, total });
             },
         );
-        // Publication either consumed everything or failed; stop any leftover work.
-        prebuilt.cancel();
+        // A failed publication leaves no use for the rest of the builder's work;
+        // after a successful one the builder has only artifactless systems left.
+        if publication.is_err() {
+            prebuilt.cancel();
+        }
         let build = builder
             .join()
             .unwrap_or_else(|_| Err("artifact builder panicked".into()));
@@ -4623,6 +4629,32 @@ mod tests {
         assert!(root.exists());
         drop(staging);
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn a_cancelled_builder_still_succeeds_when_only_artifactless_systems_remain() {
+        let snapshot = FastFiveSnapshot {
+            schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
+            source_fingerprint: String::new(),
+            systems: vec![FastFiveSystem {
+                system_id: "x68000".to_string(),
+                display_title: "X68000".to_string(),
+                games: Vec::new(),
+                variants: Vec::new(),
+            }],
+        };
+        let prebuilt = crate::fast_five_catalog::PrebuiltArtifacts::default();
+        prebuilt.cancel();
+        let report = build_tmpfs_artifacts(
+            &snapshot,
+            1,
+            crate::shard_registry::production_registry_limits(),
+            crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
+            Path::new("/nonexistent-staging"),
+            &prebuilt,
+        )
+        .expect("artifactless systems need no building, so cancellation cannot fail them");
+        assert_eq!((report.systems, report.artifactless_systems), (0, 1));
     }
 
     #[test]
