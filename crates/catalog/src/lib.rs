@@ -27,6 +27,8 @@ pub mod fast_catalog_refresh;
 #[cfg(feature = "builder")]
 pub mod fast_catalog_sources;
 pub mod fast_five_catalog;
+#[cfg(feature = "builder")]
+mod fast_hash;
 pub mod fs_fault;
 mod game_paths;
 pub use game_paths::game_dir as resolve_game_directory;
