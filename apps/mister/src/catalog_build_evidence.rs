@@ -42,6 +42,10 @@ static STACK_BUFFER: OnceLock<&'static [AtomicU32]> = OnceLock::new();
 static STACK_NEXT: AtomicUsize = AtomicUsize::new(0);
 static STACK_DROPPED: AtomicU32 = AtomicU32::new(0);
 static PROCESS_ID: AtomicI32 = AtomicI32::new(0);
+/// Whether the handler records samples. It stays installed after a build ends:
+/// a SIGPROF generated just before the timer is disarmed may still be pending
+/// for another thread, and the default action would terminate the launcher.
+static PROFILING: AtomicBool = AtomicBool::new(false);
 static MARKS: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
 
 /// Record a builder milestone on the evidence clock; a no-op when idle.
@@ -170,12 +174,19 @@ impl BuildEvidence {
             "profiler_error":self.profiler.as_ref().err(),
         });
         // Written last: the host treats its presence as "run complete".
-        fs::write(
-            directory.join("evidence.json"),
-            serde_json::to_vec_pretty(&evidence).map_err(|error| error.to_string())?,
+        write_atomically(
+            directory,
+            "evidence.json",
+            &serde_json::to_vec_pretty(&evidence).map_err(|error| error.to_string())?,
         )
-        .map_err(|error| error.to_string())
     }
+}
+
+/// The service serves any existing file at once, so publish a complete file.
+fn write_atomically(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    let temporary = directory.join(format!(".{name}.tmp"));
+    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    fs::rename(&temporary, directory.join(name)).map_err(|error| error.to_string())
 }
 
 impl Drop for BuildEvidence {
@@ -477,7 +488,7 @@ fn start_profiler() -> Result<(), String> {
         if libc::sigaction(libc::SIGPROF, std::ptr::null(), &mut previous) != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        if previous.sa_sigaction != libc::SIG_DFL {
+        if !may_install_handler(previous.sa_sigaction) {
             return Err("SIGPROF is already in use".into());
         }
         // One buffer for the process: the handler may still be running when the
@@ -493,24 +504,34 @@ fn start_profiler() -> Result<(), String> {
         STACK_NEXT.store(0, Ordering::Relaxed);
         STACK_DROPPED.store(0, Ordering::Relaxed);
         let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = on_profile_signal
-            as extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void)
-            as usize;
+        action.sa_sigaction = handler_address();
         action.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
         libc::sigemptyset(&mut action.sa_mask);
         if libc::sigaction(libc::SIGPROF, &action, std::ptr::null_mut()) != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
+    PROFILING.store(true, Ordering::Release);
     set_profile_timer(PROFILE_INTERVAL_US)
 }
 
-/// Disarm the timer and restore the default handler. Only call this after
-/// `start_profiler` succeeded, so another owner's SIGPROF setup is untouched.
+/// SIGPROF is free when unset, or when it is still this recorder's own handler
+/// left installed by an earlier build.
+fn may_install_handler(previous: libc::sighandler_t) -> bool {
+    previous == libc::SIG_DFL || previous == handler_address()
+}
+
+fn handler_address() -> libc::sighandler_t {
+    on_profile_signal as extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void)
+        as libc::sighandler_t
+}
+
+/// Disarm the timer and stop recording. The handler stays installed so a late
+/// SIGPROF is ignored rather than fatal. Only call this after `start_profiler`
+/// succeeded, so another owner's SIGPROF setup is untouched.
 fn stop_profiler() {
+    PROFILING.store(false, Ordering::Release);
     let _ = set_profile_timer(0);
-    // SAFETY: restoring the default disposition has no preconditions.
-    unsafe { libc::signal(libc::SIGPROF, libc::SIG_DFL) };
 }
 
 fn set_profile_timer(interval_us: i64) -> Result<(), String> {
@@ -550,11 +571,46 @@ fn interrupted_registers(_: *mut libc::c_void) -> Option<[usize; 4]> {
     None
 }
 
+#[cfg(target_os = "linux")]
+fn errno_location() -> *mut libc::c_int {
+    // SAFETY: returns the calling thread's errno slot.
+    unsafe { libc::__errno_location() }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn errno_location() -> *mut libc::c_int {
+    // SAFETY: returns the calling thread's errno slot.
+    unsafe { libc::__error() }
+}
+
+/// Restores the interrupted thread's errno when the handler returns.
+struct ErrnoGuard(libc::c_int);
+
+impl ErrnoGuard {
+    fn save() -> Self {
+        // SAFETY: the pointer is the calling thread's errno slot.
+        Self(unsafe { *errno_location() })
+    }
+}
+
+impl Drop for ErrnoGuard {
+    fn drop(&mut self) {
+        // SAFETY: the pointer is the calling thread's errno slot.
+        unsafe { *errno_location() = self.0 };
+    }
+}
+
 extern "C" fn on_profile_signal(
     _: libc::c_int,
     _: *mut libc::siginfo_t,
     context: *mut libc::c_void,
 ) {
+    // `process_vm_readv` sets errno; the interrupted thread may be about to
+    // read its own syscall's error, so restore it on every exit.
+    let _errno = ErrnoGuard::save();
+    if !PROFILING.load(Ordering::Acquire) {
+        return;
+    }
     let Some(buffer) = STACK_BUFFER.get() else {
         return;
     };
@@ -653,6 +709,51 @@ mod tests {
             Some("mmcblk0")
         );
         assert_eq!(choose_sd_disk(&["sda"], None), None);
+    }
+
+    #[test]
+    fn a_failed_frame_read_does_not_change_the_interrupted_errno() {
+        // SAFETY: the pointer is the calling thread's errno slot.
+        unsafe { *errno_location() = libc::ENOENT };
+        {
+            let _errno = ErrnoGuard::save();
+            let mut frame = [0u8; 8];
+            // Page zero is never readable, so the read fails and sets EFAULT.
+            assert_eq!(read_memory(8, &mut frame), 0);
+        }
+        // SAFETY: as above.
+        assert_eq!(unsafe { *errno_location() }, libc::ENOENT);
+    }
+
+    #[test]
+    fn the_handler_is_harmless_once_profiling_has_stopped() {
+        PROFILING.store(false, Ordering::Release);
+        // SAFETY: as above.
+        unsafe { *errno_location() = libc::EINTR };
+        on_profile_signal(libc::SIGPROF, std::ptr::null_mut(), std::ptr::null_mut());
+        // SAFETY: as above.
+        assert_eq!(unsafe { *errno_location() }, libc::EINTR);
+    }
+
+    #[test]
+    fn sigprof_is_free_only_when_unset_or_already_ours() {
+        assert!(may_install_handler(libc::SIG_DFL));
+        assert!(may_install_handler(handler_address()));
+        assert!(!may_install_handler(handler_address() + 4));
+    }
+
+    #[test]
+    fn evidence_is_published_complete_and_leaves_no_temporary() {
+        let directory =
+            std::env::temp_dir().join(format!("evidence-atomic-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        write_atomically(&directory, "evidence.json", b"{\"ok\":true}").unwrap();
+        assert_eq!(
+            fs::read(directory.join("evidence.json")).unwrap(),
+            b"{\"ok\":true}"
+        );
+        assert!(!directory.join(".evidence.json.tmp").exists());
+        fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
