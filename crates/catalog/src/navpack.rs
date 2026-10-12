@@ -6,6 +6,7 @@
 #[cfg(feature = "builder")]
 use crate::system_shard::{SystemGame, SystemNavigationIndexes};
 #[cfg(feature = "builder")]
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -304,7 +305,7 @@ struct CheckedHeader {
 #[derive(Default)]
 struct Strings {
     bytes: Vec<u8>,
-    refs: crate::fast_hash::FastMap<String, (u32, u32)>,
+    refs: HashMap<String, (u32, u32)>,
 }
 
 #[cfg(feature = "builder")]

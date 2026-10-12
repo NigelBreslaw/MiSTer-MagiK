@@ -435,7 +435,7 @@ struct PreparedSearchDocument {
 #[cfg(feature = "builder")]
 struct PreparedSearchBatch {
     documents: Vec<PreparedSearchDocument>,
-    words: crate::fast_hash::FastMap<String, AutocompleteStats>,
+    words: std::collections::HashMap<String, AutocompleteStats>,
     build_us: u64,
 }
 
@@ -444,9 +444,11 @@ fn prepare_search_batch(
     first_ordinal: usize,
     games: &[crate::system_shard::SystemGame],
 ) -> PreparedSearchBatch {
+    use std::collections::HashMap;
+
     let started = Instant::now();
     let mut documents = Vec::with_capacity(games.len());
-    let mut words = crate::fast_hash::FastMap::<String, AutocompleteStats>::default();
+    let mut words = HashMap::<String, AutocompleteStats>::new();
     for (offset, game) in games.iter().enumerate() {
         let title = normalize_search_text(&game.title);
         let manufacturer = normalize_search_text(&game.manufacturer);
@@ -510,8 +512,8 @@ fn prepare_search_batch(
 
 #[cfg(feature = "builder")]
 fn merge_autocomplete_words(
-    destination: &mut crate::fast_hash::FastMap<String, AutocompleteStats>,
-    source: crate::fast_hash::FastMap<String, AutocompleteStats>,
+    destination: &mut std::collections::HashMap<String, AutocompleteStats>,
+    source: std::collections::HashMap<String, AutocompleteStats>,
 ) {
     for (word, source_stats) in source {
         let stats = destination.entry(word).or_default();
@@ -526,6 +528,8 @@ pub(crate) fn populate_with_options(
     games: &[crate::system_shard::SystemGame],
     optimize: bool,
 ) -> Result<PersistedSearchBuildOutcome, PersistedSearchError> {
+    use std::collections::HashMap;
+
     let total_started = Instant::now();
     let batch_size = search_pipeline_batch_size()?;
     let source_checksum = search_source_checksum(games);
@@ -545,7 +549,7 @@ pub(crate) fn populate_with_options(
         .map_err(|error| PersistedSearchError::with("prepare search rows", error))?;
     let row_loop_started = Instant::now();
     let row_loop_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_ROWS);
-    let mut words = crate::fast_hash::FastMap::<String, AutocompleteStats>::default();
+    let mut words = HashMap::<String, AutocompleteStats>::new();
     let mut batches = 0usize;
     let mut document_build_us = 0u64;
     let mut fts_insert_us = 0u64;
@@ -929,7 +933,7 @@ struct AutocompleteStats {
 
 #[cfg(feature = "builder")]
 fn add_normalized_words(
-    words: &mut crate::fast_hash::FastMap<String, AutocompleteStats>,
+    words: &mut std::collections::HashMap<String, AutocompleteStats>,
     normalized: &str,
     source: AutocompleteSource,
 ) {
@@ -940,7 +944,7 @@ fn add_normalized_words(
 
 #[cfg(feature = "builder")]
 fn add_normalized_word(
-    words: &mut crate::fast_hash::FastMap<String, AutocompleteStats>,
+    words: &mut std::collections::HashMap<String, AutocompleteStats>,
     normalized: &str,
     source: AutocompleteSource,
 ) {
@@ -1049,7 +1053,7 @@ mod tests {
 
     #[test]
     fn repeated_autocomplete_words_keep_cumulative_score_and_best_rank() {
-        let mut words = crate::fast_hash::FastMap::default();
+        let mut words = std::collections::HashMap::new();
         add_normalized_word(&mut words, "street", AutocompleteSource::Path);
         add_normalized_word(&mut words, "street", AutocompleteSource::Title);
         add_normalized_word(&mut words, "street", AutocompleteSource::Metadata);
