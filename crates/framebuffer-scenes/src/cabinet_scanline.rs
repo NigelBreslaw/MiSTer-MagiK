@@ -139,10 +139,10 @@ pub(super) fn render_region(
     };
     let count = if lod == 0 { 1 } else { 2 };
     for l in 0..count {
-        for i in 0..n {
+        for (i, column) in scratch.columns[l][..n].iter_mut().enumerate() {
             let sx = (((((x0 + i) as i64) << 16) + (1 << 15) - cx) * inverse_x) >> 16;
             let sx = (sx >> (level + l)) - (1 << 15);
-            scratch.columns[l][i] = Column {
+            *column = Column {
                 index: i16::try_from(sx.div_euclid(65536)).expect("bounded cabinet coordinate"),
                 weight: ((sx & 65535) >> 8) as u16,
             };
