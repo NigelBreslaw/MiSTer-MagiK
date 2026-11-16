@@ -11,12 +11,12 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/markdown-satteri": "0.4.5",
-    "@astrojs/mdx": "8.1.1",
-    "@astrojs/starlight": "0.42.7",
-    "astro": "7.4.2",
+    "@astrojs/markdown-satteri": "0.4.7",
+    "@astrojs/mdx": "8.1.3",
+    "@astrojs/starlight": "0.42.10",
+    "astro": "7.4.8",
     "astro-mermaid": "2.2.0",
-    "mermaid": "12.2.0"
+    "mermaid": "12.3.0"
   },
   "devDependencies": {
     "typescript": "7.0.2"
