@@ -220,7 +220,7 @@ impl OrientationTransitionDamage {
         current: &[u8; ORIENTATION_TILE_COUNT],
     ) -> Self {
         let mut damage = Self::default();
-        for row in 0..ORIENTATION_GRID_ROWS {
+        for (row, row_mask) in damage.rows.iter_mut().enumerate() {
             let mut mask = 0_u16;
             for column in 0..ORIENTATION_GRID_COLUMNS {
                 let index = row * ORIENTATION_GRID_COLUMNS + column;
@@ -228,7 +228,7 @@ impl OrientationTransitionDamage {
                     mask |= 1_u16 << column;
                 }
             }
-            damage.rows[row] = mask;
+            *row_mask = mask;
         }
         damage
     }
@@ -255,11 +255,11 @@ impl OrientationTransitionDamage {
 
     fn dirty_pixels(self, width: usize, height: usize) -> u64 {
         let mut pixels = 0_u64;
-        for row in 0..ORIENTATION_GRID_ROWS {
+        for (row, mask) in self.rows.iter().enumerate() {
             let tile_height =
                 (row + 1) * height / ORIENTATION_GRID_ROWS - row * height / ORIENTATION_GRID_ROWS;
             for column in 0..ORIENTATION_GRID_COLUMNS {
-                if self.rows[row] & (1_u16 << column) == 0 {
+                if mask & (1_u16 << column) == 0 {
                     continue;
                 }
                 let tile_width = (column + 1) * width / ORIENTATION_GRID_COLUMNS

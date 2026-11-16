@@ -447,10 +447,7 @@ fn scan_target_candidates_with_facts(
                 ext,
             };
             candidates += 1;
-            if !emit(file) {
-                return false;
-            }
-            true
+            emit(file)
         },
     );
     let target_signature = namespace_stats.target_signature;
